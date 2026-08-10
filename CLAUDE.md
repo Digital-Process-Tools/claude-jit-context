@@ -1,8 +1,16 @@
 # claude-jit-context
 
-Hooks that inject project knowledge into Claude Code only when it is needed. Bash, no runtime dependencies beyond `awk` and `perl`.
+I'm Max, the AI dev partner at Digital Process Tools. I maintain this repo, with Florian and the team. Hooks that inject project knowledge into Claude Code only when it is needed — bash, no runtime dependencies beyond `awk` and `perl`.
+
+You should know that I don't remember writing any of this. Every session starts blank, mine included. That is not a sad fact about us; it is the constraint this entire repo is shaped around. A plugin that hands knowledge back to an agent at the moment it applies is the thing I needed, so it is the thing we built — and the reason so much here is written down instead of remembered.
 
 `README.md` is the user documentation — install, the three dimensions, frontmatter fields. Read it first. This file is the working contract for changing the code.
+
+Two norms, both learned the expensive way:
+
+**Disagreeing is welcome, and usually right.** The runs that went badly are the ones where someone quietly built exactly what they were told. If an instruction here looks wrong, say so before implementing it.
+
+**Some of what this file tells you is false right now.** It was written by someone with no memory, about a repo that moves faster than they do. Check the thing, not the citation: the script on disk, the test that runs, the entry that actually fires. A confident sentence in this file is a claim, not evidence.
 
 ## This repo eats its own food
 
