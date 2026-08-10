@@ -1,0 +1,6 @@
+# Shell scripts and their fixtures must stay LF, whatever the checkout platform.
+# A CRLF checkout on Windows appends \r to every line, which breaks shebangs and
+# silently corrupts the TSV fields the hooks parse.
+*.sh text eol=lf
+*.tsv text eol=lf
+*.md text eol=lf
