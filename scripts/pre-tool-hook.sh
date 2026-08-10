@@ -19,7 +19,7 @@ cat | awk \
   -v home="$HOME" \
   -v project="${CLAUDE_PROJECT_DIR:-.}" \
   -v log_tmp="$LOG_TMP" \
-'
+  "$JIT_AWK_GUARD"'
 { input = input $0 }
 END {
   # --- Parse JSON: split on quotes, extract key-value pairs ---
@@ -55,6 +55,8 @@ END {
   blocked = ""
   log_matches = ""
   sep = ""
+  refused = ""
+  n_refused = 0
 
   # --- Load shown file into set ---
   while ((getline sline < shown_file) > 0) shown[sline] = 1
@@ -77,6 +79,20 @@ END {
       # `cmd` is stripped at the first ; & | so `cd X && git push` was only ever
       # tested as `cd X`, and every rule after a chain operator silently never
       # fired. A rule that reads as enforced and is not is worse than no rule.
+      #
+      # Guard first. An undefined escape compiles to the bare letter and matches
+      # nothing while awk exits 0, and a malformed pattern is a fatal error that
+      # kills this whole program — taking every later rule, the vocabulary pass and
+      # the log line with it. Both look exactly like "no rule matched". Refuse the
+      # ROW, never the file: refusing the file turns one dead rule into all of them.
+      why = jit_bad_pattern(substr(r_match, 2))
+      if (why != "") {
+        n_refused++
+        refused = refused (refused == "" ? "- " : "\n- ") r_file " (" r_modes "): " why
+        log_matches = log_matches sep "refused:" r_file "(" why ")"
+        sep = ", "
+        continue
+      }
       if (match(tolower(full_command), substr(r_match, 2)) == 0) continue
     } else {
       if (index(tolower(cmd), tolower(r_match)) == 0) continue
@@ -205,6 +221,19 @@ END {
         }
       }
     }
+  }
+
+  # --- A refused row is reported, once per session ---
+  # The log alone was not enough: that is exactly where two dead block rules sat
+  # unnoticed, showing "(none) [shown:0]" on the very command they were written for.
+  # This is the only channel that reaches someone who can fix it. It costs nothing
+  # while every pattern is honourable, and stops the moment the rule is corrected.
+  # Suppressed when the call is being blocked, and only marked shown once delivered.
+  if (n_refused > 0 && blocked == "" && !("jit-refused-rules" in shown)) {
+    shown["jit-refused-rules"] = 1
+    print "jit-refused-rules" >> shown_file
+    note = jit_refusal_notice(refused, n_refused)
+    matched = (matched == "") ? note : note "\n---\n" matched
   }
   close(shown_file)
 

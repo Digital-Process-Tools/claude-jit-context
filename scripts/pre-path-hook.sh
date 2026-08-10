@@ -28,7 +28,7 @@ cat | awk \
   -v vocab_shown_file="$VOCAB_SHOWN_FILE" \
   -v shown_file="$SHOWN_FILE" \
   -v log_tmp="$LOG_TMP" \
-'
+  "$JIT_AWK_GUARD"'
 { input = input $0 }
 END {
   # --- Parse JSON: extract file_path, path, or command ---
@@ -87,6 +87,8 @@ END {
   matched = ""
   log_matches = ""
   sep = ""
+  refused = ""
+  n_refused = 0
 
   # --- Scan path layers ---
   split("00-manual 10-auto 20-grouped 30-crosscutting", layers, " ")
@@ -99,6 +101,18 @@ END {
       pattern = tf[1]; rule_file = tf[2]
 
       if (rule_file in shown) continue
+
+      # Every path pattern is a regex, so the guard applies to all of them. See
+      # common.sh: an undefined escape matches nothing and exits 0, a malformed one
+      # is fatal and silences the entire index. Refuse the row, keep the rest.
+      why = jit_bad_pattern(pattern)
+      if (why != "") {
+        n_refused++
+        refused = refused (refused == "" ? "- " : "\n- ") layer "/" rule_file ": " why
+        log_matches = log_matches sep "refused:" rule_file "(" why ")"
+        sep = ", "
+        continue
+      }
 
       path_matched = 0
       for (pi = 1; pi <= path_count; pi++) {
@@ -169,6 +183,16 @@ END {
       close(vindex)
     }
     close(vocab_shown_file)
+  }
+
+  # --- A refused row is reported, once per session ---
+  # Same reason as the tool hook: the log is where dead rules go unnoticed, and this
+  # is the only channel that reaches an author who can fix it. Free while clean.
+  if (n_refused > 0 && !("jit-refused-paths" in shown)) {
+    shown["jit-refused-paths"] = 1
+    print "jit-refused-paths" >> shown_file
+    note = jit_refusal_notice(refused, n_refused)
+    matched = (matched == "") ? note : note "\n---\n" matched
   }
 
   # --- Log info to temp file ---

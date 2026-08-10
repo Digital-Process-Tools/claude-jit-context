@@ -21,14 +21,17 @@ Body edits need no rebuild — the body is read from the file at fire time. Fron
 - One ordinary English word fires constantly. Prefer product nouns and multi-word keys.
 - `rebuild-tsv.sh` prints an ambiguity report. A keyword in more than five entries drags all five into context on one stray mention.
 
+## `match` is an awk ERE, not PCRE
+
+`\s` `\d` `\w` `\b` compile to the bare letter and match **nothing**, while awk exits 0 — use `[[:space:]]`, `[0-9]`, `[A-Za-z0-9_]`. `\n` is the one escape that survives, and rules need it: `^` anchors the whole command string rather than each line, so anchor on `(^|[;&|\n] *)`. Such a row is now refused at load and named in the injected context instead of reading as enforced.
+
 ## Prove it fires
 
-Rebuilding is not evidence. Drive the hook, and check both directions — a payload that must fire and one that must stay silent.
+Rebuilding is not evidence, and neither is the tree you are standing in: `JIT_BASE` resolves against `$CLAUDE_PROJECT_DIR`, so a worktree's rules are inert for a session rooted elsewhere.
 
 ```bash
-export CLAUDE_PROJECT_DIR="$PWD"
-bash scripts/session-start-hook.sh                       # clears `once` markers
-echo '{"prompt":"how do invoice totals work"}' | bash scripts/pre-prompt-hook.sh
+bash scripts/jit-dry-run.sh --prompt "how do invoice totals work"
+bash scripts/jit-dry-run.sh --base /path/to/other/tree/.claude/jit-context --file src/Billing/Total.php
 ```
 
-`{}` means no match.
+Lints every pattern and prints which rule fired. Exit 1 = a pattern cannot be honoured; 2 = it could not evaluate the tree, which is never a pass. Check both directions — a payload that must fire and one that must stay silent.
