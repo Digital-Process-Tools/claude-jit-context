@@ -28,6 +28,18 @@ That is the actual offer. Not a percentage off your context budget — a body of
 
 Nothing loads speculatively. Nothing is resident.
 
+## Why this exists
+
+A friend told Florian that `.claude/rules/` saves tokens — especially on something the size of DVSI, which is exactly the kind of project the feature seems written for. So he spent two hours moving our conventions into rule files, each scoped with a `paths:` glob, expecting sessions to get lighter.
+
+Then he ran `/context`. Everything was loaded. Every rule file, in a session that had touched almost none of the code they described.
+
+We spent a while assuming we had misconfigured it. We had not — as far as we could measure at the time, the scoping did not gate the load at all.
+
+The interesting part came after. If Claude Code can inject context at the moment a file is opened, why should the trigger be a file? Why not the word `XSD` when someone types it? Why not the moment a test command is about to run without `--no-coverage`?
+
+Those two questions are the vocabulary and tool dimensions. The whole plugin is the answer to them.
+
 ## Five pillars
 
 **1. Zero until triggered.** An entry costs nothing to own. That is the whole design: the price of writing something down stops being a reason not to write it down, so the corpus grows to the size of what your team actually knows rather than the size of what you can afford to keep loaded.
@@ -326,7 +338,7 @@ bash tests/run-all.sh
 
 ## Why not `.claude/rules/`?
 
-Files in `.claude/rules/` auto-load at session start — all of them, every session. Even with `globs` frontmatter for path scoping, the file still loads; the glob scopes what it claims to describe, not whether it is read.
+Files in `.claude/rules/` auto-load at session start — all of them, every session. When we measured this on a large codebase in early 2026, `globs` frontmatter did not change that: `/context` showed every rule file resident, whatever its scope. Claude Code moves quickly, so check it yourself with `/context` before taking our word for it — but that measurement is why this plugin exists.
 
 On a project with a real body of institutional knowledge, that is the difference between a context window mostly full of maybe-relevant documentation and one mostly full of the actual conversation.
 
