@@ -1,0 +1,25 @@
+---
+title: How jit-context matching works
+description: The three dimensions, the TSV index between markdown and the hooks, and the layer order.
+keywords: jit-context, 00-index, rebuild-tsv, pre-path-hook, pre-prompt-hook, pre-tool-hook, session-start-hook
+---
+
+Three dimensions, one hook each. Knowledge attaches to whichever trigger answers _when the reader needs it_.
+
+| Dimension  | Fires on                    | Hook                 | Entries in                        |
+| ---------- | --------------------------- | -------------------- | --------------------------------- |
+| vocabulary | keywords in the prompt      | `pre-prompt-hook.sh` | `.claude/jit-context/vocabulary/` |
+| paths      | a file path being touched   | `pre-path-hook.sh`   | `.claude/jit-context/paths/`      |
+| tools      | tool name + command pattern | `pre-tool-hook.sh`   | `.claude/jit-context/tools/`      |
+
+Tools is the only dimension that can `block`. The other two only inject. Each entry fires at most once per session; `session-start-hook.sh` clears the markers.
+
+Layers are scanned in order inside each dimension: `00-manual/` (hand-written), then `10-auto/`, `20-grouped/`, `30-crosscutting/` (generated). A project with no generator uses `00-manual/` alone.
+
+Path rules also parse `Bash` commands: any token containing `/` is treated as a path, including paths lifted out of quoted `supertool` arguments. A command with no path in it matches nothing — deliberately, so a stray word in a commit message cannot drag an entry into context.
+
+Timings and matches land in `.claude/jit-context/.discovery/logs/hooks.log`. `(none)` in the match column marks a knowledge gap.
+
+```
+[23:48:14.393] pre-tool (Bash) 29ms | 10-auto/billing.md(billing) [shown:11] << src/Billing/Totals.php
+```

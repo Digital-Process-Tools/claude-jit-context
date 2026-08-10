@@ -1,18 +1,72 @@
 # claude-jit-context
 
+![claude-jit-context — know more, carry less](docs/jit-context.png)
+
 [![Tests](https://github.com/Digital-Process-Tools/claude-jit-context/actions/workflows/tests.yml/badge.svg)](https://github.com/Digital-Process-Tools/claude-jit-context/actions/workflows/tests.yml)
 [![Shell](https://img.shields.io/badge/bash-4%2B-blue)](https://www.gnu.org/software/bash/)
 [![OS](https://img.shields.io/badge/tested%20on-Linux%20%7C%20macOS-blue)](https://github.com/Digital-Process-Tools/claude-jit-context/actions/workflows/tests.yml)
 [![License](https://img.shields.io/badge/license-Community-brightgreen)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.2.0-orange)](.claude-plugin/plugin.json)
 
-Project knowledge that loads **only when it is needed**.
+**Your agent should know what your team knows.**
 
-Everything in `.claude/rules/` loads at session start — every file, every session, whether or not the session touches the code it describes. Ten rule files is thousands of tokens spent before the first question is asked. `CLAUDE.md` has the same problem: it grows, and all of it is resident all the time.
+Every team has a vocabulary. *Billing* means the totals are computed and never stored. *The deploy* means the one where the migration runs first. *That flaky test* means the one that fails on Tuesdays, for a reason three people know and nobody wrote down.
 
-claude-jit-context moves that knowledge behind pattern matching. A note about database migrations loads when someone opens a migration — not before. A gotcha about your billing module loads when the prompt mentions billing. A session that never touches PHP never pays for the PHP conventions.
+Claude Code does not have your vocabulary. So you re-explain it — every session, to every agent, forever.
+
+The usual fix is `.claude/rules/`, or a `CLAUDE.md` that keeps growing. It works right up until it does not: every file loads at session start, every session, whether or not that session goes anywhere near the code it describes. So you keep the rules file small. So the vocabulary stays in people's heads.
+
+claude-jit-context takes the ceiling off. Knowledge moves behind pattern matching, and arrives at the moment it applies: the migration note loads when someone opens a migration. The billing gotcha loads when the prompt says billing. A session that never touches PHP never pays for the PHP conventions.
+
+**Know more. Carry less.** Everything else that saves context makes the agent dumber — trim the rules, drop the conventions, summarize the docs. This is the one lever that cuts what is *resident* without cutting what is *known*.
+
+## The receipt
+
+The project this was extracted from runs **1,000 entries — 2.58 MB of markdown**, on the order of 600,000 tokens. As `.claude/rules/` that is not expensive, it is impossible: it does not fit in any context window that exists. A handful of entries fire in a given session. The rest cost nothing, and are still there the moment they are relevant.
+
+That is the actual offer. Not a percentage off your context budget — a body of institutional knowledge with no ceiling, written down once, and read by every session and every developer who joins.
 
 Nothing loads speculatively. Nothing is resident.
+
+## Five pillars
+
+**1. Zero until triggered.** An entry costs nothing to own. That is the whole design: the price of writing something down stops being a reason not to write it down, so the corpus grows to the size of what your team actually knows rather than the size of what you can afford to keep loaded.
+
+**2. Three ways to be needed.** Knowledge attaches to a keyword in the prompt, a file path being touched, or a tool about to run. Pick by asking *when* the reader needs it. Most notes belong to a folder, not to a word — the expensive mistakes happen while touching, not while talking.
+
+**3. It can say no.** The tool dimension does not only inform, it **blocks** — refusing the call and returning the reason. A `require:` that fails the command is worth more than a paragraph that gets skimmed. A rule that is merely bold has already been ignored.
+
+**4. One `awk`, 30–110 ms.** Frontmatter is compiled to a TSV index at build time, so the runtime is a flat file scan. No `jq`, no Python, no Node. This matters because it runs on *every* prompt and *every* tool call — the thing that fires constantly must cost nothing.
+
+**5. Hand-written and generated, side by side.** `00-manual/` is yours. The other layers belong to generators, which can maintain bulk coverage across a large codebase without ever overwriting a line a human wrote.
+
+## The signal
+
+You will feel it before you can name it: **the agent is rediscovering something it should already know.**
+
+It greps for a file it found last week. It re-derives a convention you have explained four times. It proposes the fix that was already tried and reverted, for a reason nobody wrote down. Every one of those is the same event — knowledge that exists on your team, and does not exist where the agent can reach it.
+
+That moment is the trigger. Do not re-explain it in the chat, where it dies at the end of the session. Write the entry:
+
+```markdown
+---
+title: Billing amounts
+description: How invoice totals are computed, and why the entity getter lies.
+keywords: billing, invoice, amount, vat, total
+---
+
+Totals are **not** stored. `getAmountVatOut()` is recomputed from line items on
+every call. Writing to `amount_vat_out` directly appears to work and is silently
+discarded on the next read.
+```
+
+```bash
+bash scripts/rebuild-tsv.sh
+```
+
+The search you just paid for is the reason the entry is worth writing — and the only moment you will ever know it well enough to write it in four lines. From then on it arrives on its own, in every session, for everyone, and nobody spends that search again.
+
+A codebase accumulates this way faster than anyone expects. That is why pillar one matters: if entries cost context to own, you ration them, and the rationing is what keeps your team's knowledge trapped in people's heads.
 
 ## Install
 
@@ -264,9 +318,9 @@ bash tests/run-all.sh
 
 ## Why not `.claude/rules/`?
 
-Files in `.claude/rules/` auto-load at session start — all of them, every session. Even with `globs` frontmatter for path scoping, the file still loads.
+Files in `.claude/rules/` auto-load at session start — all of them, every session. Even with `globs` frontmatter for path scoping, the file still loads; the glob scopes what it claims to describe, not whether it is read.
 
-Dynamic rules load only when triggered. A session that never touches PHP never loads the PHP conventions. On a project with a real body of institutional knowledge, that is the difference between a context window mostly full of maybe-relevant documentation and one mostly full of the actual conversation.
+On a project with a real body of institutional knowledge, that is the difference between a context window mostly full of maybe-relevant documentation and one mostly full of the actual conversation.
 
 ## Changelog
 

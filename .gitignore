@@ -1,3 +1,12 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# Hook timing/match logs, written on every prompt and tool call.
+.claude/jit-context/.discovery/
+
+# Session memory — per-developer, never shared.
+.remember/
+
+# Machine-specific symlink to the local claude-supertool clone.
+/supertool
