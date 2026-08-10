@@ -115,6 +115,14 @@ OUT=$(cd "$CLEAN" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --file "src/
 assert_contains "path rule fired" "$OUT" "billing.md"
 
 echo ""
+echo "=== the injected refusal notice is not reported as a rule that fired ==="
+# The notice header is "# JIT Context: N rule(s) could not be evaluated". Reading rule
+# names out of the injected text naively picks up N and prints it as a fired rule --
+# a non-match reading as a match, which is the defect this whole script exists for.
+OUT=$(cd "$BROKEN" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --tool Bash --command 'ls -la' 2>&1) && ST=0 || ST=$?
+assert_contains "says no rule fired" "$OUT" "no rule fired"
+
+echo ""
 echo "=== a tree with no rules at all is 'skipped', never 'ok' ==="
 OUT=$(cd "$ELSEWHERE" && CLAUDE_PROJECT_DIR="$CLEAN" bash "$DRYRUN" 2>&1) && ST=0 || ST=$?
 assert_status "exit 2 — could not evaluate" "$ST" "2"

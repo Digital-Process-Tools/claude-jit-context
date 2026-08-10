@@ -67,15 +67,31 @@ function jit_bad_pattern(p,   i, n, c, nx, depth, inbr, brpos) {
       continue
     }
     if (inbr) {
+      # A POSIX class, collating element or equivalence class is one unit, and the ] it
+      # contains does NOT close the bracket expression. Scanning ] naively reads
+      # [[:alnum:] as balanced and hands it to match(), where it is a FATAL awk error --
+      # reopening the exact failure this guard exists to stop.
+      if (c == "[" && substr(p, i + 1, 1) ~ /^[:.=]$/) {
+        k = index(substr(p, i + 2), substr(p, i + 1, 1) "]")
+        if (k == 0) return "unterminated [" substr(p, i + 1, 1) " element inside a character class"
+        i = i + 2 + k
+        continue
+      }
+      # ] is a literal when it is the first character of the expression, or the first
+      # after a negating ^.
       if (c == "]" && i != brpos + 1 && !(i == brpos + 2 && substr(p, brpos + 1, 1) == "^")) inbr = 0
       continue
     }
     if (c == "[") { inbr = 1; brpos = i; continue }
     if (c == "(") { depth++; continue }
-    if (c == ")") { depth--; if (depth < 0) return "unbalanced parenthesis"; continue }
+    # An unmatched ) is a LITERAL in an ERE and awk accepts it -- measured, a)b matches.
+    # Refusing it would kill rules that work today, which is worse than the bug: this
+    # guard may only ever refuse a pattern awk cannot honour. An unmatched ( is a fatal
+    # error, so the closing check below is deliberately one-sided.
+    if (c == ")") { if (depth > 0) depth--; continue }
   }
   if (inbr) return "unterminated character class"
-  if (depth != 0) return "unbalanced parenthesis"
+  if (depth > 0) return "unbalanced parenthesis"
   return ""
 }
 function jit_refusal_notice(list, n) {

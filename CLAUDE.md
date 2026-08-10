@@ -57,7 +57,7 @@ bash scripts/jit-dry-run.sh --base ~/Documents/jit-wt/NNN/.claude/jit-context \
 
 Lints every pattern in the tree you name, prints which rule fires for a sample call, exits 1 on a pattern that cannot be honoured and 2 when it could not evaluate the tree at all. Use it instead of hand-running a hook with `CLAUDE_PROJECT_DIR` overridden.
 
-**A `match` is an awk ERE, not PCRE.** `\s` `\d` `\w` `\b` compile to the bare letter and match nothing while awk exits 0 — use `[[:space:]]`, `[0-9]`, `[A-Za-z0-9_]`. Such a row is now refused at load and named in the injected context, rather than reading as enforced forever. `\n` survives and is load-bearing for anchoring on command position.
+**A `match` is an awk ERE, not PCRE.** `\s` `\d` `\w` compile to the bare letter and match nothing while awk exits 0 — use `[[:space:]]`, `[0-9]`, `[A-Za-z0-9_]`. `\b` is worse, not better: awk defines it as a backspace character, so it compiles to something real and still matches nothing. Such a row is now refused at load and named in the injected context, rather than reading as enforced forever. `\n` survives and is load-bearing for anchoring on command position.
 
 ## Layout
 

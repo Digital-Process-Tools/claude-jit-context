@@ -246,6 +246,10 @@ nothing at all, while awk exits 0. Nothing about the rule looks wrong afterwards
 | `\w` `\W`    | `[A-Za-z0-9_]`   |
 | `\b` `\B`    | anchor explicitly, e.g. `(^\|[;&\|\n] *)` |
 
+`\b` fails differently and is worth knowing separately: awk *does* define it, as a
+backspace character, so `\bgit\b` compiles to a pattern looking for literal backspaces
+rather than word boundaries. It matches nothing either way, and is refused the same way.
+
 `\n` is the one escape that survives, and rules need it: `^` anchors the whole command
 string rather than each line, so a rule meant to catch a command on line three of a
 heredoc must anchor on `(^|[;&|\n] *)`.

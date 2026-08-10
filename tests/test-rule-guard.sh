@@ -35,12 +35,16 @@ done
   printf 'Bash\tgit push\tgood.md\tremind\t\t\n'
   printf 'Bash\t~a[b\tfatal.md\tremind\t\t\n'
   printf 'Bash\t~(^|[;&|\\n] *)zork\tnewline-ok.md\tremind\t\t\n'
+  printf 'Bash\t~quux)ping\tparen-literal.md\tremind\t\t\n'
+  printf 'Bash\t~zap[[:alnum:]\tclass-fatal.md\tremind\t\t\n'
 } > "$TOOLS_DIR/00-index.tsv"
 
 echo "dead escape rule body" > "$TOOLS_DIR/dead-escape.md"
 echo "good rule body" > "$TOOLS_DIR/good.md"
 echo "fatal rule body" > "$TOOLS_DIR/fatal.md"
 echo "newline anchored rule body" > "$TOOLS_DIR/newline-ok.md"
+echo "paren literal rule body" > "$TOOLS_DIR/paren-literal.md"
+echo "class fatal rule body" > "$TOOLS_DIR/class-fatal.md"
 
 {
   printf 'Billing/\tbilling.md\n'
@@ -100,6 +104,21 @@ echo "=== the one escape awk honours keeps working: rules anchor on it ==="
 OUT=$(run_tool '{"tool_name":"Bash","tool_input":{"command":"zork --now"}}')
 assert_contains "newline-anchored rule fires" "$OUT" "newline anchored rule body"
 assert_not_contains "newline-anchored rule is not refused" "$OUT" "newline-ok.md (remind)"
+
+echo ""
+echo "=== an unmatched ) is a literal in an ERE, and must NOT be refused ==="
+# A false positive here is worse than the bug: it kills a rule that works today.
+OUT=$(run_tool '{"tool_name":"Bash","tool_input":{"command":"quux)ping now"}}')
+assert_contains "literal-paren rule fires" "$OUT" "paren literal rule body"
+assert_not_contains "and is not refused" "$OUT" "paren-literal.md (remind)"
+
+echo ""
+echo "=== a POSIX class does not close the bracket expression it sits in ==="
+# [[:alnum:] is a FATAL awk error. Scanning ] naively reads it as balanced, so the
+# guard passes it through to match() and the whole file is silenced again.
+OUT=$(run_tool '{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}')
+assert_contains "good rule survives the unterminated class" "$OUT" "good rule body"
+assert_contains "unterminated class is refused" "$OUT" "class-fatal.md"
 
 echo ""
 echo "=== path hook: same two failures ==="

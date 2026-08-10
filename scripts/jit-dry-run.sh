@@ -163,10 +163,16 @@ report_hook() {
   # $1 hook script, $2 JSON payload, $3 project dir
   local out names verdict
   out="$(printf '%s' "$2" | CLAUDE_PROJECT_DIR="$3" bash "$SCRIPT_DIR/$1" 2>/dev/null)"
-  names="$(printf '%s' "$out" | grep -o -E '(JIT Context|Vocabulary): [^ ]+' | sed 's/^[^:]*: //' | tr '\n' ' ')"
+  # Anchored on .md, because the refusal notice this same hook injects is headed
+  # "# JIT Context: N rule(s) could not be evaluated" — an unanchored read picks up N
+  # and prints it as a rule that fired, which is a non-match reading as a match.
+  names="$(printf '%s' "$out" | grep -o -E '(JIT Context|Vocabulary): [^ ]+\.md' | sed 's/^[^:]*: //' | tr '\n' ' ')"
   case "$out" in
     *'"decision":"block"'*) verdict="BLOCK  " ;;
     *) verdict="       " ;;
+  esac
+  case "$out" in
+    *"could not be evaluated"*) printf '  NOTE   %-20s the hook injected a refusal notice — see the REFUSED rows above\n' "$1" ;;
   esac
   # A hook that matched nothing must not read as a hook that fired. That confusion is
   # the whole defect this script exists for; do not reintroduce it in its own output.
