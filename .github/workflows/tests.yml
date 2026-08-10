@@ -25,6 +25,26 @@ jobs:
       - name: Run hook test suites
         run: bash tests/run-all.sh
 
+  # Non-blocking probe. Windows is documented as unsupported; this exists to find
+  # out whether that is still true, not to gate the build. A green run here proves
+  # the scripts are portable under Git Bash — it does NOT prove the plugin works on
+  # Windows, which depends on Claude Code being able to invoke bash from hooks.json.
+  windows-probe:
+    runs-on: windows-latest
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - name: Show interpreter versions
+        run: |
+          bash --version | head -1
+          awk --version 2>/dev/null | head -1 || awk -W version 2>&1 | head -1
+          perl --version | sed -n 2p
+      - name: Run hook test suites
+        run: bash tests/run-all.sh
+
   shellcheck:
     runs-on: ubuntu-latest
     steps:
