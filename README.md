@@ -217,17 +217,19 @@ Coverage runs take 8 minutes locally and are produced by CI anyway.
 | `block`  | Rejects the tool call, returning the body as the reason |
 | `once`   | Fires at most once per session                          |
 
-### Batched file operations
+### Compatibility — tools that touch files through `Bash`
 
-Path rules read `file_path` from `Read`/`Edit`/`Write`/`Glob`/`Grep`. They also parse `Bash` commands that invoke [supertool](https://github.com/Digital-Process-Tools/claude-supertool), lifting the paths out of its quoted arguments — so
+Path rules read `file_path` from `Read`/`Edit`/`Write`/`Glob`/`Grep`. Anything that reaches a file some other way does not carry that field, and a naive implementation would stop matching the moment a session used one — every path rule you wrote would go quiet, with no error and nothing in the log to explain it.
+
+So `Bash` commands are scanned too: **any path-like token (anything containing `/`) counts as a path being touched.** That covers `sed -i src/Billing/Totals.php`, a test runner pointed at a directory, a shell loop over a glob, or a batching wrapper such as [supertool](https://github.com/Digital-Process-Tools/claude-supertool), whose quoted arguments are unpacked so that
 
 ```bash
 ./supertool 'read:src/Billing/Totals.php' 'grep:getAmount:src/Billing/:10'
 ```
 
-still fires the rules for `src/Billing/`. Without this, batching file operations would silently bypass every path rule you have written.
+still fires the rules for `src/Billing/`.
 
-More generally, any path-like token (anything containing `/`) in a Bash command is considered. Commands with no path in them match nothing — deliberately, so that a stray word in a commit message cannot drag an unrelated entry into context.
+Commands with no path in them match nothing — deliberately, so that a stray word in a commit message cannot drag an unrelated entry into context.
 
 ## Rebuild after every edit
 
