@@ -5,10 +5,28 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] — First packaged release
+## [0.2.0] — First public release
 
 The system had been running in production for months while its documentation still
-described a design that no longer existed. This release makes the package match the code.
+described a design that no longer existed. This release makes the package match the code,
+and publishes it.
+
+### Published
+
+- The repository is public, and CI runs on every push and pull request.
+- README rebuilt around what the plugin is for rather than how it works: the receipt
+  (1,000 entries, 2.58 MB in the project it was extracted from), five pillars, and the
+  signal that tells a reader when to reach for it — the agent rediscovering something the
+  team already knows.
+- `.claude/jit-context/` — the repo now uses its own plugin across all three dimensions,
+  including a `block` rule that refuses hand edits of a generated index.
+- The layer table no longer advertises what is not shipped. `rebuild-tsv.sh` indexes
+  `00-manual/` alone, while the hooks scan all four layers, so `10-auto/`, `20-grouped/`
+  and `30-crosscutting/` work only when a generator writes its own `00-index.tsv`. No
+  generator ships with this plugin.
+- The `Bash` path-scanning section is framed as compatibility rather than a companion-tool
+  plug: anything reaching a file outside the file tools carries no `file_path`, so path
+  rules would go quiet with nothing in the log.
 
 ### Added
 
