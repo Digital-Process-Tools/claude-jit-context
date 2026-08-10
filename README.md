@@ -3,8 +3,8 @@
 ![claude-jit-context — know more, carry less](docs/jit-context.png)
 
 [![Tests](https://github.com/Digital-Process-Tools/claude-jit-context/actions/workflows/tests.yml/badge.svg)](https://github.com/Digital-Process-Tools/claude-jit-context/actions/workflows/tests.yml)
-[![Shell](https://img.shields.io/badge/bash-4%2B-blue)](https://www.gnu.org/software/bash/)
-[![OS](https://img.shields.io/badge/tested%20on-Linux%20%7C%20macOS-blue)](https://github.com/Digital-Process-Tools/claude-jit-context/actions/workflows/tests.yml)
+[![Shell](https://img.shields.io/badge/bash-3.2%2B-blue)](https://www.gnu.org/software/bash/)
+[![OS](https://img.shields.io/badge/tested%20on-Linux%20%7C%20macOS%20%7C%20Windows-blue)](https://github.com/Digital-Process-Tools/claude-jit-context/actions/workflows/tests.yml)
 [![License](https://img.shields.io/badge/license-Community-brightgreen)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.2.0-orange)](.claude-plugin/plugin.json)
 
@@ -137,7 +137,9 @@ Copy this directory to `<your-project>/.claude/claude-jit-context/` and register
 
 ### Requirements
 
-Bash 4+, `awk`, `perl` (used only for millisecond timestamps). **No `jq`, no Python, no Node.** Linux and macOS; Windows is not supported.
+Bash, `awk`, `perl` (used only for millisecond timestamps). **No `jq`, no Python, no Node.**
+
+Linux, macOS and Windows. The suite runs on all three in CI — including macOS's bash 3.2 and Windows under Git Bash. On Windows the hooks need a `bash` on `PATH`, which Git Bash provides; that is the same requirement every hook-based plugin in this family has.
 
 ## The three dimensions
 
