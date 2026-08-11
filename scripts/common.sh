@@ -6,16 +6,125 @@ _ms() { perl -MTime::HiRes -e 'printf("%.0f\n",Time::HiRes::time()*1000)'; }
 
 JIT_BASE="${CLAUDE_PROJECT_DIR:-.}/.claude/jit-context"
 
-# Optional per-project settings (DYNAMIC_RULES_MODULE_PREFIX, _KEYWORD_BLACKLIST,
-# _VOCAB_PATHS). Kept beside the content it configures, not in the plugin.
-# shellcheck source=/dev/null
-[ -f "$JIT_BASE/config.env" ] && . "$JIT_BASE/config.env"
 LOG_DIR="$JIT_BASE/.discovery/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/hooks.log"
 
 # Timestamp with ms precision (single perl call, ~11ms)
 _ts() { perl -MTime::HiRes -MPOSIX -e 'my $t=Time::HiRes::time(); printf("%s.%03d\n", strftime("%H:%M:%S",localtime($t)), ($t*1000)%1000)'; }
+
+# --- Optional per-project settings ------------------------------------------
+# config.env lives INSIDE the project, so it arrives with the repository. It used to be
+# dot-sourced here, on every prompt and every tool call, which made cloning a repo and
+# opening it arbitrary code execution before the user had read a line of the code.
+# Reproduced 2026-08-11: a config.env of `echo ... >&2` printed, and one of `touch ...`
+# created the file.
+#
+# Every documented setting is a plain KEY=VALUE, so the file is READ and never executed.
+#
+# Only the three documented prefixes are settable. A bare identifier allowlist is not
+# enough: PATH is a valid identifier, common.sh runs before every hook invokes `awk`, and
+# a config.env that could set PATH would be the same execution one hop removed.
+#
+# A line that cannot be honoured is REFUSED and named -- in the log, and once per session
+# in the injected context. A silently dropped setting is this repo's own defect class: it
+# reads exactly like a setting that applied and did nothing.
+#
+# Only the line number and the reason are reported, never the line's own text. The premise
+# of the whole change is that this file may be hostile, and hostile text does not belong
+# in a model's context.
+#
+# The list travels to the hooks through the ENVIRONMENT, never through `awk -v`. It is
+# newline-separated, and a -v value containing a newline is the fatal awk error "newline
+# in string" -- raised before the program runs, so the hook printed nothing at all and
+# exited 0. A single refused line has no separator and hid that completely; two lines
+# silenced the whole hook. The channel for reporting a silent failure must not have one.
+export JIT_CONFIG_REFUSED=""
+export JIT_CONFIG_REFUSED_N=0
+
+jit_load_config() {
+  local file="$1" line key value reason q rest tail lineno=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    lineno=$((lineno + 1))
+    # A CRLF checkout must parse the same as an LF one -- config.env is not covered by
+    # this repo's .gitattributes, because it lives in the user's project.
+    line="${line%$'\r'}"
+    while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+    case "$line" in
+      ''|'#'*) continue ;;
+      # `export KEY=VALUE` was valid while this file was sourced, so it stays valid.
+      # The export itself is a no-op now: the hooks read these as shell variables.
+      export[[:space:]]*)
+        line="${line#export}"
+        while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+        ;;
+    esac
+
+    reason=""
+    case "$line" in
+      *=*) key="${line%%=*}"; value="${line#*=}" ;;
+      *)   key=""; value=""; reason="not a KEY=VALUE assignment" ;;
+    esac
+    if [ -z "$reason" ] && ! [[ "$key" =~ ^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$ ]]; then
+      reason="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
+    fi
+    if [ -n "$reason" ]; then
+      JIT_CONFIG_REFUSED_N=$((JIT_CONFIG_REFUSED_N + 1))
+      JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED${JIT_CONFIG_REFUSED:+$'\n'}- line $lineno: $reason"
+      continue
+    fi
+
+    # Quotes and trailing comments are handled the way `.`-sourcing handled them, because
+    # a config.env that worked before this change has to keep working. A parser that only
+    # strips a quote pair turns `KEY="src/" # default` into the value `"src/" # default`
+    # -- not refused, not reported, just quietly wrong. That is the exact failure mode the
+    # refusal machinery above exists to prevent, reintroduced by the fix for it.
+    #
+    # Nothing inside a value is expanded: a $, a backtick or a $(...) is a literal now.
+    case "$value" in
+      '"'*|"'"*)
+        q="${value%"${value#?}"}"        # the opening quote, " or '
+        rest="${value#?}"
+        case "$rest" in
+          *"$q"*)
+            tail="${rest#*"$q"}"
+            while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
+            case "$tail" in
+              # Anything after the closing quote that is not a comment is ambiguous, so it
+              # is refused rather than guessed at. Guessing is how a value goes quietly
+              # wrong, which is the one outcome this whole function is written to avoid.
+              ''|'#'*) value="${rest%%"$q"*}" ;;
+              *) reason="trailing text after the closing quote" ;;
+            esac
+            ;;
+          *) reason="unterminated quote" ;;
+        esac
+        ;;
+      *)
+        # Bash starts a comment at a # preceded by whitespace, and treats one that is not
+        # as an ordinary character -- so `^(a#b)$` keeps its hash and `1 # on` does not.
+        case "$value" in
+          *[[:space:]]#*) value="${value%%[[:space:]]#*}" ;;
+        esac
+        while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
+        ;;
+    esac
+    if [ -n "$reason" ]; then
+      JIT_CONFIG_REFUSED_N=$((JIT_CONFIG_REFUSED_N + 1))
+      JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED${JIT_CONFIG_REFUSED:+$'\n'}- line $lineno: $reason"
+      continue
+    fi
+    printf -v "$key" '%s' "$value"
+  done < "$file"
+}
+
+if [ -f "$JIT_BASE/config.env" ]; then
+  jit_load_config "$JIT_BASE/config.env"
+  if [ "$JIT_CONFIG_REFUSED_N" -gt 0 ]; then
+    printf '[%s] config.env | %d line(s) refused\n%s\n' \
+      "$(_ts)" "$JIT_CONFIG_REFUSED_N" "$JIT_CONFIG_REFUSED" >> "$LOG_FILE"
+  fi
+fi
 
 # Pipeline log: _log "step" duration_ms "message"  → [HH:MM:SS.mmm] step 42ms | message
 _log() {
@@ -94,9 +203,56 @@ function jit_bad_pattern(p,   i, n, c, nx, depth, inbr, brpos) {
   if (depth > 0) return "unbalanced parenthesis"
   return ""
 }
+'
+
+# --- Shared awk containment check + refusal notices ---------------------------
+# Prepended to all three hook programs (the prompt hook has no patterns to guard, so it
+# takes this and not JIT_AWK_GUARD), and to jit-dry-run.sh.
+#
+# An index row names its entry file, and every hook builds the path by concatenating that
+# name onto the layer directory. Until 2026-08-11 nothing checked it, so a committed row
+# of `../../../../outside.txt` made the hook READ that file and inject its contents into
+# the model's context. 00-index.tsv is a committed file, so cloning a repository was the
+# whole attack. Reproduced at all five read sites: the path rule loop, the tool rule loop,
+# and the three vocabulary passes.
+#
+# The check is "a bare file name", not a resolved-prefix comparison, because awk has no
+# realpath and shelling out for one would cost a process per row. It is safe to be this
+# strict: rebuild-tsv.sh writes this column with `basename` at all four of its sites, and
+# the generated-layer contract in the README is the same TSV format, so a name carrying a
+# separator was never produced by this project.
+#
+# The backslash is refused for Windows. On Git Bash the Win32 file API underneath awk
+# treats it as a separator, so `..\..\x` traverses there while being inert here -- the
+# reverse of the mistake this repo has already made twice about the other legs of CI.
+#
+# Consumed by the hook awk programs and jit-dry-run.sh, which shellcheck cannot see.
+# shellcheck disable=SC2034
+JIT_AWK_ENTRY='
+# A refused row is reported by POSITION, never by the text of its file-name column. That
+# column is attacker-controlled free text whose only constraint is that it carries a
+# separator, and the refusal notice fires without any rule having matched -- so echoing it
+# back would be a prompt-injection channel that needs no trigger at all. The full name
+# still goes to hooks.log, which a person reads and no model does.
+function jit_row_id(layer, rown) {
+  return layer " row " rown
+}
+function jit_bad_entry_file(f) {
+  # An empty column is a blank index line, not a rule. It carries no pattern either and
+  # the caller skips it on the existing content == "" path; refusing it would fire a
+  # notice at the author over stray whitespace.
+  if (f == "") return ""
+  if (index(f, "/") > 0 || index(f, "\\") > 0) return "not a bare file name"
+  if (f == "." || f == "..") return "not a bare file name"
+  return ""
+}
 function jit_refusal_notice(list, n) {
   return "# JIT Context: " n " rule(s) could not be evaluated, so they did NOT run\n" list \
     "\nA pattern the matcher cannot honour is not a rule that did not match, and until now the two looked identical. Lint the tree that owns these rules:\n  bash scripts/jit-dry-run.sh --base <tree>/.claude/jit-context"
+}
+function jit_config_notice(list, n) {
+  return "# JIT Context: " n " line(s) in .claude/jit-context/config.env were refused, so they did NOT take effect\n" list \
+    "\nconfig.env is read as plain KEY=VALUE and is never executed. Only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* settings are read; anything else, shell included, is refused. If a refused line is not one you wrote, treat that file as hostile -- it arrived with the repository."
 }
 '
 

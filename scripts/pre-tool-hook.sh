@@ -19,7 +19,7 @@ cat | awk \
   -v home="$HOME" \
   -v project="${CLAUDE_PROJECT_DIR:-.}" \
   -v log_tmp="$LOG_TMP" \
-  "$JIT_AWK_GUARD$JIT_AWK_JSON"'
+  "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_JSON"'
 { input = input $0 }
 END {
   # --- Parse JSON (common.sh: jit_json_fields honours an escaped quote, jit_unescape
@@ -84,10 +84,27 @@ END {
   close(shown_file)
 
   # --- Tool rules matching ---
+  rown = 0
   while ((getline tline < tools_tsv) > 0) {
+    rown++
     split(tline, tf, "\t")
     r_tool = tf[1]; r_match = tf[2]; r_file = tf[3]
     r_modes = tf[4]; r_require = tf[5]; r_forbid = tf[6]
+
+    # Containment first: r_file is concatenated onto tools_dir below, and a row of
+    # ../../../x made this hook read that file and inject it. jit_bad_entry_file lives in
+    # common.sh with the reproduction.
+    # The mode is DERIVED, never echoed: like the file name, column 4 is attacker text.
+    # "this was a block rule and it did not run" is worth saying; the raw column is not.
+    r_kind = (index(r_modes, "block") > 0) ? " (a block rule)" : ""
+    why = jit_bad_entry_file(r_file)
+    if (why != "") {
+      n_refused++
+      refused = refused (refused == "" ? "- " : "\n- ") jit_row_id("tools/00-manual", rown) r_kind ": " why
+      log_matches = log_matches sep "refused:" r_file "(" why ")"
+      sep = ", "
+      continue
+    }
 
     # tool may name several tools, pipe-separated: `tool: Edit|Write|Read`.
     # Exact-match each alternative — never substring, or `Read` would match `ReadFile`.
@@ -109,6 +126,9 @@ END {
       why = jit_bad_pattern(substr(r_match, 2))
       if (why != "") {
         n_refused++
+        # Named, not positioned — see the same decision in pre-path-hook.sh: this row
+        # already passed the bare-name check, so the name is safe to echo and is the thing
+        # an author needs. tests/test-rule-guard.sh asserts this half by file name.
         refused = refused (refused == "" ? "- " : "\n- ") r_file " (" r_modes "): " why
         log_matches = log_matches sep "refused:" r_file "(" why ")"
         sep = ", "
@@ -216,9 +236,24 @@ END {
 
       # Single pass: match keywords, collect files + matched keywords
       delete vmatch
+      vrown = 0
       while ((getline vl < lookup) > 0) {
+        vrown++
         split(vl, vf, "\t")
         kw = vf[1]; vfile = vf[2]
+        why = jit_bad_entry_file(vfile)
+        if (why != "") {
+          # Same concatenation, same refusal. Keyed on the name so one bad row is counted
+          # once, not once per keyword that happens to point at it.
+          if (!((layer "/" vfile) in vrefused)) {
+            vrefused[layer "/" vfile] = 1
+            n_refused++
+            refused = refused (refused == "" ? "- " : "\n- ") jit_row_id(layer, vrown) ": " why
+            log_matches = log_matches sep "refused:" vfile "(" why ")"
+            sep = ", "
+          }
+          continue
+        }
         if (!(vfile in shown) && index(padded, " " kw " ") > 0) {
           if (vfile in vmatch) vmatch[vfile] = vmatch[vfile] "|" kw
           else vmatch[vfile] = kw
@@ -258,6 +293,19 @@ END {
     print "jit-refused-rules" >> shown_file
     note = jit_refusal_notice(refused, n_refused)
     matched = (matched == "") ? note : note "\n---\n" matched
+  }
+
+  # --- A refused config.env line is reported, once per session ---
+  # Parsed in common.sh, reported here, for the same reason as a refused rule: the log is
+  # exactly where this would go unnoticed. Suppressed when the call is being blocked, so
+  # a block reason stays the only thing the model reads.
+  config_refused = ENVIRON["JIT_CONFIG_REFUSED"]
+  config_refused_n = ENVIRON["JIT_CONFIG_REFUSED_N"] + 0
+  if (config_refused_n > 0 && blocked == "" && !("jit-refused-config" in shown)) {
+    shown["jit-refused-config"] = 1
+    print "jit-refused-config" >> shown_file
+    cnote = jit_config_notice(config_refused, config_refused_n)
+    matched = (matched == "") ? cnote : cnote "\n---\n" matched
   }
   close(shown_file)
 

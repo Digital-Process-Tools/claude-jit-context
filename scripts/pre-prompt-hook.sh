@@ -14,7 +14,7 @@ cat | awk \
   -v vocab_base="$JIT_BASE/vocabulary" \
   -v shown_file="$SHOWN_FILE" \
   -v log_tmp="$LOG_TMP" \
-  "$JIT_AWK_JSON"'
+  "$JIT_AWK_ENTRY$JIT_AWK_JSON"'
 { input = input $0 }
 END {
   # --- Parse JSON: extract prompt ---
@@ -53,6 +53,8 @@ END {
   matched = ""
   log_matches = ""
   sep = ""
+  refused = ""
+  n_refused = 0
 
   # --- Scan vocab layers ---
   split("00-manual 10-auto 20-grouped 30-crosscutting", layers, " ")
@@ -62,9 +64,26 @@ END {
 
     # Single pass: match keywords, collect files + matched keywords
     delete vmatch
+    vrown = 0
     while ((getline vl < lookup) > 0) {
+      vrown++
       split(vl, vf, "\t")
       kw = vf[1]; vfile = vf[2]
+      # vfile is concatenated onto the layer directory below. A row of ../../../x made
+      # this hook read that file and inject it into the very first message of a session;
+      # jit_bad_entry_file in common.sh carries the reproduction. Counted once per row,
+      # not once per keyword pointing at it.
+      why = jit_bad_entry_file(vfile)
+      if (why != "") {
+        if (!((layer "/" vfile) in vrefused)) {
+          vrefused[layer "/" vfile] = 1
+          n_refused++
+          refused = refused (refused == "" ? "- " : "\n- ") jit_row_id(layer, vrown) ": " why
+          log_matches = log_matches sep "refused:" vfile "(" why ")"
+          sep = ", "
+        }
+        continue
+      }
       if (!(vfile in shown) && index(padded, " " kw " ") > 0) {
         if (vfile in vmatch) vmatch[vfile] = vmatch[vfile] "|" kw
         else vmatch[vfile] = kw
@@ -90,6 +109,28 @@ END {
         else matched = vh "\n" vc
       }
     }
+  }
+
+  # --- A refused row is reported, once per session ---
+  # The prompt hook had no such channel, because it had no pattern to refuse. A row whose
+  # entry file cannot be honoured is the same shape of problem as a pattern that cannot:
+  # both read as "no entry matched" and neither is.
+  if (n_refused > 0 && !("jit-refused-vocab" in shown)) {
+    shown["jit-refused-vocab"] = 1
+    print "jit-refused-vocab" >> shown_file
+    note = jit_refusal_notice(refused, n_refused)
+    matched = (matched == "") ? note : note "\n---\n" matched
+  }
+
+  # --- A refused config.env line is reported, once per session ---
+  # Shares the shown-file with the tool hook, so this lands once across both.
+  config_refused = ENVIRON["JIT_CONFIG_REFUSED"]
+  config_refused_n = ENVIRON["JIT_CONFIG_REFUSED_N"] + 0
+  if (config_refused_n > 0 && !("jit-refused-config" in shown)) {
+    shown["jit-refused-config"] = 1
+    print "jit-refused-config" >> shown_file
+    cnote = jit_config_notice(config_refused, config_refused_n)
+    matched = (matched == "") ? cnote : cnote "\n---\n" matched
   }
   close(shown_file)
 

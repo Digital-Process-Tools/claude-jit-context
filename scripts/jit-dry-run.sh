@@ -84,6 +84,7 @@ fi
 #     evaluate is not a rule.
 
 REFUSED=0
+VOCAB_REFUSED=0
 CHECKED=0
 LISTED=0
 INDEXES=0
@@ -117,6 +118,22 @@ check_pattern() {
   fi
 }
 
+# An entry file name is CONCATENATED onto its layer directory by every hook, so a name
+# that is not bare escapes the tree — see jit_bad_entry_file in common.sh. The hooks now
+# refuse such a row and say so in context, and that notice tells the reader to lint the
+# tree here; this is the check that makes the advice true. Verdict from the same shared
+# awk function the hooks use, never a second copy in bash that can drift from it.
+# Returns 0 when the name is honourable, 1 when it was refused.
+check_entry_file() {
+  # $1 layer label, $2 entry file name
+  local label="$1" file="$2" why
+  why="$(JIT_ENTRY="$file" awk "$JIT_AWK_ENTRY"'BEGIN { print jit_bad_entry_file(ENVIRON["JIT_ENTRY"]) }')"
+  [ -n "$why" ] || return 0
+  printf 'REFUSED  %-18s %-30s %s\n' "$label" "$file" "$why"
+  printf '         %-18s %-30s the hook reads <layer>/<name>, so this row leaves the tree\n' "" ""
+  return 1
+}
+
 for tsv in "$BASE"/tools/*/00-index.tsv; do
   [ -f "$tsv" ] || continue
   INDEXES=$((INDEXES + 1))
@@ -124,12 +141,13 @@ for tsv in "$BASE"/tools/*/00-index.tsv; do
   while IFS=$'\t' read -r r_tool r_match r_file _rest; do
     [ -n "${r_match:-}" ] || continue
     [ -n "${r_file:-}" ] || continue
+    LISTED=$((LISTED + 1))
+    check_entry_file "$label" "$r_file" || { REFUSED=$((REFUSED + 1)); continue; }
     # A bare match is a substring test (index()), not a regex — nothing to compile.
     case "$r_match" in
       "~"*) check_pattern "$label" "$r_file" "${r_match#\~}" ;;
       *)    printf 'ok       %-18s %-30s substring, not a regex (tool %s)\n' "$label" "$r_file" "$r_tool" ;;
     esac
-    LISTED=$((LISTED + 1))
   done < "$tsv"
 done
 
@@ -140,8 +158,25 @@ for tsv in "$BASE"/paths/*/00-index.tsv; do
   while IFS=$'\t' read -r p_match p_file _rest; do
     [ -n "${p_match:-}" ] || continue
     [ -n "${p_file:-}" ] || continue
-    check_pattern "$label" "$p_file" "$p_match"
     LISTED=$((LISTED + 1))
+    check_entry_file "$label" "$p_file" || { REFUSED=$((REFUSED + 1)); continue; }
+    check_pattern "$label" "$p_file" "$p_match"
+  done < "$tsv"
+done
+
+# Vocabulary has no patterns to compile — its rows are literal keywords and literal path
+# fragments — so it never appeared here. It has three of the five entry-file read sites,
+# which is exactly the thing this lint now checks, so it is swept for that alone. Silent
+# on a clean tree: a vocabulary index is not "checked" in the sense the counts above mean.
+for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; do
+  [ -f "$tsv" ] || continue
+  label="vocabulary/$(basename "$(dirname "$tsv")")"
+  while IFS=$'\t' read -r _v_key v_file _rest; do
+    [ -n "${v_file:-}" ] || continue
+    # Counted apart from REFUSED, which is a subset of the rules the summary line says
+    # were indexed and compiled. Folding these in printed "2 refused" under "1 rule
+    # indexed", which is the kind of arithmetic that makes a reader distrust the tool.
+    check_entry_file "$label" "$v_file" || VOCAB_REFUSED=$((VOCAB_REFUSED + 1))
   done < "$tsv"
 done
 
@@ -156,6 +191,10 @@ echo ""
 # Two counts, not one: a substring row has no regex to compile, so folding it into the
 # checked total would report coverage the run does not have.
 echo "$LISTED rule(s) indexed, $CHECKED regex pattern(s) compiled, $REFUSED refused."
+if [ "$VOCAB_REFUSED" -gt 0 ]; then
+  echo "$VOCAB_REFUSED vocabulary row(s) refused on the entry file name."
+  echo "Vocabulary carries no patterns, so it is swept for that alone and never counted above."
+fi
 
 # --- Phase 2: which rule fires for this call? --------------------------------
 
@@ -246,5 +285,5 @@ if [ -n "$SAMPLE_TOOL$SAMPLE_COMMAND$SAMPLE_FILE$SAMPLE_PROMPT" ]; then
   esac
 fi
 
-[ "$REFUSED" -eq 0 ] || exit 1
+[ "$REFUSED" -eq 0 ] && [ "$VOCAB_REFUSED" -eq 0 ] || exit 1
 exit 0
