@@ -311,6 +311,24 @@ rather than word boundaries. It matches nothing either way, and is refused the s
 string rather than each line, so a rule meant to catch a command on line three of a
 heredoc must anchor on `(^|[;&|\n] *)`.
 
+**Double quotes in a pattern are yours to use.** A matching pair around the *whole* value
+is read as YAML-style quoting and removed — `match: "~ls[[:space:]]+-la"` indexes as
+`~ls[[:space:]]+-la`. A quote anywhere else is part of the pattern and reaches the index
+untouched, which is what lets you anchor on a quoted argument at all:
+
+```yaml
+match: ~echo[[:space:]]+["]hi["]     # fires on echo "hi", not on echo hi
+```
+
+Quoting the whole value is never *required* — the reader takes the rest of the line as it
+stands — so the shortest advice is to leave a pattern containing quotes unquoted, and to
+write a literal quote at either end as `["]`, the bracket form the invocation macros emit.
+A value that merely begins and ends with a quote without being one quoted string, such as
+`"a" or "b"`, is left exactly as written rather than half-unwrapped.
+
+Earlier versions deleted every quote in the value, so `["]` became `[]` and the rule
+matched something the author never wrote, with nothing in the entry or the log to show it.
+
 **A pattern the matcher cannot honour is refused at load and reported** — the row is
 skipped, every other rule in the file keeps working, and the hook injects a one-line
 notice naming the rule and the construct, once per session. Two things this replaces:

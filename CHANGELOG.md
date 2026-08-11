@@ -89,6 +89,33 @@ the user to do anything beyond opening the project.
 
 ### Fixed
 
+- **A `match:` pattern could not contain a double quote, and nothing said so.** The
+  frontmatter reader deleted every `"` in the value on its way to the index, so `["]` —
+  the way you anchor on a quoted argument, and the way the invocation macros do it —
+  reached the index as `[]`. The rule then matched something the author never wrote:
+  measured, `~echo[[:space:]]+["]hi["]` indexed as `~echo[[:space:]]+[]hi[]`, went silent
+  on `echo "hi"`, and fired on `echo h`. Both directions wrong, from a pattern that reads
+  correctly in the entry.
+
+  Nothing reported it. The `.md` on disk still showed what the author wrote, only the
+  index runs, and there was no error and no log line — the repository's own
+  `fails-to-preserve` shape.
+
+  Now only a matching pair around the **whole** value is removed, which is the YAML-style
+  quoting the strip existed for; `match: "~ls -la"` still works. A quote anywhere else is
+  data, and a value is never *required* to be quoted, so a pattern containing quotes is
+  simply written unquoted. Deliberately no refusal beside it: nothing is left that can
+  only be represented wrongly, since a literal quote at either end is written `["]`.
+
+  "Wrapping" is tested as `^"[^"]*"$` rather than `^".*"$`, because the second is greedy
+  and would turn `"a" or "b"` into `a" or "b` — a rewrite of the author's value, which is
+  the defect being fixed rather than a smaller version of it. Anything that is not
+  unambiguously one quoted string is preserved verbatim. `require:` and `forbid:` are read
+  by the same function and were altered the same way.
+
+  Applies to `tools` and `paths` alike. No shipped or dogfood entry used a quote, so no
+  index changed — which is also why this went two releases without being noticed.
+
 - **This repository's own `entries.md` rule was anchored on a bare path fragment**, so
   it fired on every `.md` file whose path merely contained `jit-context/` — including
   the scratchpad directory a Claude Code session derives from the project name, which
@@ -96,6 +123,11 @@ the user to do anything beyond opening the project.
   files twice in one session. Anchored on `(\.claude|examples)/jit-context/` instead.
   A dogfood rule rather than a shipped one, but it is precisely the failure the entry
   itself warns about.
+
+- **`tests/test-frontmatter-quotes.sh`** — new suite for the above. Written first and run
+  red: 7 of 14 failed, including the two hook verdicts inverted in opposite directions.
+  Both directions on the same fixture, and it aborts naming itself if the index it reads
+  is not the one it just built.
 
 - **`tests/test-dogfood-entries.sh`** — new suite covering this repository's own
   entries, both directions for every rule: a path each must match, and a near-miss each

@@ -146,10 +146,29 @@ jit_frontmatter() {
     /^---$/ { n++; next }
     n == 1 && index($0, f ":") == 1 {
       sub("^" f ": *", "")
-      # mode is a comma-separated token list, so every space goes; every other field is
-      # free text, where it is the quotes that go. Both are what the index has always
-      # carried, and changing either would silently retire rules that work today.
-      if (f == "mode") gsub(/ /, ""); else gsub(/"/, "")
+      # mode is a comma-separated token list, so every space goes.
+      if (f == "mode") { gsub(/ /, "") }
+      else {
+        # Every other field is free text, and a `match:` value is an awk ERE where a
+        # double quote is an ordinary character an author has real reason to write --
+        # `["]` is how you anchor on a quoted argument. Deleting every quote in the value
+        # (#19) turned that into `[]`, silently: the .md still read as the author wrote
+        # it, only the index runs, and the rule matched something else forever with no
+        # error and no log line.
+        #
+        # So only a pair WRAPPING the whole value goes -- that is YAML-style quoting of
+        # the value, which is what the strip was for. A quote anywhere else is data.
+        #
+        # Wrapping is `^"[^"]*"$` and not `^".*"$` on purpose: the second is greedy, and
+        # `"a" and "b"` starts and ends with a quote without being one quoted scalar. It
+        # would come out as `a" and "b"` -- a rewrite nobody asked for, which is the
+        # defect this whole change is about. Anything that is not unambiguously a wrapped
+        # scalar is preserved verbatim, and a value is never required to be quoted here:
+        # the reader takes the rest of the line as it stands.
+        v = $0
+        sub(/[[:space:]]+$/, "", v)
+        if (v ~ /^"[^"]*"$/) $0 = substr(v, 2, length(v) - 2)
+      }
       print
       exit
     }
@@ -187,10 +206,13 @@ jit_frontmatter() {
 #   @invocation-quoted-arg W...
 #                        the same, followed by a QUOTED argument before any pipe.
 #                        `supertool 'gh-pr:1' | head` matches; `pytest | tail` does not.
-#                        This one is not writable by hand at all: rebuild-tsv.sh strips
-#                        every double quote out of a `match:` line, so an author can only
-#                        ever anchor on the single quote and never knows the other half
-#                        was dropped.
+#                        Hand-writing this used to be impossible -- the frontmatter reader
+#                        deleted every double quote in a `match:` value, so an author could
+#                        only ever anchor on the single quote and never learned the other
+#                        half had gone (#19). jit_frontmatter() now preserves it, so the
+#                        macro is a shorthand for an anchor rather than the only route to
+#                        one; the anchor is still the part nobody can verify by reading,
+#                        which is why it is written once here.
 #
 # The subject a tools regex is matched against is lowercased by the hook, so the words
 # are lowercased here. Everything outside [a-z0-9_/] is emitted inside a bracket
