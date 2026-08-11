@@ -158,6 +158,20 @@ assert_contains "batch: entity" "$OUT" "entity pattern"
 assert_contains "batch: php-coding" "$OUT" "php coding rules"
 
 # =============================================
+# SECTION 2b: multi-line commands (issue #6)
+# =============================================
+
+echo ""
+echo "=== supertool call on the second line of a multi-line command ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cd repo\n./supertool '\''read:src/Billing/Module.class.php'\''"}}')
+assert_contains "php rule fires for a supertool call after a decoded newline" "$OUT" "php coding rules"
+
+echo ""
+echo "=== multi-line command with no supertool call stays silent ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cd repo\ncat src/Billing/Module.class.php"}}')
+assert_empty "no rule fires without a supertool call" "$OUT"
+
+# =============================================
 # SECTION 3: Bash non-supertool (should NOT match)
 # =============================================
 

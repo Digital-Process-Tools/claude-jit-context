@@ -232,6 +232,27 @@ Coverage runs take 8 minutes locally and are produced by CI anyway.
 | `block`  | Rejects the tool call, returning the body as the reason |
 | `once`   | Fires at most once per session                          |
 
+### What a tool rule is tested against
+
+Three different subjects, and the difference is what stops a rule about a command from
+firing on prose that merely mentions it.
+
+| Field                | Subject                                                            |
+| -------------------- | ------------------------------------------------------------------ |
+| `match` (substring)  | the **command words** — the command up to the first `;` `&` `\|`, the first `"`, or the first ` --` |
+| `~match` (regex)     | the **whole command**, including quoted arguments and later lines   |
+| `require` / `forbid` | the **whole command**                                               |
+
+So `match: git push` does not fire on `git commit -m "fix git push detection"`, in one
+line or twenty — the quote ends the command words, and everything after it is an argument
+rather than a command. A `~match` regex does see that text, which is the price of being
+able to anchor on a later command: write `~(^|[;&|\n] *)git[[:space:]]+push` rather than
+`~git push` when you mean the command and not the words.
+
+A command spanning several lines is one string with real newlines in it. `^` anchors that
+whole string, not each line, so a rule that must catch the second command needs the
+newline in its anchor class — see below.
+
 ### Patterns are awk, not PCRE
 
 Every regex — a `paths` `match`, and a `tools` `match` prefixed with `~` — is compiled by

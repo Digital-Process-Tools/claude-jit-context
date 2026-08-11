@@ -19,6 +19,12 @@ source "$(dirname "$0")/common.sh"    # JIT_BASE, _log_hook, optional config.env
 
 Hooks read `.claude/jit-context/<dimension>/<layer>/00-index.tsv` — never the markdown frontmatter. One `awk` per hook is the whole runtime.
 
+**Read the payload with `jit_json_fields()` + `jit_unescape()` from `common.sh`, never a bare `split(input, f, "\"")`.** A bare split ends a value at the first *escaped* quote and decodes nothing, so a multi-line command reaches the matcher with its newlines still spelled backslash-n and an anchored rule cannot fire on it. Decode only the values the hook keeps — a `Write` payload carries the whole file body in `tool_input.content`.
+
+One awk trap, measured on both `awk version 20200816` and `GNU Awk 5.4.1` because the two disagree: **`split()` on a one-character separator also splits on newlines** — one-true-awk does, gawk does not. Any walk over alternate fields (the single-quote split that lifts paths out of `supertool` arguments) then reads its arguments from the wrong side of the separator on one platform and not the other. Bracket the separator — `"[\047]"` — and awk compiles a regex, which splits on that character alone everywhere.
+
+Both engines agree that regex `.` **does** match a newline: `gsub(/[;&|].*/)` on `a;b<NL>c;d` gives `a` on each. Do not assume otherwise — an earlier draft of this file did, and the reasoning built on it was wrong in the safe direction only by luck.
+
 **Behaviour change: write the test first, watch it fail, then fix.** A test written after the fix asserts what the code happens to do.
 
 ```bash

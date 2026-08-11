@@ -100,6 +100,91 @@ function jit_refusal_notice(list, n) {
 }
 '
 
+# --- Shared JSON string reader ---------------------------------------------
+# Prepended to all three hook programs. Every hook used to read its payload with
+# `split(input, f, "\\"")` and take the raw field, which is wrong twice:
+#
+#   1. It ends a value at the first ESCAPED quote. `gh pr list --search \\"a b\\" --limit 20`
+#      arrived as `gh pr list --search ` -- so a `require: --limit` blocked a command that
+#      carried --limit, and only when the flag sat after the quote. The require check is a
+#      plain index(); it was the subject that had been cut, not the test.
+#   2. It never decodes anything. A multi-line Bash command arrives with its newlines as
+#      the two characters \\ and n, so a rule anchored `~(^|[;&|\\n] *)` -- where the escape
+#      is a real newline to awk -- could not fire on it, ever. Nothing errored, nothing
+#      warned; the rule read as enforced and was not.
+#
+# jit_json_fields() keeps the old quote-split parity (field[even] = key, field[even+2] =
+# value) but reports each field as a RANGE of raw pieces, rejoining nothing: a quote whose
+# preceding piece ends in an odd number of backslashes was escaped, so it is content and
+# the field continues past it.
+#
+# Ranges rather than strings, because a Write payload carries the whole file body in
+# tool_input.content and every literal quote in that body arrives escaped. Concatenating a
+# field back together costs a copy of the whole value per escaped quote — measured at
+# 359 ms for a 200 KB payload with 8000 of them, against 30 ms before and 44 ms now.
+# jit_field()
+# materialises a field only when a caller asks for one, and a caller only ever asks for
+# the four short values it matches on.
+#
+# Parity is read off the single piece before the quote, never the joined field: a join
+# always inserts a literal quote, so a run of backslashes can never carry across one.
+#
+# An escape awk cannot represent is left exactly as written rather than swallowed: eating
+# the backslash of an unknown escape would turn `\\d` into `d` and hand the matcher a
+# subject its author never typed. \\uXXXX is in that set deliberately -- decoding it needs
+# UTF-8 assembly no awk here can be trusted to do.
+# shellcheck disable=SC2034
+JIT_AWK_JSON='
+function jit_trailing_backslashes(s,   c, n) {
+  n = length(s); c = 0
+  while (c < n && substr(s, n - c, 1) == "\\") c++
+  return c
+}
+function jit_json_fields(s, raw, fs, fe,   n, i, k) {
+  n = split(s, raw, "\"")
+  k = 1
+  fs[1] = 1
+  for (i = 1; i < n; i++) {
+    # An odd number of trailing backslashes means the quote that follows was escaped, so
+    # it is content and not a delimiter: the field runs on. The backslash stays put and
+    # jit_unescape() collapses the pair when the field is finally materialised.
+    if (jit_trailing_backslashes(raw[i]) % 2 == 1) continue
+    fe[k] = i
+    k++
+    fs[k] = i + 1
+  }
+  fe[k] = n
+  return k
+}
+function jit_field(raw, a, b,   o, i) {
+  if (a == "" || b == "" || a > b) return ""
+  if (a == b) return raw[a]
+  o = raw[a]
+  for (i = a + 1; i <= b; i++) o = o "\"" raw[i]
+  return o
+}
+function jit_unescape(s,   n, i, c, nx, o) {
+  if (index(s, "\\") == 0) return s
+  n = length(s); o = ""
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (c != "\\" || i == n) { o = o c; continue }
+    nx = substr(s, i + 1, 1)
+    if (nx == "n") o = o "\n"
+    else if (nx == "t") o = o "\t"
+    else if (nx == "r") o = o "\r"
+    else if (nx == "b") o = o "\b"
+    else if (nx == "f") o = o "\f"
+    else if (nx == "\"") o = o "\""
+    else if (nx == "/") o = o "/"
+    else if (nx == "\\") o = o "\\"
+    else { o = o c nx; i++; continue }
+    i++
+  }
+  return o
+}
+'
+
 # Hook log with timing + matches: _log_hook "pre-tool (Bash)" 42 "tool:git-push.md(git push)"
 _log_hook() {
   local hook="$1"

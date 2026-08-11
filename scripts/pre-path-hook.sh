@@ -28,26 +28,41 @@ cat | awk \
   -v vocab_shown_file="$VOCAB_SHOWN_FILE" \
   -v shown_file="$SHOWN_FILE" \
   -v log_tmp="$LOG_TMP" \
-  "$JIT_AWK_GUARD"'
+  "$JIT_AWK_GUARD$JIT_AWK_JSON"'
 { input = input $0 }
 END {
   # --- Parse JSON: extract file_path, path, or command ---
-  n = split(input, f, "\"")
+  # jit_json_fields/jit_unescape live in common.sh. Splitting on a bare quote ended a
+  # value at the first ESCAPED one, and nothing decoded \n — so a supertool call sitting
+  # on the second line of a multi-line command was invisible here.
+  n = jit_json_fields(input, raw, fs, fe)
   cmd = ""
-  for (i = 2; i <= n; i += 2) {
-    k = f[i]; v = f[i+2]
-    if (k == "file_path") file_path = v
-    else if (k == "path" && file_path == "") file_path = v
-    else if (k == "command") cmd = v
+  for (i = 2; i + 2 <= n; i += 2) {
+    # A key this hook wants is quote-free, so a field spanning several raw pieces is not
+    # one; skipping it is what keeps a Write payload body from ever being reassembled.
+    if (fs[i] != fe[i]) continue
+    k = raw[fs[i]]
+    if (k == "file_path") file_path = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
+    else if (k == "path" && file_path == "") file_path = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
+    else if (k == "command") cmd = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
   }
 
   # --- Collect paths to match against ---
   path_count = 0
   if (file_path != "") {
     path_count = 1; all_paths[1] = file_path
-  } else if (cmd != "" && cmd ~ /(^|[ \t;&|(])(\.\/)?supertool(\.py)?[ \t]/) {
-    # Extract paths from supertool single-quoted arguments
-    n2 = split(cmd, args, "\047")
+  # \n joins the class for the same reason ; and | are in it: a decoded multi-line
+  # command puts the second invocation after a real newline, and without it the call was
+  # simply not seen.
+  } else if (cmd != "" && cmd ~ /(^|[ \t\n;&|(])(\.\/)?supertool(\.py)?[ \t]/) {
+    # Extract paths from supertool single-quoted arguments.
+    # The separator is bracketed, so awk compiles it as a REGEX rather than a single
+    # character. Measured on awk 20200816 (macOS): with a one-character separator that awk
+    # also splits on a newline, so a multi-line command produced one extra field and
+    # shifted the odd/even parity this loop walks — every quoted argument was then read
+    # from the wrong side of the quote. "[\047]" splits on the quote and nothing else, on
+    # every awk.
+    n2 = split(cmd, args, "[\047]")
     for (ai = 2; ai <= n2; ai += 2) {
       arg = args[ai]
       # read:PATH, map:PATH, ls:PATH, tail:PATH, head:PATH, wc:PATH

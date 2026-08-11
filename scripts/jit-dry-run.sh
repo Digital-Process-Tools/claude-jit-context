@@ -159,6 +159,35 @@ echo "$LISTED rule(s) indexed, $CHECKED regex pattern(s) compiled, $REFUSED refu
 
 # --- Phase 2: which rule fires for this call? --------------------------------
 
+# The sample call is hand-built JSON, so it has to be escaped into it. What the caller
+# typed is what the hooks see, character for character:
+#
+#   "   escaped. Unescaped, it ended the value early and the rule was dry-run against a
+#       command nobody typed — the tool reporting "no rule fired" for a rule that fires.
+#   \   escaped. Passing it through would let jit_unescape() read it back as a JSON
+#       escape, so `--file 'C:\test\x'` linted as `C:<TAB>est\x`, and a sample ending in a
+#       backslash escaped the closing quote and broke the payload outright.
+#   NL  folded to its escape, so a command pasted across lines ($'a\nb', a heredoc) is
+#       dry-run as the multi-line command it is instead of being silently joined.
+#
+# Built by hand rather than with gsub: a backslash in a gsub REPLACEMENT has its own layer
+# of meaning, and getting that count right is exactly the kind of thing that is wrong in
+# one awk and right in another.
+json_quote() {
+  printf '%s' "$1" | awk '{
+    o = ""
+    for (i = 1; i <= length($0); i++) {
+      c = substr($0, i, 1)
+      if (c == "\\") o = o "\\\\"
+      else if (c == "\"") o = o "\\\""
+      else if (c == "\t") o = o "\\t"
+      else o = o c
+    }
+    printf "%s%s", sep, o
+    sep = "\\n"
+  }'
+}
+
 report_hook() {
   # $1 hook script, $2 JSON payload, $3 project dir
   local out names verdict
@@ -190,19 +219,19 @@ if [ -n "$SAMPLE_TOOL$SAMPLE_COMMAND$SAMPLE_FILE$SAMPLE_PROMPT" ]; then
       PROJECT="${BASE%/.claude/jit-context}"
       echo "sample call against $PROJECT"
       if [ -n "$SAMPLE_PROMPT" ]; then
-        report_hook pre-prompt-hook.sh "{\"prompt\":\"$SAMPLE_PROMPT\"}" "$PROJECT"
+        report_hook pre-prompt-hook.sh "{\"prompt\":\"$(json_quote "$SAMPLE_PROMPT")\"}" "$PROJECT"
       fi
       # A file target goes to BOTH hooks under the tool the caller named. The tool
       # dimension matches file_path when there is no command — a `block` rule guarding
       # Edit of a generated file is only reachable this way, and routing --file to the
       # path hook alone reported it as not firing when the rule was fine.
       if [ -n "$SAMPLE_FILE" ]; then
-        payload="{\"tool_name\":\"${SAMPLE_TOOL:-Read}\",\"tool_input\":{\"file_path\":\"$SAMPLE_FILE\"}}"
+        payload="{\"tool_name\":\"${SAMPLE_TOOL:-Read}\",\"tool_input\":{\"file_path\":\"$(json_quote "$SAMPLE_FILE")\"}}"
         report_hook pre-tool-hook.sh "$payload" "$PROJECT"
         report_hook pre-path-hook.sh "$payload" "$PROJECT"
       fi
       if [ -n "$SAMPLE_COMMAND" ]; then
-        payload="{\"tool_name\":\"${SAMPLE_TOOL:-Bash}\",\"tool_input\":{\"command\":\"$SAMPLE_COMMAND\"}}"
+        payload="{\"tool_name\":\"${SAMPLE_TOOL:-Bash}\",\"tool_input\":{\"command\":\"$(json_quote "$SAMPLE_COMMAND")\"}}"
         report_hook pre-tool-hook.sh "$payload" "$PROJECT"
         report_hook pre-path-hook.sh "$payload" "$PROJECT"
       fi
