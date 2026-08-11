@@ -323,7 +323,13 @@ for eng in $ENGINES; do
   echo "camel body" > "$VOCAB_DIR/00-manual/c-$u.md"
   # This repo's .gitattributes forces eol=lf on *.md; a user's project has no such
   # guarantee and CRLF is the Windows default (issue #15).
-  printf 'CRLF body line one\r\nCRLF body line two\r\n' > "$VOCAB_DIR/00-manual/r-$u.md"
+  # The middle line carries a CR that is NOT a line terminator. On Git Bash the awk that
+  # reads this file opens it in text mode, so the CR of a CRLF is consumed by the runtime
+  # before the awk program sees it -- there is no terminator CR left to escape, and an
+  # assertion on one asserts a property of the C runtime rather than of this hook. A bare
+  # mid-line CR survives that translation, so it is the one CR whose escaping can be
+  # asserted everywhere. The CRLF terminators stay: on Linux and macOS they are real.
+  printf 'CRLF body line one\r\nbare\rCR mid-line\r\nCRLF body line two\r\n' > "$VOCAB_DIR/00-manual/r-$u.md"
   # The NUL on the second line is the engine-divergent case: gawk carries an embedded NUL
   # through getline and would emit it raw, one-true-awk truncates the line at it. Neither
   # may put a raw byte in the JSON, and assert_no_raw_controls holds for both readings.
@@ -351,7 +357,7 @@ for eng in $ENGINES; do
   echo "=== [$eng] control characters in an entry body (issue #15) ==="
   OUT=$(run_hook_engine "$eng" "{\"prompt\":\"a crlf$u question\"}")
   assert_contains "[$eng] CRLF entry is injected" "$OUT" "CRLF body line one"
-  assert_contains "[$eng] CR is escaped" "$OUT" 'one\\r\\nCRLF'
+  assert_contains "[$eng] CR is escaped" "$OUT" 'bare\\rCR mid-line'
   assert_no_raw_controls "[$eng] CRLF entry emits no raw control byte" "$eng" "{\"prompt\":\"a crlfraw$u question\"}"
 
   OUT=$(run_hook_engine "$eng" "{\"prompt\":\"a ctrl$u question\"}")

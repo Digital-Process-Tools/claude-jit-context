@@ -321,7 +321,14 @@ assert_no_raw_controls() {
 # are driven (issue #15).
 printf 'Bash\tcrlfcmd\tcrlf-rule.md\tremind\t\t\n' >> "$TOOLS_DIR/00-index.tsv"
 printf 'Bash\tblockcmd\tblock-rule.md\tremind\t--needed\t\n' >> "$TOOLS_DIR/00-index.tsv"
-printf 'CRLF rule line one\r\nCRLF rule line two\r\n' > "$TOOLS_DIR/crlf-rule.md"
+# The middle line carries a CR that is NOT a line terminator. On Git Bash the awk that
+# reads this file opens it in text mode, so the CR of a CRLF is consumed by the runtime
+# before the awk program ever sees it -- on that platform there is no terminator CR left to
+# escape, and asserting on one asserts a property of the C runtime, not of this hook. A bare
+# mid-line CR is not touched by that translation, so it is the one CR whose escaping can be
+# asserted on every platform. The CRLF terminators stay: on Linux and macOS they are real
+# and assert_no_raw_controls still has to cope with them.
+printf 'CRLF rule line one\r\nbare\rCR mid-line\r\nCRLF rule line two\r\n' > "$TOOLS_DIR/crlf-rule.md"
 # The NUL on the second line is the engine-divergent case: gawk carries an embedded NUL
 # through getline and would emit it raw, one-true-awk truncates the line at it. Neither may
 # put a raw byte in the JSON, and assert_no_raw_controls holds for both readings.
@@ -358,7 +365,7 @@ for eng in $ENGINES; do
   echo "=== [$eng] control characters in an entry body (issue #15) ==="
   OUT=$(run_hook_engine "$eng" '{"tool_name":"Bash","tool_input":{"command":"crlfcmd now"}}')
   assert_contains "[$eng] CRLF rule is injected" "$OUT" "CRLF rule line one"
-  assert_contains "[$eng] CR is escaped in the reminder" "$OUT" 'one\\r\\nCRLF'
+  assert_contains "[$eng] CR is escaped in the reminder" "$OUT" 'bare\\rCR mid-line'
   assert_no_raw_controls "[$eng] reminder emits no raw control byte" "$eng" '{"tool_name":"Bash","tool_input":{"command":"crlfcmd now"}}' 
 
   OUT=$(run_hook_engine "$eng" '{"tool_name":"Bash","tool_input":{"command":"blockcmd now"}}')
