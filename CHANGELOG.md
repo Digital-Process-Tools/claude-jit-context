@@ -5,6 +5,43 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A `match` pattern the matcher cannot honour is refused at load, named, and skipped —
+  instead of reading as enforced forever.** Every regex is compiled by awk, so it is a
+  POSIX ERE; measured on `awk version 20200816`, `~gh\s+pr` compiles to `ghs+pr`, matches
+  nothing, and **awk exits 0**. Exit status cannot see that defect, so the check is
+  structural and deliberately engine-independent: a rule fires on the author's machine,
+  not on the runner, and a lint whose answer changes with the local awk gates nothing.
+  `\n` is the one escape rules need and keeps working. (#3)
+- **One malformed row no longer silences every rule in its index.** `~a[b` is a fatal awk
+  error raised mid-scan, so the `END` block never ran: no JSON, no injected context, no
+  vocabulary pass, and no log line — while the hook still exited 0. Reproduced against
+  both `pre-tool-hook.sh` and `pre-path-hook.sh`. The row is refused; the file survives.
+  Refusing the whole index was considered and rejected — it converts one dead rule into
+  all of them. (#3)
+- A refused row is **reported**, not merely skipped. The log now carries `refused:FILE
+  (reason)`, so `(none) [shown:0]` no longer covers both "nothing matched" and "nothing
+  could be evaluated", and the hooks inject a one-line notice naming the rule, its mode
+  and the construct, once per session. The log alone was not enough: that is exactly
+  where two dead `block` rules sat unnoticed, one of them since it was written. (#3)
+
+### Added
+
+- **`scripts/jit-dry-run.sh`** — evaluate one tree's rules where they are written. Lints
+  every pattern, prints which rule fires for a sample `--tool`/`--command`, `--file` or
+  `--prompt`, and exits 0 clean, 1 refused, 2 could not evaluate. It reads the tree you
+  are standing in, or `--base DIR`.
+
+  This is the answer to #4. `JIT_BASE` resolves against `$CLAUDE_PROJECT_DIR`
+  (`scripts/common.sh:7`), so a git worktree cannot load or test its own rules from a
+  session rooted elsewhere, and nothing says so — four rules authored in a worktree on
+  2026-08-10 were verifiable only by hand-running a hook with the variable overridden.
+  The issue also proposed unioning a worktree's rules over the root's at runtime; that
+  is deliberately **not** built. See the issue thread for the argument.
+
 ## [0.2.0] — First public release
 
 The system had been running in production for months while its documentation still

@@ -30,7 +30,7 @@ Two consequences worth knowing before you change anything here:
 
 **Adding a rule here is the honest test of the product.** If a rule belongs in this file rather than an entry, that is worth knowing — write down which dimension failed to hold it.
 
-## The one trap
+## The first trap: an entry that was never indexed
 
 **The hooks never read your markdown. They read `00-index.tsv`.**
 
@@ -44,6 +44,21 @@ bash scripts/rebuild-tsv.sh    # after every frontmatter edit, without exception
 
 Body-only edits do not need it — the body is read from the file at fire time. Frontmatter edits always do. When in doubt, rebuild; it takes milliseconds.
 
+## The second trap: rules that resolve against another tree
+
+**`JIT_BASE` resolves against `$CLAUDE_PROJECT_DIR`, never the cwd** (`scripts/common.sh:7`). A worktree's rules are inert for a session rooted anywhere else — including yours, editing them.
+
+So neither trap is visible from where you are working. Both are:
+
+```bash
+bash scripts/jit-dry-run.sh --base ~/Documents/jit-wt/NNN/.claude/jit-context \
+  --tool Bash --command "git push origin main"
+```
+
+Lints every pattern in the tree you name, prints which rule fires for a sample call, exits 1 on a pattern that cannot be honoured and 2 when it could not evaluate the tree at all. Use it instead of hand-running a hook with `CLAUDE_PROJECT_DIR` overridden.
+
+**A `match` is an awk ERE, not PCRE.** `\s` `\d` `\w` compile to the bare letter and match nothing while awk exits 0 — use `[[:space:]]`, `[0-9]`, `[A-Za-z0-9_]`. `\b` is worse, not better: awk defines it as a backspace character, so it compiles to something real and still matches nothing. Such a row is now refused at load and named in the injected context, rather than reading as enforced forever. `\n` survives and is load-bearing for anchoring on command position.
+
 ## Layout
 
 | Path                     | What                                                                       |
@@ -51,6 +66,7 @@ Body-only edits do not need it — the body is read from the file at fire time. 
 | `scripts/*-hook.sh`      | One script per hook event. These are the product.                          |
 | `scripts/common.sh`      | Sourced by all of them. Paths, logging, optional `config.env`.             |
 | `scripts/rebuild-tsv.sh` | Frontmatter → `00-index.tsv`. The only writer of that file.               |
+| `scripts/jit-dry-run.sh` | Lints one tree's patterns and dry-runs a sample call against it.          |
 | `tests/test-*.sh`        | One suite per hook, plus `run-all.sh`.                                     |
 | `examples/jit-context/`  | Shipped example entries. They carry real frontmatter and must stay valid.  |
 | `.claude/jit-context/`   | This repo's own entries. Not shipped — dogfood.                            |

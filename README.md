@@ -201,7 +201,8 @@ Every command extends `CommandBase` and implements `declareOptions()`.
 Return values are typed — never `void`, because callers assert on the result.
 ```
 
-`match` is a regex tested against the file path.
+`match` is a regex tested against the file path — an **awk ERE, not PCRE**. See
+[Patterns are awk, not PCRE](#patterns-are-awk-not-pcre) before writing one.
 
 ### Tools
 
@@ -230,6 +231,34 @@ Coverage runs take 8 minutes locally and are produced by CI anyway.
 | `remind` | Injects the file body as additional context             |
 | `block`  | Rejects the tool call, returning the body as the reason |
 | `once`   | Fires at most once per session                          |
+
+### Patterns are awk, not PCRE
+
+Every regex — a `paths` `match`, and a `tools` `match` prefixed with `~` — is compiled by
+**awk**, so it is a POSIX ERE. PCRE shorthand classes do not exist there, and the failure
+is silent: measured on `awk version 20200816`, `~gh\s+pr` compiles to `ghs+pr` and matches
+nothing at all, while awk exits 0. Nothing about the rule looks wrong afterwards.
+
+| Do not write | Write instead    |
+| ------------ | ---------------- |
+| `\s` `\S`    | `[[:space:]]`    |
+| `\d` `\D`    | `[0-9]`          |
+| `\w` `\W`    | `[A-Za-z0-9_]`   |
+| `\b` `\B`    | anchor explicitly, e.g. `(^\|[;&\|\n] *)` |
+
+`\b` fails differently and is worth knowing separately: awk *does* define it, as a
+backspace character, so `\bgit\b` compiles to a pattern looking for literal backspaces
+rather than word boundaries. It matches nothing either way, and is refused the same way.
+
+`\n` is the one escape that survives, and rules need it: `^` anchors the whole command
+string rather than each line, so a rule meant to catch a command on line three of a
+heredoc must anchor on `(^|[;&|\n] *)`.
+
+**A pattern the matcher cannot honour is refused at load and reported** — the row is
+skipped, every other rule in the file keeps working, and the hook injects a one-line
+notice naming the rule and the construct, once per session. Two things this replaces:
+a rule that read as enforced for as long as it existed, and a single malformed pattern
+(`~a[b` is a fatal awk error) that silenced every rule in its index at once.
 
 ### Compatibility — tools that touch files through `Bash`
 
@@ -260,11 +289,20 @@ This parses the frontmatter of every `.md` file into `00-index.tsv` files, which
 An entry that never fires looks exactly like work that was done.
 
 ```bash
-echo '{"prompt":"how do invoice totals work"}' \
-  | bash .claude/claude-jit-context/scripts/pre-prompt-hook.sh
+bash scripts/jit-dry-run.sh                                    # lint every pattern
+bash scripts/jit-dry-run.sh --prompt "how do invoice totals work"
+bash scripts/jit-dry-run.sh --tool Bash --command "git push origin main"
+bash scripts/jit-dry-run.sh --file src/Billing/Total.php
 ```
 
-`{}` means no match — the keywords are wrong.
+It prints a verdict per rule and which rule fired for the sample call, and exits **1**
+when a pattern cannot be honoured, **2** when it could not evaluate the tree at all —
+no index, no `awk`. A tree it could not read never reports as clean.
+
+**It reads the tree you are standing in**, or `--base DIR`. That matters because the
+hooks resolve rules against `$CLAUDE_PROJECT_DIR` and never the current directory, so a
+git worktree, a checkout under review, or a plugin being developed cannot load or test
+its own rules from a session rooted elsewhere — with nothing to say so.
 
 ## How keyword matching works
 
