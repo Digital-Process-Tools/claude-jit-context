@@ -10,3 +10,7 @@ __pycache__/
 
 # Machine-specific symlink to the local claude-supertool clone.
 /supertool
+
+# Maintainer loop state — per-maintainer, never shared.
+.max/
+.claude/settings.local.json
