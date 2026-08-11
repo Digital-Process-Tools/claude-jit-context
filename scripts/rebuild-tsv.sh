@@ -31,13 +31,19 @@ build_tool_tsv() {
 
     # Parse frontmatter fields
     local tool match mode require forbid
-    tool=$(awk '/^---$/{n++; next} n==1 && /^tool:/{sub(/^tool: */, ""); gsub(/"/, ""); print; exit}' "$md")
-    match=$(awk '/^---$/{n++; next} n==1 && /^match:/{sub(/^match: */, ""); gsub(/"/, ""); print; exit}' "$md")
-    mode=$(awk '/^---$/{n++; next} n==1 && /^mode:/{sub(/^mode: */, ""); gsub(/ /, ""); print; exit}' "$md")
-    require=$(awk '/^---$/{n++; next} n==1 && /^require:/{sub(/^require: */, ""); gsub(/"/, ""); print; exit}' "$md")
-    forbid=$(awk '/^---$/{n++; next} n==1 && /^forbid:/{sub(/^forbid: */, ""); gsub(/"/, ""); print; exit}' "$md")
+    tool=$(jit_frontmatter tool "$md")
+    match=$(jit_frontmatter match "$md")
+    mode=$(jit_frontmatter mode "$md")
+    require=$(jit_frontmatter require "$md")
+    forbid=$(jit_frontmatter forbid "$md")
 
     [ -z "$tool" ] || [ -z "$match" ] && continue
+
+    # An invocation macro becomes the real ERE here, so the index still carries a plain
+    # awk pattern and no hook learns a new vocabulary. jit_expand_match returns anything
+    # that is not a macro unchanged, and names a macro it cannot honour on stderr while
+    # writing the row through -- see common.sh for why the row is not dropped.
+    match=$(jit_expand_match "$match" tools "$label/$filename")
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$tool" "$match" "$filename" "${mode:-remind}" "$require" "$forbid" >> "$tsv"
   done
@@ -184,8 +190,13 @@ build_path_tsv() {
     [ "$filename" = "00-README.md" ] && continue
 
     local match_line
-    match_line=$(awk '/^---$/{n++; next} n==1 && /^match:/{sub(/^match: */, ""); gsub(/"/, ""); print; exit}' "$md")
+    match_line=$(jit_frontmatter match "$md")
     [ -z "$match_line" ] && continue
+
+    # Paths carry no invocation macro -- their subject is a file path, not a command --
+    # but the check runs here so that writing one is REFUSED and named rather than
+    # indexed as a literal that can never match a path.
+    match_line=$(jit_expand_match "$match_line" paths "$label/$filename")
 
     printf '%s\t%s\n' "$match_line" "$filename" >> "$tsv"
   done

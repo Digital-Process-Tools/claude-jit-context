@@ -25,6 +25,17 @@ Body edits need no rebuild — the body is read from the file at fire time. Fron
 
 `\s` `\d` `\w` compile to the bare letter and match **nothing**, while awk exits 0 — use `[[:space:]]`, `[0-9]`, `[A-Za-z0-9_]`. `\b` is not a word boundary but a backspace character, so it also matches nothing. `\n` is the one escape that survives, and rules need it: `^` anchors the whole command string rather than each line, so anchor on `(^|[;&|\n] *)`. Such a row is now refused at load and named in the injected context instead of reading as enforced.
 
+## Do not hand-roll an invocation anchor
+
+A tools rule that fires on a command rather than a word uses a macro, not a retyped anchor:
+
+```yaml
+match: ~@invocation git push               # git -C /tmp push yes, git stash push NO
+match: ~@invocation-quoted-arg supertool   # supertool 'x' | head yes, pytest | tail NO
+```
+
+`rebuild-tsv.sh` expands it into the real ERE, so the index still carries a plain awk pattern. A macro it does not know is refused and named, and written through unexpanded so the hook refuses that row too rather than matching nothing. `paths` has no macros — its subject is a file path — and one written there is refused.
+
 ## Prove it fires
 
 Rebuilding is not evidence, and neither is the tree you are standing in: `JIT_BASE` resolves against `$CLAUDE_PROJECT_DIR`, so a worktree's rules are inert for a session rooted elsewhere.
@@ -34,4 +45,4 @@ bash scripts/jit-dry-run.sh --prompt "how do invoice totals work"
 bash scripts/jit-dry-run.sh --base /path/to/other/tree/.claude/jit-context --file src/Billing/Total.php
 ```
 
-Lints every pattern and prints which rule fired. Exit 1 = a pattern cannot be honoured; 2 = it could not evaluate the tree, which is never a pass. Check both directions — a payload that must fire and one that must stay silent.
+Lints every pattern and prints which rule fired. Exit 1 = a pattern cannot be honoured or a `00-manual/` entry's frontmatter is not what its index row carries (`STALE`, i.e. you did not rebuild); 2 = it could not evaluate the tree, which is never a pass. Check both directions — a payload that must fire and one that must stay silent.

@@ -174,6 +174,54 @@ the user to do anything beyond opening the project.
 
 ### Added
 
+- **Invocation macros in a tools `match`** — `~@invocation git push` and
+  `~@invocation-quoted-arg supertool`, expanded into the real awk ERE by
+  `rebuild-tsv.sh` at index time.
+
+  Every rule that fires on an invocation rather than on a word carries an anchor, and the
+  anchor is the part nobody can verify by reading. Four have been wrong: the `\n`
+  alternative that could never fire (#6), `git stash push` blocked by a rule written for
+  `git push` (#8), a rule shipped with no anchor at all (#8), and this repository's own
+  `paths` rule matching a session scratchpad directory (#10). Three of the four were
+  written by someone who had read the anchoring guidance, and one of them was in the file
+  that contains it — which is why this is a construct and not another paragraph.
+
+  `@invocation` is the command at invocation position, optionally behind a wrapper (`rtk`,
+  `command`, `env`, `sudo`) or an environment assignment, with only **option-shaped**
+  tokens between the words. `git -C /tmp push` matches and `git stash push` does not: a
+  subcommand is not an option, and that is exactly what the widely copied
+  `([^;&|\n]*[[:space:]])?` — added to catch the first — gets wrong about the second.
+  `@invocation-quoted-arg` is the same shape followed by a quoted argument before any
+  pipe, so `supertool 'gh-pr:1' | head` matches and `pytest | tail` does not. That second
+  one was not writable by hand at all: `rebuild-tsv.sh` strips every double quote out of a
+  `match:` line, so an author could only ever anchor on the single quote, and nothing said
+  the other half had been dropped.
+
+  **The index contract does not change and nothing needs migrating.** The column still
+  holds a plain awk ERE, no hook learns a new vocabulary, and frontmatter that uses no
+  macro indexes byte-for-byte as before — verified by rebuilding this repository's own
+  tree and getting no diff. Only an entry that adopts a macro needs a rebuild, which a
+  frontmatter edit needed anyway.
+
+  A macro name `rebuild-tsv.sh` does not know is **refused and named** on stderr, and the
+  row is written through unexpanded rather than dropped or guessed at. `jit_bad_pattern()`
+  then refuses that row in the hook, by name, on the same channel a broken pattern uses —
+  so a macro that was mistyped, or an index built before the macros existed, is loud at
+  both ends instead of compiling into a literal that matches nothing. Only `tools` has
+  them; a `paths` `match` is tested against a file path, so a macro there is refused.
+
+- **`jit-dry-run.sh` reports a `STALE` entry** — a `00-manual/` file whose frontmatter is
+  not what its index row carries, which is a rule that exists on disk and never runs. It
+  exits 1 on one, like a refused pattern. This check used to be an eyeball, because the
+  index carried the author's own text; with a macro it carries the expansion, so the check
+  had to become a command.
+
+  The whole row is compared, not just the pattern. A `block` quietly downgraded to
+  `remind`, a dropped `require`, a rule retargeted at another tool — each is a rule that
+  reads as enforced and is not, and none of them is visible anywhere else. `rebuild-tsv.sh`
+  and this lint now read frontmatter through one function, so they cannot drift into
+  disagreeing about what a file says.
+
 - **`scripts/jit-dry-run.sh`** — evaluate one tree's rules where they are written. Lints
   every pattern, prints which rule fires for a sample `--tool`/`--command`, `--file` or
   `--prompt`, and exits 0 clean, 1 refused, 2 could not evaluate. It reads the tree you

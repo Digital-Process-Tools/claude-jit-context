@@ -221,7 +221,7 @@ Coverage runs take 8 minutes locally and are produced by CI anyway.
 | Field     | Required | Meaning                                                           |
 | --------- | -------- | ----------------------------------------------------------------- |
 | `tool`    | yes      | Tool name: `Bash`, `Read`, `Edit`, `Skill`, `Task`, …             |
-| `match`   | yes      | Substring, or a regex when prefixed with `~`                      |
+| `match`   | yes      | Substring, a regex when prefixed with `~`, or an [invocation macro](#anchoring-on-an-invocation) |
 | `mode`    | no       | `remind` (default), `block`, `once` — comma-separated, composable |
 | `require` | no       | Pipe-separated strings that MUST appear, else the call is blocked |
 | `forbid`  | no       | Pipe-separated strings that must NOT appear, else blocked         |
@@ -252,6 +252,42 @@ able to anchor on a later command: write `~(^|[;&|\n] *)git[[:space:]]+push` rat
 A command spanning several lines is one string with real newlines in it. `^` anchors that
 whole string, not each line, so a rule that must catch the second command needs the
 newline in its anchor class — see below.
+
+### Anchoring on an invocation
+
+That anchor is the load-bearing part of a rule, and it is the part nobody can verify by
+reading. Four of ours were wrong: an alternative that could never fire, `git stash push`
+blocked by a rule written for `git push`, a rule shipped with no anchor at all, and this
+repository's own rule matching a temporary directory. So the two shapes that keep being
+hand-written are named instead of retyped:
+
+```markdown
+---
+tool: Bash
+match: ~@invocation git push
+mode: block
+---
+```
+
+| Macro                            | Matches                                | Does not match       |
+| -------------------------------- | -------------------------------------- | -------------------- |
+| `~@invocation git push`          | `git push`, `git -C /tmp push`, `rtk git push`, `cd x && git push` | `git stash push`, `git pushall`, `git commit -m "fix git push"` |
+| `~@invocation-quoted-arg gh`     | `gh 'pr list' \| head`, `gh "pr list"`  | `gh \| tail`, `gh pr list`, `cat /opt/gh 'x'` |
+
+`@invocation` is the command word at invocation position — optionally behind a wrapper
+(`rtk`, `command`, `env`, `sudo`) or an environment assignment, and with only
+**option-shaped** tokens between the words. That last part is the difference between the
+two columns: a subcommand is not an option, which is what the widely copied
+`([^;&|\n]*[[:space:]])?` gets wrong. `@invocation-quoted-arg` is the same, followed by a
+quoted argument before any pipe.
+
+The macro is expanded into a plain awk ERE by `rebuild-tsv.sh`, so the index format does
+not change and neither does anything a hook reads. A macro name it does not know is
+**refused and named** at build time, and the row is written through unexpanded so the hook
+refuses it again by name rather than compiling a literal that matches nothing.
+
+Only the `tools` dimension has these — a `paths` `match` is tested against a file path, so
+an invocation macro there is refused.
 
 ### Patterns are awk, not PCRE
 
@@ -319,6 +355,11 @@ bash scripts/jit-dry-run.sh --file src/Billing/Total.php
 It prints a verdict per rule and which rule fired for the sample call, and exits **1**
 when a pattern cannot be honoured, **2** when it could not evaluate the tree at all —
 no index, no `awk`. A tree it could not read never reports as clean.
+
+It also reports **`STALE`**: a `00-manual/` entry whose frontmatter is not what the index
+carries, which is a rule that exists on disk and never runs. That used to be visible by
+reading the index, because the index carried the author's own text; with an invocation
+macro it carries the expansion instead, so the eyeball check is done here.
 
 **It reads the tree you are standing in**, or `--base DIR`. That matters because the
 hooks resolve rules against `$CLAUDE_PROJECT_DIR` and never the current directory, so a

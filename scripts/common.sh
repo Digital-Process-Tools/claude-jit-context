@@ -133,6 +133,152 @@ _log() {
   echo "$line"
 }
 
+# --- Frontmatter reader ------------------------------------------------------
+# The ONE reader of an entry's YAML frontmatter. rebuild-tsv.sh writes the index with it
+# and jit-dry-run.sh checks the index against it, so the two cannot drift into disagreeing
+# about what a file says -- which would make the staleness lint either blind or noisy, and
+# both of those read as "the tree is fine".
+#
+# Only the first `---` block, only the first occurrence of the field.
+jit_frontmatter() {
+  # $1 field name, $2 entry file
+  awk -v f="$1" '
+    /^---$/ { n++; next }
+    n == 1 && index($0, f ":") == 1 {
+      sub("^" f ": *", "")
+      # mode is a comma-separated token list, so every space goes; every other field is
+      # free text, where it is the quotes that go. Both are what the index has always
+      # carried, and changing either would silently retire rules that work today.
+      if (f == "mode") gsub(/ /, ""); else gsub(/"/, "")
+      print
+      exit
+    }
+  ' "$2"
+}
+
+# --- Invocation macros -------------------------------------------------------
+# A rule that has to fire on an INVOCATION rather than on a word carries an anchor, and
+# the anchor is the part nobody can verify by reading. Four have been wrong: the \n
+# alternative that could never fire (#6), `git stash push` blocked by a rule written for
+# `git push` (#8), a rule with no anchor at all (#8), and this repo's own paths rule
+# matching a session scratchpad directory (#10). Three of those were written by someone
+# who had read the anchoring guidance; one was in the file that contains it.
+#
+# So the anchor is written once, here, and named in frontmatter instead of retyped:
+#
+#   match: ~@invocation git push               command-with-options
+#   match: ~@invocation-quoted-arg supertool   command-with-quoted-argument
+#
+# Expansion happens in rebuild-tsv.sh, at index time. The INDEX CONTRACT does not change:
+# the column still holds a plain awk ERE, the hooks are untouched, and an index built from
+# frontmatter that uses no macro is byte-identical to the one built before this existed.
+# Nobody has to rebuild anything to keep working.
+#
+# What the two shapes mean, and the near-miss each one exists to exclude:
+#
+#   @invocation W...     the words at invocation position, optionally behind a wrapper
+#                        (rtk, command, env, sudo) or an environment assignment, with
+#                        only OPTION-SHAPED tokens between them. `git -C /tmp push`
+#                        matches; `git stash push` does not, because a subcommand is not
+#                        an option. That distinction is the whole point -- the widely
+#                        copied `([^;&|\n]*[[:space:]])?`, added to catch the first, also
+#                        swallows the second.
+#
+#   @invocation-quoted-arg W...
+#                        the same, followed by a QUOTED argument before any pipe.
+#                        `supertool 'gh-pr:1' | head` matches; `pytest | tail` does not.
+#                        This one is not writable by hand at all: rebuild-tsv.sh strips
+#                        every double quote out of a `match:` line, so an author can only
+#                        ever anchor on the single quote and never knows the other half
+#                        was dropped.
+#
+# The subject a tools regex is matched against is lowercased by the hook, so the words
+# are lowercased here. Everything outside [a-z0-9_/] is emitted inside a bracket
+# expression rather than behind a backslash: `\.` is accepted by awk today, but
+# jit_bad_pattern() refuses undefined escapes and a bracket needs no per-engine judgement.
+JIT_MACRO_ANCHOR='(^|[;&|\n] *)'
+JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|env|sudo|nohup|nice|time)[[:space:]]+)*'
+JIT_MACRO_OPT='(-[^[:space:];&|]*[[:space:]]+([^-;&|[:space:]][^[:space:];&|]*[[:space:]]+)?)*'
+JIT_MACRO_END='($|[[:space:];&|])'
+
+jit_macro_word() {
+  local w="$1" out="" i n c
+  n=${#w}
+  for ((i = 0; i < n; i++)); do
+    c="${w:i:1}"
+    case "$c" in
+      [a-z0-9_/]) out="$out$c" ;;
+      *)          out="${out}[$c]" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+# jit_expand_match RAW DIMENSION LABEL
+#
+# Prints the value to write into the index, and returns 0 when it can be honoured. A value
+# that is not a macro is printed back unchanged -- this function is on the path of every
+# row, and it must be a no-op for every rule that exists today.
+#
+# A macro it CANNOT honour is also printed back unchanged, returns 1, and names itself on
+# stderr. Dropping the row would delete a rule the author wrote; repairing it would be a
+# guess. Written through, the unexpanded `@name` reaches jit_bad_pattern() in the hook,
+# which refuses that row by name -- loud at build time and loud at run time, instead of a
+# literal that compiles cleanly and matches nothing.
+jit_expand_match() {
+  local raw="$1" dim="${2:-tools}" label="${3:-<entry>}"
+  local body name args reason="" out word first=1
+
+  case "$raw" in '~'*) body="${raw#\~}" ;; *) body="$raw" ;; esac
+  case "$body" in '@'*) ;; *) printf '%s' "$raw"; return 0 ;; esac
+
+  name="${body#@}"
+  args=""
+  case "$name" in
+    *[[:space:]]*) args="${name#*[[:space:]]}"; name="${name%%[[:space:]]*}" ;;
+  esac
+  while [ "$args" != "${args#[[:space:]]}" ]; do args="${args#[[:space:]]}"; done
+  while [ "$args" != "${args%[[:space:]]}" ]; do args="${args%[[:space:]]}"; done
+  args="$(printf '%s' "$args" | tr '[:upper:]' '[:lower:]')"
+
+  if [ "$dim" != "tools" ]; then
+    reason="@$name describes a COMMAND, and a $dim rule is matched against a file path"
+  elif [ "$name" != "invocation" ] && [ "$name" != "invocation-quoted-arg" ]; then
+    reason="unknown macro @$name -- the macros are @invocation and @invocation-quoted-arg"
+  elif [ -z "$args" ]; then
+    reason="@$name needs the command it targets, e.g. 'match: ~@$name git push'"
+  else
+    case "$args" in
+      *[!a-z0-9._/:+\ -]*) reason="@$name takes plain command words, and this one carries a character that is not one" ;;
+    esac
+  fi
+
+  if [ -n "$reason" ]; then
+    printf '%s' "$raw"
+    printf 'REFUSED  %s: %s\n' "$label" "$reason" >&2
+    printf '         written through unexpanded, so the hook refuses that row by name rather than matching nothing.\n' >&2
+    return 1
+  fi
+
+  out="$JIT_MACRO_ANCHOR$JIT_MACRO_WRAP"
+  # Deliberate word splitting: args is the space-separated command phrase, already
+  # restricted above to characters that cannot glob.
+  # shellcheck disable=SC2086
+  for word in $args; do
+    [ "$first" = 1 ] || out="${out}[[:space:]]+${JIT_MACRO_OPT}"
+    out="$out$(jit_macro_word "$word")"
+    first=0
+  done
+  case "$name" in
+    invocation)            out="$out$JIT_MACRO_END" ;;
+    invocation-quoted-arg) out="${out}[[:space:]]+${JIT_MACRO_OPT}['\"]" ;;
+  esac
+
+  # The ~ is not optional and is not copied from the author: a tools row without it is a
+  # substring rule, and a substring rule whose text is an ERE can never match anything.
+  printf '~%s' "$out"
+}
+
 # --- Shared awk guard for a rule match pattern -------------------------------
 # Prepended to the hook programs (awk "$JIT_AWK_GUARD"'...'), so the same verdict is
 # reached by pre-tool-hook.sh, pre-path-hook.sh and jit-dry-run.sh.
@@ -162,6 +308,13 @@ _log() {
 # shellcheck disable=SC2034
 JIT_AWK_GUARD='
 function jit_bad_pattern(p,   i, n, c, nx, depth, inbr, brpos) {
+  # An @macro that reached the index unexpanded. Three ways in: an index built before the
+  # macros existed, an index not rebuilt after the frontmatter adopted one, or a macro
+  # rebuild-tsv.sh refused and wrote through. Compiled as a regex it is a literal that
+  # matches nothing, on both engines, while awk exits 0 -- the exact silence this guard
+  # exists to break. Anchored on `@name` followed by a space or end of pattern, so a
+  # pattern that genuinely starts with a literal @ (`@app/.*`) is untouched.
+  if (p ~ /^@[A-Za-z][A-Za-z0-9-]*([[:space:]]|$)/) return "unexpanded macro -- run scripts/rebuild-tsv.sh"
   n = length(p)
   depth = 0
   inbr = 0
