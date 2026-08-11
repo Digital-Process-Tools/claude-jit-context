@@ -5,3 +5,5 @@ pre-path-hook	jit-context.md
 pre-prompt-hook	jit-context.md
 pre-tool-hook	jit-context.md
 session-start-hook	jit-context.md
+invocation macro	jit-context.md
+jit-dry-run	jit-context.md

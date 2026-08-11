@@ -1,7 +1,7 @@
 ---
 title: How jit-context matching works
 description: The three dimensions, the TSV index between markdown and the hooks, and the layer order.
-keywords: jit-context, 00-index, rebuild-tsv, pre-path-hook, pre-prompt-hook, pre-tool-hook, session-start-hook
+keywords: jit-context, 00-index, rebuild-tsv, pre-path-hook, pre-prompt-hook, pre-tool-hook, session-start-hook, invocation macro, jit-dry-run
 ---
 
 Three dimensions, one hook each. Knowledge attaches to whichever trigger answers _when the reader needs it_.
@@ -17,6 +17,8 @@ Tools is the only dimension that can `block`. The other two only inject. Each en
 Layers are scanned in order inside each dimension: `00-manual/` (hand-written), then `10-auto/`, `20-grouped/`, `30-crosscutting/` (generated). A project with no generator uses `00-manual/` alone.
 
 Path rules also parse `Bash` commands: any token containing `/` is treated as a path, including paths lifted out of quoted `supertool` arguments. A command with no path in it matches nothing — deliberately, so a stray word in a commit message cannot drag an entry into context.
+
+A tools `match` may be a substring, a `~`-prefixed awk ERE, or an invocation macro — `~@invocation git push`, `~@invocation-quoted-arg supertool` — which `rebuild-tsv.sh` expands into the ERE at index time. `jit-dry-run.sh` lints one tree and reports `REFUSED` (a pattern the matcher cannot honour) and `STALE` (frontmatter the index does not carry).
 
 Timings and matches land in `.claude/jit-context/.discovery/logs/hooks.log`. `(none)` in the match column marks a knowledge gap.
 
