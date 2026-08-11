@@ -1,6 +1,6 @@
 ---
 title: Rebuild the index or this edit does nothing
-match: jit-context/.*\.md$
+match: (\.claude|examples)/jit-context/.*\.md$
 ---
 
 **The hooks never read this file's frontmatter. They read `00-index.tsv`.**

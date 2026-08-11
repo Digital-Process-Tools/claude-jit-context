@@ -9,6 +9,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **This repository's own `entries.md` rule was anchored on a bare path fragment**, so
+  it fired on every `.md` file whose path merely contained `jit-context/` — including
+  the scratchpad directory a Claude Code session derives from the project name, which
+  for this repo contains `claude-jit-context`. Observed firing on unrelated temporary
+  files twice in one session. Anchored on `(\.claude|examples)/jit-context/` instead.
+  A dogfood rule rather than a shipped one, but it is precisely the failure the entry
+  itself warns about.
+
+- **`tests/test-dogfood-entries.sh`** — new suite covering this repository's own
+  entries, both directions for every rule: a path each must match, and a near-miss each
+  must not. Every other suite builds a synthetic tree, which proves the engine works and
+  says nothing about the rules we ship to ourselves. It carries a harness guard that
+  fails loudly when the tree cannot be evaluated, because the first draft of this suite
+  passed its silence assertions on an empty result.
+
 - **The hooks now read JSON strings instead of splitting on quotes.** All three parsed
   their payload with `split(input, f, "\"")` and took the raw field, which was wrong
   twice, and both were silent.
