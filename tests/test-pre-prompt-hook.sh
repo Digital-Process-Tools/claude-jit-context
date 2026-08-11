@@ -252,6 +252,115 @@ fi
 # Cleanup test files if they survived
 rm -f /tmp/claude-vocab-shown-$$.txt /tmp/claude-path-shown-$$.txt
 
+# =============================================
+# SECTION: awk engine matrix — multibyte prompts, control characters in entries
+# =============================================
+# gawk and one-true-awk do not agree on multibyte handling, and the CI legs do not run
+# the same awk: Linux ships gawk, macOS and Git Bash ship a one-true-awk derivative.
+# Issue #14 passed under gawk and aborted the END block under one-true-awk, printing
+# nothing while still exiting 0 — indistinguishable from having nothing to say. A green
+# run on one engine is therefore not evidence about the other, so every assertion below
+# runs once per awk on this machine, reached through a PATH shim.
+ENGINE_BIN=$(mktemp -d)
+ENGINES=""
+ENGINE_SEEN=""
+for cand in awk gawk nawk mawk; do
+  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  case " $ENGINE_SEEN " in *" $cand_path "*) continue ;; esac
+  ENGINE_SEEN="$ENGINE_SEEN $cand_path"
+  mkdir -p "$ENGINE_BIN/$cand"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$cand_path" > "$ENGINE_BIN/$cand/awk"
+  chmod +x "$ENGINE_BIN/$cand/awk"
+  ENGINES="$ENGINES $cand"
+done
+
+run_hook_engine() {
+  echo "$2" | PATH="$ENGINE_BIN/$1:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2>/dev/null
+}
+
+# RFC 8259 forbids a raw U+0000-U+001F inside a JSON string; a strict parser is entitled
+# to reject the whole object, which renders as the hook having said nothing. perl is
+# already a hard dependency of common.sh, so this assertion adds none.
+# This one re-runs the hook and pipes it straight into perl instead of taking a captured
+# string. A $( ) capture silently DROPS NUL bytes, so an assertion reading a shell variable
+# cannot fail for the one byte that most needs checking -- gawk carries an embedded NUL
+# through getline and would emit it raw. The first draft of this helper did exactly that
+# and passed against output that contained a raw 0x00.
+assert_no_raw_controls() {
+  local desc="$1" eng="$2" payload="$3" out
+  out=$(mktemp)
+  echo "$payload" | PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" > "$out" 2>/dev/null
+  if ! LC_ALL=C perl -0777 -ne 'exit(/additionalContext|"reason"/ ? 0 : 1)' "$out"; then
+    # A hook that injected nothing trivially carries no control byte. Without this leg the
+    # assertion passes for the wrong reason -- which is the defect class this repo keeps
+    # finding in its own product.
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc -- nothing was injected, so the check was vacuous"
+  elif LC_ALL=C perl -0777 -ne 's/\n\z//; exit(/[\x00-\x1f]/ ? 1 : 0)' "$out"; then
+    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    raw control byte in: $(LC_ALL=C perl -0777 -pe 's/([\x00-\x1f])/sprintf("<%02X>",ord($1))/ge' "$out" | head -c 200)"
+  fi
+  rm -f "$out"
+}
+
+for eng in $ENGINES; do
+  # Every fixture below is unique per engine AND per suite run. The hook dedupes matches
+  # in /tmp/claude-vocab-shown-$PPID.txt, which no test can name; a $PPID reused from an
+  # earlier suite run carries a stale marker and would suppress a match for a reason that
+  # has nothing to do with the fix. Observed once. A suite-unique keyword cannot collide.
+  u="${eng}$$"
+  printf 'facture%s\tf-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"
+  printf 'camel%s\tc-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"
+  printf 'crlf%s\tr-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"
+  printf 'ctrl%s\tk-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"
+  # assert_no_raw_controls runs the hook itself, so it gets its own entries. Sharing them
+  # with the assert_contains calls above would mean a second match of an entry the hook has
+  # already marked shown, and a suppressed match trips the vacuous-pass leg.
+  printf 'crlfraw%s\trr-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"
+  printf 'ctrlraw%s\trk-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"
+  echo "facture body" > "$VOCAB_DIR/00-manual/f-$u.md"
+  echo "camel body" > "$VOCAB_DIR/00-manual/c-$u.md"
+  # This repo's .gitattributes forces eol=lf on *.md; a user's project has no such
+  # guarantee and CRLF is the Windows default (issue #15).
+  printf 'CRLF body line one\r\nCRLF body line two\r\n' > "$VOCAB_DIR/00-manual/r-$u.md"
+  # The NUL on the second line is the engine-divergent case: gawk carries an embedded NUL
+  # through getline and would emit it raw, one-true-awk truncates the line at it. Neither
+  # may put a raw byte in the JSON, and assert_no_raw_controls holds for both readings.
+  printf 'control \001 and \014 and \037 here\nnul \000 tail\n' > "$VOCAB_DIR/00-manual/k-$u.md"
+  cp "$VOCAB_DIR/00-manual/r-$u.md" "$VOCAB_DIR/00-manual/rr-$u.md"
+  cp "$VOCAB_DIR/00-manual/k-$u.md" "$VOCAB_DIR/00-manual/rk-$u.md"
+
+  echo ""
+  echo "=== [$eng] non-ASCII prompt (issue #14) ==="
+  OUT=$(run_hook_engine "$eng" "{\"prompt\":\"détail de la facture$u\"}")
+  assert_contains "[$eng] non-ASCII prompt still matches a keyword" "$OUT" "facture body"
+
+  OUT=$(run_hook_engine "$eng" '{"prompt":"détail de la façade"}')
+  assert_empty "[$eng] non-ASCII prompt with no keyword stays silent" "$OUT"
+
+  # The CamelCase split is the loop that aborted. Drive it both ways: the split is the only
+  # thing that makes this keyword visible, so the same token without the case transition
+  # must produce silence. A rule that fires on everything looks like success from one side.
+  OUT=$(run_hook_engine "$eng" "{\"prompt\":\"parlons de DétailCamel$u\"}")
+  assert_contains "[$eng] CamelCase split survives a non-ASCII token" "$OUT" "camel body"
+
+  OUT=$(run_hook_engine "$eng" "{\"prompt\":\"parlons de détailcamel$u\"}")
+  assert_empty "[$eng] no case transition, no match" "$OUT"
+
+  echo "=== [$eng] control characters in an entry body (issue #15) ==="
+  OUT=$(run_hook_engine "$eng" "{\"prompt\":\"a crlf$u question\"}")
+  assert_contains "[$eng] CRLF entry is injected" "$OUT" "CRLF body line one"
+  assert_contains "[$eng] CR is escaped" "$OUT" 'one\\r\\nCRLF'
+  assert_no_raw_controls "[$eng] CRLF entry emits no raw control byte" "$eng" "{\"prompt\":\"a crlfraw$u question\"}"
+
+  OUT=$(run_hook_engine "$eng" "{\"prompt\":\"a ctrl$u question\"}")
+  assert_contains "[$eng] control chars escaped as \u00XX" "$OUT" 'control \\u0001 and \\u000c and \\u001f here'
+  assert_no_raw_controls "[$eng] control-char entry emits no raw control byte" "$eng" "{\"prompt\":\"a ctrlraw$u question\"}"
+done
+
+rm -rf "$ENGINE_BIN"
+
 # --- Cleanup ---
 rm -rf "$TEST_DIR"
 

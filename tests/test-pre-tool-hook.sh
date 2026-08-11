@@ -268,6 +268,107 @@ echo "=== require: genuinely absent, still blocks ==="
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"gh pr list --search \"foo bar\""}}')
 assert_blocked "blocked when --limit really is missing" "$OUT"
 
+# =============================================
+# SECTION: awk engine matrix — multibyte paths, control characters in entries
+# =============================================
+# See the same section in test-pre-prompt-hook.sh: issue #14 aborted the END block under
+# one-true-awk and passed under gawk, and the CI legs do not run the same awk. Every
+# assertion below runs once per awk on this machine, reached through a PATH shim.
+ENGINE_BIN=$(mktemp -d)
+ENGINES=""
+ENGINE_SEEN=""
+for cand in awk gawk nawk mawk; do
+  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  case " $ENGINE_SEEN " in *" $cand_path "*) continue ;; esac
+  ENGINE_SEEN="$ENGINE_SEEN $cand_path"
+  mkdir -p "$ENGINE_BIN/$cand"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$cand_path" > "$ENGINE_BIN/$cand/awk"
+  chmod +x "$ENGINE_BIN/$cand/awk"
+  ENGINES="$ENGINES $cand"
+done
+
+run_hook_engine() {
+  echo "$2" | PATH="$ENGINE_BIN/$1:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2>/dev/null
+}
+
+# RFC 8259 forbids a raw U+0000-U+001F inside a JSON string; a strict parser is entitled
+# to reject the whole object, which renders as the hook having said nothing.
+# This one re-runs the hook and pipes it straight into perl instead of taking a captured
+# string. A $( ) capture silently DROPS NUL bytes, so an assertion reading a shell variable
+# cannot fail for the one byte that most needs checking -- gawk carries an embedded NUL
+# through getline and would emit it raw. The first draft of this helper did exactly that
+# and passed against output that contained a raw 0x00.
+assert_no_raw_controls() {
+  local desc="$1" eng="$2" payload="$3" out
+  out=$(mktemp)
+  echo "$payload" | PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" > "$out" 2>/dev/null
+  if ! LC_ALL=C perl -0777 -ne 'exit(/additionalContext|"reason"/ ? 0 : 1)' "$out"; then
+    # A hook that injected nothing trivially carries no control byte. Without this leg the
+    # assertion passes for the wrong reason -- which is the defect class this repo keeps
+    # finding in its own product.
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc -- nothing was injected, so the check was vacuous"
+  elif LC_ALL=C perl -0777 -ne 's/\n\z//; exit(/[\x00-\x1f]/ ? 1 : 0)' "$out"; then
+    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    raw control byte in: $(LC_ALL=C perl -0777 -pe 's/([\x00-\x1f])/sprintf("<%02X>",ord($1))/ge' "$out" | head -c 200)"
+  fi
+  rm -f "$out"
+}
+
+# CRLF is the Windows default and a user's project carries no .gitattributes of ours.
+# The blocked branch escapes its reason separately from the reminder branch, so both
+# are driven (issue #15).
+printf 'Bash\tcrlfcmd\tcrlf-rule.md\tremind\t\t\n' >> "$TOOLS_DIR/00-index.tsv"
+printf 'Bash\tblockcmd\tblock-rule.md\tremind\t--needed\t\n' >> "$TOOLS_DIR/00-index.tsv"
+printf 'CRLF rule line one\r\nCRLF rule line two\r\n' > "$TOOLS_DIR/crlf-rule.md"
+# The NUL on the second line is the engine-divergent case: gawk carries an embedded NUL
+# through getline and would emit it raw, one-true-awk truncates the line at it. Neither may
+# put a raw byte in the JSON, and assert_no_raw_controls holds for both readings.
+printf 'blocked \001 reason \014 text \037 here\nnul \000 tail\n' > "$TOOLS_DIR/block-rule.md"
+
+for eng in $ENGINES; do
+  # Vocabulary matches are deduped in /tmp/claude-vocab-shown-$PPID.txt, which no test can
+  # name; a $PPID reused from an earlier suite run carries a stale marker and would suppress
+  # a match for a reason that has nothing to do with the fix. Suite-unique keywords cannot
+  # collide. The rule rows below stay static -- they are `remind`, so nothing dedupes them.
+  u="${eng}$$"
+  printf 'plain%s\tp-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"
+  printf 'camel%s\tc-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"
+  echo "plain vocabulary body" > "$VOCAB_DIR/00-manual/p-$u.md"
+  echo "camel vocabulary body" > "$VOCAB_DIR/00-manual/c-$u.md"
+
+  echo ""
+  echo "=== [$eng] non-ASCII path token (issue #14) ==="
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat src/Détail/plain$u.php\"}}")
+  assert_contains "[$eng] non-ASCII path token still matches vocabulary" "$OUT" "plain vocabulary body"
+
+  OUT=$(run_hook_engine "$eng" '{"tool_name":"Bash","tool_input":{"command":"cat src/Détail/facade.php"}}')
+  assert_empty "[$eng] non-ASCII path token with no keyword stays silent" "$OUT"
+
+  # The CamelCase split is the loop that aborted. It is the only thing that makes this
+  # keyword visible, so the same token lowercased must produce silence -- a rule that fires
+  # on everything looks like success from one side.
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat src/DétailCamel$u/x.php\"}}")
+  assert_contains "[$eng] CamelCase split survives a non-ASCII path" "$OUT" "camel vocabulary body"
+
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat src/détailcamel$u/x.php\"}}")
+  assert_empty "[$eng] no case transition, no match" "$OUT"
+
+  echo "=== [$eng] control characters in an entry body (issue #15) ==="
+  OUT=$(run_hook_engine "$eng" '{"tool_name":"Bash","tool_input":{"command":"crlfcmd now"}}')
+  assert_contains "[$eng] CRLF rule is injected" "$OUT" "CRLF rule line one"
+  assert_contains "[$eng] CR is escaped in the reminder" "$OUT" 'one\\r\\nCRLF'
+  assert_no_raw_controls "[$eng] reminder emits no raw control byte" "$eng" '{"tool_name":"Bash","tool_input":{"command":"crlfcmd now"}}' 
+
+  OUT=$(run_hook_engine "$eng" '{"tool_name":"Bash","tool_input":{"command":"blockcmd now"}}')
+  assert_blocked "[$eng] blockcmd without --needed is blocked" "$OUT"
+  assert_contains "[$eng] block reason escapes control chars" "$OUT" 'blocked \\u0001 reason \\u000c text \\u001f here'
+  assert_no_raw_controls "[$eng] block reason emits no raw control byte" "$eng" '{"tool_name":"Bash","tool_input":{"command":"blockcmd now"}}' 
+done
+
+rm -rf "$ENGINE_BIN"
+
 # --- Cleanup ---
 rm -rf "$TEST_DIR"
 

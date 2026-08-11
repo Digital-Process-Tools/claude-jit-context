@@ -219,6 +219,92 @@ echo "=== Supertool: read with offset/limit (path still extracted) ==="
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"./supertool '\''read:src/Billing/Components/Form.class.php:10:50'\''"}}')
 assert_contains "read with offset matches component" "$OUT" "component pattern"
 
+# =============================================
+# SECTION: control characters in an entry body (issue #15)
+# =============================================
+# This hook has no CamelCase loop, so issue #14 never reached it. It shares the JSON
+# output escaping, which handled backslash, quote, tab and newline and left the rest of
+# U+0000-U+001F raw. CRLF is the Windows default and a user's project carries no
+# .gitattributes of ours. Run once per awk on this machine anyway — the CI legs do not
+# run the same engine, and the escaping is where the two dimensions meet.
+ENGINE_BIN=$(mktemp -d)
+ENGINES=""
+ENGINE_SEEN=""
+for cand in awk gawk nawk mawk; do
+  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  case " $ENGINE_SEEN " in *" $cand_path "*) continue ;; esac
+  ENGINE_SEEN="$ENGINE_SEEN $cand_path"
+  mkdir -p "$ENGINE_BIN/$cand"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$cand_path" > "$ENGINE_BIN/$cand/awk"
+  chmod +x "$ENGINE_BIN/$cand/awk"
+  ENGINES="$ENGINES $cand"
+done
+
+run_hook_engine() {
+  echo "$2" | PATH="$ENGINE_BIN/$1:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2>/dev/null
+}
+
+# RFC 8259 forbids a raw U+0000-U+001F inside a JSON string; a strict parser is entitled
+# to reject the whole object, which renders as the hook having said nothing.
+# This one re-runs the hook and pipes it straight into perl instead of taking a captured
+# string. A $( ) capture silently DROPS NUL bytes, so an assertion reading a shell variable
+# cannot fail for the one byte that most needs checking -- gawk carries an embedded NUL
+# through getline and would emit it raw. The first draft of this helper did exactly that
+# and passed against output that contained a raw 0x00.
+assert_no_raw_controls() {
+  local desc="$1" eng="$2" payload="$3" out
+  out=$(mktemp)
+  echo "$payload" | PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" > "$out" 2>/dev/null
+  if ! LC_ALL=C perl -0777 -ne 'exit(/additionalContext|"reason"/ ? 0 : 1)' "$out"; then
+    # A hook that injected nothing trivially carries no control byte. Without this leg the
+    # assertion passes for the wrong reason -- which is the defect class this repo keeps
+    # finding in its own product.
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc -- nothing was injected, so the check was vacuous"
+  elif LC_ALL=C perl -0777 -ne 's/\n\z//; exit(/[\x00-\x1f]/ ? 1 : 0)' "$out"; then
+    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    raw control byte in: $(LC_ALL=C perl -0777 -pe 's/([\x00-\x1f])/sprintf("<%02X>",ord($1))/ge' "$out" | head -c 200)"
+  fi
+  rm -f "$out"
+}
+
+printf 'CRLF rule line one\r\nCRLF rule line two\r\n' > "$PATHS_DIR/00-manual/crlf.md"
+# The NUL on the second line is the engine-divergent case: gawk carries an embedded NUL
+# through getline and would emit it raw, one-true-awk truncates the line at it. Neither may
+# put a raw byte in the JSON, and assert_no_raw_controls holds for both readings.
+printf 'control \001 and \014 and \037 here\nnul \000 tail\n' > "$PATHS_DIR/00-manual/ctrl.md"
+
+for eng in $ENGINES; do
+  # Four rules per engine, each fired exactly once. This hook marks a rule file shown on
+  # every fire and the marker is keyed on a $PPID no test can name, so a rule fired twice
+  # is suppressed the second time whenever the OS recycles a PID -- which it does, and
+  # which is why the assertions below own their fixtures rather than sharing two.
+  for kind in a raw; do
+    printf 'CrlfR%s%s/\tcrlf-%s-%s.md\n' "$eng" "$kind" "$eng" "$kind" >> "$PATHS_DIR/00-manual/00-index.tsv"
+    printf 'CtrlR%s%s/\tctrl-%s-%s.md\n' "$eng" "$kind" "$eng" "$kind" >> "$PATHS_DIR/00-manual/00-index.tsv"
+    cp "$PATHS_DIR/00-manual/crlf.md" "$PATHS_DIR/00-manual/crlf-$eng-$kind.md"
+    cp "$PATHS_DIR/00-manual/ctrl.md" "$PATHS_DIR/00-manual/ctrl-$eng-$kind.md"
+  done
+
+  echo ""
+  echo "=== [$eng] CRLF and control characters in a path entry ==="
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/project/src/CrlfR${eng}a/x.txt\"}}")
+  assert_contains "[$eng] CRLF entry is injected" "$OUT" "CRLF rule line one"
+  assert_contains "[$eng] CR is escaped" "$OUT" 'one\\r\\nCRLF'
+  assert_no_raw_controls "[$eng] CRLF entry emits no raw control byte" "$eng" "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/project/src/CrlfR${eng}raw/x.txt\"}}"
+
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/project/src/CtrlR${eng}a/x.txt\"}}")
+  assert_contains "[$eng] control chars escaped as \u00XX" "$OUT" 'control \\u0001 and \\u000c and \\u001f here'
+  assert_no_raw_controls "[$eng] control-char entry emits no raw control byte" "$eng" "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/project/src/CtrlR${eng}raw/x.txt\"}}"
+
+  # The other direction: a path no rule names still says nothing at all.
+  OUT=$(run_hook_engine "$eng" '{"tool_name":"Read","tool_input":{"file_path":"/project/src/OtherDir/x.txt"}}')
+  assert_empty "[$eng] unmatched path stays silent" "$OUT"
+done
+
+rm -rf "$ENGINE_BIN"
+
 # --- Cleanup ---
 rm -rf "$TEST_DIR"
 

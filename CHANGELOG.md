@@ -115,6 +115,52 @@ the user to do anything beyond opening the project.
 
   Applies to `tools` and `paths` alike. No shipped or dogfood entry used a quote, so no
   index changed — which is also why this went two releases without being noticed.
+- **A prompt containing a non-ASCII character skipped every vocabulary entry, on macOS
+  and Git Bash only.** The CamelCase splitter in `pre-prompt-hook.sh` and
+  `pre-tool-hook.sh` walked the string one position at a time and tested each character
+  with `c ~ /[A-Z]/`. Matching a regex against a single character is a multibyte decode,
+  and one character of a UTF-8 string is one *byte* to one-true-awk: a lone continuation
+  byte raised `towc: multibyte conversion failure`, which aborts the `END` block. The hook
+  then printed nothing at all and still exited 0, so the failure was invisible.
+
+  Measured: `détail de la facturation` matched nothing while `comment marche la
+  facturation` matched, under `awk version 20200816`; both matched under GNU Awk 5.4.1.
+  The same reached the tool hook through a path token — `cat src/Détail/a.php`.
+  `pre-path-hook.sh` has no such loop and was never affected. Linux CI runs gawk, which is
+  exactly why nothing caught it.
+
+  The case test is `index()` now — a byte search with no decode. It cannot change the
+  verdict, because every byte of a multibyte UTF-8 sequence is `>= 0x80` and so is never
+  an ASCII letter or digit either way. Word boundaries stay ASCII-only, deliberately:
+  splitting on non-ASCII case transitions would be new behaviour, and the very next line
+  replaces every non-ASCII byte with a space before any keyword lookup happens.
+
+  Each suite now runs its assertions once per `awk` present on the machine, reached
+  through a `PATH` shim. A green run on one engine was never evidence about the other, and
+  this is the third engine-divergence defect found here.
+
+- **Hook output did not escape CR, or the rest of the JSON control range.** All three
+  hooks escaped backslash, quote, tab and newline and left `U+0001`–`U+001F` raw, which
+  RFC 8259 forbids inside a string — a strict parser is entitled to reject the whole
+  object, and that renders as the hook having had nothing to say. An entry with CRLF line
+  endings emitted a raw `0x0D` on every match. This repository's `.gitattributes` forces
+  `eol=lf`, so our own entries were safe; a user's project has no such guarantee and CRLF
+  is the Windows default.
+
+  CR now has its short form and the rest of the range is emitted as `\u00XX`. The whole
+  range is covered rather than the characters that seemed likely, because "likely" is a
+  guess about someone else's files. That includes `U+0000`, which the first cut of this fix
+  skipped on the reasoning that awk strings are NUL-terminated — true of one-true-awk, which
+  truncates the line at the NUL, and false of gawk, which is NUL-transparent and emitted the
+  byte raw. Measured on GNU Awk 5.4.1, the engine Linux CI runs. The loop starts at 0 and
+  skips whatever the engine cannot represent, because `index(s, "")` returns 1 and would
+  hand `gsub` an empty regex. The tail pass is guarded by
+  `index()` rather than a regex for the same reason as the fix above, and because no byte
+  of a UTF-8 sequence falls in `0x00`–`0x1F` it can never cut a multibyte character in
+  half — the two fixes pass over different buffers and neither can undo the other.
+
+  The tool hook's `block` reason is escaped through the same function; it had its own
+  copy of the four-character version.
 
 - **This repository's own `entries.md` rule was anchored on a bare path fragment**, so
   it fired on every `.md` file whose path merely contained `jit-context/` — including

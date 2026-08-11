@@ -20,6 +20,38 @@ cat | awk \
   -v project="${CLAUDE_PROJECT_DIR:-.}" \
   -v log_tmp="$LOG_TMP" \
   "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_JSON"'
+# RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
+# entitled to reject the whole object -- which renders as this hook having had nothing to
+# say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
+# because an entry authored on Windows has CRLF line endings and this repo .gitattributes
+# covers OUR files, not a user (issue #15).
+#
+# Backslash goes first, or every escape introduced after it is doubled.
+#
+# The tail loop is guarded by index() rather than a regex: index() is a byte search with no
+# multibyte decode -- the same reason the CamelCase split uses it -- and no byte of a UTF-8
+# sequence falls in 0x00-0x1F, so it can never cut a multibyte character in half. The two
+# fixes pass over different buffers and neither can undo the other.
+#
+# U+0000 IS reachable, on exactly one of the two engines. gawk is NUL-transparent and
+# carries an embedded NUL through getline into the buffer; one-true-awk truncates the line
+# at it and cannot even build a one-byte NUL with sprintf("%c", 0). So the loop starts at 0
+# and skips the code point the engine cannot represent -- without that skip, index(s, "")
+# returns 1 and gsub would be handed an empty regex, which matches at every position.
+function jit_json_escape(s,   k, c) {
+  gsub(/\\/, "\\\\", s)
+  gsub(/"/, "\\\"", s)
+  gsub(/\t/, "\\t", s)
+  gsub(/\n/, "\\n", s)
+  gsub(/\r/, "\\r", s)
+  for (k = 0; k <= 31; k++) {
+    if (k == 9 || k == 10 || k == 13) continue
+    c = sprintf("%c", k)
+    if (length(c) == 0) continue
+    if (index(s, c) > 0) gsub(c, sprintf("\\u%04x", k), s)
+  }
+  return s
+}
 { input = input $0 }
 END {
   # --- Parse JSON (common.sh: jit_json_fields honours an escaped quote, jit_unescape
@@ -214,11 +246,26 @@ END {
 
   # Word-boundary match prep:
   # 1. Split CamelCase: "SiProjectModule" -> "Si Project Module"
+  # The case test is index() and not /[A-Z]/. Matching a regex against a SINGLE character
+  # is a multibyte decode, and one character of a UTF-8 string is one BYTE to one-true-awk:
+  # a lone continuation byte raised "towc: multibyte conversion failure", which aborts the
+  # END block. The hook then printed nothing at all and still exited 0, so a command naming
+  # a path like src/Détail/a.php silently skipped every vocabulary entry (issue #14). gawk
+  # decodes the whole string and never hit it, which is why Linux CI stayed green and macOS
+  # and Git Bash did not.
+  #
+  # index() is a plain byte search with no decode, and it cannot change the verdict: every
+  # byte of a multibyte UTF-8 sequence is >= 0x80, so none of them is ever an ASCII letter
+  # or digit either way. The empty guards keep the substitution exact rather than merely
+  # equivalent: index(s, "") returns 1, so an unguarded p == "" splits on a leading capital
+  # where /[a-z0-9]/ did not. Measured: the two agree byte for byte anyway, because the
+  # whitespace collapse below absorbs the extra separator. Kept because the next person to
+  # reach for index() on a single character should not have to re-derive that.
   cc = ""
   for (i = 1; i <= length(tt); i++) {
     c = substr(tt, i, 1)
     p = (i > 1) ? substr(tt, i-1, 1) : ""
-    if (c ~ /[A-Z]/ && p ~ /[a-z0-9]/) cc = cc " " c
+    if (c != "" && p != "" && index("ABCDEFGHIJKLMNOPQRSTUVWXYZ", c) > 0 && index("abcdefghijklmnopqrstuvwxyz0123456789", p) > 0) cc = cc " " c
     else cc = cc c
   }
   tt = tolower(cc)
@@ -318,12 +365,10 @@ END {
 
   # --- Output JSON ---
   if (blocked != "") {
-    gsub(/\\/, "\\\\", blocked); gsub(/"/, "\\\"", blocked)
-    gsub(/\t/, "\\t", blocked); gsub(/\n/, "\\n", blocked)
+    blocked = jit_json_escape(blocked)
     printf "{\"decision\":\"block\",\"reason\":\"%s\"}", blocked
   } else if (matched != "") {
-    gsub(/\\/, "\\\\", matched); gsub(/"/, "\\\"", matched)
-    gsub(/\t/, "\\t", matched); gsub(/\n/, "\\n", matched)
+    matched = jit_json_escape(matched)
     printf "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"%s\"}}", matched
   } else {
     print "{}"
