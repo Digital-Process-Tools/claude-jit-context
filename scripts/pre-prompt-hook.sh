@@ -14,13 +14,17 @@ cat | awk \
   -v vocab_base="$JIT_BASE/vocabulary" \
   -v shown_file="$SHOWN_FILE" \
   -v log_tmp="$LOG_TMP" \
-'
+  "$JIT_AWK_JSON"'
 { input = input $0 }
 END {
   # --- Parse JSON: extract prompt ---
-  n = split(input, f, "\"")
-  for (i = 2; i <= n; i += 2) {
-    if (f[i] == "prompt") { message = f[i+2]; break }
+  # jit_json_fields/jit_unescape live in common.sh. A bare quote split cut the prompt at
+  # the first escaped quote a user typed, and left every \n as the two characters \ and n
+  # — which glued the word after a line break to an "n" and hid it from keyword lookup.
+  n = jit_json_fields(input, raw, fs, fe)
+  for (i = 2; i + 2 <= n; i += 2) {
+    if (fs[i] != fe[i]) continue
+    if (raw[fs[i]] == "prompt") { message = jit_unescape(jit_field(raw, fs[i+2], fe[i+2])); break }
   }
 
   if (message == "") { print "{}"; exit }

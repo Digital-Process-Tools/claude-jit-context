@@ -9,6 +9,55 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The hooks now read JSON strings instead of splitting on quotes.** All three parsed
+  their payload with `split(input, f, "\"")` and took the raw field, which was wrong
+  twice, and both were silent.
+
+  A value ended at the first **escaped** quote. `gh pr list --search \"a b\" --limit 20`
+  reached the matcher as `gh pr list --search `, so a rule carrying `require: --limit`
+  blocked a command that had `--limit` — but only when the flag sat after the quoted
+  argument. Moving the same flag earlier "fixed" it, which is why this read as position
+  sensitivity in a substring test. The `require` check is a plain `index()`; it was the
+  subject that had been cut, not the test. (#7)
+
+  And nothing was decoded. A multi-line Bash command arrives with its newlines as the two
+  characters `\` and `n`, so a rule anchored `~(^|[;&|\n] *)` — where that escape is a
+  real newline to awk — could not fire on one, ever. `&&` worked, a newline did not, and
+  the log recorded the same "no match" either way. The same defect hid a `supertool` call
+  on the second line from every path rule, and glued the word after a line break in a
+  prompt onto an `n`, hiding it from vocabulary lookup. (#6)
+
+  `\n`, `\t`, `\r`, `\b`, `\f`, `\"`, `\\` and `\/` are decoded. An escape awk cannot
+  represent — `\uXXXX`, or anything undefined — is left exactly as written rather than
+  swallowed: eating the backslash would hand the matcher a subject its author never typed.
+
+  Nothing shipped depended on the old spelling. Every `match` in `examples/` and in this
+  repo's own tree uses a backslash only to escape a literal `.` in a path pattern, which is
+  unaffected.
+
+- **A quoted argument spanning lines is not read as a command.** Issue #7 also reports a
+  rule matching a `git commit` whose *message* quoted a command. Now that a command can
+  hold real newlines, the quote that ends the command words is found once in the whole
+  string rather than once per line — awk cannot see that a quote opened on line one is
+  still open on line three, and the conservative reading is the one single-line commands
+  already had. `~match`, `require` and `forbid` still see the whole command; that is what
+  lets an anchored regex reach a later command at all. (#7)
+
+- `scripts/jit-dry-run.sh` escapes its `--command`/`--file`/`--prompt` sample into the
+  JSON it builds, so what you type is what the hooks see. An unescaped quote ended the
+  value early and the tool reported "no rule fired" for a rule that fires — the exact
+  confusion the script exists to remove — and an unescaped backslash was read back as a
+  JSON escape, so `--file 'C:\test\x'` linted as `C:<TAB>est\x`. A real newline is folded
+  to its escape, so a multi-line command can be pasted in and dry-run as one.
+
+- **`split()` on a one-character separator also splits on a newline, on one-true-awk but
+  not on gawk** — measured on `awk version 20200816` and `GNU Awk 5.4.1`. `pre-path-hook.sh`
+  walks alternate fields of a single-quote split to lift paths out of `supertool`
+  arguments, so on macOS and Git Bash a multi-line command produced one extra field,
+  shifted that parity, and read every argument from the wrong side of the quote — while
+  Linux was fine. The separator is now bracketed, which makes awk compile it as a regex
+  and split on the quote alone, identically on both.
+
 - **A `match` pattern the matcher cannot honour is refused at load, named, and skipped —
   instead of reading as enforced forever.** Every regex is compiled by awk, so it is a
   POSIX ERE; measured on `awk version 20200816`, `~gh\s+pr` compiles to `ghs+pr`, matches

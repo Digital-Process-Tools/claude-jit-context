@@ -34,6 +34,16 @@ echo "phpunit rule context" > "$TOOLS_DIR/phpunit.md"
 echo "phpstan rule context" > "$TOOLS_DIR/phpstan.md"
 echo "skill loaded rule context" > "$TOOLS_DIR/skill-loaded.md"
 
+# Two more rows, written with printf so the backslash reaches the TSV verbatim.
+# The first is anchored on command position: the escape inside the character class is a
+# REAL newline to awk, so this row can only ever fire on a multi-line command once the
+# JSON newline escape is decoded before matching (issue #6).
+printf 'Bash\t~(^|[;&|\\n] *)gh[[:space:]]+pr[[:space:]]+view\tgh-pr.md\tremind\t\t\n' >> "$TOOLS_DIR/00-index.tsv"
+# `require` on a command that routinely carries an embedded quoted argument (issue #7).
+printf 'Bash\tgh pr list\tgh-list.md\tremind\t--limit\t\n' >> "$TOOLS_DIR/00-index.tsv"
+echo "gh pr view rule context" > "$TOOLS_DIR/gh-pr.md"
+echo "gh pr list rule context" > "$TOOLS_DIR/gh-list.md"
+
 # Vocabulary TSV: keyword<TAB>file
 printf 'blog\tblog.md\n' > "$VOCAB_DIR/00-manual/00-index.tsv"
 printf 'crypto\tcrypto.md\n' >> "$VOCAB_DIR/00-manual/00-index.tsv"
@@ -204,6 +214,59 @@ echo ""
 echo "=== Missing config dir ==="
 OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | CLAUDE_PROJECT_DIR="/tmp/nonexistent" bash "$HOOK" 2>/dev/null)
 assert_empty "missing config" "$OUT"
+
+# =============================================
+# SECTION 4: JSON string decoding (issues #6, #7)
+# =============================================
+
+echo ""
+echo "=== Anchored rule, single-line command (control) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"gh pr view 1 --json state"}}')
+assert_contains "anchored rule fires at start of command" "$OUT" "gh pr view rule context"
+
+echo ""
+echo "=== Anchored rule, MULTI-LINE command (issue #6) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"echo x\ngh pr view 1 --json state"}}')
+assert_contains "anchored rule fires after a decoded newline" "$OUT" "gh pr view rule context"
+
+echo ""
+echo "=== Anchored rule still discriminates (the other direction) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"echo the gh pr view docs"}}')
+assert_not_contains "no fire: mid-line, no separator before gh" "$OUT" "gh pr view rule context"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"echo x\necho gh pr view 1"}}')
+assert_not_contains "no fire: after a newline but not the first word" "$OUT" "gh pr view rule context"
+
+echo ""
+echo "=== A backslash the user actually typed is not a newline ==="
+# The command itself contains a backslash followed by n, so the JSON carries an escaped
+# backslash. A decoder that simply gsubs the two-character sequence would fire here.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"printf x\\ngh pr view"}}')
+assert_not_contains "an escaped backslash is not a separator" "$OUT" "gh pr view rule context"
+
+echo ""
+echo "=== a MULTI-LINE commit message is not read as a command (issue #7) ==="
+# The quoted argument spans lines. Nothing in the command words is `gh pr list`; the
+# words only appear inside prose the author is writing ABOUT the command.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"git commit -m \"fix the matcher\n\nmentions gh pr list and git push in passing\""}}')
+assert_contains "matches git-commit" "$OUT" "git commit rule context"
+assert_not_contains "does NOT match gh pr list from the message body" "$OUT" "gh pr list rule context"
+assert_not_contains "does NOT match git push from the message body" "$OUT" "git push rule context"
+
+echo ""
+echo "=== require: flag sits after an embedded quote (issue #7) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"gh pr list --search \"foo bar\" --limit 20"}}')
+assert_not_contains "not blocked — --limit is present" "$OUT" '"decision":"block"'
+assert_contains "reminds instead" "$OUT" "gh pr list rule context"
+
+echo ""
+echo "=== require: same flags, other order (control) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"gh pr list --limit 20 --search \"foo bar\""}}')
+assert_not_contains "not blocked, either order" "$OUT" '"decision":"block"'
+
+echo ""
+echo "=== require: genuinely absent, still blocks ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"gh pr list --search \"foo bar\""}}')
+assert_blocked "blocked when --limit really is missing" "$OUT"
 
 # --- Cleanup ---
 rm -rf "$TEST_DIR"

@@ -19,22 +19,24 @@ cat | awk \
   -v home="$HOME" \
   -v project="${CLAUDE_PROJECT_DIR:-.}" \
   -v log_tmp="$LOG_TMP" \
-  "$JIT_AWK_GUARD"'
+  "$JIT_AWK_GUARD$JIT_AWK_JSON"'
 { input = input $0 }
 END {
-  # --- Parse JSON: split on quotes, extract key-value pairs ---
-  n = split(input, f, "\"")
-  for (i = 2; i <= n; i += 2) {
-    v = f[i+2]
-    k = f[i]
-    if (k == "tool_name") tool_name = v
-    else if (k == "command") command = v
-    else if (k == "skill") f_skill = v
-    else if (k == "file_path") f_file_path = v
-    else if (k == "pattern") f_pattern = v
-    else if (k == "description") f_desc = v
-    else if (k == "prompt") f_prompt = v
-    else if (k == "query") f_query = v
+  # --- Parse JSON (common.sh: jit_json_fields honours an escaped quote, jit_unescape
+  # --- decodes the value) and extract key-value pairs ---
+  n = jit_json_fields(input, raw, fs, fe)
+  for (i = 2; i + 2 <= n; i += 2) {
+    # Only a field that is ONE raw piece can be a key this hook wants — every key below is
+    # quote-free — and only the matching value is ever materialised or decoded. That is
+    # what keeps a Write payload, whose tool_input.content is the whole file body, from
+    # being reassembled and walked character by character on every single tool call.
+    if (fs[i] != fe[i]) continue
+    k = raw[fs[i]]
+    if (k == "tool_name") tool_name = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
+    else if (k == "command") command = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
+    else if (k == "skill") f_skill = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
+    else if (k == "file_path") f_file_path = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
+    else if (k == "pattern") f_pattern = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
   }
 
   # Fallback chain for tool matching
@@ -43,11 +45,30 @@ END {
   if (full_command == "") full_command = f_file_path
   if (full_command == "") full_command = f_pattern
 
-  # Strip to command words (before ; & | quotes flags)
+  # Strip to command words (before ; & | quotes flags). `full_command` can now hold real
+  # newlines, and the one strip that had to change is the quote.
+  #
+  # `.` matches a newline -- measured on awk 20200816 and GNU Awk 5.4.1, both of which
+  # reduce "a;b<NL>c;d" to "a". So the ; & | and -- strips already run to the end of the
+  # whole string rather than to the end of a line, which is what they always meant, and
+  # a multi-line command keeps its later lines only when nothing truncated it earlier.
+  #
+  # The quote is a cut at its FIRST occurrence, not a gsub, and the difference only shows
+  # once a command can span lines. A quoted argument may too -- `git commit -m "line one
+  # ... mentions gh pr list"` -- and awk cannot see that the quote opened on line one is
+  # still open on line three. Stripping per line would hand that commit message to
+  # substring rules as if it were a command, which is the false block issue #7 reports.
   cmd = full_command
   gsub(/[;&|].*/, "", cmd)
-  gsub(/".*/, "", cmd)
+  q = index(cmd, "\"")
+  if (q > 0) cmd = substr(cmd, 1, q - 1)
   gsub(/ --.*/, "", cmd)
+
+  # What is left can now be newlines and spaces rather than the empty string. Blank is
+  # "no command words" either way, and must reach the same verdict.
+  probe = cmd
+  gsub(/[[:space:]]/, "", probe)
+  if (probe == "") cmd = ""
 
   if (tool_name == "" || cmd == "") { print "{}"; exit }
 
@@ -160,7 +181,10 @@ END {
   # `./supertool edit:..src/Billing/..` still binds to Billing. No path -> no vocab
   # here; the prompt hook still injects on what the user is actually discussing.
   cmd_paths = ""
-  np = split(command, ptoks, / /)
+  # Split on any run of whitespace, not a single space: a decoded command has real
+  # newlines in it now, and splitting on " " alone would glue the last token of one line
+  # to the first of the next and hide both from the path test.
+  np = split(command, ptoks, /[[:space:]]+/)
   for (pi = 1; pi <= np; pi++) {
     if (index(ptoks[pi], "/") > 0) cmd_paths = cmd_paths " " ptoks[pi]
   }

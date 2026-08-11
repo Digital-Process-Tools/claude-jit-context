@@ -110,6 +110,42 @@ OUT=$(cd "$CLEAN" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --tool Bash 
 assert_contains "says no rule fired" "$OUT" "no rule fired"
 
 echo ""
+echo "=== a sample command carrying a quote reaches the hook intact ==="
+# The sample is hand-built JSON. An unescaped quote used to end the value early, so the
+# rule was tested against `echo ` and reported as not firing.
+OUT=$(cd "$CLEAN" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --tool Bash --command 'echo "hi" ; git push origin main' 2>&1) && ST=0 || ST=$?
+# Anchored on the verdict, not on the name: phase 1 lists git-push.md as a linted pattern
+# on every run, so a bare name check passes whether or not the rule ever fired.
+assert_contains "rule fires after a quoted argument" "$OUT" "BLOCK  pre-tool-hook.sh"
+
+echo ""
+echo "=== ...and still declines when the quote is all there is ==="
+OUT=$(cd "$CLEAN" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --tool Bash --command 'echo "git push" | cat' 2>&1) && ST=0 || ST=$?
+assert_contains "no rule fired on quoted prose" "$OUT" "no rule fired"
+
+echo ""
+echo "=== a multi-line sample command fires the anchored rule ==="
+OUT=$(cd "$CLEAN" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --tool Bash --command "$(printf 'echo x\ngit push origin main')" 2>&1) && ST=0 || ST=$?
+assert_contains "anchored rule fires for a pasted multi-line command" "$OUT" "BLOCK  pre-tool-hook.sh"
+
+echo ""
+echo "=== a backslash in the sample stays a backslash ==="
+# Two characters, not a newline. The sample is what the caller typed, so the rule must
+# decline here for the same reason it fires above — and a backslash that reached the
+# payload unescaped would have made this a newline and blocked.
+OUT=$(cd "$CLEAN" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --tool Bash --command 'echo x\ngit push origin main' 2>&1) && ST=0 || ST=$?
+assert_contains "no rule fires on a literal backslash-n" "$OUT" "no rule fired"
+
+echo ""
+echo "=== a sample ending in a backslash still builds valid JSON ==="
+# Smoke test, not the decisive one — the assertion above is what proves the escaping.
+# Unescaped, this trailing backslash escapes the closing quote of the hand-built payload
+# and the value swallows the rest of the object.
+OUT=$(cd "$CLEAN" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --file 'C:\repo\src\Billing\' 2>&1) && ST=0 || ST=$?
+assert_status "exit 0 on a backslash-laden sample" "$ST" "0"
+assert_contains "both hooks still answered" "$OUT" "pre-path-hook.sh"
+
+echo ""
 echo "=== a path sample fires a path rule ==="
 OUT=$(cd "$CLEAN" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --file "src/Billing/Total.php" 2>&1) && ST=0 || ST=$?
 assert_contains "path rule fired" "$OUT" "billing.md"

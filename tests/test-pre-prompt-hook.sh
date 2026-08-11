@@ -113,6 +113,26 @@ OUT=$(run_hook '{"prompt":"open stripe and check the balance"}')
 assert_contains "stripe matches payments.md" "$OUT" "payments context"
 
 # =============================================
+# SECTION 2b: JSON string decoding (issue #6)
+# =============================================
+
+echo ""
+echo "=== Keyword after a newline in the prompt ==="
+OUT=$(run_hook '{"prompt":"check the billing\npayments dashboard"}')
+assert_contains "billing matched" "$OUT" "billing context"
+assert_contains "payments matched across the decoded newline" "$OUT" "payments context"
+
+echo ""
+echo "=== Keyword after an escaped quote in the prompt ==="
+OUT=$(run_hook '{"prompt":"he said \"hello\" and then asked about billing"}')
+assert_contains "keyword after an escaped quote is still seen" "$OUT" "billing context"
+
+echo ""
+echo "=== Prompt with no keyword stays silent ==="
+OUT=$(run_hook '{"prompt":"he said \"hello\" and left"}')
+assert_empty "no match after an escaped quote either" "$OUT"
+
+# =============================================
 # SECTION 3: Multiple matches in one prompt
 # =============================================
 
