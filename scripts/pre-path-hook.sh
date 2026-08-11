@@ -28,7 +28,7 @@ cat | awk \
   -v vocab_shown_file="$VOCAB_SHOWN_FILE" \
   -v shown_file="$SHOWN_FILE" \
   -v log_tmp="$LOG_TMP" \
-  "$JIT_AWK_GUARD$JIT_AWK_JSON"'
+  "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_JSON"'
 { input = input $0 }
 END {
   # --- Parse JSON: extract file_path, path, or command ---
@@ -111,9 +111,23 @@ END {
     layer = layers[li]
     index_file = paths_base "/" layer "/00-index.tsv"
 
+    rown = 0
     while ((getline tline < index_file) > 0) {
+      rown++
       split(tline, tf, "\t")
       pattern = tf[1]; rule_file = tf[2]
+
+      # Containment first, before the shown set and before the pattern: the file name is
+      # about to be concatenated onto this layer directory, and a row of ../../../x made
+      # the hook read that file and inject it. See jit_bad_entry_file in common.sh.
+      why = jit_bad_entry_file(rule_file)
+      if (why != "") {
+        n_refused++
+        refused = refused (refused == "" ? "- " : "\n- ") jit_row_id(layer, rown) ": " why
+        log_matches = log_matches sep "refused:" rule_file "(" why ")"
+        sep = ", "
+        continue
+      }
 
       if (rule_file in shown) continue
 
@@ -123,6 +137,10 @@ END {
       why = jit_bad_pattern(pattern)
       if (why != "") {
         n_refused++
+        # Named, not positioned: this row PASSED the bare-name check above, so the name
+        # cannot carry a separator, and naming it is what an author fixing the pattern
+        # actually needs. Only a name that failed that check is untrustworthy enough to
+        # withhold. tests/test-rule-guard.sh asserts this half by file name.
         refused = refused (refused == "" ? "- " : "\n- ") layer "/" rule_file ": " why
         log_matches = log_matches sep "refused:" rule_file "(" why ")"
         sep = ", "
@@ -167,9 +185,21 @@ END {
       layer = layers[li]
       vindex = vocab_base "/" layer "/01-paths.tsv"
 
+      vrown = 0
       while ((getline vline < vindex) > 0) {
+        vrown++
         split(vline, vf, "\t")
         vpattern = vf[1]; vocab_file = vf[2]
+
+        # Same containment check as the rule loop above: this name is concatenated too.
+        why = jit_bad_entry_file(vocab_file)
+        if (why != "") {
+          n_refused++
+          refused = refused (refused == "" ? "- " : "\n- ") jit_row_id(layer, vrown) ": " why
+          log_matches = log_matches sep "refused:" vocab_file "(" why ")"
+          sep = ", "
+          continue
+        }
 
         if (vocab_file in vshown) continue
 
@@ -208,6 +238,20 @@ END {
     print "jit-refused-paths" >> shown_file
     note = jit_refusal_notice(refused, n_refused)
     matched = (matched == "") ? note : note "\n---\n" matched
+  }
+
+  # --- A refused config.env line is reported, once per session ---
+  # Parsed in common.sh, reported here, because this is the only channel that reaches the
+  # user. The case that matters is the one where they did NOT write the file: config.env
+  # arrives with the repository, and a refused line there is either their own typo or a
+  # shell payload someone shipped them. Both are worth saying out loud.
+  config_refused = ENVIRON["JIT_CONFIG_REFUSED"]
+  config_refused_n = ENVIRON["JIT_CONFIG_REFUSED_N"] + 0
+  if (config_refused_n > 0 && !("jit-refused-config" in shown)) {
+    shown["jit-refused-config"] = 1
+    print "jit-refused-config" >> shown_file
+    cnote = jit_config_notice(config_refused, config_refused_n)
+    matched = (matched == "") ? cnote : cnote "\n---\n" matched
   }
 
   # --- Log info to temp file ---

@@ -9,12 +9,14 @@ These four scripts run in someone else's session, on every prompt and every tool
 
 **Silence and "nothing to say" are not the same.** The tool dimension can block a call. If a rule cannot be evaluated, that must not render as an allow with no explanation — say so in what the hook injects. Implemented: `jit_bad_pattern()` in `common.sh` refuses the ROW, never the file, and both hooks name it in the log and once per session in context. Refusing the file was rejected — a malformed pattern is fatal to the whole awk, which is the bug, not the fix.
 
+**`.claude/jit-context/` is attacker-controlled input, not configuration.** It arrives with the repository, and these hooks run before anyone has read the code they cloned. So `config.env` is parsed as `KEY=VALUE` and never sourced, and an entry file name from an index row is refused unless it is bare — `jit_bad_entry_file()` in `common.sh`. Both were live: a `config.env` of `touch …` created the file, and a row of `../../../../x` made the hook read that file and inject it, at all five concatenation sites. Add a sixth site and it needs the same check.
+
 **No new runtime dependencies.** `awk` and `perl` only. No `jq`, no Python, no Node. Dropping `jq` is most of what 0.2.0 was; adding one back is a breaking change, not a convenience.
 
 Each script sources shared state first:
 
 ```bash
-source "$(dirname "$0")/common.sh"    # JIT_BASE, _log_hook, optional config.env
+source "$(dirname "$0")/common.sh"    # JIT_BASE, _log_hook, config.env parsed as data
 ```
 
 Hooks read `.claude/jit-context/<dimension>/<layer>/00-index.tsv` — never the markdown frontmatter. One `awk` per hook is the whole runtime.

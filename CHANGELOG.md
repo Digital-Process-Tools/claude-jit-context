@@ -7,6 +7,86 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+Both of these treat `.claude/jit-context/` as what it actually is: a directory that
+arrives with the repository. The hooks run on the first prompt of a session, before
+anyone has read the code they were cloned with, so every file under that directory is
+attacker-controlled input rather than configuration the user wrote. Neither finding needs
+the user to do anything beyond opening the project.
+
+- **`config.env` was executed as shell on every prompt and every tool call.** `common.sh`
+  dot-sourced it, so a repository shipping a `.claude/jit-context/config.env` ran whatever
+  was in it. Reproduced: a file containing `echo … >&2` printed, and one containing
+  `touch …` created the file.
+
+  It is now read as data. One `KEY=VALUE` per line, `#` comments and blanks skipped,
+  surrounding quotes stripped, a leading `export` accepted, and nothing inside a value
+  expanded — the values reach the hooks through `printf -v`, never through `eval`.
+
+  Only `JIT_CONTEXT_*`, `DYNAMIC_RULES_*` and `DVSI_*` are settable. An allowlist of plain
+  shell identifiers would have been the obvious fix and would not have closed the hole:
+  `PATH` is a plain identifier, `common.sh` runs before every hook invokes `awk`, and that
+  is the same execution one hop removed.
+
+  A line that is not a settable assignment is **refused** — logged, and named once per
+  session in the injected context, with its line number and the reason but never its text,
+  since the premise of the change is that the file may be hostile. Dropping it quietly was
+  not an option: a setting that vanishes reads exactly like a setting that applied and did
+  nothing, which is this repository's own recurring defect.
+
+  That reporting channel had the defect it exists to report. The list is newline-separated
+  and it first travelled to the hooks through `awk -v`, where a newline in the value is the
+  fatal error "newline in string" — raised before the program runs, so the hook printed
+  nothing whatsoever and still exited 0. **One** refused line has no separator and hid it
+  completely; **two** silenced the hook. It goes through the environment now, and the suite
+  covers the two-line case on all three hooks.
+
+- **An index row could make a hook read any file on disk and inject it into context.** The
+  entry file name from `00-index.tsv` was concatenated onto its layer directory with no
+  containment check, so a committed row of `../../../../outside.txt` made the hook read
+  that file and hand its contents to the model. Confirmed at all five read sites — the
+  path rule loop, the tool rule loop, and the three vocabulary passes (prompt hook, tool
+  hook, and the path hook's `01-paths.tsv`). Absolute paths do not traverse; they are
+  prefixed and simply fail to open. Only the relative form worked, and `00-index.tsv` is a
+  committed file, so cloning a repository was the whole attack.
+
+  A name carrying `/`, carrying `\`, or equal to `.` or `..` is now refused, and named in
+  the same once-per-session channel as a pattern the matcher cannot honour. The backslash
+  is in that list for Windows: on Git Bash the file API underneath `awk` treats it as a
+  separator, so `..\..\x` traverses there while being inert on Linux and macOS.
+
+  Refusing anything that is not a bare file name is safe because `rebuild-tsv.sh` writes
+  that column with `basename` at all four of its sites, and the generated-layer contract
+  is the same TSV format — a name with a separator in it was never produced by this
+  project.
+
+  `scripts/jit-dry-run.sh` checks the same column, from the same shared `awk` function, so
+  the "lint the tree that owns these rules" advice the refusal notice prints is true for
+  this class too. It also sweeps the vocabulary indexes, which had never been linted at
+  all because vocabulary carries no patterns — and which hold three of the five sites.
+
+  A refused row is reported by **position** — `00-manual row 3` — and never by the text of
+  its file-name column. That column is attacker-controlled free text whose only constraint
+  is that it contains a separator, and the notice fires without any rule having matched, so
+  echoing it back would be a prompt-injection channel needing no trigger at all. A row
+  whose name *passes* the check cannot contain a separator, and an unhonourable **pattern**
+  is still reported by file name, which is what an author fixing it needs.
+
+  **This closes the string form and not the symlink form.** An entry file that is itself a
+  symlink out of the tree still has its target read: the name in the index is bare, so it
+  passes, and `getline` follows the link like any `open()`. `awk` cannot `lstat`, and the
+  architecture is one `awk` process per hook with no per-row subprocess, so closing it is a
+  design decision about where a tree walk belongs — not something to slip into this change.
+  Tracked separately.
+
+- **`tests/test-security.sh`** — new suite, red before either fix. Every "did not
+  exfiltrate" case is paired with a positive control that a legitimate entry still fires,
+  because a fix that broke entry loading outright would have satisfied the negative half
+  on its own. The `config.env` cases are driven in both directions: `JIT_CONTEXT_VOCAB_PATHS=1`
+  must still turn a feature on that is off by default, and asserting only that the hook
+  printed valid JSON would have passed with `config.env` support deleted entirely.
+
 ### Fixed
 
 - **This repository's own `entries.md` rule was anchored on a bare path fragment**, so
@@ -134,7 +214,9 @@ and publishes it.
 - **Vocabulary dimension**, triggered by keywords in the prompt via a `UserPromptSubmit`
   hook. It had existed and worked for months without appearing anywhere in the README.
 - `scripts/session-start-hook.sh` — clears per-session `once` markers so rules fire fresh.
-- `.claude/jit-context/config.env`, sourced by `common.sh`, for per-project settings:
+- `.claude/jit-context/config.env`, read by `common.sh`, for per-project settings.
+  (It was *sourced* until the Security entry at the top of this file; that was the bug.)
+  Settings:
   `DYNAMIC_RULES_MODULE_PREFIX`, `DYNAMIC_RULES_KEYWORD_BLACKLIST`,
   `DYNAMIC_RULES_VOCAB_PATHS`.
 - `tests/run-all.sh` — one entry point, non-zero exit on any failure.

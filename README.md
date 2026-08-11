@@ -375,6 +375,12 @@ DYNAMIC_RULES_KEYWORD_BLACKLIST="^(count|output|input|name|file|files)$"
 DYNAMIC_RULES_VOCAB_PATHS=0
 ```
 
+**This file is read, not executed.** One `KEY=VALUE` per line; `#` comments and blank lines are ignored, surrounding quotes are stripped, and a leading `export` is accepted. Nothing inside a value is expanded — a `$`, a backtick or a `$(…)` is a literal character.
+
+Only settings named `JIT_CONTEXT_*`, `DYNAMIC_RULES_*` or `DVSI_*` are read. Any other line is **refused**, named in `hooks.log`, and reported once per session in the context the hooks inject — it is never dropped in silence. A `#` preceded by whitespace starts a trailing comment, exactly as it did when the file was sourced; one that is not is an ordinary character, so `^(a#b)$` keeps its hash.
+
+That narrowness is deliberate. `config.env` lives in the project, so it arrives with the repository. It was previously `.`-sourced on every prompt and every tool call, which made cloning a repo and opening it arbitrary code execution before you had read a line of the code. `PATH` is a valid shell identifier and the very next thing every hook does is run `awk`, so an allowlist of plain identifiers would not have closed it.
+
 ## Performance
 
 Every hook is a **single `awk` process**. Frontmatter is parsed at build time into TSV, so the runtime path is a flat file scan with no JSON parsing, no `jq`, and no subprocess per rule. Typical hook time is 30–110 ms, which matters because these run on _every_ prompt and _every_ tool call.
