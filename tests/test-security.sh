@@ -165,6 +165,59 @@ assert_contains "a legitimate vocab-by-path entry still fires" "$OUT" "entry bod
 rm -rf "$PROJ"
 
 echo ""
+echo "=== S2: an entry name with a leading dot is refused (#34) ==="
+# The symlink sweep enumerates the tree with globs, and a glob `*` does not match a leading
+# dot -- so `.hidden.md` was never lstat-ed and every link guard cleared it. tests/
+# test-symlink-entry.sh drives the disclosure itself, where a link can be built; this half
+# is the NAME, it needs no link, and it therefore runs on every platform including Windows.
+#
+# Safe to refuse outright: rebuild-tsv.sh globs `*.md`, which cannot produce a dot-name, so
+# no honest tree has ever carried one.
+PROJ=$(new_proj); BASE="$PROJ/.claude/jit-context"
+printf 'entry body G\n' > "$BASE/paths/00-manual/legit-g.md"
+printf 'dot secret body\n' > "$BASE/paths/00-manual/.hidden-g.md"
+{ printf 'gtarget\t.hidden-g.md\n'
+  printf 'gtarget\tlegit-g.md\n'; } > "$BASE/paths/00-manual/00-index.tsv"
+OUT=$(printf '{"tool_name":"Read","tool_input":{"file_path":"/x/gtarget/a.php"}}' \
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPTS/pre-path-hook.sh" 2>/dev/null)
+assert_not_contains "a dot-named entry is not read at all" "$OUT" "dot secret body"
+assert_contains "the dot-named row is refused and the reason names the dot" "$OUT" "begins with a dot"
+assert_contains "a legitimate entry in the same index still fires" "$OUT" "entry body G"
+rm -rf "$PROJ"
+
+PROJ=$(new_proj); BASE="$PROJ/.claude/jit-context"
+printf 'entry body H\n' > "$BASE/tools/00-manual/legit-h.md"
+printf 'dot secret body\n' > "$BASE/tools/00-manual/.hidden-h.md"
+{ printf 'Bash\thtarget\t.hidden-h.md\tremind\t\t\n'
+  printf 'Bash\thtarget\tlegit-h.md\tremind\t\t\n'; } > "$BASE/tools/00-manual/00-index.tsv"
+OUT=$(printf '{"tool_name":"Bash","tool_input":{"command":"htarget now"}}' \
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null)
+assert_not_contains "tool hook: a dot-named entry is not read at all" "$OUT" "dot secret body"
+assert_contains "tool hook: the dot-named row is refused" "$OUT" "begins with a dot"
+assert_contains "tool hook: a legitimate rule still fires" "$OUT" "entry body H"
+rm -rf "$PROJ"
+
+echo ""
+echo "=== S2: an honest name is NOT constrained to an ASCII alphabet (#34) ==="
+# The audit proposed closing #34 and #35 together with `^[A-Za-z0-9._-]+\.md$`. That
+# constraint admits `.hidden.md` -- every character in it is in the class -- so it closes
+# neither, and the only thing it does close is an honest author's file name. This case
+# pins that: a name with an accent and a name with a space are ordinary entries and must
+# keep firing. If a future change refuses them, it breaks a working tree on upgrade with a
+# message about a rule that "could not be evaluated", and it buys nothing.
+PROJ=$(new_proj); BASE="$PROJ/.claude/jit-context"
+printf 'accented entry body\n' > "$BASE/paths/00-manual/déploiement.md"
+printf 'spaced entry body\n' > "$BASE/paths/00-manual/my rule.md"
+{ printf 'itarget\tdéploiement.md\n'
+  printf 'itarget\tmy rule.md\n'; } > "$BASE/paths/00-manual/00-index.tsv"
+OUT=$(printf '{"tool_name":"Read","tool_input":{"file_path":"/x/itarget/a.php"}}' \
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPTS/pre-path-hook.sh" 2>/dev/null)
+assert_contains "an accented entry file name still fires" "$OUT" "accented entry body"
+assert_contains "an entry file name with a space still fires" "$OUT" "spaced entry body"
+assert_not_contains "and neither is refused" "$OUT" "could not be evaluated"
+rm -rf "$PROJ"
+
+echo ""
 echo "=== S2: a refused row does not carry its own text into context ==="
 # The refusal notice fires WITHOUT any rule matching, on the first call of a session. The
 # entry file name in a refused row is attacker-controlled free text by definition -- the

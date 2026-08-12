@@ -64,7 +64,20 @@ jit_scan_symlinks() {
     JIT_SYMLINKS="$JIT_SYMLINKS${base%/*}$JIT_NL$base$JIT_NL"
     found=1
   fi
-  for f in "$base" "$base"/* "$base"/*/* "$base"/*/*/*; do
+  # Both forms at every depth. A glob `*` does not match a leading dot, so until #34 the
+  # sweep walked straight past `.hidden.md` -- never lstat-ed it, never recorded it, and the
+  # awk side then cleared the row. The comment about the log path forty lines below already
+  # said this about `.discovery` and did not apply it here.
+  #
+  # Ordering still matters and is still shallow-to-deep: both forms at depth 1 before either
+  # form at depth 2, so a descendant can only ever be tested after its ancestor was recorded.
+  #
+  # `.` and `..` are dropped below rather than here -- a glob cannot exclude them, and
+  # `..` is the parent of the tree, which is neither ours to judge nor ours to refuse.
+  for f in "$base" "$base"/* "$base"/.* "$base"/*/* "$base"/*/.* "$base"/*/*/* "$base"/*/*/.*; do
+    case "$f" in
+      */. | */..) continue ;;
+    esac
     if [ -L "$f" ]; then
       JIT_SYMLINKS="$JIT_SYMLINKS$f$JIT_NL"
       found=1
@@ -591,6 +604,24 @@ function jit_bad_entry_file(f, dir) {
   if (f == "") return ""
   if (index(f, "/") > 0 || index(f, "\\") > 0) return "not a bare file name"
   if (f == "." || f == "..") return "not a bare file name"
+  # A LEADING DOT, refused by name rather than caught by lstat, because lstat never saw it:
+  # the sweep in the bash half enumerates the tree with globs and a glob * does not match a
+  # leading dot. So `.hidden.md` skipped the link set entirely and every check below cleared
+  # it, while the identical link named `hidden.md` was refused -- #13 reopened as #34,
+  # driven at all five read sites and in jit-dry-run.sh.
+  #
+  # The sweep now globs the dot forms too, so this is belt and braces rather than the only
+  # guard. It is kept because it is the half that needs no lstat at all, and because it is
+  # the same verdict on every platform regardless of what the sweep managed to see.
+  #
+  # Refusing every dot-name outright is safe for an honest tree: rebuild-tsv.sh writes this
+  # column from a `*.md` glob at all four of its sites, and that glob cannot produce one.
+  # No WIDER alphabet constraint is imposed. `^[A-Za-z0-9._-]+\.md$` was proposed for this
+  # and would have been worse than nothing: it admits `.hidden.md`, every character of which
+  # is in that class, and it admits a whole English sentence of dots and hyphens -- so it
+  # closes neither this nor the notice-quoting sibling, while refusing an accented or spaced
+  # file name that works today. tests/test-security.sh pins both directions.
+  if (substr(f, 1, 1) == ".") return "the entry file name begins with a dot, so rename it without one"
   if (dir != "") {
     # The directory first: when the layer itself is a link, every row in it is unreadable
     # for the same reason, and naming the file would point the author at the wrong thing.

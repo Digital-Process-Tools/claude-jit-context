@@ -15,6 +15,30 @@ anyone has read the code they were cloned with, so every file under that directo
 attacker-controlled input rather than configuration the user wrote. None of them needs
 the user to do anything beyond opening the project.
 
+- **A dot-named entry file walked straight past the symbolic-link check.** The sweep that
+  `lstat`s the tree enumerates it with `*`, `*/*` and `*/*/*`, and a glob `*` does not match
+  a leading dot — so `.hidden.md` was never `lstat`ed, never entered the link set, and the
+  awk side cleared it. A link named `hidden.md` was refused; the identical link named
+  `.hidden.md` was read and its target injected. `common.sh` stated that exact glob property
+  about `.discovery` six lines below the sweep and did not apply it to the sweep.
+
+  `jit-dry-run.sh` ran the same blind sweep, so the linter reported the hostile tree `ok`
+  and exited 0 — the tool the refusal notice sends the reader to said the attack was
+  honourable. That is what made this a release blocker rather than a bug.
+
+  Both halves are fixed, because they fail differently. **The sweep now globs the dot forms
+  too** at every depth, with `.` and `..` dropped, so nothing under the tree escapes the
+  `lstat` by being named after it. **And an entry file name beginning with a dot is refused
+  outright**, by name, so the verdict holds without an `lstat` at all — `rebuild-tsv.sh`
+  writes that column from a `*.md` glob, which cannot produce a dot-name, so no honest entry
+  is affected.
+
+  No wider constraint on the name was adopted. `^[A-Za-z0-9._-]+\.md$` was proposed to close
+  this and the notice-quoting issue below in one stroke, and it closes neither: every
+  character of `.hidden.md` is in that class, and so is a whole English sentence of dots and
+  hyphens. What it does refuse is `café.md` and `my rule.md` — a working tree breaking on
+  upgrade, in exchange for nothing. Both directions are pinned in the suite.
+
 - **`config.env` was executed as shell on every prompt and every tool call.** `common.sh`
   dot-sourced it, so a repository shipping a `.claude/jit-context/config.env` ran whatever
   was in it. Reproduced: a file containing `echo … >&2` printed, and one containing

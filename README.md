@@ -346,6 +346,14 @@ there, or generate the layer. Directories *above* your project are yours rather 
 clone's and are not checked, so a project reached through a symlinked parent works
 normally.
 
+**An entry file name may not begin with a dot.** That is the one constraint on the name, and
+it exists because the symbolic-link check above is a glob-and-`lstat` sweep of the tree: a
+glob does not match a leading dot, so `.hidden.md` was invisible to it and a link named that
+way was read. Nothing else about the name is constrained — spaces, accents and any other
+character an author actually types stay honourable — and `rebuild-tsv.sh` cannot produce a
+dot-name in the first place, so no entry you wrote is affected. An index row naming one is
+refused and reported, and `jit-dry-run.sh` refuses the same row.
+
 ### Compatibility — tools that touch files through `Bash`
 
 Path rules read `file_path` from `Read`/`Edit`/`Write`/`Glob`/`Grep`. Anything that reaches a file some other way does not carry that field, and a naive implementation would stop matching the moment a session used one — every path rule you wrote would go quiet, with no error and nothing in the log to explain it.
