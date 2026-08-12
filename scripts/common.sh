@@ -215,6 +215,57 @@ jit_log_write() {
   fi
 }
 
+# --- The once-per-session markers, and what a session is --------------------
+# They used to be /tmp/claude-{vocab,path}-shown-$PPID.txt. Two things were wrong with
+# that and only one of them was visible.
+#
+# $PPID is not a session. Under `$( ... )` it is the command-substitution SUBSHELL --
+# measured: script pid 31660, hook PPID 31661 -- a short-lived pid the OS recycles freely.
+# Two hook calls in one process drew the same marker at random, and what the second one
+# then suppressed was every path rule INCLUDING the refusal notice, so a lost security
+# message and a flake had the same signature. 4 of 5 full `run-all.sh` runs went red at
+# 8c62858 with ZERO stale marker files on disk: recycling inside one run, not leftovers.
+# In production the same weak proxy collides across concurrent sessions and worktrees.
+#
+# And /tmp is shared, so nothing there could be cleaned without reaching into state this
+# session does not own -- which is exactly what `rm -f /tmp/claude-hook-log-*.tmp` did.
+#
+# The key is now the `session_id` the hook payload carries, read in awk (jit_session_key,
+# below) because awk is already parsing that JSON. No session_id -- a hand-run hook, a
+# test payload -- means NO marker file and no dedup at all, rather than a guess: repeating
+# an entry costs tokens, suppressing one costs the rule. That is also why exactly one of the
+# twelve existing suites needed a behaviour change: the SessionStart section of
+# test-pre-prompt-hook.sh, which asserted on the /tmp files by name.
+#
+# The directory is the project's, beside the log, so markers die with the tree instead of
+# accumulating in /tmp forever (12,288 of them on one machine, #17) and two projects no
+# longer share a namespace. That puts a WRITE inside a tree a clone controls, so it gets
+# the same four `[ -L ]` tests the log path got in #27 -- written out again rather than
+# read off the log's verdict, because this is a DIFFERENT concatenation and JIT_LOG_DISABLED
+# also covers hooks.log itself, which has nothing to say about this directory.
+#
+# An unwritable or read-only checkout ends with JIT_STATE_DIR empty, which degrades to no
+# dedup in silence. A hook that cannot remember is still a hook that must run.
+JIT_STATE_DIR="$JIT_BASE/.discovery/state"
+for _jit_p in "${JIT_BASE%/*}" "$JIT_BASE" "$JIT_BASE/.discovery" "$JIT_STATE_DIR"; do
+  if [ -L "$_jit_p" ]; then JIT_STATE_DIR=""; fi
+done
+unset _jit_p
+# `mkdir -p` is a fork, and this file runs before every hook, so it is only paid when the
+# directory is missing AND the parent that would hold it is writable -- otherwise a
+# permanently read-only checkout buys a doomed fork on every prompt and every tool call,
+# forever, because a one-shot process cannot remember that it already failed. Both tests
+# below are shell builtins. Gated on JIT_BASE existing too: a session with no jit-context
+# tree at all should not have one materialised under its cwd.
+if [ -n "$JIT_STATE_DIR" ] && [ -d "$JIT_BASE" ] && [ ! -d "$JIT_STATE_DIR" ]; then
+  if [ -d "$JIT_BASE/.discovery" ]; then
+    if [ -w "$JIT_BASE/.discovery" ]; then mkdir -p "$JIT_STATE_DIR" 2>/dev/null; fi
+  elif [ -w "$JIT_BASE" ]; then
+    mkdir -p "$JIT_STATE_DIR" 2>/dev/null
+  fi
+fi
+if [ ! -d "$JIT_STATE_DIR" ] || [ ! -w "$JIT_STATE_DIR" ]; then JIT_STATE_DIR=""; fi
+
 # Timestamp with ms precision (single perl call, ~11ms)
 _ts() { perl -MTime::HiRes -MPOSIX -e 'my $t=Time::HiRes::time(); printf("%s.%03d\n", strftime("%H:%M:%S",localtime($t)), ($t*1000)%1000)'; }
 
@@ -808,6 +859,52 @@ function jit_json_fields(s, raw, fs, fe,   n, i, k) {
   }
   fe[k] = n
   return k
+}
+# --- Session identity, for the once-per-session markers ---------------------
+# Read here rather than in bash because the payload is already being parsed: a second awk
+# process per hook to fetch one field would cost more than every check in this file.
+#
+# The value becomes a FILE NAME concatenated onto a directory, and it arrives in JSON that
+# a stranger runner writes -- so it is a bare-name check of the same family as
+# jit_bad_entry_file(): anything outside [A-Za-z0-9_-] is not a session id, it is a path
+# fragment, and a field spanning an escaped quote is not one either. Refused means NO
+# marker, never a sanitised guess at what was meant.
+#
+# The first session_id in the payload wins. The scan is flat, so a nested tool_input value
+# could carry the string too -- first-wins keeps the field the runner itself wrote, which
+# Claude Code puts at the top level, ahead of anything a command line spells.
+function jit_session_key(raw, fs, fe, n,   i, k) {
+  for (i = 2; i + 2 <= n; i += 2) {
+    if (fs[i] != fe[i]) continue
+    if (raw[fs[i]] != "session_id") continue
+    if (fs[i+2] != fe[i+2]) return ""
+    k = raw[fs[i+2]]
+    if (k == "" || length(k) > 64) return ""
+    if (k ~ /[^A-Za-z0-9_-]/) return ""
+    return k
+  }
+  return ""
+}
+# "" means this run keeps its shown set in memory only: it still dedups within the one
+# invocation, and forgets at exit. Every read and write of the set goes through the
+# functions below, so the empty case is handled in one place rather than at nine.
+function jit_shown_file(dir, kind, raw, fs, fe, n,   k) {
+  if (dir == "") return ""
+  k = jit_session_key(raw, fs, fe, n)
+  if (k == "") return ""
+  return dir "/" kind "-shown-" k ".txt"
+}
+function jit_shown_load(file, set,   line) {
+  if (file == "") return
+  while ((getline line < file) > 0) set[line] = 1
+  close(file)
+}
+function jit_shown_mark(file, key) {
+  if (file == "") return
+  print key >> file
+}
+function jit_shown_close(file) {
+  if (file != "") close(file)
 }
 function jit_field(raw, a, b,   o, i) {
   if (a == "" || b == "" || a > b) return ""

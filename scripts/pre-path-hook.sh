@@ -7,8 +7,6 @@ SCRIPT_DIR="$(dirname "$0")"
 source "$SCRIPT_DIR/common.sh"
 T_START=$(_ms)
 
-SHOWN_FILE="/tmp/claude-path-shown-$PPID.txt"
-[ -f "$SHOWN_FILE" ] || : > "$SHOWN_FILE"
 LOG_TMP="/tmp/claude-path-log-$$.tmp"
 
 # Vocabulary-by-path is OFF for interactive sessions: every prompt already gets a
@@ -18,15 +16,12 @@ LOG_TMP="/tmp/claude-path-log-$$.tmp"
 # codebase it will touch. Opt in with DYNAMIC_RULES_VOCAB_PATHS=1.
 # The pre-0.2 name is still honoured so existing runners do not break silently.
 VOCAB_PATHS="${JIT_CONTEXT_VOCAB_PATHS:-${DYNAMIC_RULES_VOCAB_PATHS:-${DVSI_AUTONOMOUS_VOCAB_PATHS:-0}}}"
-VOCAB_SHOWN_FILE="/tmp/claude-vocab-shown-$PPID.txt"
-[ -f "$VOCAB_SHOWN_FILE" ] || : > "$VOCAB_SHOWN_FILE"
 
 cat | awk \
   -v paths_base="$JIT_BASE/paths" \
   -v vocab_base="$JIT_BASE/vocabulary" \
   -v vocab_paths="$VOCAB_PATHS" \
-  -v vocab_shown_file="$VOCAB_SHOWN_FILE" \
-  -v shown_file="$SHOWN_FILE" \
+  -v state_dir="$JIT_STATE_DIR" \
   -v log_tmp="$LOG_TMP" \
   "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_JSON"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
@@ -68,6 +63,12 @@ END {
   # value at the first ESCAPED one, and nothing decoded \n — so a supertool call sitting
   # on the second line of a multi-line command was invisible here.
   n = jit_json_fields(input, raw, fs, fe)
+  # Both marker paths are derived from the same parse. state_dir is empty when the tree
+  # cannot hold one and the key is empty when the payload names no session; either way
+  # these are "" and the shown sets live and die with this process. See common.sh.
+  # The vocabulary one is deliberately the SAME file the prompt hook writes.
+  shown_file = jit_shown_file(state_dir, "path", raw, fs, fe, n)
+  vocab_shown_file = jit_shown_file(state_dir, "vocab", raw, fs, fe, n)
   cmd = ""
   for (i = 2; i + 2 <= n; i += 2) {
     # A key this hook wants is quote-free, so a field spanning several raw pieces is not
@@ -128,8 +129,7 @@ END {
   if (path_count == 0) { print "{}"; exit }
 
   # --- Load shown set ---
-  while ((getline sline < shown_file) > 0) shown[sline] = 1
-  close(shown_file)
+  jit_shown_load(shown_file, shown)
 
   matched = ""
   log_matches = ""
@@ -196,7 +196,7 @@ END {
       if (!path_matched) continue
 
       shown[rule_file] = 1
-      print rule_file >> shown_file
+      jit_shown_mark(shown_file, rule_file)
 
       content = ""
       rpath = paths_base "/" layer "/" rule_file
@@ -213,15 +213,14 @@ END {
     }
     close(index_file)
   }
-  close(shown_file)
+  jit_shown_close(shown_file)
 
   # --- Scan vocabulary path layers (autonomous runs only) ---
   # Shares the shown-file written by the prompt hook, so an entry already delivered at
   # intake is not repeated here. Index entries are literal path fragments ("src2/SiBlog/"),
   # not regexes: matched with index(), and the trailing slash keeps src2/Bra/ off src2/Bram/.
   if (vocab_paths == "1") {
-    while ((getline vsline < vocab_shown_file) > 0) vshown[vsline] = 1
-    close(vocab_shown_file)
+    jit_shown_load(vocab_shown_file, vshown)
 
     for (li = 1; li <= 4; li++) {
       layer = layers[li]
@@ -252,7 +251,7 @@ END {
         if (!vmatched) continue
 
         vshown[vocab_file] = 1
-        print vocab_file >> vocab_shown_file
+        jit_shown_mark(vocab_shown_file, vocab_file)
 
         vcontent = ""
         vfpath = vocab_base "/" layer "/" vocab_file
@@ -269,7 +268,7 @@ END {
       }
       close(vindex)
     }
-    close(vocab_shown_file)
+    jit_shown_close(vocab_shown_file)
   }
 
   # --- A refused row is reported, once per session ---
@@ -277,7 +276,7 @@ END {
   # is the only channel that reaches an author who can fix it. Free while clean.
   if (n_refused > 0 && !("jit-refused-paths" in shown)) {
     shown["jit-refused-paths"] = 1
-    print "jit-refused-paths" >> shown_file
+    jit_shown_mark(shown_file, "jit-refused-paths")
     note = jit_refusal_notice(refused, n_refused)
     matched = (matched == "") ? note : note "\n---\n" matched
   }
@@ -291,7 +290,7 @@ END {
   config_refused_n = ENVIRON["JIT_CONFIG_REFUSED_N"] + 0
   if (config_refused_n > 0 && !("jit-refused-config" in shown)) {
     shown["jit-refused-config"] = 1
-    print "jit-refused-config" >> shown_file
+    jit_shown_mark(shown_file, "jit-refused-config")
     cnote = jit_config_notice(config_refused, config_refused_n)
     matched = (matched == "") ? cnote : cnote "\n---\n" matched
   }

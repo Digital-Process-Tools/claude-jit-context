@@ -2,10 +2,12 @@
 # Tests for pre-path-hook.sh (TSV-based, supertool-aware)
 # Usage: bash tests/test-pre-path-hook.sh
 #
-# NOTE: "once mode" (shown-file deduplication) cannot be tested here because
-# each `run_hook` call creates a subprocess with a different $PPID, so the
-# shown file is unique per call. Once mode works in production where $PPID
-# is the stable Claude Code process PID.
+# NOTE: the shown-file deduplication is not exercised here, and no longer by accident.
+# It used to key on $PPID, which under `$( )` is the command-substitution subshell -- a
+# recycled pid brought a stale marker with it and suppressed an assertion at random
+# (#17, #23). The key is the payload session_id now, and the payloads below carry none,
+# so this hook keeps no marker file at all and every call here starts clean.
+# tests/test-session-markers.sh drives dedup itself, in both directions.
 
 set -euo pipefail
 
@@ -283,9 +285,9 @@ printf 'control \001 and \014 and \037 here\nnul \000 tail\n' > "$PATHS_DIR/00-m
 
 for eng in $ENGINES; do
   # Four rules per engine, each fired exactly once. This hook marks a rule file shown on
-  # every fire and the marker is keyed on a $PPID no test can name, so a rule fired twice
-  # is suppressed the second time whenever the OS recycles a PID -- which it does, and
-  # which is why the assertions below own their fixtures rather than sharing two.
+  # every fire, and within ONE call that mark still applies -- so the assertions below own
+  # their fixtures rather than sharing two. The cross-call half of that reasoning is gone
+  # with the $PPID key (#17, #23): these payloads name no session, so nothing persists.
   for kind in a raw; do
     printf 'CrlfR%s%s/\tcrlf-%s-%s.md\n' "$eng" "$kind" "$eng" "$kind" >> "$PATHS_DIR/00-manual/00-index.tsv"
     printf 'CtrlR%s%s/\tctrl-%s-%s.md\n' "$eng" "$kind" "$eng" "$kind" >> "$PATHS_DIR/00-manual/00-index.tsv"

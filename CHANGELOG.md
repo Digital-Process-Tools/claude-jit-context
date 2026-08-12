@@ -48,6 +48,72 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   repository ships — its own three and the one shipped example — the check warns on none of
   them. It catches the narrower class it can actually see, and the release note says so
   rather than borrowing credit for a bug it would have missed.
+### Fixed
+
+- **`$PPID` was standing in for a session, and it is not one.** Every hook keyed its
+  once-per-session markers on `/tmp/claude-{vocab,path}-shown-$PPID.txt`. Under `$( ... )`
+  — which is how the suites call a hook, and how plenty of runners do — `$PPID` is the
+  command-substitution subshell, a short-lived pid the OS recycles freely. Two calls in one
+  process drew the same marker at random and the second one went silent.
+
+  What went silent is the part that matters. `pre-path-hook.sh` suppresses **every** path
+  rule after its first fire, refusal notice included — so a tree with a row the matcher
+  cannot honour reported nothing, in exactly the way this repository is written about, and
+  a red leg read as a containment failure while containment was intact. Measured on `main`
+  at `8c62858`: 4 of 5 full `run-all.sh` runs red, and `test-pre-path-hook.sh` alone red 2
+  of 12 with no other suite in the process — the collision happens between consecutive
+  calls inside one script, not only across suites. Every affected suite passed standalone
+  on the retry, which is what made it read as noise for two weeks.
+
+  The key is now the `session_id` the payload carries, read in the `awk` that is already
+  parsing that JSON. It is checked as a bare name before it is used as one — anything
+  outside `[A-Za-z0-9_-]`, or longer than 64 characters, is a path fragment and not a
+  session identity. **A payload with no session id gets no marker file and no dedup at
+  all**, rather than a guess: repeating an entry costs tokens, suppressing one costs the
+  rule. That is also why exactly one of the twelve existing suites needed a behaviour
+  change — the `SessionStart` section of `test-pre-prompt-hook.sh`, which asserted on the
+  `/tmp` files by name. Three others had comments describing the old mechanism as current;
+  those were corrected. Eight were not touched at all.
+
+- **A `SessionStart` deleted other sessions' temp files.** `rm -f
+  /tmp/claude-hook-log-*.tmp` swept a shared directory by wildcard, so opening one session
+  destroyed the in-flight log temp of every other concurrent session of the same user — a
+  lost log line, silently, in the file where a dead rule is supposed to become visible. The
+  wildcard is gone. A hook removes its own temp on the way out, and nothing this plugin
+  runs now deletes a file outside the project it was invoked for.
+
+- **The markers accumulated forever.** One pair per session in `/tmp`, cleaned by nothing —
+  12,288 of them on one machine. The two `rm`s in `session-start-hook.sh` that looked like
+  cleanup named `$PPID` at *session start*, which is never the pid a later hook computes,
+  so they had never once deleted a file a session actually used.
+
+### Changed
+
+- **Session markers moved from `/tmp` into the project**, beside the log, at
+  `.claude/jit-context/.discovery/state/`. They die with the tree, two projects no longer
+  share a namespace, and there is nothing global left for a wildcard to reach. That is a
+  write inside a directory a cloned repository controls, so it takes the same four `[ -L ]`
+  tests the log path took in 0.3.0 — written out again rather than read off the log's
+  verdict, because it is a different concatenation. A tree that cannot be written, a
+  read-only checkout among them, degrades to no dedup in silence; a hook that cannot
+  remember is still a hook that must run.
+
+- **`session-start-hook.sh` now reads its payload** to learn which session it is starting,
+  clears exactly that session's two markers, and ages out markers older than a week inside
+  the one directory this plugin creates — matching only names this plugin writes, skipping
+  links. The sweep is `perl`, which is already a dependency; `find` would have been a new
+  one and its `-delete` is not POSIX.
+
+- **`once` is now the guarantee it was documented to be.** Because the old key changed per
+  invocation, an entry in a real session was often re-injected rather than deduped. It now
+  genuinely fires once per session, which means less repetition in context — and, in a
+  session where a row is refused, one refusal notice rather than one per tool call.
+
+- `tests/test-session-markers.sh` — new suite, 30 assertions. The collision is driven
+  deterministically, from a marker written by hand under the key the hook will compute,
+  rather than by running a suite twenty times and hoping. Every "does not fire" case is
+  paired with a "does fire" case on the same fixture, and the traversal, read-only and
+  symbolic-link cases are driven separately.
 
 ## [0.3.0] — Containment
 
