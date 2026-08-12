@@ -94,10 +94,18 @@ assert_silent "a test for a hook"      "tests/test-pre-path-hook.sh" "hooks.md"
 # Same defect class as the scratchpad path above: an unanchored pattern matches the
 # fragment wherever it appears, so a directory ENDING in "scripts" claims the rule.
 assert_silent "a lookalike directory"  "myscripts/common.sh"       "hooks.md"
+# jit-init.sh must never inherit "every failure path exits 0" -- it exits 1 to refuse an
+# overwrite and 2 when it cannot evaluate the request.
+assert_silent "the project seeder"     "scripts/jit-init.sh"       "hooks.md"
 
 echo ""
-echo "=== tooling.md fires on the four build, diagnostic and release scripts ==="
+echo "=== tooling.md fires on the five build, diagnostic and release scripts ==="
 assert_fires  "the index writer"       "scripts/rebuild-tsv.sh"    "tooling.md"
+# Seeds a project and refuses rather than overwriting, so it is run deliberately by a
+# person and fails loudly (#81). It carried no rule at all until this file named it --
+# hooks.md's pattern does not reach it either, so it was a script in scripts/ that the
+# repo's own knowledge said nothing about.
+assert_fires  "the project seeder"     "scripts/jit-init.sh"       "tooling.md"
 assert_fires  "the linter"             "scripts/jit-dry-run.sh"    "tooling.md"
 assert_fires  "the miss reporter"      "scripts/jit-misses.sh"     "tooling.md"
 # Same contract, same reason: it is run at a tag by a person, never in a stranger's
@@ -110,6 +118,9 @@ assert_silent "a hook script"          "scripts/pre-tool-hook.sh"  "tooling.md"
 assert_silent "the shared library"     "scripts/common.sh"         "tooling.md"
 assert_silent "a suite about a tool"   "tests/test-jit-dry-run.sh" "tooling.md"
 assert_silent "a lookalike directory"  "vendor/subscripts/jit-misses.sh" "tooling.md"
+assert_silent "the seeder's own suite"  "tests/test-jit-init.sh"   "tooling.md"
+# The template the seeder copies is documentation, not one of the tools.
+assert_silent "the seeded template"     "templates/jit-context/vocabulary/00-manual/writing-rules.md" "tooling.md"
 
 echo ""
 echo "=== tests.md fires on a suite, and only on a suite ==="

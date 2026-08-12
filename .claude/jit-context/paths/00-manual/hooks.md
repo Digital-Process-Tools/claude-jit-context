@@ -5,7 +5,7 @@ match: (^|/)scripts/(.*-hook|common)\.sh$
 
 These five scripts run in someone else's session, on every prompt and every tool call, often before they know this plugin exists — the four hooks, and `common.sh`, which is sourced by all four and is where every containment fix in 0.3.0 landed. Everything below applies to `common.sh` verbatim; it is executed by the hooks, not beside them.
 
-`rebuild-tsv.sh`, `jit-dry-run.sh` and `jit-misses.sh` also live in `scripts/` and are **not** governed by this file — they never run in a stranger's session and are expected to fail loudly. See `paths/00-manual/tooling.md`.
+`rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh` and `jit-init.sh` also live in `scripts/` and are **not** governed by this file — they never run in a stranger's session and are expected to fail loudly. See `paths/00-manual/tooling.md`.
 
 **Every failure path exits `0` with nothing injected.** Missing config directory, unreadable entry, unparseable frontmatter, empty `tool_name`, empty stdin — each is a reason to say nothing, never a reason to error. `tests/run-all.sh` has explicit cases for empty input, empty `tool_name` and a missing config dir.
 
