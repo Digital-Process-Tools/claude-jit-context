@@ -7,6 +7,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] — A session, and a red that means something
+
 ### Added
 
 - **Four of this repository's eight scripts, and all fourteen suites, now carry a rule.**
