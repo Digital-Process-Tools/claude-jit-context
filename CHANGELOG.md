@@ -5,6 +5,62 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`LC_ALL=C` stopped a non-ASCII `forbid` from blocking, so a deny-list rule allowed the
+  call** (#76). `0.3.2` pinned `LC_ALL=C` on every hook's awk to stop a malformed byte
+  aborting the program, and the header comment on all three hooks argued the cost was zero
+  because the Latin-1 fold table from `#31` carries both cases. That argument holds for the
+  vocabulary dimension, which folds, and not for the tool dimension, which never did: the
+  four comparisons in the tool-rule matcher leaned on `tolower()` alone. Under `C` awk does
+  not case-fold a multibyte capital, so `forbid: clé-privée` stopped seeing
+  `deploy --key CLÉ-PRIVÉE` — the rule matched, the block became an advisory reminder, exit
+  0, nothing on stderr. Failing open on the one dimension that can refuse a call. The
+  `require` mirror failed the other way and refused a command that satisfied it, and a
+  `match:` or `~match` term carrying an accent stopped firing at all.
+
+  The scope in the issue was wrong and the comment it quoted is why. `#68` recorded that
+  one-true-awk "never folded a multibyte capital", which made this look like a gawk-only
+  and therefore Linux-only regression. It is not: awk 20200816 on macOS folds `CLÉ` to
+  `clé` under a UTF-8 locale exactly as gawk 5.4.1 does. Driven on both engines through the
+  suite's `PATH` shim, the same four assertions were red on both.
+
+  All four comparisons now run `jit_fold_latin1()` on **both** sides, which is what the
+  vocabulary half already did and what `#31` established as this codebase's single answer
+  to comparing non-ASCII text. The subjects are folded once before the row loop rather than
+  per rule; the terms are folded at the comparison, so the block reason and the injected
+  header still echo the term the author wrote. The `~match` **pattern** is folded too —
+  folding only the subject would have made an accented regex unmatchable, the same
+  one-sided mistake `#31` names, one level down. Nothing in the tool dimension is folded at
+  index time, so there is no migration: an existing `tools/00-index.tsv` matches unchanged.
+
+  Three consequences worth stating rather than discovering. Tool-rule matching is now
+  accent-insensitive in both directions — `forbid: secret` will also catch `sécret` —
+  which is the semantic the vocabulary dimension has had since `#31` and is documented in
+  the README. A `~match` **range** across accented endpoints is widened by the same fold:
+  under the pin `[é-ü]` was a bracket expression over raw bytes matching almost nothing,
+  and folded it becomes `[e-u]`, which matches a third of the lowercase alphabet. No such
+  pattern is known to exist and a range over accented endpoints has never meant what its
+  author intended, but this widens it rather than fixing it; refusing non-ASCII inside a
+  bracket expression was the alternative and would have killed `[éè]`, which is
+  legitimate and works. And `rebuild-tsv.sh` folds without the pin while the hooks fold with it:
+  that is safe, and now says why in the code rather than being verified case by case —
+  `jit_fold_latin1()` is `index()`/`substr()` over a table carrying both cases, so it
+  decodes nothing and asks the locale nothing. `tolower()` was the only locale-sensitive
+  step, and no comparison depends on it alone any more.
+
+### Changed
+
+- **The `LC_ALL=C` header comment in all three hooks said this could not happen.** It was
+  a real check of the vocabulary dimension, presented as a check of the file it was pasted
+  into — so three files asserted in prose that the defect above was impossible, which is
+  how an area stops being looked at. Each hook now states what it actually compares:
+  `pre-prompt-hook.sh` has one folded comparison, `pre-tool-hook.sh` has two and only one
+  of them was checked, and `pre-path-hook.sh` calls neither `tolower()` nor the fold table
+  and matches paths byte for byte, so the pin cannot reach it at all.
+
 ## [0.3.2] — Untrusted bytes, and the harness that misreported them
 
 ### Fixed

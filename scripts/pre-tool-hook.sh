@@ -20,17 +20,33 @@ jit_tmp_open
 # place. Under `C` both engines read the record as bytes and neither has anything to
 # decode, so neither can fail to.
 #
-# WHAT IT COSTS, checked rather than assumed. Under `C`, tolower() stops case-folding
-# non-ASCII. The Latin-1 fold table added in #31 already carries BOTH cases explicitly --
-# it had to, because one-true-awk tolower() never folded a multibyte capital -- so under
-# `C` gawk simply takes the branch one-true-awk always took. Driven over four spellings of
-# `detail` on both engines under both locales: all sixteen match. Driven again as a
-# differential over a mixed ASCII/French/German/Greek/Cyrillic corpus against this
-# repository own tree: the injected output is byte-identical UTF-8 vs C on each engine,
-# and byte-identical between the two engines under C.
+# WHAT IT COSTS. Under `C`, tolower() stops case-folding non-ASCII -- on BOTH engines.
+# The sentence this comment carried until #76, that one-true-awk tolower() never folded a
+# multibyte capital, is wrong: awk 20200816 folds `CLÉ` to `clé` under a UTF-8 locale
+# exactly as gawk 5.4.1 does, and neither folds it under `C`. Measured 2026-08-12. So the
+# pin changes the verdict of every comparison that leans on tolower() ALONE, and it does
+# so on every platform rather than only on Linux.
 #
-# A letter outside Latin-1 is unaffected either way: the strip maps every non-ASCII byte
-# to a space regardless of case, so the two locales cannot disagree about it.
+# What makes the pin free is jit_fold_latin1() (#31), never tolower(): the table carries
+# both cases explicitly and is applied with index()/substr(), so it decodes nothing and
+# asks the locale nothing. A comparison that runs the fold on BOTH of its sides reaches
+# the same verdict under C as under UTF-8, on either engine. A comparison that does not is
+# a live defect.
+#
+# This hook has two FAMILIES of such comparison -- one vocabulary lookup and the four
+# tool-rule sites below -- and #68 only checked the first. The vocabulary
+# lookup folds its subject below and reads an index rebuild-tsv.sh folded with the same
+# table -- that half was driven over four spellings of `detail` on both engines under both
+# locales, and again as a differential over a mixed ASCII/French/German/Greek/Cyrillic
+# corpus against this repository own tree: byte-identical output, UTF-8 vs C on each
+# engine and between the engines under C. The TOOL RULES did not fold at all, so
+# `forbid: clé-privée` stopped blocking `CLÉ-PRIVÉE` and the deny-list rule allowed the
+# call (#76). They fold both sides now; see the block above the row loop.
+#
+# A letter outside Latin-1 is unaffected either way in the vocabulary pass: the strip maps
+# every non-ASCII byte to a space regardless of case, so the two locales cannot disagree
+# about it. In the tool pass it is compared byte for byte, which is also locale-blind --
+# what it is not is case-insensitive, and it never was on either engine under `C`.
 #
 # The alternative -- sanitising the bytes before tolower() -- needs a pass that cannot
 # itself decode, which is the same trap one layer down.
@@ -134,6 +150,39 @@ END {
 
   if (tool_name == "" || cmd == "") { print "{}"; exit }
 
+  # --- The subjects the tool rules are matched against, folded once (#76) --------------
+  # tolower() is not enough on its own and never was. Under the `C` pin from #68 neither
+  # engine folds a multibyte capital -- measured on gawk 5.4.1 AND on one-true-awk
+  # 20200816, which does fold under a UTF-8 locale, so this was never the gawk-only
+  # divergence #68 assumed. A rule written `forbid: clé-privée` stopped matching
+  # `CLÉ-PRIVÉE`: the block became a reminder, exit 0, nothing on stderr.
+  #
+  # jit_fold_latin1() is the answer this codebase already gives to "how do we compare
+  # non-ASCII text", and it is the right one here because it is locale-independent BY
+  # CONSTRUCTION: it is index()/substr() over a table carrying both cases explicitly, so
+  # it decodes nothing and asks the locale nothing. That is also why rebuild-tsv.sh may
+  # keep folding without the pin (common.sh:1108) -- the fold is bytes in, bytes out, and
+  # the two locales cannot disagree about it. Only tolower() was ever locale-sensitive.
+  #
+  # Folded HERE, once, rather than per row: the fold is 51 index() scans of the subject,
+  # and the loop below would run it per rule otherwise. The terms are folded at their four
+  # comparison sites instead, because they are short and because the raw term is what the
+  # injected header and the block reason echo back to the author.
+  #
+  # What the per-row term fold costs, measured on gawk 5.4.1, 20 calls per point,
+  # interleaved against 5f3d14e on the same machine: 20 rows 63 -> 65 ms, 100 rows
+  # 61 -> 62 ms, 1000 rows 66 -> 83 ms. A tools index is rules a human wrote, and the
+  # shapes that exist are the first two; the 1000-row figure is there so the next person
+  # reaching for a per-row fold knows where it starts to show. The 1000-entry corpus the
+  # README cites is VOCABULARY, and that pass is untouched by this.
+  #
+  # Both sides, always. #31 learned that folding one side of a comparison silently kills
+  # the rows that used to line up -- worse than the bug it fixes. Nothing in the tool
+  # dimension is folded at index time, so both sides are folded here and there is no
+  # migration: a tools/00-index.tsv written by any previous version still matches.
+  fold_cmd = jit_fold_latin1(tolower(cmd))
+  fold_full = jit_fold_latin1(tolower(full_command))
+
   matched = ""
   blocked = ""
   log_matches = ""
@@ -209,9 +258,33 @@ END {
         sep = ", "
         continue
       }
-      if (match(tolower(full_command), substr(r_match, 2)) == 0) continue
+      # The PATTERN is folded too, not just the subject (#76). Folding one side alone is
+      # the #31 mistake one level down: against a folded subject, an ERE carrying `é`
+      # becomes unmatchable rather than accent-insensitive. The fold is safe on a regex
+      # because every entry in the table maps a Latin-1 LETTER to ASCII letters -- it can
+      # introduce no metacharacter, so a pattern that compiled before still compiles.
+      # It runs AFTER jit_bad_pattern(), so the author is diagnosed against what they
+      # wrote.
+      #
+      # NOT tolower()-ed, unlike the three index() sites below. That is deliberate and
+      # unchanged: the subject has always been lowercased and the pattern never was, so a
+      # pattern carrying an ASCII capital has matched nothing since this line was written.
+      # Lowercasing it here would wake rules that are dead today -- including `block`
+      # rules -- which is a behaviour change nobody asked for and not this fix.
+      #
+      # The fold is a literal substitution with no bracket-expression awareness, and two
+      # shapes are widened by it. `[æ]` becomes `[ae]`, which is the accent-insensitivity
+      # the plain terms get. A RANGE across the fold is worse: under `C` `[é-ü]` is a
+      # bracket expression over the raw bytes and matches almost nothing -- measured, it
+      # does not match `exemple de phrase` -- while the folded `[e-u]` matches a third of
+      # the lowercase alphabet, and it does. Nobody has written such a pattern and a range
+      # over accented endpoints has never meant what its author intended, but this widens
+      # rather than fixes it, and a `block` rule is the one that would notice. Refusing
+      # non-ASCII inside a bracket expression was the alternative and is worse: it kills
+      # `[éè]`, which is legitimate and works.
+      if (match(fold_full, jit_fold_latin1(substr(r_match, 2))) == 0) continue
     } else {
-      if (index(tolower(cmd), tolower(r_match)) == 0) continue
+      if (index(fold_cmd, jit_fold_latin1(tolower(r_match))) == 0) continue
     }
 
     # "once" mode
@@ -232,7 +305,10 @@ END {
     if (r_require != "") {
       nr = split(r_require, reqs, "|")
       for (ri = 1; ri <= nr; ri++) {
-        if (index(tolower(full_command), tolower(reqs[ri])) == 0) {
+        # Folded on both sides (#76): `require: validé` must be satisfied by `VALIDÉ`.
+        # This half fails CLOSED when it breaks -- it refuses a command that met its
+        # requirement -- which is the safer direction and still wrong.
+        if (index(fold_full, jit_fold_latin1(tolower(reqs[ri]))) == 0) {
           blocked = "BLOCKED: Missing required: " reqs[ri] ". " content
           log_matches = log_matches sep "tool:" r_file "(BLOCKED:" reqs[ri] ")"
           sep = ", "; break
@@ -245,7 +321,9 @@ END {
     if (r_forbid != "" && blocked == "") {
       nfb = split(r_forbid, forbs, "|")
       for (fi = 1; fi <= nfb; fi++) {
-        if (index(tolower(full_command), tolower(forbs[fi])) > 0) {
+        # Folded on both sides (#76). This is the half that failed OPEN: `forbid:
+        # clé-privée` stopped seeing `CLÉ-PRIVÉE` and the deny-list rule allowed the call.
+        if (index(fold_full, jit_fold_latin1(tolower(forbs[fi]))) > 0) {
           blocked = "BLOCKED: Forbidden: " forbs[fi] ". " content
           log_matches = log_matches sep "tool:" r_file "(BLOCKED:" forbs[fi] ")"
           sep = ", "; break
