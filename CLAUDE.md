@@ -33,6 +33,8 @@ Two consequences worth knowing before you change anything here:
 
 **Adding a rule here is the honest test of the product.** If a rule belongs in this file rather than an entry, that is worth knowing — write down which dimension failed to hold it.
 
+**A new script under `scripts/` needs a `paths/` rule, and `tests/test-dogfood-entries.sh` fails until it has one.** The split above is enumerated — `hooks.md` matches the hooks and `common.sh`, `tooling.md` names its tools one alternation at a time — so a file that is neither used to match nothing at all, and silence there reads exactly like a file nobody has a rule about (#83). Widen a `match` or write the entry that states the new script's contract; either satisfies the leg.
+
 ## The first trap: an entry that was never indexed
 
 **The hooks never read your markdown. They read `00-index.tsv`.**
