@@ -214,6 +214,13 @@ echo ""
 echo "=== G: session-start clears THIS session, and leaves every other one alone ==="
 # The old SessionStart deleted /tmp/claude-hook-log-*.tmp by wildcard -- every other
 # concurrent session in-flight log temp, none of which it owns.
+#
+# Since #60 no hook creates that name at all: the scratch file comes from mktemp under
+# $TMPDIR and is removed by an EXIT trap in the process that made it. The file planted
+# below is therefore nobody's -- which is the point, and is a stronger fixture than the
+# one it replaced. The assertion is unchanged and still guards the same regression: this
+# hook must not sweep a shared directory by pattern. tests/test-hook-tmpfile.sh section D
+# makes the same demand of the three hooks, in the directory they actually use.
 
 P="$(new_project g)"
 mkdir -p "$(state_of "$P")"

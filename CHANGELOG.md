@@ -9,6 +9,54 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The scratch file each hook hands to `awk` had a name anyone could work out, and `awk`
+  truncated through a symbolic link at it** (#60). All three of `pre-path`, `pre-tool` and
+  `pre-prompt` built it by concatenation — `/tmp/claude-path-log-$$.tmp`, and the same shape
+  twice more — and `awk` opened it with `printf … > log_tmp`, which truncates and follows a
+  link. `awk` cannot `lstat`, so `awk` could not have checked; the `[ -f "$LOG_TMP" ]` bash
+  ran afterwards checked nothing either, because `-f` follows the link too and a link to a
+  regular file passes it. A pid is not a secret and `/tmp` is world-writable, so the attack
+  is not to guess it — it is to pre-create the plausible range and wait. The consequence was
+  a file outside the project directory, chosen by someone other than the user, emptied and
+  then filled with a hook log line.
+
+  `[ -L ]` before the write was rejected as the fix. That is check-then-act on a directory
+  anyone can write, which is the one place the race is genuinely cheap for the attacker to
+  win. `jit_tmp_open()` in `common.sh` is the single route now: `mktemp` creates the file
+  with `O_EXCL` under an unpredictable name in one step, so there is no window and nothing
+  to check. It is also the answer to the same line appearing three times — the three hooks
+  call one function.
+
+  The removal is keyed to the creating process. `rm -f /tmp/claude-hook-log-*.tmp` once
+  deleted other live sessions' in-flight temps (#43) and does not come back: nothing sweeps
+  by wildcard, and an `EXIT` trap in the process that created the file is the only remover,
+  which also collects it on the crash path an unpredictable name would otherwise leak
+  forever.
+
+  Not getting a scratch file is not an error. An unwritable or absent `$TMPDIR` leaves
+  `$JIT_TMP` empty and the hook keeps matching, keeps injecting and keeps exiting `0`
+  without a log line or dedup — but handing `""` to `awk` unguarded would have been worse
+  than the bug, since an unopenable redirect is *fatal* inside `END` and takes the injection
+  and the block decision with it, which is #50 exactly. Each `awk` guards on
+  `log_tmp != ""`. `README.md` names `mktemp` in Requirements and says what is lost without
+  it.
+
+  One thing this change found that nobody had filed: **the hooks' exit status was an
+  accident.** It was whatever the last command left behind, and the last command was
+  `rm -f`, which always succeeds. Moving the removal into the trap made the last command the
+  log append — and a project whose `.discovery` is read-only then exited `1`, a hook failing
+  hard because it could not write a log line. `tests/test-session-markers.sh` section H
+  caught it before the commit. All three hooks now end in a literal `exit 0`.
+
+  `tests/test-hook-tmpfile.sh` drives it: the link is planted at the old predictable name
+  under the pid the hook actually runs with (`exec` preserves `$$`; `$BASHPID` is unusable,
+  macOS ships bash 3.2), and the victim file is asserted byte-identical *beside* the same
+  run still injecting its entry and still writing its log line — "nothing was truncated" is
+  true of a hook that never ran. A structural scan refuses any script that builds a temp
+  path from `$$` again, since the behavioural half can only name the three prefixes that
+  existed. It costs one `mktemp` fork per hook fire, measured at ~2 ms against a 30–110 ms
+  budget.
+
 - **Every assertion helper in the test suite could report the opposite of what it found.**
   Fourteen of the fifteen suites decided PASS/FAIL with `echo "$output" | grep -q "$needle"`. `grep -q`
   exits the instant it matches; the writer on the left of the pipe is then writing into a

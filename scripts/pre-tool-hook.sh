@@ -7,7 +7,9 @@ SCRIPT_DIR="$(dirname "$0")"
 source "$SCRIPT_DIR/common.sh"
 T_START=$(_ms)
 
-LOG_TMP="/tmp/claude-hook-log-$$.tmp"
+# Created with O_EXCL under an unpredictable name, removed by an EXIT trap in this
+# process, and empty when this platform could not give us one. See common.sh (#60).
+jit_tmp_open
 
 cat | awk \
   -v tools_tsv="$JIT_BASE/tools/00-manual/00-index.tsv" \
@@ -16,7 +18,7 @@ cat | awk \
   -v state_dir="$JIT_STATE_DIR" \
   -v home="$HOME" \
   -v project="${CLAUDE_PROJECT_DIR:-.}" \
-  -v log_tmp="$LOG_TMP" \
+  -v log_tmp="$JIT_TMP" \
   "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_JSON"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
@@ -373,13 +375,18 @@ END {
   sc = 0; for (s in shown) sc++
   tt_short = substr(tt, 1, 120)
   if (log_matches == "") log_matches = "(none)"
-  printf "%s\t%s\t%d\t%s\n", tool_name, log_matches, sc, tt_short > log_tmp
-  # Lines 2..N of the same channel: one `path<TAB>key` per mark. bash appends them, because
-  # bash can test `[ -L ]` and survive a redirect that fails. This is also why a `block`
-  # decision can no longer be lost to an unusable marker: nothing between the rule matching
-  # and the print below opens a file any more. See common.sh.
-  jit_shown_flush(log_tmp)
-  close(log_tmp)
+  # Empty means bash could not get a scratch file at all -- see jit_tmp_open() in
+  # common.sh. Redirecting to "" is a FATAL awk error raised inside END, which would take
+  # the block decision below with it: the #50 shape, out of the line meant to record it.
+  if (log_tmp != "") {
+    printf "%s\t%s\t%d\t%s\n", tool_name, log_matches, sc, tt_short > log_tmp
+    # Lines 2..N of the same channel: one `path<TAB>key` per mark. bash appends them,
+    # because bash can test `[ -L ]` and survive a redirect that fails. This is also why a
+    # `block` decision can no longer be lost to an unusable marker: nothing between the
+    # rule matching and the print below opens a file any more. See common.sh.
+    jit_shown_flush(log_tmp)
+    close(log_tmp)
+  }
 
   # --- Output JSON ---
   if (blocked != "") {
@@ -398,12 +405,22 @@ END {
 T_END=$(_ms)
 TOTAL=$((T_END - T_START))
 
-if [ -f "$LOG_TMP" ]; then
+# `-s`, not `-f`: mktemp always leaves the file there, so its EXISTENCE stopped being
+# evidence that awk had anything to say. An empty one would otherwise be read as a log
+# line made of empty fields. Removal is the EXIT trap in common.sh, not a line here --
+# one creator, one remover, and the crash path covered too.
+if [ -n "$JIT_TMP" ] && [ -s "$JIT_TMP" ]; then
   # One open: the log line, then every marker append awk asked for.
   {
     IFS=$'\t' read -r AWK_TOOL AWK_MATCHES AWK_SHOWN AWK_TEXT
     jit_shown_apply
-  } < "$LOG_TMP"
+  } < "$JIT_TMP"
   _log_hook "pre-tool ($AWK_TOOL)" "$TOTAL" "$AWK_MATCHES [shown:$AWK_SHOWN] << $AWK_TEXT"
-  rm -f "$LOG_TMP"
 fi
+
+# Stated, not inherited. The hook exit status used to be whatever the last command
+# happened to leave behind -- which was `rm -f`, and always 0 by accident. With the
+# removal moved to the EXIT trap the last command became the log append, and a project
+# whose .discovery is read-only exited 1: a hook that FAILED HARD because it could not
+# write a log line. tests/test-session-markers.sh section H caught it.
+exit 0
