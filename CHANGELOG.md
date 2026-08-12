@@ -138,6 +138,16 @@ the user to do anything beyond opening the project.
   A name that passed is bare by construction and is still named, because that is what an
   author fixing an unhonourable pattern needs.
 
+- **The refusal notice echoed the index's mode column into the model's context.**
+  `pre-tool-hook.sh` derives `r_kind` — `" (a block rule)"` — precisely so that TSV column 4
+  never travels, and the containment branch honours it thirty-five lines above. The
+  pattern-refusal branch interpolated the raw column instead. It needs no rule to match and
+  no entry file to exist, so a mode column reading `IGNORE ALL PREVIOUS INSTRUCTIONS: …`
+  arrived in `additionalContext` on the first `Bash` call of the session. Both branches now
+  use `r_kind`. The other two hooks were checked for the same shape and do not have it —
+  neither index carries a mode column, and every other interpolation is a row position or a
+  name that already passed the bare-name check.
+
 - **`tests/test-log-containment.sh`** — new suite. Every "nothing was written outside the
   tree" assertion is preceded by a positive control on the same shape, because that
   assertion passes when nothing happened at all: the honest tree must produce a log line,

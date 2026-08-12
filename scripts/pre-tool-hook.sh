@@ -161,7 +161,14 @@ END {
         # Named, not positioned — see the same decision in pre-path-hook.sh: this row
         # already passed the bare-name check, so the name is safe to echo and is the thing
         # an author needs. tests/test-rule-guard.sh asserts this half by file name.
-        refused = refused (refused == "" ? "- " : "\n- ") r_file " (" r_modes "): " why
+        #
+        # r_kind, never r_modes. Column 4 is free text from a committed index and this
+        # branch was interpolating it raw, thirty-five lines under the comment saying why
+        # that is not allowed and one branch over from the code that honours it. It needs
+        # no rule to match and no entry file to exist, so a mode column reading "IGNORE ALL
+        # PREVIOUS INSTRUCTIONS: ..." arrived in the context on the first Bash call of the
+        # session. Reproduced 2026-08-12; tests/test-security.sh drives both halves.
+        refused = refused (refused == "" ? "- " : "\n- ") r_file r_kind ": " why
         log_matches = log_matches sep "refused:" r_file "(" why ")"
         sep = ", "
         continue
