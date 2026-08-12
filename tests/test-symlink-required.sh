@@ -182,12 +182,11 @@ fi
 
 echo "=== Requirement declared AND honoured: the suites are untouched ==="
 
-# What is asserted here is deliberately NOT the child suite's own pass count. Those two
-# suites are subject to the known $PPID marker flake documented at the top of
-# test-symlink-entry.sh, which reddens a positive control at random -- and run-all.sh runs
-# both of them directly anyway, so their verdict is already reported once. What this half
-# owns is narrower and flake-free: declaring the requirement must not turn a healthy run
-# into a skip, and must not print the broken-configuration verdict.
+# The child suite's own exit code is asserted here, not only its wording. Until #43 those
+# two suites reddened at random from a once-per-session marker keyed on a recycled $PPID,
+# and this half deliberately did not look at their verdict; the marker now keys on a
+# session_id these payloads do not carry, so exit 0 is a claim that holds every run and a
+# non-zero one is a finding.
 for suite in test-symlink-entry.sh test-log-containment.sh; do
   case "$suite" in
     test-symlink-entry.sh)   RAN_MARKER="=== S3a" ;;
@@ -195,11 +194,7 @@ for suite in test-symlink-entry.sh test-log-containment.sh; do
     *)                       RAN_MARKER="__no such suite__" ;;
   esac
   OUT="$(run_suite "$suite" 1 0)"; RC=$?
-  if [ "$RC" = 2 ]; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $suite: the requirement turned a healthy run into a skip"
-  else
-    PASS=$((PASS + 1)); echo "  PASS: $suite: the requirement did not turn a healthy run into a skip"
-  fi
+  assert_rc "$suite: still passes clean with the requirement declared" 0 "$RC"
   assert_contains "$suite: reports the probe as yes" "$OUT" "symlink support: yes"
   assert_contains "$suite: the requirement is stated in the log" "$OUT" "REQUIRED by this environment"
   assert_contains "$suite: the containment sections actually ran" "$OUT" "$RAN_MARKER"

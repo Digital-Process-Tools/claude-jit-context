@@ -104,11 +104,12 @@ new_rc() {
   printf '%s' "$f"
 }
 
-# Subject to the same known flake as tests/test-symlink-entry.sh, which carries the
-# measurement: under $( ) the hook inherits the command-substitution subshell as $PPID, and
-# a recycled pid brings a stale once-per-session marker with it. When that happens the hook
-# prints {} and the "hook still injects its notice" control below goes red. Re-run before
-# treating it as a finding.
+# A red in this suite is a FINDING, not a coin flip. The once-per-session marker that used
+# to silence the "hook still injects its notice" controls at random keyed on $PPID, which
+# under $( ) is a recycled subshell pid; it now keys on the payload's session_id, and these
+# payloads carry none, so no dedup runs here at all. #43 (67a66e7), and
+# tests/test-symlink-entry.sh carries the measurement. Do not re-run a red and take the
+# second answer.
 run_prompt() {
   printf '%s' "$PROMPT_PAYLOAD" | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-prompt-hook.sh" 2>&1
 }

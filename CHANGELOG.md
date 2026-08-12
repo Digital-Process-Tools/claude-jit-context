@@ -140,6 +140,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pass while doing it. Unset, the honest skip is unchanged: a platform that never had
   symbolic links is not a misconfiguration.
 
+- **A red in a containment suite is a finding now, not a coin flip, and the files no longer
+  say otherwise.** `tests/test-symlink-entry.sh` and `tests/test-log-containment.sh` each
+  carried a "KNOWN FLAKE — re-run before treating it as a finding" block describing the
+  `$PPID` marker collision fixed above. Left in place, those comments tell the next reviewer
+  to shrug off exactly the reds these two suites exist to produce — the silenced output was
+  the refusal notice. Both are replaced by what is true after the fix: these payloads carry
+  no `session_id`, so no dedup runs in either suite at all, and a positive control that goes
+  red went red for a reason. `tests/test-symlink-required.sh` asserts the two suites' exit
+  codes for the same reason.
+
 - **`tests/test-symlink-required.sh`** covers that split by fabricating the MSYS behaviour on
   a platform that has real links — a copying `ln` on `PATH` — and driving both directions:
   requirement undeclared gives exit 2 and the skip wording, declared gives exit 1 and the
