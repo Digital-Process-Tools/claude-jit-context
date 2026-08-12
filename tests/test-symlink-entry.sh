@@ -64,21 +64,17 @@ new_project() {
   printf '%s' "$p"
 }
 
-# KNOWN FLAKE, filed separately, and it can redden any positive control below at random.
+# A red in this suite is a FINDING. Do not re-run it and take the second answer.
 #
-# The hooks key their once-per-session markers on /tmp/claude-*-shown-$PPID.txt, and the
-# refusal notice takes a sentinel in that same file. Every call here is wrapped in $( ),
-# so the hook is exec'd by the command-substitution SUBSHELL and $PPID is that subshell --
-# a fresh, short-lived, readily recycled pid, not this script. Measured: script pid 31660,
-# hook PPID 31661 under $( ), and 31660 when the same pipeline is redirected to a file.
+# It used to be a coin flip: the once-per-session markers keyed on /tmp/claude-*-shown-$PPID.txt,
+# every call here is wrapped in $( ) so the hook inherited the command-substitution subshell
+# as its $PPID -- a short-lived, readily recycled pid -- and a recycled one carried a stale
+# marker in. What went silent was the REFUSAL NOTICE, the security-relevant output, so the
+# positive controls below reddened at random with nothing wrong with them.
 #
-# So a recycled subshell pid inherits a stale marker and the hook says {} -- and what goes
-# silent is the REFUSAL NOTICE, which is the security-relevant output. Nothing in a test
-# can clear that file first: the pid is not known until after the hook has run, and $$
-# inside a subshell still reports the parent. Clearing by wildcard would delete the state
-# of every other session on the machine, which is the same defect one level up.
-#
-# Left alone deliberately. The fix belongs in the marker path, not in a workaround here.
+# Fixed in #43 (67a66e7): the key is the payload's session_id, and a payload without one --
+# every payload in this file -- gets no marker and no dedup at all. Nothing here suppresses
+# anything any more, so a positive control that goes red went red for a reason.
 run_hook() {
   printf '%s' "$3" | CLAUDE_PROJECT_DIR="$2" bash "$SCRIPTS/$1" 2>&1
 }
@@ -100,6 +96,14 @@ PROMPT_PAYLOAD='{"prompt":"tell me about sectarget"}'
 # copy can never do, and it is what settled the CI diagnosis -- a layer directory linked
 # before its files were written came back EMPTY, while one linked after came back full.
 # No symbolic link can behave both ways; a copy taken at `ln` time behaves exactly so.
+#
+# The runner can DECLARE the capability a requirement: JIT_TESTS_REQUIRE_SYMLINKS=1 says
+# this environment was configured to have symbolic links (see .github/workflows/tests.yml,
+# which pairs it with MSYS=winsymlinks:nativestrict on the Windows leg). A probe that then
+# says "no" is a broken configuration, not a platform without the capability, and the two
+# get different verdicts below -- a skip renders green in run-all.sh, and a setting that
+# stopped applying and was never noticed is the hole this suite already had once.
+REQUIRE_SYMLINKS="${JIT_TESTS_REQUIRE_SYMLINKS:-}"
 CAN_SYMLINK=no
 probe_symlinks() {
   local d="$TMP/.symlink-probe"
@@ -117,6 +121,9 @@ probe_symlinks() {
 }
 probe_symlinks
 echo "symlink support: $CAN_SYMLINK (files and directories, verified through the link)"
+if [ "$REQUIRE_SYMLINKS" = 1 ]; then
+  echo "symbolic links are REQUIRED by this environment (JIT_TESTS_REQUIRE_SYMLINKS=1, MSYS=${MSYS:-<unset>})"
+fi
 echo ""
 
 echo "=== The harness can build and run a project at all ==="
@@ -147,6 +154,24 @@ if [ "$CAN_SYMLINK" != yes ]; then
   echo "         MSYS=winsymlinks:nativestrict and the privilege to create symbolic links"
   echo "         (Developer Mode), plus git config core.symlinks=true for a checkout."
   echo ""
+  if [ "$REQUIRE_SYMLINKS" = 1 ]; then
+    echo "SYMBOLIC LINKS WERE REQUIRED AND NOT OBTAINED."
+    echo ""
+    echo "         This environment set JIT_TESTS_REQUIRE_SYMLINKS=1, so it was configured to"
+    echo "         have the capability and did not get it. That is a broken configuration,"
+    echo "         not a platform that never had symbolic links, and the two must not read the"
+    echo "         same in a CI log. On the GitHub Windows image the runner needs"
+    echo "         MSYS=winsymlinks:nativestrict exported to the bash step; Developer Mode is"
+    echo "         already on in the image, and git config core.symlinks=true covers a"
+    echo "         checkout that carries a committed link."
+    echo ""
+    echo "         Failing rather than skipping: run-all.sh renders a skip green, so a setting"
+    echo "         that quietly stopped applying would restore the hole this probe exists to"
+    echo "         close. Nothing here is a defect in the hooks."
+    echo ""
+    echo "$PASS passed, $FAIL failed, every containment case NOT RUN"
+    exit 1
+  fi
   echo "$PASS passed, $FAIL failed, every containment case SKIPPED"
   [ "$FAIL" -eq 0 ] || exit 1
   exit 2

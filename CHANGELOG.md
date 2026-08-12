@@ -115,6 +115,48 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   paired with a "does fire" case on the same fixture, and the traversal, read-only and
   symbolic-link cases are driven separately.
 
+### Tests
+
+- **The symbolic-link containment suites ran nowhere on Windows, and the log said so
+  politely.** `tests/test-symlink-entry.sh` and the S4a–S4d sections of
+  `tests/test-log-containment.sh` build their fixtures with `ln -s`. The MSYS runtime copies
+  the target instead of linking it, so 0.3.0 shipped those suites skipping on the Windows
+  leg with a named reason and exit 2 — honest, and still no coverage. A Windows clone with
+  `core.symlinks=true` carries real links, so the guard those suites exist to prove matters
+  there.
+
+  CI now exports `MSYS=winsymlinks:nativestrict` to the bash steps and sets
+  `core.symlinks=true` before the checkout, and a step near the top of every leg reports
+  whether this runner makes real links, so the answer is in the log rather than inferred
+  from a suite's verdict. Developer Mode — the privilege the MSYS runtime needs — is already
+  enabled on the GitHub Windows image by its own build script, so nothing has to be turned on
+  in the workflow for it.
+
+- **A skip and a broken configuration no longer read the same.** The workflow declares the
+  requirement with `JIT_TESTS_REQUIRE_SYMLINKS=1`; when that is set and the probe still says
+  `no`, the two suites **fail** instead of skipping, and name the variable, the setting and
+  the privilege. `run-all.sh` renders a skip green — so an environment we configured that
+  silently stopped applying would restore exactly the hole this change closes, and read as a
+  pass while doing it. Unset, the honest skip is unchanged: a platform that never had
+  symbolic links is not a misconfiguration.
+
+- **A red in a containment suite is a finding now, not a coin flip, and the files no longer
+  say otherwise.** `tests/test-symlink-entry.sh` and `tests/test-log-containment.sh` each
+  carried a "KNOWN FLAKE — re-run before treating it as a finding" block describing the
+  `$PPID` marker collision fixed above. Left in place, those comments tell the next reviewer
+  to shrug off exactly the reds these two suites exist to produce — the silenced output was
+  the refusal notice. Both are replaced by what is true after the fix: these payloads carry
+  no `session_id`, so no dedup runs in either suite at all, and a positive control that goes
+  red went red for a reason. `tests/test-symlink-required.sh` asserts the two suites' exit
+  codes for the same reason.
+
+- **`tests/test-symlink-required.sh`** covers that split by fabricating the MSYS behaviour on
+  a platform that has real links — a copying `ln` on `PATH` — and driving both directions:
+  requirement undeclared gives exit 2 and the skip wording, declared gives exit 1 and the
+  loud one, and declared-and-honoured leaves a healthy run untouched. The stub is itself
+  controlled against a real `ln`, because a stub that broke the suites for an unrelated
+  reason would satisfy the negative half on its own.
+
 ## [0.3.0] — Containment
 
 This release treats `.claude/jit-context/` as what it actually is: a directory that

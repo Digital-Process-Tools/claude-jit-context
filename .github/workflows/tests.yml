@@ -20,13 +20,47 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      # The two containment suites build their fixtures with `ln -s`. Without this the MSYS
+      # runtime COPIES the target instead of linking it, the suites cannot construct the
+      # attack they exist to refuse, and they skip -- which is what happened on 0.3.0, where
+      # the containment guard was exercised nowhere on Windows while a Windows clone with
+      # core.symlinks=true carries real links (#33). Ignored on Linux and macOS.
+      MSYS: winsymlinks:nativestrict
+      # And SAY that this environment was configured to have them. A probe that reports "no"
+      # after we asked is a broken configuration, not a platform without the capability: the
+      # suites fail on it instead of skipping, because run-all.sh renders a skip green and
+      # this setting silently ceasing to apply would restore the hole unnoticed.
+      JIT_TESTS_REQUIRE_SYMLINKS: "1"
     steps:
+      # Before checkout, so it applies to it. Nothing in this repository is a committed
+      # symlink today (`git ls-files -s | awk '$1=="120000"'` is empty) and every fixture is
+      # built at runtime -- this covers the day one is committed, when a checkout that
+      # materialised it as a text file would be the same silent hole one level down.
+      - name: Let the checkout carry symbolic links (Windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.symlinks true
       - uses: actions/checkout@v7
       - name: Show interpreter versions
         run: |
           bash --version | head -1
           awk --version 2>/dev/null | head -1 || awk -W version 2>&1 | head -1
           perl --version | sed -n 2p
+      # The suites print `symlink support: yes|no` themselves; this states the same thing
+      # once, up front, so the answer to "did #33 take" is at the top of the log rather than
+      # inside a suite. It never fails the job -- the suites own that verdict.
+      - name: Report whether this runner makes real symbolic links
+        run: |
+          d="$RUNNER_TEMP/symlink-probe"; rm -rf "$d"; mkdir -p "$d/target-dir"
+          printf 'probe\n' > "$d/target-file"
+          ln -sf "$d/target-file" "$d/link-file" 2>/dev/null
+          ln -sfn "$d/target-dir" "$d/link-dir" 2>/dev/null
+          printf 'late\n' > "$d/target-dir/late.txt"
+          if [ -L "$d/link-file" ] && [ -L "$d/link-dir" ] && [ -f "$d/link-dir/late.txt" ]; then
+            echo "symbolic links: yes (MSYS=${MSYS:-<unset>})"
+          else
+            echo "symbolic links: NO (MSYS=${MSYS:-<unset>}) -- the containment suites will fail below"
+          fi
       - name: Run hook test suites
         run: bash tests/run-all.sh
 
