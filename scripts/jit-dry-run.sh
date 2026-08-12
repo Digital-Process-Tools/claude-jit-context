@@ -150,6 +150,8 @@ print_untrusted() {
 
 REFUSED=0
 VOCAB_REFUSED=0
+VOCAB_KEYS=0
+VOCAB_FILES=0
 WARNED=0
 CHECKED=0
 LISTED=0
@@ -455,6 +457,7 @@ done
 # fragments — so it never appeared here. It has three of the five entry-file read sites,
 # which is exactly the thing this lint now checks, so it is swept for that alone. Silent
 # on a clean tree: a vocabulary index is not "checked" in the sense the counts above mean.
+VOCAB_SEEN=" "
 for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; do
   [ -f "$tsv" ] || continue
   # An index was opened. That is the whole of what INDEXES answers, and leaving this line
@@ -468,6 +471,21 @@ for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; 
     # were indexed and compiled. Folding these in printed "2 refused" under "1 rule
     # indexed", which is the kind of arithmetic that makes a reader distrust the tool.
     check_entry_file "$label" "$v_file" "$(dirname "$tsv")" || VOCAB_REFUSED=$((VOCAB_REFUSED + 1))
+    # Keywords only, never the module-path rows in 01-paths.tsv: those are derived from a
+    # "## Modules" section and are not something anybody authored as a rule.
+    case "$tsv" in
+      */00-index.tsv)
+        VOCAB_KEYS=$((VOCAB_KEYS + 1))
+        # bash 3.2 ships on macOS and has no associative arrays, so distinct file names
+        # are tracked in a space-delimited string. This is a count in a summary line and
+        # nothing branches on it, so a pathological name that fooled the membership test
+        # would misreport a number and change no verdict.
+        case "$VOCAB_SEEN" in
+          *" $v_file "*) ;;
+          *) VOCAB_SEEN="$VOCAB_SEEN$v_file "; VOCAB_FILES=$((VOCAB_FILES + 1)) ;;
+        esac
+        ;;
+    esac
   done < "$tsv"
 done
 
@@ -487,6 +505,14 @@ echo ""
 # Two counts, not one: a substring row has no regex to compile, so folding it into the
 # checked total would report coverage the run does not have.
 echo "$LISTED rule(s) indexed, $CHECKED regex pattern(s) compiled, $REFUSED refused."
+# Its own line, and never folded into the one above. Vocabulary rows are literal keywords
+# with no pattern to compile, so adding them to $LISTED would claim compilation coverage
+# the run does not have -- but leaving them out entirely printed "0 rule(s) indexed" over a
+# tree holding a rule that fires, which is this repository's own defect class. A project
+# seeded by jit-init.sh is exactly that tree, and it is the first thing a new user lints.
+if [ "$VOCAB_KEYS" -gt 0 ]; then
+  echo "$VOCAB_KEYS vocabulary keyword(s) across $VOCAB_FILES entry file(s) — literal, nothing to compile."
+fi
 if [ "$STALE" -gt 0 ]; then
   echo "$STALE entry file(s) whose frontmatter is not what the index carries."
   echo "Those rules are inert: the hooks read the index, never the markdown."
