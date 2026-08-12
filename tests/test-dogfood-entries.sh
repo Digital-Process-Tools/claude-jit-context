@@ -148,8 +148,9 @@ assert_silent "a lookalike name"       "docs/CHANGELOG.md.tmpl"     "changelog.m
 
 echo ""
 echo "=== the tools dimension: a write to the generated index is refused, a read is not ==="
-# This repository's only `block` rule, and until #92 it had no assertion anywhere in
-# tests/: it could have stopped working outright and nothing would have gone red (#93).
+# The `block` rules -- the only two in this tree, and until #92 there was one and it had
+# no assertion anywhere in tests/: it could have stopped working outright and nothing
+# would have gone red (#93).
 #
 # The REAL hook, not jit-dry-run.sh. The thing under test is a refusal, and only the hook
 # emits the {"decision":"block"} a session acts on; the dry-run reports which rule fired,
@@ -225,6 +226,9 @@ assert_allows "the index name in a dir"   "$(file_payload Edit "docs/00-index.ts
 assert_blocks "sed -i on the index"       "$(bash_payload "sed -i '' s/a/b/ $IDX")" "$SHELL_RULE"
 assert_blocks "sed -i with a backup suffix" "$(bash_payload "sed -i.bak s/a/b/ $IDX")"     "$SHELL_RULE"
 assert_blocks "perl -pi on the index"     "$(bash_payload "perl -pi -e s/a/b/ $IDX")"      "$SHELL_RULE"
+# The long-option spelling of the same flag. `-[a-z]*i` is a SHORT cluster and cannot
+# reach it, so the first draft of this rule claimed to cover in-place sed and did not.
+assert_blocks "sed --in-place"            "$(bash_payload "sed --in-place s/a/b/ $IDX")"  "$SHELL_RULE"
 assert_blocks "a > redirect"              "$(bash_payload "echo x > $IDX")"                "$SHELL_RULE"
 assert_blocks "a >> redirect, no space"   "$(bash_payload "printf a >>$IDX")"              "$SHELL_RULE"
 assert_blocks "tee at the end of a pipe"  "$(bash_payload "cat foo | tee $IDX")"           "$SHELL_RULE"
@@ -239,6 +243,9 @@ assert_allows "grep on the index"         "$(bash_payload "grep foo $IDX")"
 # Paired with "sed -i on the index" above: same command word, same path, one flag apart.
 assert_allows "sed reading, not writing"  "$(bash_payload "sed -n 1p $IDX")"
 assert_allows "merely mentioning it"      "$(bash_payload "echo see $IDX")"
+# An arrow is not a redirect. The first draft matched a bare `>`, so narrating a rename
+# was refused -- the #76 shape again, one character wide.
+assert_allows "an arrow, not a redirect"  "$(bash_payload "echo renamed old.tsv->00-index.tsv")"
 # Paired with "sed -i on the index": same write form, one suffix apart.
 assert_allows "a write to a .bak"         "$(bash_payload "sed -i '' s/a/b/ docs/00-index.tsv.bak")"
 assert_allows "a write to another tsv"    "$(bash_payload "echo x > docs/my00-index.tsv")"
