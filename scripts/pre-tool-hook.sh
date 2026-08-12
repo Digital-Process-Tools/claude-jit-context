@@ -369,13 +369,16 @@ END {
     cnote = jit_config_notice(config_refused, config_refused_n)
     matched = (matched == "") ? cnote : cnote "\n---\n" matched
   }
-  jit_shown_close(shown_file)
-
   # --- Write log info to temp file (bash reads it for timing) ---
   sc = 0; for (s in shown) sc++
   tt_short = substr(tt, 1, 120)
   if (log_matches == "") log_matches = "(none)"
   printf "%s\t%s\t%d\t%s\n", tool_name, log_matches, sc, tt_short > log_tmp
+  # Lines 2..N of the same channel: one `path<TAB>key` per mark. bash appends them, because
+  # bash can test `[ -L ]` and survive a redirect that fails. This is also why a `block`
+  # decision can no longer be lost to an unusable marker: nothing between the rule matching
+  # and the print below opens a file any more. See common.sh.
+  jit_shown_flush(log_tmp)
   close(log_tmp)
 
   # --- Output JSON ---
@@ -396,7 +399,11 @@ T_END=$(_ms)
 TOTAL=$((T_END - T_START))
 
 if [ -f "$LOG_TMP" ]; then
-  IFS=$'\t' read -r AWK_TOOL AWK_MATCHES AWK_SHOWN AWK_TEXT < "$LOG_TMP"
+  # One open: the log line, then every marker append awk asked for.
+  {
+    IFS=$'\t' read -r AWK_TOOL AWK_MATCHES AWK_SHOWN AWK_TEXT
+    jit_shown_apply
+  } < "$LOG_TMP"
   _log_hook "pre-tool ($AWK_TOOL)" "$TOTAL" "$AWK_MATCHES [shown:$AWK_SHOWN] << $AWK_TEXT"
   rm -f "$LOG_TMP"
 fi

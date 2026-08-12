@@ -38,6 +38,55 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   diagnostics are `${output:0:200}`, and the three `perl … | head -c 200` truncations
   happen inside perl.
 
+- **An unusable marker path took the injection with it, and said so on stderr** (#50). The
+  once-per-session dedup was `print key >> file` inside `awk`'s `END`. A path that will not
+  open is a *fatal* `awk` error, so a rule that was indexed, matched and had something to say
+  emitted nothing, exited `0`, and printed an `awk` diagnostic into the session. Failing open
+  and being loud — the two things `common.sh` has a standing comment forbidding — in one
+  statement. Three routes reached it: a marker path whose directory is gone, a marker file
+  that cannot be written, and the state directory being removed between `common.sh`'s
+  `[ -d ]`/`[ -w ]` and the write, which needs no guessed session id at all.
+
+  The append moved out of `awk` and into the shell. `awk` accumulates `path<TAB>key` lines and
+  hands them back over the temp channel each hook already opens for its log line; the shell
+  does the append, where `>>` failing is `2>/dev/null` rather than a dead process. No new
+  process, no second temp file, still one append per mark.
+
+  **`pre-tool-hook.sh` did lose `block` decisions this way, which #50 recorded as unconfirmed
+  and expected to hold.** It does not, twice over: `modes: block,once` is a legal row and the
+  `once` mark runs *before* `require`/`forbid` are evaluated, and `modes: block` on its own
+  fails too, because the marker is read before any rule is considered and one-true-awk treats
+  an unreadable read as fatal as an unwritable write. Both halves are driven in
+  `tests/test-marker-degradation.sh`, each against a positive control that blocks.
+
+- **The marker file is no longer written through a symbolic link** (#49). `.discovery` and
+  `.discovery/state` already got the `[ -L ]` treatment `hooks.log` got in #27; the marker
+  itself did not, because `awk` cannot `lstat` and the shell did not know the path — the
+  session id is parsed in `awk` on purpose, and re-parsing it in the shell would be two
+  answers to one question. Moving the append to the shell answers this for free: `awk` still
+  computes the path, the shell now receives it, contains it to `$JIT_STATE_DIR/{path,vocab}-shown-*.txt`,
+  and tests `[ -L ]` before it writes. Reproduced through a committed link and refused.
+
+  **The marker *read* is deliberately still a bound rather than a check, and the measurement
+  is why.** A sweep of the state directory was written and removed: it is `O(entries)`, and
+  the entry count is a quantity a cloned repository chooses, since `.discovery/state/` is
+  inside the tree. Interleaved against the unpatched hook, 60 calls per point — 0 entries:
+  30 ms against 30 ms; 2000: 30 ms against 84 ms; 8000: 45 ms against 238 ms, worst sample
+  565 ms. That is the `JIT_SYMLINKS_MAX` failure — a repository choosing how long every
+  prompt takes — re-introduced by the fix for another one, and a cap does not save it because
+  the cost is the glob expansion before any test in the loop runs. What the unswept read can
+  do is bounded and stated in `common.sh`: it can read a file it should not have, and the
+  only use of what it reads is a set of names to *skip*, so the worst outcome is fewer
+  injections. `session-start-hook.sh` now clears a link or an empty directory sitting at this
+  session's two marker names, which is the same protection at `O(1)` and once per session.
+
+- **`2>/dev/null` after a redirection suppresses nothing.** Bash applies redirections left to
+  right, so `printf ... >> "$f" 2>/dev/null` fails on the append while stderr is still the
+  session's terminal and prints "No such file or directory" into it — from the line written
+  to prevent exactly that. Found by the new suite on the fix itself, and present in
+  `jit_log_write()` since #27: a log directory removed after `common.sh` created it was loud
+  in the same way. Both reordered.
+
 ### Added
 
 - **`tests/test-assertion-helpers.sh` — the harness asserting about itself.** It extracts

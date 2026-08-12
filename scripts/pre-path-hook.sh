@@ -213,7 +213,6 @@ END {
     }
     close(index_file)
   }
-  jit_shown_close(shown_file)
 
   # --- Scan vocabulary path layers (autonomous runs only) ---
   # Shares the shown-file written by the prompt hook, so an entry already delivered at
@@ -268,7 +267,6 @@ END {
       }
       close(vindex)
     }
-    jit_shown_close(vocab_shown_file)
   }
 
   # --- A refused row is reported, once per session ---
@@ -306,6 +304,9 @@ END {
   fp_short = substr(fp_short, 1, 80)
   if (log_matches == "") log_matches = "(none)"
   printf "%s\t%s\n", log_matches, fp_short > log_tmp
+  # Lines 2..N of the same channel: one `path<TAB>key` per mark. bash appends them, because
+  # bash can test `[ -L ]` and survive a redirect that fails. See common.sh.
+  jit_shown_flush(log_tmp)
   close(log_tmp)
 
   # --- Output JSON ---
@@ -323,7 +324,11 @@ T_END=$(_ms)
 TOTAL=$((T_END - T_START))
 
 if [ -f "$LOG_TMP" ]; then
-  IFS=$'\t' read -r AWK_MATCHES AWK_PATH < "$LOG_TMP"
+  # One open: the log line, then every marker append awk asked for.
+  {
+    IFS=$'\t' read -r AWK_MATCHES AWK_PATH
+    jit_shown_apply
+  } < "$LOG_TMP"
   _log_hook "pre-path" "$TOTAL" "$AWK_MATCHES << $AWK_PATH"
   rm -f "$LOG_TMP"
 fi
