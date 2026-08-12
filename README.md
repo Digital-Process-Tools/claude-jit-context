@@ -332,8 +332,9 @@ Earlier versions deleted every quote in the value, so `["]` became `[]` and the 
 matched something the author never wrote, with nothing in the entry or the log to show it.
 
 **A pattern the matcher cannot honour is refused at load and reported** — the row is
-skipped, every other rule in the file keeps working, and the hook injects a one-line
-notice giving the construct and the row — `paths/00-manual row 3` — once per session. Two
+skipped, every other rule in the file keeps working, and the hook injects a notice naming
+the construct and the row — `paths/00-manual row 3`, one line per refused row up to the
+bound described below — once per session. Two
 things this replaces: a rule that read as enforced for as long as it existed, and a single
 malformed pattern (`~a[b` is a fatal awk error) that silenced every rule in its index at
 once.
@@ -343,6 +344,14 @@ with the repository, so that column is untrusted text, and the notice fires with
 matched — quoting it back would be a channel into the model's context that needs no trigger.
 The name you need in order to fix it is in `hooks.log` and in `jit-dry-run.sh`, which the
 notice points you at.
+
+**The list of refused rows is bounded, and the count beside it is not.** The index arrives
+with the repository, so the number of unhonourable rows in it is chosen by whoever wrote
+it — and one bullet per row would spend the context window this plugin exists to protect.
+Past roughly 4 KB the notice stops listing and says so, in those words; the total it
+reports is always the true total, and the row numbers it did list are true positions in
+the file, not places in the shortened list. Every row is still evaluated: the bound is on
+what gets said, never on what gets checked.
 
 **Nothing on the way to an entry may be a symbolic link** — not the entry file, not its
 layer directory, not the dimension directory, not `config.env`, and not `.claude/` or

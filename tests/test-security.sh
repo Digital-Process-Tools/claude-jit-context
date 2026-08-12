@@ -502,6 +502,151 @@ fi
 rm -rf "$PROJ"
 
 echo ""
+echo "=== S7: a hostile index cannot flood the refusal notice (#38) ==="
+
+# The sibling of the config.env cap above, one channel over. `refused` is built INSIDE awk
+# and never crosses an exec, so there is no ARG_MAX and nothing fails -- it simply grows,
+# one bullet per unhonourable row, and every byte of it lands in additionalContext. The
+# index is a committed file, so its length is chosen by whoever wrote the repository.
+#
+# Three things are asserted together, because any two of them are satisfiable by a fix that
+# lies: the notice is BOUNDED, it states the TRUE TOTAL, and the positions it prints are
+# TRUE POSITIONS rather than indices into the truncated list.
+#
+# The fixture interleaves honest rows with refused ones so that the refused rows sit at
+# EVEN positions only. A cap that renumbered as it truncated would print "row 1", which no
+# refused row occupies here -- that is what the "row 1:" negative pins, and it is paired
+# with the "row 2:" positive in the same fixture.
+#
+# Three assertions per hook go red against the pre-fix code, and they are the ones a future
+# edit must not quietly drop: the bullet count, the payload byte length, and "not listed
+# here". The rest guard the OTHER failure -- a bound that lies -- and pass either way by
+# design, because a fix cannot be allowed to break them while making the first three green.
+
+# Literal, and it does not exit early. `| grep -c` would put a program on the right of a
+# pipe that this tree does not allow there; awk reads its whole input.
+count_occurrences() {
+  printf '%s' "$1" | awk -v t="$2" '
+    { s = s $0 }
+    END { n = 0; while ((i = index(s, t)) > 0) { n++; s = substr(s, i + length(t)) } print n }'
+}
+
+assert_lt() {
+  local desc="$1" actual="$2" limit="$3"
+  if [ "$actual" -lt "$limit" ]; then
+    PASS=$((PASS + 1)); echo "  PASS: $desc ($actual < $limit)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    expected less than $limit, got $actual"
+  fi
+}
+
+assert_gt() {
+  local desc="$1" actual="$2" floor="$3"
+  if [ "$actual" -gt "$floor" ]; then
+    PASS=$((PASS + 1)); echo "  PASS: $desc ($actual > $floor)"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    expected more than $floor, got $actual"
+  fi
+}
+
+PROJ=$(new_proj); BASE="$PROJ/.claude/jit-context"
+printf 'entry body S\n' > "$BASE/tools/00-manual/legit-s.md"
+i=0
+: > "$BASE/tools/00-manual/00-index.tsv"
+while [ "$i" -lt 400 ]; do
+  i=$((i + 1))
+  # Odd row: honest, and matches nothing.
+  printf 'Bash\tzzz-quiet-%d\tfiller-%d.md\t\t\t\n' "$i" "$i" >> "$BASE/tools/00-manual/00-index.tsv"
+  # Even row: an undefined escape, so the row is refused and named.
+  printf 'Bash\t~gh\\d pr%d\thostile-%d.md\t\t\t\n' "$i" "$i" >> "$BASE/tools/00-manual/00-index.tsv"
+done
+# LAST row, after every refused one: the positive control for the cap being a bound on
+# OUTPUT and not on evaluation. A fix that stopped scanning at the cap loses this.
+printf 'Bash\tstarget\tlegit-s.md\tremind\t\t\n' >> "$BASE/tools/00-manual/00-index.tsv"
+OUT=$(printf '{"tool_name":"Bash","tool_input":{"command":"starget now"}}' \
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPTS/pre-tool-hook.sh" 2>&1)
+BULLETS=$(count_occurrences "$OUT" "tools/00-manual row ")
+assert_contains "S7 the hook still speaks" "$OUT" "hookSpecificOutput"
+assert_contains "S7 the TOTAL is reported truthfully" "$OUT" "400 rule(s) could not be evaluated"
+assert_contains "S7 and the list says it was cut" "$OUT" "not listed here"
+assert_gt "S7 the notice still names refused rows" "$BULLETS" 0
+assert_lt "S7 the notice is bounded well below one bullet per row" "$BULLETS" 400
+assert_lt "S7 and so is the whole injected payload" "${#OUT}" 8000
+assert_contains "S7 a listed position is a TRUE position" "$OUT" "tools/00-manual row 2:"
+assert_not_contains "S7 truncating did NOT renumber from 1" "$OUT" "tools/00-manual row 1:"
+assert_contains "S7 the rule after every refused row still fires" "$OUT" "entry body S"
+assert_not_contains "S7 and no file-name column reaches the model" "$OUT" "hostile-"
+rm -rf "$PROJ"
+
+# Paired control: below the cap, every refused row is listed and nothing claims truncation.
+PROJ=$(new_proj); BASE="$PROJ/.claude/jit-context"
+printf 'entry body T\n' > "$BASE/tools/00-manual/legit-t.md"
+{ printf 'Bash\tzzz-quiet-a\tfiller-a.md\t\t\t\n'
+  printf 'Bash\t~gh\\d pra\thostile-a.md\t\t\t\n'
+  printf 'Bash\tzzz-quiet-b\tfiller-b.md\t\t\t\n'
+  printf 'Bash\t~gh\\d prb\thostile-b.md\t\t\t\n'
+  printf 'Bash\tttarget\tlegit-t.md\tremind\t\t\n'; } > "$BASE/tools/00-manual/00-index.tsv"
+OUT=$(printf '{"tool_name":"Bash","tool_input":{"command":"ttarget now"}}' \
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPTS/pre-tool-hook.sh" 2>&1)
+assert_contains "S7 control: the true total is 2" "$OUT" "2 rule(s) could not be evaluated"
+assert_contains "S7 control: row 2 is listed" "$OUT" "tools/00-manual row 2:"
+assert_contains "S7 control: row 4 is listed" "$OUT" "tools/00-manual row 4:"
+assert_not_contains "S7 control: and nothing claims truncation" "$OUT" "not listed here"
+assert_contains "S7 control: the honest rule still fires" "$OUT" "entry body T"
+rm -rf "$PROJ"
+
+# The path hook builds the same string from its own sites.
+PROJ=$(new_proj); BASE="$PROJ/.claude/jit-context"
+printf 'entry body U\n' > "$BASE/paths/00-manual/legit-u.md"
+i=0
+: > "$BASE/paths/00-manual/00-index.tsv"
+while [ "$i" -lt 400 ]; do
+  i=$((i + 1))
+  printf 'zzz-quiet-%d\tfiller-%d.md\n' "$i" "$i" >> "$BASE/paths/00-manual/00-index.tsv"
+  printf '~src\\d%d\thostile-%d.md\n' "$i" "$i" >> "$BASE/paths/00-manual/00-index.tsv"
+done
+printf 'utarget\tlegit-u.md\n' >> "$BASE/paths/00-manual/00-index.tsv"
+OUT=$(printf '{"tool_name":"Read","tool_input":{"file_path":"/x/utarget/a.php"}}' \
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPTS/pre-path-hook.sh" 2>&1)
+BULLETS=$(count_occurrences "$OUT" "paths/00-manual row ")
+assert_contains "S7 path hook: the TOTAL is reported truthfully" "$OUT" "400 rule(s) could not be evaluated"
+assert_contains "S7 path hook: and the list says it was cut" "$OUT" "not listed here"
+assert_gt "S7 path hook: rows are still named" "$BULLETS" 0
+assert_lt "S7 path hook: the notice is bounded" "$BULLETS" 400
+assert_lt "S7 path hook: and so is the payload" "${#OUT}" 8000
+assert_contains "S7 path hook: a listed position is a TRUE position" "$OUT" "paths/00-manual row 2:"
+assert_not_contains "S7 path hook: truncating did NOT renumber from 1" "$OUT" "paths/00-manual row 1:"
+assert_contains "S7 path hook: the rule after every refused row still fires" "$OUT" "entry body U"
+rm -rf "$PROJ"
+
+# The prompt hook has no patterns to refuse, only entry-file containment -- a different
+# call site building the same string, so it is driven too.
+PROJ=$(new_proj); BASE="$PROJ/.claude/jit-context"
+printf 'entry body V\n' > "$BASE/vocabulary/00-manual/legit-v.md"
+i=0
+: > "$BASE/vocabulary/00-manual/00-index.tsv"
+while [ "$i" -lt 400 ]; do
+  i=$((i + 1))
+  printf 'zzzquiet%d\tfiller-%d.md\n' "$i" "$i" >> "$BASE/vocabulary/00-manual/00-index.tsv"
+  printf 'zzzquietb%d\t../../../../outside-%d.txt\n' "$i" "$i" >> "$BASE/vocabulary/00-manual/00-index.tsv"
+done
+printf 'vtarget\tlegit-v.md\n' >> "$BASE/vocabulary/00-manual/00-index.tsv"
+OUT=$(printf '{"prompt":"please check vtarget now"}' \
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPTS/pre-prompt-hook.sh" 2>&1)
+BULLETS=$(count_occurrences "$OUT" "vocabulary/00-manual row ")
+assert_contains "S7 prompt hook: the TOTAL is reported truthfully" "$OUT" "400 rule(s) could not be evaluated"
+assert_contains "S7 prompt hook: and the list says it was cut" "$OUT" "not listed here"
+assert_gt "S7 prompt hook: rows are still named" "$BULLETS" 0
+assert_lt "S7 prompt hook: the notice is bounded" "$BULLETS" 400
+assert_lt "S7 prompt hook: and so is the payload" "${#OUT}" 8000
+assert_contains "S7 prompt hook: a listed position is a TRUE position" "$OUT" "vocabulary/00-manual row 2:"
+assert_not_contains "S7 prompt hook: truncating did NOT renumber from 1" "$OUT" "vocabulary/00-manual row 1:"
+assert_contains "S7 prompt hook: the entry after every refused row still fires" "$OUT" "entry body V"
+rm -rf "$PROJ"
+
+echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))
 echo "  $PASS/$TOTAL passed, $FAIL failed"
