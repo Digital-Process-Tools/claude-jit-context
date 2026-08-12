@@ -692,6 +692,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   6105 bytes for the largest match against 311 summarised, 7 entries, none of them
   blocking.
 
+  An entry that can never *become* a summary is not counted as blocking. One pinned to
+  `full` by its own `inject:`, or carrying no frontmatter at all, stays whole whatever the
+  project sets — naming it would send an author to write a `description:` that nothing
+  will ever read. `jit_entry_load()` reports that pin separately, because when the default
+  and the override agree the two are indistinguishable from the mode alone.
+
   It prices **one match**, deliberately never a corpus total. "Summary mode would save
   2.4 MB on this tree" is technically true and useless: nothing here is ever resident, so
   that quantity has never been in a context window and never will be. The saving that

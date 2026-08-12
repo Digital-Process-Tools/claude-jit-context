@@ -494,10 +494,16 @@ BEGIN {
     sumb[n] = length(jit_inject_text(e, rel))
     e["mode"] = keep
     if (eff[n] == "full") { nfull++; bfull += fullb[n] }
-    # An entry with no description: cannot be summarised into anything but its own name,
-    # whether that is because the author has not written one or because the file carries
-    # no frontmatter at all. Both are the same obstacle to flipping the tree.
-    if (e["desc"] == "") { nodesc++; nd[nodesc] = rel }
+    # An entry with no description: could only be summarised into its own name, so it is
+    # what stands between this tree and being able to flip.
+    #
+    # Unless it can never be summarised at all. An entry PINNED to full -- by its own
+    # `inject: full`, or by having no frontmatter for the rebuild to have indexed -- stays
+    # whole whatever the project sets, so naming it here would send an author to write a
+    # description that nothing will ever read. The two cases are indistinguishable from
+    # the mode alone when the default and the override agree, which is why jit_entry_load
+    # reports the pin separately.
+    if (e["desc"] == "" && !(e["pin"] && e["mode"] == "full")) { nodesc++; nd[nodesc] = rel }
   }
 
   if (n == 0) { print "(no entries)"; exit }

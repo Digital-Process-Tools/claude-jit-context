@@ -5,8 +5,9 @@
 # The defect this is about is not accuracy, it is cost. A 14.9 KB entry arriving on the
 # word `tag` is the whole case, and it does not depend on the match being wrong -- it
 # depends on being wrong being expensive. So the mode is a project setting with a
-# per-entry override, `summary` is the default, and every assertion below is paired: a
-# fixture that must arrive whole beside one that must not, in the same tree.
+# per-entry override -- `full` by default, for upgrade safety, and `summary` opt-in --
+# and every assertion below is paired: a fixture that must arrive whole beside one that
+# must not, in the same tree.
 #
 # Usage: bash tests/test-inject-mode.sh
 
@@ -79,6 +80,19 @@ printf '%s\n' \
   "" \
   "WEIRD-BODY-MARKER" > "$V/weird.md"
 
+# Pinned to full by its own frontmatter AND carrying no description:. It can never be
+# rendered as a summary whatever the project sets, so it is NOT what stands between this
+# tree and being able to flip -- and a report that names it sends an author to write a
+# line nothing will ever read.
+printf '%s\n' \
+  "---" \
+  "title: Pinned" \
+  "inject: full" \
+  "keywords: pinned" \
+  "---" \
+  "" \
+  "PINNED-BODY-MARKER" > "$V/pinned.md"
+
 printf '%s\n' \
   "---" \
   "title: Opted in" \
@@ -106,6 +120,7 @@ printf '%s\t%s\n' \
   bare     bare.md \
   weird    weird.md \
   optin    optin.md \
+  pinned   pinned.md \
   longdesc longdesc.md > "$V/00-index.tsv"
 
 printf '%s\n' \
@@ -405,7 +420,8 @@ assert_not_contains "and does not count a summary entry as whole" "$REPORT" "bil
 
 # rebuild-tsv.sh rewrote every index in the fixture tree from frontmatter, which is not
 # what the rest of this suite indexed by hand. Put them back, or every later assertion
-# would be measuring the rebuild rather than the hooks.
+# would be measuring the rebuild rather than the hooks. Every fixture, or the next
+# section is quietly testing a smaller tree than the one it was written against.
 printf '%s\t%s\n' \
   billing  billing.md \
   payments payments.md \
@@ -413,6 +429,7 @@ printf '%s\t%s\n' \
   bare     bare.md \
   weird    weird.md \
   optin    optin.md \
+  pinned   pinned.md \
   longdesc longdesc.md \
   quoted   quoted.md > "$V/00-index.tsv"
 
@@ -436,6 +453,12 @@ assert_contains "it names the entries that block the flip" "$REPORT" "carry no d
 assert_contains "and names one of them"                    "$REPORT" "nodesc.md"
 # Paired, in the same report: an entry that CAN be summarised is not listed as blocking.
 assert_not_contains "and does not name one that can be summarised" "$REPORT" "  .claude/jit-context/vocabulary/00-manual/billing.md"
+# And the other kind of non-blocker, which is the one that is easy to get wrong: an entry
+# PINNED to full can never render as a summary, so its missing description: is not work
+# anybody has to do before flipping. Naming it would send an author to write a line that
+# nothing will ever read.
+assert_not_contains "nor an entry pinned to full by its own frontmatter" "$REPORT" "pinned.md"
+assert_not_contains "nor one with no frontmatter at all"                "$REPORT" "bare.md"
 
 # The other side of the same question: a tree with nothing in the way says so, because
 # "2 entries block this" and "nothing blocks this" must not read identically.
@@ -458,6 +481,7 @@ printf '%s\t%s\n' \
   bare     bare.md \
   weird    weird.md \
   optin    optin.md \
+  pinned   pinned.md \
   longdesc longdesc.md \
   quoted   quoted.md > "$V/00-index.tsv"
 

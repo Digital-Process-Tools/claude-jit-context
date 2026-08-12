@@ -635,7 +635,7 @@ NODESC=0
 WHOLE_LINES=""
 list_whole() {
   # $1 layer dir, $2 label
-  local dir="$1" label="$2" md name inj eff why size desc
+  local dir="$1" label="$2" md name inj eff why size desc pin
   [ -d "$dir" ] || return 0
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -648,22 +648,26 @@ list_whole() {
     [ -L "$md" ] && continue
     [ "${JIT_SYMLINKS_ALL:-}" = "1" ] && continue
     inj="$(jit_frontmatter inject "$md" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-    # Counted whatever the mode is: under `full` it is the distance to being able to flip,
-    # and under `summary` it is a set of entries a match can only name.
     desc="$(jit_frontmatter description "$md")"
-    [ -n "$desc" ] || NODESC=$((NODESC + 1))
     why=""
+    # `pin` mirrors jit_entry_load() in common.sh: the mode was decided by the ENTRY, not
+    # inherited from the project default. An entry pinned to full can never render as a
+    # summary, so a missing description: on one of those is not what stands between this
+    # tree and being able to flip -- naming it would send an author to write a line
+    # nothing will ever read.
+    pin=0
     if [ "$(sed -n 1p "$md")" != "---" ]; then
-      eff=full; why="no frontmatter, so there is nothing to summarise"
+      eff=full; pin=1; why="no frontmatter, so there is nothing to summarise"
     elif [ "$inj" = full ]; then
-      eff=full; why="inject: full in this entry"
+      eff=full; pin=1; why="inject: full in this entry"
     elif [ "$inj" = summary ]; then
-      eff=summary
+      eff=summary; pin=1
     else
       eff="$TREE_INJECT"
       [ -n "$inj" ] && why="inject: value not recognised, so the project default applied"
       [ -z "$why" ] && why="the project default"
     fi
+    if [ -z "$desc" ] && [ "$pin$eff" != "1full" ]; then NODESC=$((NODESC + 1)); fi
     if [ "$eff" = full ]; then
       size="$(wc -c < "$md" | tr -d ' ')"
       WHOLE=$((WHOLE + 1))

@@ -1495,6 +1495,13 @@ function jit_clip(s, n,   i) {
 function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, key, val, nread, r) {
   e["body"] = ""; e["title"] = ""; e["desc"] = ""
   e["mode"] = def; e["fm"] = 0; e["badmode"] = 0; e["read"] = 0; e["injseen"] = 0
+  # PIN: the mode was decided by the ENTRY rather than inherited from the project
+  # default. A caller that wants to know what would change if the project flipped needs
+  # this and cannot derive it from mode alone -- when the default and the override agree,
+  # the two are indistinguishable. Both reports got that wrong: an entry pinned to `full`
+  # can never render as a summary, so listing it as "write a description: and you can
+  # flip" sends an author to write a line nothing will ever read.
+  e["pin"] = 0
   # e["why"] is the SECOND half of the return value: 0 with a reason is a row that could
   # not be honoured and must be refused out loud, 0 with no reason is an empty file and
   # has always been silence. Callers branch on it, so it is reset on every call -- ent is
@@ -1552,7 +1559,7 @@ function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, key, val,
       e["injseen"] = 1
       gsub(/[[:space:]]/, "", val)
       val = tolower(val)
-      if (val == "summary" || val == "full") e["mode"] = val
+      if (val == "summary" || val == "full") { e["mode"] = val; e["pin"] = 1 }
       else if (val != "") e["badmode"] = 1
     }
   }
@@ -1577,7 +1584,7 @@ function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, key, val,
   # summarise, and its body is the entry. That is not a loophole an author can live in:
   # deleting the frontmatter to keep the whole body also unindexes the entry on the next
   # rebuild.
-  if (!e["fm"]) e["mode"] = "full"
+  if (!e["fm"]) { e["mode"] = "full"; e["pin"] = 1 }
   return e["read"]
 }
 function jit_inject_text(e, rel,   out) {
