@@ -393,7 +393,7 @@ jit_shown_apply() {
     case "$name" in
       */*) continue ;;
       # The backslash, for Windows, and it is the same reason jit_bad_entry_file() gives
-      # 550 lines below: on Git Bash the Win32 file API underneath treats it as a
+      # further down this file: on Git Bash the Win32 file API underneath treats it as a
       # separator, so `..\..\x` traverses there while being an ordinary character here.
       # That check did not come along when the write moved out of awk in #59, and the
       # filter admitted a byte this repository's own code says must not pass (#65).

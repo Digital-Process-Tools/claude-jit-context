@@ -113,7 +113,21 @@ skip() {
 [ -r "$LOG" ] || skip "not readable"
 [ -s "$LOG" ] || skip "the file is empty -- the hooks have logged nothing yet"
 
-awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" '
+# LC_ALL=C, for the same reason the three hooks pin it (#68) and one that is specific to
+# this tool: the file it reads is one THE HOOKS WROTE, and they truncate the prompt copy at
+# 80 bytes. An ordinary CJK or heavily accented prompt therefore leaves a half-finished
+# UTF-8 sequence at the end of a log line -- no attacker, no malformed input, just a
+# multibyte character straddling the cut. Reading that back aborted this awk with
+# `illegal byte sequence` under one-true-awk and made gawk print a multibyte warning, so
+# the reporting tool went dark on exactly the corpora the accent fold exists for.
+#
+# This tool may fail loudly, and it still does -- on a log it cannot read, with a named
+# SKIPPED reason and exit 2. Choking on bytes it wrote itself is not that.
+#
+# The fold table below is the byte-identical copy of the one in common.sh, built out of
+# index() and substr() with no decode and carrying both cases, so `C` costs it nothing --
+# tests/test-jit-misses.sh drives the accented fixture under both engines.
+LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" '
 BEGIN {
   # Filler that two prompts can share without sharing a subject. Deliberately short and
   # visible: it is the only part of the grouping rule that is a matter of taste, and a

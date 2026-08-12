@@ -305,6 +305,29 @@ pick_utf8_locale() {
   printf '%s' "${LC_ALL:-${LANG:-C}}"
 }
 UTF8_LOCALE="$(pick_utf8_locale)"
+# Whether what came back is ACTUALLY a UTF-8 locale. On a runner with no `locale` command
+# or no UTF-8 locale installed -- Git Bash is the case in mind -- the fallback is the
+# caller own, which is normally `C`, and `C` is precisely where the bug does not reproduce.
+# The assertions below would then still pass, and pass for the wrong reason: they could not
+# tell the fix from its absence. Said out loud rather than gone quietly green, on the
+# pattern section A of tests/test-hook-tmpfile.sh already uses for symbolic links.
+UTF8_LOCALE_REAL=no
+if [ "$(LC_ALL="$UTF8_LOCALE" locale charmap 2>/dev/null)" = "UTF-8" ]; then UTF8_LOCALE_REAL=yes; fi
+if [ "$UTF8_LOCALE_REAL" != yes ]; then
+  echo "  SKIP-NOTE: no UTF-8 locale on this machine ($UTF8_LOCALE). The malformed-byte"
+  echo "             assertions below run under a byte locale, where the defect does not"
+  echo "             reproduce -- they still assert the guarantee, they just cannot fail"
+  echo "             for it here."
+  if [ "${JIT_TESTS_REQUIRE_UTF8_LOCALE:-}" = 1 ]; then
+    FAIL=$((FAIL + 1))
+    echo ""
+    echo "  FAIL: A UTF-8 LOCALE WAS REQUIRED AND NOT OBTAINED."
+    echo "        JIT_TESTS_REQUIRE_UTF8_LOCALE=1 says this environment was configured to"
+    echo "        have one, so the note above is a broken configuration and not a platform"
+    echo "        without the capability. Failed rather than noted because run-all.sh"
+    echo "        renders a note green. Nothing here is a defect in the hooks."
+  fi
+fi
 BADBYTE="$(printf '\351')"
 echo ""
 echo "caller locale for the malformed-byte assertions: $UTF8_LOCALE"

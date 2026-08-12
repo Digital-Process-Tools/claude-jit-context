@@ -71,6 +71,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   space regardless of case. The pin is on the `awk` invocation and not exported;
   `rebuild-tsv.sh` has the opposite contract and keeps its own locale.
 
+  `scripts/jit-misses.sh` is pinned as well, for a reason that is not the hooks'. It reads
+  the log the hooks **wrote**, and they truncate the prompt copy at 80 **bytes** — so an
+  ordinary CJK or heavily accented prompt leaves a half-finished UTF-8 sequence at the end
+  of a log line with no attacker and no malformed input anywhere. Reading it back aborted
+  the report under one-true-awk and made gawk warn: #68 one hop downstream, in the tool
+  whose whole job is to read that file. It was already live on macOS and Git Bash, where
+  one-true-awk has always truncated by byte; pinning the hooks brought the same split to
+  gawk, which is what made it worth fixing here rather than filing. The tool still fails
+  loudly on a log it genuinely cannot read — named `SKIPPED`, exit 2.
+
 - **`pre-prompt-hook.sh` said it stripped accents; it called `tolower` and nothing else**
   (#31). The comment above the normalisation read "Lowercase + strip accents (basic ASCII
   transliteration)" and the line under it was a bare `tolower()`. It sat above the variable
