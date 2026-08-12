@@ -87,7 +87,57 @@ the user to do anything beyond opening the project.
   must still turn a feature on that is off by default, and asserting only that the hook
   printed valid JSON would have passed with `config.env` support deleted entirely.
 
+### Added
+
+- **`scripts/jit-misses.sh` — the vocabulary the team keeps not having, from the log we
+  already write.** `pre-prompt-hook.sh` records every prompt with the entries it matched
+  or the literal `(none)`, so the misses were already on disk and nobody was reading them.
+  One `awk` pass groups the `(none)` prompts by shared content word and prints the
+  recurring ones with counts, highest first, with every prompt behind a row printed under
+  it.
+
+  It reads and prints: no file written, no entry created, no hook fired, nothing sent
+  anywhere, and no new dependency. It deliberately does not source `common.sh`, which
+  `mkdir -p`s the log directory at load — a reporting tool that creates the thing it
+  reports cannot be trusted about it.
+
+  Two prompts are the same miss when they share a token of three or more characters that
+  is not a stopword, after the normalisation the prompt hook already applies. `xsd
+  validation` and `validate the xsd` group on `xsd`; `validation` and `validate` do not,
+  because nothing stems. That rule is wrong at the margin and is stated in `--help`
+  rather than hidden in a similarity score nobody can inspect.
+
+  Three outcomes, never two, because a ranked list is exactly where a silent failure
+  hides: findings, `ok` when the log was read and nothing recurs, and `SKIPPED` with the
+  reason named at exit 2 — absent, empty, unrecognised format, or hook records with no
+  `pre-prompt` among them. That last one is not hypothetical: of 1,242 `(none)` rows on
+  the machine this was designed against, 1,217 came from the tool and path hooks, and a
+  row count over them would have reported "prompts, nothing missing" from a log
+  containing no prompts at all.
+
+  Slash commands and harness-generated `<…>` blocks are set aside before grouping and
+  **counted in the header**, never dropped in silence — `/opensource-manager` was the
+  most repeated `(none)` in the real log and is not a knowledge gap.
+
+  Accented words fold to their ASCII base before tokenising. Stripping to `[a-z0-9 -]`
+  alone turned `cassée` into `cass` and `détaillée` into `taill` — one word split into
+  fragments nobody typed, offered as candidate entry names. Identical under both awks, so
+  it was the character class and not the engine.
+
 ### Fixed
+
+- **The README said `rebuild-tsv.sh` indexes `00-manual/` "and nothing else", and that
+  creating `20-grouped/*.md` and rebuilding "produces silence, because nothing indexed
+  it".** Both were the opposite of what the code does: the rebuild globs every
+  subdirectory of each dimension, so every layer directory present is indexed. Driven,
+  not read off a grep — a `40-custom/` entry and a `20-grouped/` entry, one rebuild, and
+  both got a `00-index.tsv`.
+
+  The hooks then read four hardcoded layer names, so the `20-grouped/` entry fired on its
+  keyword and the `40-custom/` one returned `{}`. A layer named anything else is indexed
+  and read by nobody: a rule that exists, is indexed, and can never fire — this
+  repository's own defect shape, produced by its own documentation. The README now says
+  which four names are read and what happens to a directory with any other name.
 
 - **A `match:` pattern could not contain a double quote, and nothing said so.** The
   frontmatter reader deleted every `"` in the value on its way to the index, so `["]` —
