@@ -113,6 +113,37 @@ the user to do anything beyond opening the project.
   `scripts/jit-dry-run.sh` reaches the same verdict from the same shared `awk` function,
   against the tree named by `--base` rather than the session's own.
 
+- **The hooks wrote their log through a path a cloned repository controls.** `common.sh`
+  built `.claude/jit-context/.discovery/logs/hooks.log` by concatenation and checked
+  nothing. `mkdir -p` follows a symlink and `>>` follows a symlink, and git tracks symlinks
+  as mode `120000` — so a committed `hooks.log -> ~/.zshenv` meant one prompt appended
+  attacker-chosen text to the reader's shell rc file, and it ran at the next shell start.
+  Reproduced with no keyword match, no rule fired and no entry file present: the refusal
+  path on its own writes a line, and the index row's file-name column is the payload.
+
+  Four link positions reach that write and all four are now tested before anything is
+  created — `hooks.log`, `logs/`, `.discovery/`, and the two directories above
+  `.claude/jit-context/` — five `[ -L ]` tests, all shell builtins. The symlink sweep above
+  does not cover this: it globs with `*`, which does not match a leading dot, so
+  `.discovery` is invisible to it by construction.
+
+  On refusal **logging is switched off for the run and the hook carries on**. A hook that
+  cannot log still has a job to do, and `common.sh` runs before every one of them; failing
+  here would be exactly the hard failure the design forbids. Nothing is injected about it
+  either — a notice would be a second attacker-triggered channel into the context.
+
+  The content half went with it. The containment branch wrote the row's file-name column
+  into the log verbatim — the one string `jit_bad_entry_file()` deliberately withholds from
+  the model. A name that failed the bare-name check is now reported by position there too.
+  A name that passed is bare by construction and is still named, because that is what an
+  author fixing an unhonourable pattern needs.
+
+- **`tests/test-log-containment.sh`** — new suite. Every "nothing was written outside the
+  tree" assertion is preceded by a positive control on the same shape, because that
+  assertion passes when nothing happened at all: the honest tree must produce a log line,
+  and the hook must still inject its notice while refusing to log. If those controls go
+  red, the suite says in as many words that everything below them is vacuous.
+
 - **`tests/test-symlink-entry.sh`** — new suite, red before the fix at all five read sites
   and for every shape: the entry file, the layer directory, `.claude/jit-context/` and
   `.claude/`. Paired with positive controls that a real entry still fires, that an unrelated

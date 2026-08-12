@@ -156,7 +156,7 @@ END {
       if (why != "") {
         n_refused++
         refused = refused (refused == "" ? "- " : "\n- ") jit_row_id(layer, rown) ": " why
-        log_matches = log_matches sep "refused:" rule_file "(" why ")"
+        log_matches = log_matches sep "refused:" jit_log_name(rule_file, layer, rown, why) "(" why ")"
         sep = ", "
         continue
       }
@@ -228,7 +228,7 @@ END {
         if (why != "") {
           n_refused++
           refused = refused (refused == "" ? "- " : "\n- ") jit_row_id(layer, vrown) ": " why
-          log_matches = log_matches sep "refused:" vocab_file "(" why ")"
+          log_matches = log_matches sep "refused:" jit_log_name(vocab_file, layer, vrown, why) "(" why ")"
           sep = ", "
           continue
         }

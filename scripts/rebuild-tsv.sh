@@ -10,6 +10,11 @@ source "$(dirname "$0")/common.sh"
 # Consumed by _log() in common.sh, which shellcheck cannot see across the source.
 # shellcheck disable=SC2034
 LOG_FILE="$LOG_DIR/pipeline.log"
+# common.sh checked hooks.log, not this name. Same reason, same one-builtin test: a clone
+# chooses this path too, and _log() appends through it.
+# Read by jit_log_write() in common.sh, which shellcheck cannot see across the source.
+# shellcheck disable=SC2034
+if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
 
 # --- Tool rules: parse frontmatter from .md files ---
 # Extracts tool, match, mode, require, forbid from YAML frontmatter

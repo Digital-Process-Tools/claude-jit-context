@@ -127,7 +127,7 @@ END {
           vrefused[layer "/" vfile] = 1
           n_refused++
           refused = refused (refused == "" ? "- " : "\n- ") jit_row_id(layer, vrown) ": " why
-          log_matches = log_matches sep "refused:" vfile "(" why ")"
+          log_matches = log_matches sep "refused:" jit_log_name(vfile, layer, vrown, why) "(" why ")"
           sep = ", "
         }
         continue

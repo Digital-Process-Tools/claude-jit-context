@@ -93,9 +93,50 @@ jit_scan_symlinks() {
 
 jit_scan_symlinks "$JIT_BASE"
 
+# --- The log path is inside the project, so a clone chooses where we write ---
+# LOG_DIR and LOG_FILE are built by concatenating onto JIT_BASE, and until 2026-08-12
+# nothing checked them. `mkdir -p` follows a symlink and `>>` follows a symlink, and git
+# tracks symlinks as mode 120000 -- so a committed
+# `.claude/jit-context/.discovery/logs/hooks.log -> ~/.zshenv` means one prompt appends
+# attacker-chosen text to the victim's rc file, and it runs at the next shell start.
+# Reproduced with NO keyword match, NO rule fired and NO entry file present: the refusal
+# path alone writes a line, and the row's file-name column is the payload.
+#
+# jit_scan_symlinks() does not cover this. It globs with `*`, which does not match a
+# leading dot, so `.discovery` is invisible to it by construction -- and the log path is a
+# different concatenation from the entry path in any case. Four positions reach the same
+# write and all four are tested: hooks.log, logs/, .discovery/, and the two directories
+# above JIT_BASE that the entry sweep already refuses.
+#
+# On refusal, logging is DISABLED for the run and the hook carries on. A hook that cannot
+# log still has a job to do, and this file runs before every one of them -- exiting here
+# would be the "fail hard" this whole design forbids. Nothing is injected about it either:
+# the log is for the person, and a notice would be a second attacker-triggered channel.
+#
+# Five `[ -L ]` tests, all shell builtins, forking nothing.
+JIT_LOG_DISABLED=0
 LOG_DIR="$JIT_BASE/.discovery/logs"
-mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/hooks.log"
+for _jit_p in "${JIT_BASE%/*}" "$JIT_BASE" "$JIT_BASE/.discovery" "$LOG_DIR"; do
+  if [ -L "$_jit_p" ]; then JIT_LOG_DISABLED=1; fi
+done
+unset _jit_p
+# The mkdir is what MATERIALISES a directory through a link, so it is gated too, not just
+# the append. `2>/dev/null` because a read-only or unwritable tree is a reason to say
+# nothing, never a reason to print to a session's stderr.
+if [ "$JIT_LOG_DISABLED" = 0 ]; then
+  mkdir -p "$LOG_DIR" 2>/dev/null
+  # Checked after the mkdir as well: hooks.log may be a dangling link, which `mkdir -p`
+  # on its parent neither creates nor disturbs.
+  if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
+fi
+# Every writer goes through this. A caller that appends to "$LOG_FILE" directly reopens
+# the hole -- there is one function so there is one place to check.
+jit_log_write() {
+  if [ "$JIT_LOG_DISABLED" = 0 ]; then
+    printf '%s\n' "$1" >> "$LOG_FILE" 2>/dev/null
+  fi
+}
 
 # Timestamp with ms precision (single perl call, ~11ms)
 _ts() { perl -MTime::HiRes -MPOSIX -e 'my $t=Time::HiRes::time(); printf("%s.%03d\n", strftime("%H:%M:%S",localtime($t)), ($t*1000)%1000)'; }
@@ -208,15 +249,15 @@ jit_load_config() {
 if [ -f "$JIT_BASE/config.env" ]; then
   jit_load_config "$JIT_BASE/config.env"
   if [ "$JIT_CONFIG_REFUSED_N" -gt 0 ]; then
-    printf '[%s] config.env | %d line(s) refused\n%s\n' \
-      "$(_ts)" "$JIT_CONFIG_REFUSED_N" "$JIT_CONFIG_REFUSED" >> "$LOG_FILE"
+    jit_log_write "$(printf '[%s] config.env | %d line(s) refused\n%s' \
+      "$(_ts)" "$JIT_CONFIG_REFUSED_N" "$JIT_CONFIG_REFUSED")"
   fi
 fi
 
 # Pipeline log: _log "step" duration_ms "message"  → [HH:MM:SS.mmm] step 42ms | message
 _log() {
   local line="$1 ${2}ms | $3"
-  echo "[$(_ts)] $line" >> "$LOG_FILE"
+  jit_log_write "[$(_ts)] $line"
   echo "$line"
 }
 
@@ -499,6 +540,20 @@ JIT_AWK_ENTRY='
 function jit_row_id(layer, rown) {
   return layer " row " rown
 }
+# What the LOG may say about a refused row. hooks.log is a file on the disk of whoever
+# cloned the repository, read by a person, and the containment branch was writing the row
+# file-name column into it verbatim -- the one string jit_bad_entry_file() deliberately
+# withholds from the model. A name that FAILED the bare-name check now gets the treatment
+# the model-facing notice already gets: the row is named by POSITION, the raw text dropped.
+#
+# A name that PASSED is bare by construction -- no separator, not . or .. -- and it is what
+# an author fixing an unhonourable pattern actually needs, so it is kept. That includes a
+# row refused for being a symbolic link: the name passed, only the file behind it did not.
+#
+# No apostrophes in this block. It is a single-quoted bash string and one would close it.
+function jit_log_name(f, layer, rown, why) {
+  return (why == "not a bare file name") ? jit_row_id(layer, rown) : f
+}
 # The set built by jit_scan_symlinks() in the bash half, keyed by full path. Loaded once
 # per awk process, lazily, so a hook whose tree has no index pays nothing for it.
 function jit_symlinked(p,   n, i, a) {
@@ -627,5 +682,5 @@ _log_hook() {
   local hook="$1"
   local ms="$2"
   local matches="${3:-(none)}"
-  echo "[$(_ts)] $hook ${ms}ms | $matches" >> "$LOG_FILE"
+  jit_log_write "[$(_ts)] $hook ${ms}ms | $matches"
 }

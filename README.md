@@ -466,6 +466,15 @@ Timings and matches are appended to `.claude/jit-context/.discovery/logs/hooks.l
 
 `(none)` in the match column means nothing fired — useful for finding knowledge gaps.
 
+**If any part of that path is a symbolic link, logging is switched off for the run and the
+hooks carry on.** The log path is built inside the project, so a cloned repository would
+otherwise choose the file the hooks append to — and `mkdir -p` and `>>` both follow a link.
+A hook that cannot log still has a job to do, so nothing fails and nothing is injected
+about it; the empty `.discovery/logs/` is the symptom. The one line a refused row
+contributes never carries the raw file-name column from the index either, for a name that
+failed the containment check: that is unvalidated text from the repository, and this file
+is read by a person.
+
 ## What the team keeps asking that nobody has written down
 
 A prompt that matched nothing is already recorded, on every machine that has the plugin installed. When the same words come back a third time, that is not a hunch about what the documentation is missing — it is a count.
@@ -497,7 +506,7 @@ It reads and prints. No file is written, no entry is created, no hook fires and 
 bash tests/run-all.sh
 ```
 
-380 assertions across ten suites, covering matching, normalization, modes, blocking, session-once behaviour, malformed input, the dry-run and the miss report. Engine-sensitive assertions run once per `awk` on the machine. No dependencies beyond bash, `awk` and `perl`.
+COUNT-PLACEHOLDER assertions across SUITES-PLACEHOLDER suites, covering matching, normalization, modes, blocking, session-once behaviour, malformed input, the dry-run, the miss report, and what a hostile project directory can make the hooks read, write or say. Engine-sensitive assertions run once per `awk` on the machine. No dependencies beyond bash, `awk` and `perl`.
 
 ## Why not `.claude/rules/`?
 

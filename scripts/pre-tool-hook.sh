@@ -133,7 +133,7 @@ END {
     if (why != "") {
       n_refused++
       refused = refused (refused == "" ? "- " : "\n- ") jit_row_id("tools/00-manual", rown) r_kind ": " why
-      log_matches = log_matches sep "refused:" r_file "(" why ")"
+      log_matches = log_matches sep "refused:" jit_log_name(r_file, "tools/00-manual", rown, why) "(" why ")"
       sep = ", "
       continue
     }
@@ -296,7 +296,7 @@ END {
             vrefused[layer "/" vfile] = 1
             n_refused++
             refused = refused (refused == "" ? "- " : "\n- ") jit_row_id(layer, vrown) ": " why
-            log_matches = log_matches sep "refused:" vfile "(" why ")"
+            log_matches = log_matches sep "refused:" jit_log_name(vfile, layer, vrown, why) "(" why ")"
             sep = ", "
           }
           continue
