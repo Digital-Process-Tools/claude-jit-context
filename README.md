@@ -422,6 +422,16 @@ bash .claude/claude-jit-context/scripts/rebuild-tsv.sh
 
 This parses the frontmatter of every `.md` file into `00-index.tsv` files, which is what the hooks actually read. It also prints an **ambiguity report** — keywords appearing in more than five entries. Those are worth pruning: every match loads the whole entry, so a keyword like `user` in twelve files means one stray mention drags twelve files into context.
 
+The exit code says which of three things happened, so a script or a pre-commit hook can tell them apart:
+
+| | |
+| --- | --- |
+| **0** | the index was written and every rule can be honoured |
+| **1** | the index was written, and at least one rule will be **refused** by the matcher — an invocation macro that could not be expanded. That rule is on disk and will never fire |
+| **2** | the index was not built: no `tools/`, `paths/` or `vocabulary/` where it looked, or a `00-index.tsv` it could not write. What is on disk is not what this run built |
+
+The ambiguity report is advisory and never moves the code — those entries are indexed and fire.
+
 ### Verify an entry actually fires
 
 An entry that never fires looks exactly like work that was done.
