@@ -7,13 +7,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Security
+## [0.3.0] — Containment
 
-All three of these treat `.claude/jit-context/` as what it actually is: a directory that
+This release treats `.claude/jit-context/` as what it actually is: a directory that
 arrives with the repository. The hooks run on the first prompt of a session, before
 anyone has read the code they were cloned with, so every file under that directory is
-attacker-controlled input rather than configuration the user wrote. None of them needs
-the user to do anything beyond opening the project.
+attacker-controlled input rather than configuration the user wrote. None of the findings
+below needs the user to do anything beyond opening the project.
+
+Two of them were holes in the fix for the one before, which is the honest summary of how
+this release went: the first audit found three things, the fix for the largest of them
+reopened it through a glob that does not match a leading dot, and the second audit found
+that. The list is longer than it would have been if either round had been skipped.
+
+### Security
 
 - **A dot-named entry file walked straight past the symbolic-link check.** The sweep that
   `lstat`s the tree enumerates it with `*`, `*/*` and `*/*/*`, and a glob `*` does not match
