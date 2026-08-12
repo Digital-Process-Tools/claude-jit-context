@@ -55,6 +55,36 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   them: a letter in one and not the other is a keyword indexed one way and reported
   another.
 
+- **`jit-misses.sh` tokenised pasted links, so its top recommendations were `https`, `com`
+  and `github`** (#69). Run against this repository's own log, the three highest-ranked
+  candidate vocabulary entries were fragments of one URL pasted three times, sitting above
+  `haiku`, `tdd` and `supertool` — the words people had actually typed. A recommendation
+  engine is trusted or ignored and nothing in between, and three useless rows at the top
+  teach a reader to skim past the useful ones. It also inflated the miss count invisibly: a
+  session where someone pasted four links looked like a session with four knowledge gaps.
+
+  A whitespace-delimited run containing `://` is now dropped whole before tokenising, and
+  the number of links dropped — links, not records, so a prompt pasting two says two — is
+  printed in the header alongside `set aside` rather than vanishing. A record whose cut at
+  80 characters landed inside a link no longer also loses the word before it: that fragment
+  left with the link, and dropping a further token discarded a whole word nobody truncated.
+  It happened on two of the three link records in the log that produced this issue.
+
+  That is the entire rule, and the restraint is the point. Not a stop-list: `com`
+  is not noise because it is short or common but because it was never a word in the prompt,
+  and a list that hides `com` in this corpus leaves `https` in the next one. Not "a dot
+  between two alphanumerics" either — `common.sh`, `tests.md` and `rebuild-tsv.sh` are that
+  shape and are all plausible entry names, and `github.com` cannot be told apart from
+  `common.sh` by structure, only by a list of TLDs, which is the stop-list under another
+  name. A scheme-less host therefore still tokenises; a pasted link, which is the thing that
+  actually caused this, does not. Paths were never in scope: `src/Billing/Totals.php` still
+  yields `billing` and `totals`.
+
+  On the log that produced the report in the issue, `com`, `github`, `https`, `pull` and the
+  org and repo names all left the list and `haiku`, `decide`, `skill`, `supertool` and `tdd`
+  moved to the top. `haiku` and `haiky` remain separate rows — a typo is a real miss, and
+  merging them needs a similarity metric this tool deliberately does not have.
+
 - **A hostile index could flood the refusal notice, and a truncated list must not read as
   complete** (#38). The `refused` string is built inside `awk` and never crosses an `exec`,
   so unlike the `config.env` cap in #36 there is no `ARG_MAX` and nothing fails — it simply

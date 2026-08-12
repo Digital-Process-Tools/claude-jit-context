@@ -187,6 +187,102 @@ assert_contains "says ok" "$OUT" "ok --"
 assert_not_contains "and is not confused with a skip" "$OUT" "SKIPPED"
 assert_contains "while still reporting what it read" "$OUT" "2 prompt record(s)"
 
+# =============================================
+# SECTION: a pasted link is not three vocabulary gaps (#69)
+# =============================================
+# `https://github.com/org/repo/pull/54` tokenised into `https`, `github`, `com`, `pull`
+# and the org and repo names, and three pastes of the same link put all six ABOVE the
+# words people had actually typed. None of them was ever a word in the prompt.
+#
+# The rule is `://` and nothing else, so the two shapes that look like it must survive:
+# a path (`src/Billing/Totals.php`) and a dotted filename (`common.sh`). A rule that ate
+# either would be a worse bug than the one it fixes.
+URLS="$TMP/urls.log"
+cat > "$URLS" <<'LOG'
+[10:00:01.001] pre-prompt 9ms | (none) [shown:1] << the changelog at https://github.com/digital-process-tools/claude-jit-context/pull/54
+[10:00:02.001] pre-prompt 9ms | (none) [shown:1] << changelog, see https://github.com/digital-process-tools/claude-jit-context/pull/55
+[10:00:03.001] pre-prompt 9ms | (none) [shown:1] << the totals in src/Billing/Totals.php are wrong
+[10:00:04.001] pre-prompt 9ms | (none) [shown:1] << recompute src/Billing/Totals.php totals
+[10:00:05.001] pre-prompt 9ms | (none) [shown:1] << where is the fold table in common.sh
+[10:00:06.001] pre-prompt 9ms | (none) [shown:1] << common.sh sets every path
+LOG
+
+if [ ! -s "$URLS" ]; then
+  echo "  FAIL: harness guard -- the URL fixture is empty, every silence assertion below is vacuous"
+  exit 1
+fi
+
+echo ""
+echo "=== a pasted URL contributes no tokens, and the words around it still do ==="
+OUT=$(bash "$MISSES" --log "$URLS" 2>&1) && ST=0 || ST=$?
+assert_status "exit 0 -- findings" "$ST" "0"
+assert_contains "read the whole fixture" "$OUT" "6 prompt record(s)"
+# Positive control FIRST: an "absent" assertion passes when the tokeniser returns
+# nothing at all, so pin what must still be reported before pinning what must not.
+assert_token_row "the word typed beside the link is still a miss" "$OUT" "changelog"
+assert_token_row "a path is not a URL -- the directory survives" "$OUT" "billing"
+assert_token_row "and so does the file name" "$OUT" "totals"
+assert_token_row "a dotted file name is not a host name" "$OUT" "common"
+assert_no_token_row "the scheme was never a word someone typed" "$OUT" "https"
+assert_no_token_row "nor was the TLD" "$OUT" "com"
+assert_no_token_row "nor the host" "$OUT" "github"
+assert_no_token_row "nor a path segment of the URL" "$OUT" "pull"
+assert_no_token_row "nor the org in it" "$OUT" "digital-process-tools"
+assert_no_token_row "nor the repo in it" "$OUT" "claude-jit-context"
+assert_contains "and it says how many links it dropped" "$OUT" "2 link(s) stripped"
+
+# The header says `link(s)`, so it must count LINKS. Counting records instead is a number
+# that reads as a link count and halves on the prompt that pastes two.
+MULTI="$TMP/multilink.log"
+cat > "$MULTI" <<'LOG'
+[10:00:01.001] pre-prompt 9ms | (none) [shown:1] << compare https://acme.example.com/one with https://acme.example.com/two
+[10:00:02.001] pre-prompt 9ms | (none) [shown:1] << compare https://acme.example.com/three with https://acme.example.com/four
+LOG
+OUT=$(bash "$MISSES" --log "$MULTI" --min 1 2>&1) && ST=0 || ST=$?
+assert_status "two links in each of two prompts, exit 0" "$ST" "0"
+assert_contains "counts links, not records" "$OUT" "4 link(s) stripped"
+assert_token_row "and the word around them still counts once each" "$OUT" "compare"
+
+# --- the 80-character cut, and whether it landed inside the link -------------
+# The hook logs substr(msg, 1, 80), so a record can end mid-word, and the last token is
+# dropped because a fragment can never recur as a real word. If the cut landed inside a
+# LINK, that fragment leaves with the link, and dropping a further token then discards a
+# whole word nobody truncated. Both messages are built and measured here rather than
+# pasted: "exactly 80" is the entire claim, and an off-by-one typed into a heredoc would
+# make every assertion below about an untruncated record.
+TRUNC_URL="reconcile the omega ledger zebra https://acme.example.com/api/v2/ledger/entries/2026"
+TRUNC_URL="${TRUNC_URL:0:80}"
+# No word is shared with the record above: `zebra` must owe its row to the truncated-link
+# record alone, or the assertion passes on the other record and proves nothing.
+TRUNC_WORD_FULL="settlement batch quarterly closingstatementreconciliationprocedureaddendumextension"
+TRUNC_WORD="${TRUNC_WORD_FULL:0:80}"
+TRUNC_FRAG="${TRUNC_WORD##* }"
+
+if [ "${#TRUNC_URL}" -ne 80 ] || [ "${#TRUNC_WORD}" -ne 80 ] ||
+   [ "${TRUNC_URL#*://}" = "$TRUNC_URL" ] ||
+   [ "$TRUNC_FRAG" = "${TRUNC_WORD_FULL##* }" ] || [ "${#TRUNC_FRAG}" -lt 3 ]; then
+  echo "  FAIL: harness guard -- the truncation fixtures are not the shape they claim"
+  echo "    url record: ${#TRUNC_URL} chars, word record: ${#TRUNC_WORD} chars, fragment: $TRUNC_FRAG"
+  exit 1
+fi
+
+TRUNCLOG="$TMP/trunc.log"
+{
+  printf '[10:00:01.001] pre-prompt 9ms | (none) [shown:1] << %s\n' "$TRUNC_URL"
+  printf '[10:00:02.001] pre-prompt 9ms | (none) [shown:1] << %s\n' "$TRUNC_WORD"
+} > "$TRUNCLOG"
+
+echo ""
+echo "=== a cut that landed inside the link does not also cost the word before it ==="
+OUT=$(bash "$MISSES" --log "$TRUNCLOG" --min 1 2>&1) && ST=0 || ST=$?
+assert_status "exit 0" "$ST" "0"
+assert_contains "read both records" "$OUT" "2 prompt record(s)"
+assert_token_row "the last real word before the link survives the cut" "$OUT" "zebra"
+# The other direction, and the control that the truncation rule is still live at all:
+# when the cut lands in ordinary text the fragment must still go.
+assert_token_row "a record cut mid-word still yields its earlier words" "$OUT" "quarterly"
+assert_no_token_row "and never the fragment the cut made" "$OUT" "$TRUNC_FRAG"
+
 echo ""
 echo "=== an unknown flag is refused, not silently ignored ==="
 OUT=$(bash "$MISSES" --log "$A" --nonsense 2>&1) && ST=0 || ST=$?
@@ -320,6 +416,14 @@ for eng in $ENGINES; do
   assert_token_row "[$eng] and so does a doubly accented one" "$OUT" "detaillee"
   assert_no_token_row "[$eng] no fragment before the accent" "$OUT" "cass"
   assert_no_token_row "[$eng] no fragment after it either" "$OUT" "taill"
+
+  # The URL strip splits the message on whitespace, and split() is the one function the
+  # two awks have already disagreed about in this file. Drive it on both.
+  OUT=$(PATH="$ENGINE_BIN/$eng:$PATH" bash "$MISSES" --log "$URLS" 2>&1) && ST=0 || ST=$?
+  assert_status "[$eng] a log full of links still reports, exit 0" "$ST" "0"
+  assert_token_row "[$eng] the word beside the link survives" "$OUT" "changelog"
+  assert_token_row "[$eng] and the path is not eaten" "$OUT" "billing"
+  assert_no_token_row "[$eng] and the scheme is gone" "$OUT" "https"
 
   OUT=$(PATH="$ENGINE_BIN/$eng:$PATH" bash "$MISSES" --log "$NOPROMPT" 2>&1) && ST=0 || ST=$?
   assert_status "[$eng] no prompt records is still exit 2" "$ST" "2"

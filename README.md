@@ -537,6 +537,8 @@ jit-misses: .claude/jit-context/.discovery/logs/hooks.log
 
 Two prompts are **the same miss** when they share a content word — a token of three or more characters that is not a stopword — after the same normalisation the prompt hook applies before looking a keyword up. So `xsd validation` and `validate the xsd` group on `xsd`; `validation` and `validate` do not, because nothing here stems. There is no similarity metric and no threshold to tune, and every prompt behind a row is printed under it, so you can always see why two merged and disagree with the grouping.
 
+A pasted link is removed whole first — anything containing `://` — and counted in the header, because `https`, `github` and `com` were never words anyone typed. Only the scheme triggers it: `src/Billing/Totals.php` and `common.sh` are ordinary tokens and still count, since a host name cannot be told from a file name by shape.
+
 It reads and prints. No file is written, no entry is created, no hook fires and nothing leaves the machine — it tells you what is worth writing, and the entry still has an author. Three outcomes, never two: a ranked list, `ok` when the log was read and nothing recurs, or `SKIPPED` with the reason named and exit 2 when the log is absent, empty, in another format, or holds no prompt records at all. An empty report that could mean either is the defect this plugin exists to talk about.
 
 `--log PATH` reads a log elsewhere, `--min N` changes how many misses make a recurrence (default 2), `--top N` caps the list, `--help` carries the grouping rule.
