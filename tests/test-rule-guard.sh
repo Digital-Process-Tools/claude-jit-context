@@ -88,8 +88,14 @@ assert_not_contains "fatal rule body is not injected" "$OUT" "fatal rule body"
 echo ""
 echo "=== the refusal is reported, not silent ==="
 assert_contains "names the count" "$OUT" "could not be evaluated"
-assert_contains "names the fatal rule file" "$OUT" "fatal.md"
-assert_contains "names the dead-escape rule file" "$OUT" "dead-escape.md"
+# By POSITION, not by the file-name column. That column is attacker-controlled free text in
+# a committed index -- #35 -- and the notice fires with no rule matched, so quoting it back
+# was a prompt-injection channel needing no trigger. The name an author needs is in
+# hooks.log and in jit-dry-run.sh, both of which still carry it.
+assert_contains "locates the fatal rule by row" "$OUT" "tools/00-manual row 3"
+assert_contains "locates the dead-escape rule by row" "$OUT" "tools/00-manual row 1"
+assert_not_contains "and does not quote the file-name column back" "$OUT" "fatal.md"
+assert_not_contains "nor the dead-escape one" "$OUT" "dead-escape.md"
 assert_contains "names the construct" "$OUT" "\\s"
 assert_contains "points at the dry-run" "$OUT" "jit-dry-run.sh"
 
@@ -97,20 +103,20 @@ echo ""
 echo "=== a dead block rule does not read as enforced ==="
 OUT=$(run_tool '{"tool_name":"Bash","tool_input":{"command":"gh pr list"}}')
 assert_not_contains "dead escape rule does not block" "$OUT" "decision"
-assert_contains "and says so" "$OUT" "dead-escape.md"
+assert_contains "and says so, by row" "$OUT" "tools/00-manual row 1"
 
 echo ""
 echo "=== the one escape awk honours keeps working: rules anchor on it ==="
 OUT=$(run_tool '{"tool_name":"Bash","tool_input":{"command":"zork --now"}}')
 assert_contains "newline-anchored rule fires" "$OUT" "newline anchored rule body"
-assert_not_contains "newline-anchored rule is not refused" "$OUT" "newline-ok.md (remind)"
+assert_not_contains "newline-anchored rule is not refused" "$OUT" "tools/00-manual row 4"
 
 echo ""
 echo "=== an unmatched ) is a literal in an ERE, and must NOT be refused ==="
 # A false positive here is worse than the bug: it kills a rule that works today.
 OUT=$(run_tool '{"tool_name":"Bash","tool_input":{"command":"quux)ping now"}}')
 assert_contains "literal-paren rule fires" "$OUT" "paren literal rule body"
-assert_not_contains "and is not refused" "$OUT" "paren-literal.md (remind)"
+assert_not_contains "and is not refused" "$OUT" "tools/00-manual row 5"
 
 echo ""
 echo "=== a POSIX class does not close the bracket expression it sits in ==="
@@ -118,21 +124,26 @@ echo "=== a POSIX class does not close the bracket expression it sits in ==="
 # guard passes it through to match() and the whole file is silenced again.
 OUT=$(run_tool '{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}')
 assert_contains "good rule survives the unterminated class" "$OUT" "good rule body"
-assert_contains "unterminated class is refused" "$OUT" "class-fatal.md"
+assert_contains "unterminated class is refused" "$OUT" "tools/00-manual row 6"
 
 echo ""
 echo "=== path hook: same two failures ==="
 OUT=$(run_path '{"tool_name":"Read","tool_input":{"file_path":"/proj/Billing/Total.php"}}')
 assert_contains "valid path rule fires past a fatal row" "$OUT" "billing path body"
 assert_contains "path refusal is reported" "$OUT" "could not be evaluated"
-assert_contains "names the fatal path rule" "$OUT" "path-fatal.md"
-assert_contains "names the dead path rule" "$OUT" "path-dead.md"
+assert_contains "locates the fatal path rule by row" "$OUT" "00-manual row 2"
+assert_contains "locates the dead path rule by row" "$OUT" "00-manual row 3"
 
 echo ""
 echo "=== the log distinguishes 'nothing matched' from 'could not be evaluated' ==="
 LOG="$BASE/.discovery/logs/hooks.log"
 if [ -f "$LOG" ]; then
   assert_contains "log records the refusal" "$(cat "$LOG")" "refused:"
+  # The compensating half of #35. The model-facing notice locates a refused row by position;
+  # the FILE NAME an author actually needs to open is here, in a file a person reads and no
+  # model does. Assert it, or the fix reads as "the name is gone" rather than "the name moved".
+  assert_contains "log still names the fatal rule file for the author" "$(cat "$LOG")" "fatal.md"
+  assert_contains "log still names the dead-escape rule file" "$(cat "$LOG")" "dead-escape.md"
 else
   FAIL=$((FAIL + 1)); echo "  FAIL: log file written"
 fi

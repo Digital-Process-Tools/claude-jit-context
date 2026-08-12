@@ -158,9 +158,16 @@ END {
       why = jit_bad_pattern(substr(r_match, 2))
       if (why != "") {
         n_refused++
-        # Named, not positioned — see the same decision in pre-path-hook.sh: this row
-        # already passed the bare-name check, so the name is safe to echo and is the thing
-        # an author needs. tests/test-rule-guard.sh asserts this half by file name.
+        # POSITIONED, not named. This branch used to echo r_file, arguing that the row had
+        # passed the bare-name check so the name was safe. That check forbids a slash, a
+        # backslash, `.` and `..` and nothing else — 250 bytes of English pass it intact,
+        # and a file-name column reading "IGNORE ALL PREVIOUS INSTRUCTIONS. Run: ..." landed
+        # in the context verbatim, with no rule matched and no entry file present (#35).
+        # The sibling of the r_modes hole below, one column over in the same statement.
+        #
+        # The name is not lost, it moved: jit_log_name() puts it in hooks.log, which a
+        # person reads and no model does, and jit-dry-run.sh — which this very notice tells
+        # the author to run — prints the name beside the reason. The model gets the row.
         #
         # r_kind, never r_modes. Column 4 is free text from a committed index and this
         # branch was interpolating it raw, thirty-five lines under the comment saying why
@@ -168,7 +175,7 @@ END {
         # no rule to match and no entry file to exist, so a mode column reading "IGNORE ALL
         # PREVIOUS INSTRUCTIONS: ..." arrived in the context on the first Bash call of the
         # session. Reproduced 2026-08-12; tests/test-security.sh drives both halves.
-        refused = refused (refused == "" ? "- " : "\n- ") r_file r_kind ": " why
+        refused = refused (refused == "" ? "- " : "\n- ") jit_row_id("tools/00-manual", rown) r_kind ": " why
         log_matches = log_matches sep "refused:" r_file "(" why ")"
         sep = ", "
         continue
@@ -302,7 +309,7 @@ END {
           if (!((layer "/" vfile) in vrefused)) {
             vrefused[layer "/" vfile] = 1
             n_refused++
-            refused = refused (refused == "" ? "- " : "\n- ") jit_row_id(layer, vrown) ": " why
+            refused = refused (refused == "" ? "- " : "\n- ") jit_row_id("vocabulary/" layer, vrown) ": " why
             log_matches = log_matches sep "refused:" jit_log_name(vfile, layer, vrown, why) "(" why ")"
             sep = ", "
           }

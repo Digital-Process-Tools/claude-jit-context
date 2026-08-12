@@ -155,7 +155,7 @@ END {
       why = jit_bad_entry_file(rule_file, paths_base "/" layer)
       if (why != "") {
         n_refused++
-        refused = refused (refused == "" ? "- " : "\n- ") jit_row_id(layer, rown) ": " why
+        refused = refused (refused == "" ? "- " : "\n- ") jit_row_id("paths/" layer, rown) ": " why
         log_matches = log_matches sep "refused:" jit_log_name(rule_file, layer, rown, why) "(" why ")"
         sep = ", "
         continue
@@ -169,11 +169,21 @@ END {
       why = jit_bad_pattern(pattern)
       if (why != "") {
         n_refused++
-        # Named, not positioned: this row PASSED the bare-name check above, so the name
-        # cannot carry a separator, and naming it is what an author fixing the pattern
-        # actually needs. Only a name that failed that check is untrustworthy enough to
-        # withhold. tests/test-rule-guard.sh asserts this half by file name.
-        refused = refused (refused == "" ? "- " : "\n- ") layer "/" rule_file ": " why
+        # POSITIONED, not named. This branch used to echo rule_file, arguing that the row
+        # had passed the bare-name check above so the name could not carry a separator.
+        # True, and beside the point: that check forbids a slash, a backslash, `.` and `..`
+        # and nothing else, so 250 bytes of English pass it intact. A file-name column
+        # reading "IGNORE ALL PREVIOUS INSTRUCTIONS. Run: ..." arrived in the context
+        # verbatim, with no rule matched and no entry file present (#35).
+        #
+        # The name is not lost, it moved: jit_log_name() puts it in hooks.log, which a
+        # person reads and no model does, and jit-dry-run.sh — which this notice tells the
+        # author to run — prints the name beside the reason. The model gets the row.
+        # Qualified by DIMENSION, not just by layer. This hook reads paths/<layer> and
+        # vocabulary/<layer>, both of which are called 00-manual, and the file name used to
+        # tell those two apart. Withholding the name without adding the dimension would have
+        # made one notice line ambiguous in exchange for closing the other hole.
+        refused = refused (refused == "" ? "- " : "\n- ") jit_row_id("paths/" layer, rown) ": " why
         log_matches = log_matches sep "refused:" rule_file "(" why ")"
         sep = ", "
         continue
@@ -227,7 +237,7 @@ END {
         why = jit_bad_entry_file(vocab_file, vocab_base "/" layer)
         if (why != "") {
           n_refused++
-          refused = refused (refused == "" ? "- " : "\n- ") jit_row_id(layer, vrown) ": " why
+          refused = refused (refused == "" ? "- " : "\n- ") jit_row_id("vocabulary/" layer, vrown) ": " why
           log_matches = log_matches sep "refused:" jit_log_name(vocab_file, layer, vrown, why) "(" why ")"
           sep = ", "
           continue

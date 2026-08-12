@@ -331,9 +331,16 @@ matched something the author never wrote, with nothing in the entry or the log t
 
 **A pattern the matcher cannot honour is refused at load and reported** — the row is
 skipped, every other rule in the file keeps working, and the hook injects a one-line
-notice naming the rule and the construct, once per session. Two things this replaces:
-a rule that read as enforced for as long as it existed, and a single malformed pattern
-(`~a[b` is a fatal awk error) that silenced every rule in its index at once.
+notice giving the construct and the row — `paths/00-manual row 3` — once per session. Two
+things this replaces: a rule that read as enforced for as long as it existed, and a single
+malformed pattern (`~a[b` is a fatal awk error) that silenced every rule in its index at
+once.
+
+**The notice locates a refused row by position, never by its file name.** The index arrives
+with the repository, so that column is untrusted text, and the notice fires with no rule
+matched — quoting it back would be a channel into the model's context that needs no trigger.
+The name you need in order to fix it is in `hooks.log` and in `jit-dry-run.sh`, which the
+notice points you at.
 
 **Nothing on the way to an entry may be a symbolic link** — not the entry file, not its
 layer directory, not the dimension directory, not `config.env`, and not `.claude/` or
