@@ -335,10 +335,12 @@ printf 'CRLF rule line one\r\nbare\rCR mid-line\r\nCRLF rule line two\r\n' > "$T
 printf 'blocked \001 reason \014 text \037 here\nnul \000 tail\n' > "$TOOLS_DIR/block-rule.md"
 
 for eng in $ENGINES; do
-  # Vocabulary matches are deduped in /tmp/claude-vocab-shown-$PPID.txt, which no test can
-  # name; a $PPID reused from an earlier suite run carries a stale marker and would suppress
-  # a match for a reason that has nothing to do with the fix. Suite-unique keywords cannot
-  # collide. The rule rows below stay static -- they are `remind`, so nothing dedupes them.
+  # Vocabulary matches are deduped per session. That used to mean a /tmp file keyed on
+  # $PPID, which no test could name and which a recycled pid could poison (#17, #23); the
+  # payloads here carry no session_id, so the hook now keeps no marker file at all. Keywords
+  # stay unique per engine anyway, because one keyword shared by two engines would be one
+  # entry shown twice inside a single call. The rule rows below stay static -- they are
+  # `remind`, so nothing dedupes them.
   u="${eng}$$"
   printf 'plain%s\tp-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"
   printf 'camel%s\tc-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"

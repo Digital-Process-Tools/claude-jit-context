@@ -7,15 +7,13 @@ SCRIPT_DIR="$(dirname "$0")"
 source "$SCRIPT_DIR/common.sh"
 T_START=$(_ms)
 
-SHOWN_FILE="/tmp/claude-vocab-shown-$PPID.txt"
-[ -f "$SHOWN_FILE" ] || : > "$SHOWN_FILE"
 LOG_TMP="/tmp/claude-hook-log-$$.tmp"
 
 cat | awk \
   -v tools_tsv="$JIT_BASE/tools/00-manual/00-index.tsv" \
   -v tools_dir="$JIT_BASE/tools/00-manual" \
   -v vocab_base="$JIT_BASE/vocabulary" \
-  -v shown_file="$SHOWN_FILE" \
+  -v state_dir="$JIT_STATE_DIR" \
   -v home="$HOME" \
   -v project="${CLAUDE_PROJECT_DIR:-.}" \
   -v log_tmp="$LOG_TMP" \
@@ -57,6 +55,10 @@ END {
   # --- Parse JSON (common.sh: jit_json_fields honours an escaped quote, jit_unescape
   # --- decodes the value) and extract key-value pairs ---
   n = jit_json_fields(input, raw, fs, fe)
+  # The marker path is derived from the same parse: state_dir is empty when the tree cannot
+  # hold one, and the key is empty when the payload names no session. Either way this is ""
+  # and the shown set lives and dies with this process. See common.sh.
+  shown_file = jit_shown_file(state_dir, "vocab", raw, fs, fe, n)
   for (i = 2; i + 2 <= n; i += 2) {
     # Only a field that is ONE raw piece can be a key this hook wants — every key below is
     # quote-free — and only the matching value is ever materialised or decoded. That is
@@ -112,8 +114,7 @@ END {
   n_refused = 0
 
   # --- Load shown file into set ---
-  while ((getline sline < shown_file) > 0) shown[sline] = 1
-  close(shown_file)
+  jit_shown_load(shown_file, shown)
 
   # --- Tool rules matching ---
   rown = 0
@@ -190,7 +191,7 @@ END {
       key = "rule:" r_file
       if (key in shown) continue
       shown[key] = 1
-      print key >> shown_file
+      jit_shown_mark(shown_file, key)
     }
 
     # Read rule .md
@@ -324,7 +325,7 @@ END {
 
       for (vfile in vmatch) {
         shown[vfile] = 1
-        print vfile >> shown_file
+        jit_shown_mark(shown_file, vfile)
 
         vc = ""
         vpath = vocab_base "/" layer "/" vfile
@@ -351,7 +352,7 @@ END {
   # Suppressed when the call is being blocked, and only marked shown once delivered.
   if (n_refused > 0 && blocked == "" && !("jit-refused-rules" in shown)) {
     shown["jit-refused-rules"] = 1
-    print "jit-refused-rules" >> shown_file
+    jit_shown_mark(shown_file, "jit-refused-rules")
     note = jit_refusal_notice(refused, n_refused)
     matched = (matched == "") ? note : note "\n---\n" matched
   }
@@ -364,11 +365,11 @@ END {
   config_refused_n = ENVIRON["JIT_CONFIG_REFUSED_N"] + 0
   if (config_refused_n > 0 && blocked == "" && !("jit-refused-config" in shown)) {
     shown["jit-refused-config"] = 1
-    print "jit-refused-config" >> shown_file
+    jit_shown_mark(shown_file, "jit-refused-config")
     cnote = jit_config_notice(config_refused, config_refused_n)
     matched = (matched == "") ? cnote : cnote "\n---\n" matched
   }
-  close(shown_file)
+  jit_shown_close(shown_file)
 
   # --- Write log info to temp file (bash reads it for timing) ---
   sc = 0; for (s in shown) sc++

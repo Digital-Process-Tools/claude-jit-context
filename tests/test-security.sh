@@ -60,9 +60,11 @@ assert_no_file() {
   fi
 }
 
-# A fresh project tree per case. Entry file names are unique per case on purpose: the
-# hooks dedupe on a /tmp shown-file keyed by $PPID, and reusing a name across cases would
-# make a later case silently skip the entry it is testing.
+# A fresh project tree per case. Entry file names are unique per case on purpose: the hooks
+# dedupe per session, and reusing a name across cases would make a later case silently skip
+# the entry it is testing. The dedup used to key on $PPID in shared /tmp, which is what made
+# this suite go red at random (#17, #23); the payloads here name no session, so the hooks
+# now keep no marker file and the uniqueness is belt and braces.
 new_proj() {
   local p
   p=$(mktemp -d)

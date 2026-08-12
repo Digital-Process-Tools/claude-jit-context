@@ -228,19 +228,25 @@ assert_contains "security matches" "$OUT" "security context"
 # =============================================
 
 echo ""
-echo "=== SessionStart hook clears shown files ==="
-# Create fake shown files mimicking all three naming patterns
-touch /tmp/claude-vocab-shown-$$.txt
-touch /tmp/claude-path-shown-$$.txt
+echo "=== SessionStart hook clears this session shown files ==="
+# The markers are keyed on the payload session_id and live in the project, not on $PPID in
+# /tmp (#17, #23) -- so this drives the hook with a session id and looks in the tree.
+# tests/test-session-markers.sh carries the rest: another session is left alone, a
+# traversing id is refused, and no /tmp file of anyone else is swept.
+SESSION_STATE="$TEST_DIR/.claude/jit-context/.discovery/state"
 
 if [ -f "$SESSION_HOOK" ]; then
-  bash "$SESSION_HOOK" >/dev/null 2>&1
-  if [ ! -f /tmp/claude-vocab-shown-$$.txt ]; then
+  mkdir -p "$SESSION_STATE"
+  touch "$SESSION_STATE/vocab-shown-testsess.txt"
+  touch "$SESSION_STATE/path-shown-testsess.txt"
+  printf '{"session_id":"testsess","hook_event_name":"SessionStart"}' \
+    | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$SESSION_HOOK" >/dev/null 2>&1
+  if [ ! -f "$SESSION_STATE/vocab-shown-testsess.txt" ]; then
     PASS=$((PASS + 1)); echo "  PASS: clears vocab shown files"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: vocab shown file not cleared"
   fi
-  if [ ! -f /tmp/claude-path-shown-$$.txt ]; then
+  if [ ! -f "$SESSION_STATE/path-shown-testsess.txt" ]; then
     PASS=$((PASS + 1)); echo "  PASS: clears path shown files"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: path shown file not cleared"
@@ -249,8 +255,7 @@ else
   echo "  SKIP: session-start-hook.sh not found"
 fi
 
-# Cleanup test files if they survived
-rm -f /tmp/claude-vocab-shown-$$.txt /tmp/claude-path-shown-$$.txt
+rm -f "$SESSION_STATE/vocab-shown-testsess.txt" "$SESSION_STATE/path-shown-testsess.txt"
 
 # =============================================
 # SECTION: awk engine matrix — multibyte prompts, control characters in entries
@@ -305,10 +310,11 @@ assert_no_raw_controls() {
 }
 
 for eng in $ENGINES; do
-  # Every fixture below is unique per engine AND per suite run. The hook dedupes matches
-  # in /tmp/claude-vocab-shown-$PPID.txt, which no test can name; a $PPID reused from an
-  # earlier suite run carries a stale marker and would suppress a match for a reason that
-  # has nothing to do with the fix. Observed once. A suite-unique keyword cannot collide.
+  # Every fixture below is unique per engine AND per suite run. That was originally a guard
+  # against the $PPID marker collision (#17, #23), which no test could name; the payloads
+  # here carry no session_id, so since that fix the hook keeps no marker file at all and
+  # nothing can carry between calls. Kept because two engines sharing one keyword would
+  # still be one entry shown twice within a single run.
   u="${eng}$$"
   printf 'facture%s\tf-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"
   printf 'camel%s\tc-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"

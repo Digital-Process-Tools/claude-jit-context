@@ -12,7 +12,7 @@ Three dimensions, one hook each. Knowledge attaches to whichever trigger answers
 | paths      | a file path being touched   | `pre-path-hook.sh`   | `.claude/jit-context/paths/`      |
 | tools      | tool name + command pattern | `pre-tool-hook.sh`   | `.claude/jit-context/tools/`      |
 
-Tools is the only dimension that can `block`. The other two only inject. Each entry fires at most once per session; `session-start-hook.sh` clears the markers.
+Tools is the only dimension that can `block`. The other two only inject. Each entry fires at most once per session; the marker is keyed on the payload's `session_id` and lives in `.claude/jit-context/.discovery/state/`, and `session-start-hook.sh` clears this session's and ages out the rest. A payload with no `session_id` — a hand-run hook, every test suite here — keeps no marker and therefore never dedups.
 
 Layers are scanned in order inside each dimension: `00-manual/` (hand-written), then `10-auto/`, `20-grouped/`, `30-crosscutting/` (generated). A project with no generator uses `00-manual/` alone.
 

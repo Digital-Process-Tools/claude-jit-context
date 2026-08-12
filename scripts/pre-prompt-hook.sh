@@ -6,13 +6,11 @@ SCRIPT_DIR="$(dirname "$0")"
 source "$SCRIPT_DIR/common.sh"
 T_START=$(_ms)
 
-SHOWN_FILE="/tmp/claude-vocab-shown-$PPID.txt"
-[ -f "$SHOWN_FILE" ] || : > "$SHOWN_FILE"
 LOG_TMP="/tmp/claude-prompt-log-$$.tmp"
 
 cat | awk \
   -v vocab_base="$JIT_BASE/vocabulary" \
-  -v shown_file="$SHOWN_FILE" \
+  -v state_dir="$JIT_STATE_DIR" \
   -v log_tmp="$LOG_TMP" \
   "$JIT_AWK_ENTRY$JIT_AWK_JSON"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
@@ -54,6 +52,10 @@ END {
   # the first escaped quote a user typed, and left every \n as the two characters \ and n
   # — which glued the word after a line break to an "n" and hid it from keyword lookup.
   n = jit_json_fields(input, raw, fs, fe)
+  # The marker path is derived from the same parse: state_dir is empty when the tree cannot
+  # hold one, and the key is empty when the payload names no session. Either way this is ""
+  # and the shown set lives and dies with this process. See common.sh.
+  shown_file = jit_shown_file(state_dir, "vocab", raw, fs, fe, n)
   for (i = 2; i + 2 <= n; i += 2) {
     if (fs[i] != fe[i]) continue
     if (raw[fs[i]] == "prompt") { message = jit_unescape(jit_field(raw, fs[i+2], fe[i+2])); break }
@@ -95,8 +97,7 @@ END {
   gsub(/  +/, " ", padded)
 
   # --- Load shown set ---
-  while ((getline sline < shown_file) > 0) shown[sline] = 1
-  close(shown_file)
+  jit_shown_load(shown_file, shown)
 
   matched = ""
   log_matches = ""
@@ -141,7 +142,7 @@ END {
 
     for (vfile in vmatch) {
       shown[vfile] = 1
-      print vfile >> shown_file
+      jit_shown_mark(shown_file, vfile)
 
       vc = ""
       vpath = vocab_base "/" layer "/" vfile
@@ -165,7 +166,7 @@ END {
   # both read as "no entry matched" and neither is.
   if (n_refused > 0 && !("jit-refused-vocab" in shown)) {
     shown["jit-refused-vocab"] = 1
-    print "jit-refused-vocab" >> shown_file
+    jit_shown_mark(shown_file, "jit-refused-vocab")
     note = jit_refusal_notice(refused, n_refused)
     matched = (matched == "") ? note : note "\n---\n" matched
   }
@@ -176,11 +177,11 @@ END {
   config_refused_n = ENVIRON["JIT_CONFIG_REFUSED_N"] + 0
   if (config_refused_n > 0 && !("jit-refused-config" in shown)) {
     shown["jit-refused-config"] = 1
-    print "jit-refused-config" >> shown_file
+    jit_shown_mark(shown_file, "jit-refused-config")
     cnote = jit_config_notice(config_refused, config_refused_n)
     matched = (matched == "") ? cnote : cnote "\n---\n" matched
   }
-  close(shown_file)
+  jit_shown_close(shown_file)
 
   # --- Log info ---
   sc = 0; for (s in shown) sc++
