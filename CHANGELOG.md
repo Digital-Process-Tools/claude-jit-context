@@ -113,6 +113,20 @@ the user to do anything beyond opening the project.
   `scripts/jit-dry-run.sh` reaches the same verdict from the same shared `awk` function,
   against the tree named by `--base` rather than the session's own.
 
+- **`jit-dry-run.sh --base <tree>` did not lint that tree's `config.env`.** `JIT_BASE`
+  resolves from `$CLAUDE_PROJECT_DIR`, so the file it parsed was the session's and never
+  the one being linted: a tree carrying `touch /tmp/nope` and `PATH=/evil` printed
+  "0 refused" and nothing else. That is an absence produced by the tool, read as an absence
+  in the world — in the tool written to report exactly that, and reached by following the
+  advice in a notice that has just called the file hostile.
+
+  The linter now reads `<tree>/config.env` through the same `jit_load_config()` the hooks
+  use, and gives three answers rather than two: no file, every line honoured, or the
+  refused lines named by position and reason. A refused line makes it exit 1. The parse
+  runs in a **subshell**: `jit_load_config()` reads and never executes, but it does assign
+  the settings it accepts, and a linter must not take its own behaviour from the tree it
+  was asked to judge.
+
 - **The hooks wrote their log through a path a cloned repository controls.** `common.sh`
   built `.claude/jit-context/.discovery/logs/hooks.log` by concatenation and checked
   nothing. `mkdir -p` follows a symlink and `>>` follows a symlink, and git tracks symlinks
