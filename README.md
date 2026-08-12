@@ -331,9 +331,16 @@ matched something the author never wrote, with nothing in the entry or the log t
 
 **A pattern the matcher cannot honour is refused at load and reported** — the row is
 skipped, every other rule in the file keeps working, and the hook injects a one-line
-notice naming the rule and the construct, once per session. Two things this replaces:
-a rule that read as enforced for as long as it existed, and a single malformed pattern
-(`~a[b` is a fatal awk error) that silenced every rule in its index at once.
+notice giving the construct and the row — `paths/00-manual row 3` — once per session. Two
+things this replaces: a rule that read as enforced for as long as it existed, and a single
+malformed pattern (`~a[b` is a fatal awk error) that silenced every rule in its index at
+once.
+
+**The notice locates a refused row by position, never by its file name.** The index arrives
+with the repository, so that column is untrusted text, and the notice fires with no rule
+matched — quoting it back would be a channel into the model's context that needs no trigger.
+The name you need in order to fix it is in `hooks.log` and in `jit-dry-run.sh`, which the
+notice points you at.
 
 **Nothing on the way to an entry may be a symbolic link** — not the entry file, not its
 layer directory, not the dimension directory, not `config.env`, and not `.claude/` or
@@ -345,6 +352,20 @@ does not resolve the link, so one pointing back inside the tree is refused too; 
 there, or generate the layer. Directories *above* your project are yours rather than the
 clone's and are not checked, so a project reached through a symlinked parent works
 normally.
+
+**A tree carrying an implausible number of symbolic links is refused whole.** The check
+above has to hold the links it found, and that has a size; past it, a repository could
+choose a number large enough to disable every rule including the ones guarding it. Above the
+budget no rule in that tree runs, and the hook says why. An honest tree records zero links
+and never comes near it.
+
+**An entry file name may not begin with a dot.** That is the one constraint on the name, and
+it exists because the symbolic-link check above is a glob-and-`lstat` sweep of the tree: a
+glob does not match a leading dot, so `.hidden.md` was invisible to it and a link named that
+way was read. Nothing else about the name is constrained — spaces, accents and any other
+character an author actually types stay honourable — and `rebuild-tsv.sh` cannot produce a
+dot-name in the first place, so no entry you wrote is affected. An index row naming one is
+refused and reported, and `jit-dry-run.sh` refuses the same row.
 
 ### Compatibility — tools that touch files through `Bash`
 

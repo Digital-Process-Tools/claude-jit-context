@@ -154,7 +154,13 @@ echo "=== an unexpanded macro reaching an index is refused by the hook, not igno
 # deliberately decided not to do.
 OUT="$(drive "echo hello")"
 assert_contains "the hook says the row did not run" "$OUT" "could not be evaluated"
-assert_contains "and names the entry"               "$OUT" "bogus.md"
+# By ROW, not by name. The index arrives with the repository, so its file-name column is
+# untrusted text and the notice fires with nothing matched (#35). The name an author needs
+# is in the rebuild error asserted above, in hooks.log, and in jit-dry-run.sh.
+assert_contains "and locates the row"               "$OUT" "tools/00-manual row"
+assert_not_contains "without quoting the index back" "$OUT" "bogus.md"
+assert_contains "and the linter still names the entry for the author" \
+  "$(bash "$DRYRUN" --base "$BASE" 2>&1)" "bogus.md"
 # And the honoured rule beside it is untouched — one bad row must not silence the file.
 assert_contains "the honoured rule still fires" "$(drive "git push")" '"decision":"block"'
 

@@ -194,8 +194,17 @@ check_entry_file() {
   # tree" is true of a name carrying a separator and false of a link, whose name is bare;
   # printing it for both would send an author looking at the wrong column.
   case "$why" in
+    # The whole-tree case FIRST: its reason contains the words "symbolic link", so the
+    # narrower branch below would swallow it and print advice about replacing one link.
+    *"too many symbolic links"*)
+      printf '         %-18s %-30s the set of links did not fit the budget the hooks carry it in, so none of this tree could be vouched for\n' "" "" ;;
     *"symbolic link"*)
       printf '         %-18s %-30s the hook would follow it out of the tree — replace the link with the file\n' "" "" ;;
+    *"begins with a dot"*)
+      # A third fault with a third second line. This row does not leave the tree and is not
+      # itself a link — it is a name the link sweep could never lstat, because a glob does
+      # not match a leading dot, so the link check above it was answering about nothing.
+      printf '         %-18s %-30s a dot-name is invisible to the symbolic-link sweep, and rebuild-tsv.sh never writes one\n' "" "" ;;
     *)
       printf '         %-18s %-30s the hook reads <layer>/<name>, so this row leaves the tree\n' "" "" ;;
   esac

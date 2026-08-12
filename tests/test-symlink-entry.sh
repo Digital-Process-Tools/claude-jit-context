@@ -346,6 +346,164 @@ assert_not_contains "in-tree symlink: refused too, and its target is not injecte
 assert_contains "in-tree symlink: the refusal is named" "$OUT" "could not be evaluated"
 
 echo ""
+echo "=== S3e: a DOT-NAMED entry file (#34 -- #13 reopened) ==="
+
+# The sweep enumerates the tree with "$base"/*, "$base"/*/* and "$base"/*/*/*, and a glob
+# `*` does not match a leading dot. So `.hidden.md` was never lstat-ed, never entered
+# JIT_SYMLINKS, and the awk side cleared it -- while the identical link named `hidden.md`
+# was refused. common.sh already stated the dot-glob problem for .discovery six lines
+# below the sweep and did not apply it to the sweep.
+#
+# Every case here is paired with an honest entry in the same index, so a fix that refused
+# everything would fail the pairing rather than pass it.
+
+P="$(new_project s3e-tool)"
+D="$P/.claude/jit-context/tools/00-manual"
+ln -sf "$OUTSIDE/secret.txt" "$D/.hidden.md"
+printf 'legit body\n' > "$D/good.md"
+printf 'Bash\tsectarget\t.hidden.md\t\t\t\n' > "$D/00-index.tsv"
+printf 'Bash\tsectarget\tgood.md\t\t\t\n' >> "$D/00-index.tsv"
+OUT="$(run_hook pre-tool-hook.sh "$P" "$TOOL_PAYLOAD")"
+assert_not_contains "tool rule: dot-named symlinked entry does not leak its target" "$OUT" "$CANARY"
+assert_contains "tool rule: the dot-named row is refused and named" "$OUT" "could not be evaluated"
+assert_contains "tool rule: positive control -- a real entry still fires beside it" "$OUT" "legit body"
+
+P="$(new_project s3e-path)"
+D="$P/.claude/jit-context/paths/00-manual"
+ln -sf "$OUTSIDE/secret.txt" "$D/.hidden.md"
+printf 'legit body\n' > "$D/good.md"
+printf 'sectarget\t.hidden.md\n' > "$D/00-index.tsv"
+printf 'sectarget\tgood.md\n' >> "$D/00-index.tsv"
+OUT="$(run_hook pre-path-hook.sh "$P" "$PATH_PAYLOAD")"
+assert_not_contains "path rule: dot-named symlinked entry does not leak its target" "$OUT" "$CANARY"
+assert_contains "path rule: the dot-named row is refused and named" "$OUT" "could not be evaluated"
+assert_contains "path rule: positive control -- a real entry still fires beside it" "$OUT" "legit body"
+
+P="$(new_project s3e-prompt)"
+D="$P/.claude/jit-context/vocabulary/00-manual"
+ln -sf "$OUTSIDE/secret.txt" "$D/.hidden.md"
+printf 'legit body\n' > "$D/good.md"
+printf 'sectarget\t.hidden.md\n' > "$D/00-index.tsv"
+printf 'sectarget\tgood.md\n' >> "$D/00-index.tsv"
+OUT="$(run_hook pre-prompt-hook.sh "$P" "$PROMPT_PAYLOAD")"
+assert_not_contains "prompt vocab: dot-named symlinked entry does not leak its target" "$OUT" "$CANARY"
+assert_contains "prompt vocab: the dot-named row is refused and named" "$OUT" "could not be evaluated"
+assert_contains "prompt vocab: positive control -- a real entry still fires beside it" "$OUT" "legit body"
+
+# The sweep itself, not a hook. The name ban above closes the reachable attack; this is the
+# other half, and it is about the GLOB rather than the name: a dot-named path anywhere under
+# the base must be lstat-ed, so any future read site inherits the verdict instead of needing
+# its own. Driven by sourcing common.sh and reading the set it exports.
+sweep_of() {
+  CLAUDE_PROJECT_DIR="$1" bash -c 'source "$0" >/dev/null 2>&1; printf "%s" "$JIT_SYMLINKS"' \
+    "$SCRIPTS/common.sh"
+}
+
+P="$(new_project s3e-sweep)"
+ln -sfn "$OUTSIDE" "$P/.claude/jit-context/.evil"
+ln -sfn "$OUTSIDE" "$P/.claude/jit-context/tools/.evil"
+ln -sfn "$OUTSIDE" "$P/.claude/jit-context/tools/00-manual/.evil"
+SWEPT="$(sweep_of "$P")"
+assert_contains "sweep: a dot-named path one level down is recorded" "$SWEPT" "/jit-context/.evil"
+assert_contains "sweep: a dot-named path two levels down is recorded" "$SWEPT" "/tools/.evil"
+assert_contains "sweep: a dot-named path three levels down is recorded" "$SWEPT" "/tools/00-manual/.evil"
+
+# Paired positive control: the sweep must still see an ordinary name, or widening the glob
+# has replaced the enumeration rather than extended it.
+P="$(new_project s3e-sweep-plain)"
+ln -sf "$OUTSIDE/secret.txt" "$P/.claude/jit-context/tools/00-manual/plain.md"
+SWEPT="$(sweep_of "$P")"
+assert_contains "sweep: an ordinary name is still recorded" "$SWEPT" "/tools/00-manual/plain.md"
+
+# And an honest tree still sweeps to nothing, or every row everywhere is about to be refused.
+P="$(new_project s3e-sweep-clean)"
+printf 'body\n' > "$P/.claude/jit-context/tools/00-manual/good.md"
+SWEPT="$(sweep_of "$P")"
+assert_not_contains "sweep: an honest tree records no link at all" "$SWEPT" "/tools"
+
+echo ""
+echo "=== S3f: a tree with more links than the set can carry (#36) ==="
+
+# JIT_SYMLINKS travels through the environment. It was unbounded, so past ARG_MAX every
+# exec from common.sh onward failed: the hook emitted NOTHING, exited 0, printed
+# "Argument list too long" to the session stderr, and a block rule that was present,
+# indexed and honourable did not block. Both of this repo standing contracts at once --
+# never fail hard, never write to a session stderr -- and it failed OPEN, not closed.
+#
+# Roughly 4000 attacker-named links did it on the audit host. Cheap for a hostile clone,
+# unreachable for an honest tree.
+#
+# Driven in both directions in one fixture: the same tree, the same block rule, with and
+# without the links.
+
+P="$(new_project s3f)"
+D="$P/.claude/jit-context/tools/00-manual"
+printf 'block body here\n' > "$D/good.md"
+printf 'Bash\tsectarget\tgood.md\tblock\t\t\n' > "$D/00-index.tsv"
+# A vocabulary row too, because the prompt hook reads only that dimension: with no row there
+# is nothing to refuse and the prompt hook would correctly say nothing, which is not what
+# this case is asking about.
+printf 'vocab body here\n' > "$P/.claude/jit-context/vocabulary/00-manual/vocab.md"
+printf 'sectarget\tvocab.md\n' > "$P/.claude/jit-context/vocabulary/00-manual/00-index.tsv"
+
+# Direction one: the honest tree. The block rule blocks.
+OUT="$(run_hook pre-tool-hook.sh "$P" "$TOOL_PAYLOAD")"
+assert_contains "s3f control: an honourable block rule blocks before the links exist" "$OUT" '"decision":"block"'
+
+# Now bury it. Names are padded so the byte budget is crossed with a few dozen links rather
+# than a few thousand -- the budget is on BYTES, which is the quantity ARG_MAX is about, and
+# 4000 short names and 40 long ones are the same problem.
+PAD="$(printf 'p%.0s' $(seq 1 190))"
+i=0
+while [ "$i" -lt 200 ]; do
+  i=$((i + 1))
+  ln -s /etc/hosts "$D/$PAD$i.md"
+done
+
+OUT="$(run_hook pre-tool-hook.sh "$P" "$TOOL_PAYLOAD")"
+RC=$?
+assert_not_contains "s3f: nothing is written to the session stderr" "$OUT" "Argument list too long"
+assert_contains "s3f: the hook still emits JSON rather than nothing at all" "$OUT" "hookEventName"
+assert_contains "s3f: and it refuses the tree rather than running unguarded" "$OUT" "too many symbolic links"
+assert_not_contains "s3f: a rule in a tree nobody can vouch for does not fire" "$OUT" "block body here"
+if [ "$RC" -eq 0 ]; then
+  PASS=$((PASS + 1)); echo "  PASS: s3f: the hook still exits 0"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: s3f: the hook exited $RC, expected 0"
+fi
+
+# The other two hooks reach common.sh the same way, so they fail the same way.
+OUT="$(run_hook pre-prompt-hook.sh "$P" "$PROMPT_PAYLOAD")"
+assert_not_contains "s3f: prompt hook writes nothing to stderr either" "$OUT" "Argument list too long"
+assert_contains "s3f: prompt hook reports the refused tree too" "$OUT" "too many symbolic links"
+OUT="$(run_hook pre-path-hook.sh "$P" "$PATH_PAYLOAD")"
+assert_not_contains "s3f: path hook writes nothing to stderr either" "$OUT" "Argument list too long"
+
+# Direction two, back again: remove the links and the same block rule blocks again. Without
+# this the suite would pass with the guard hardwired to refuse every tree it is ever shown.
+rm -f "$D/$PAD"*.md
+OUT="$(run_hook pre-tool-hook.sh "$P" "$TOOL_PAYLOAD")"
+assert_contains "s3f: with the links gone the block rule blocks again" "$OUT" '"decision":"block"'
+assert_not_contains "s3f: and nothing is refused any more" "$OUT" "too many symbolic links"
+
+# jit-dry-run.sh sweeps the tree it was pointed at, so it reaches the same wall and must
+# reach the same verdict rather than clearing the tree.
+i=0
+while [ "$i" -lt 200 ]; do
+  i=$((i + 1))
+  ln -s /etc/hosts "$D/$PAD$i.md"
+done
+OUT="$(bash "$SCRIPTS/jit-dry-run.sh" --base "$P/.claude/jit-context" --tool Bash --command "sectarget run" 2>&1)"
+RC=$?
+assert_contains "s3f: the linter refuses the tree too" "$OUT" "too many symbolic links"
+assert_not_contains "s3f: and does not print Argument list too long" "$OUT" "Argument list too long"
+if [ "$RC" -eq 1 ]; then
+  PASS=$((PASS + 1)); echo "  PASS: s3f: the linter exits 1"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: s3f: the linter exited $RC, expected 1"
+fi
+
+echo ""
 echo "=== jit-dry-run.sh reaches the same verdict ==="
 
 # The refusal notice the hooks inject tells the author to lint the tree with this script.
@@ -384,6 +542,27 @@ ln -sfn "$EVILDIR" "$P/.claude/jit-context/tools/00-manual"
 OUT="$(bash "$SCRIPTS/jit-dry-run.sh" --base "$P/.claude/jit-context" --tool Bash --command "sectarget run" 2>&1)"
 assert_contains "dry-run: the linked layer directory is refused and named" "$OUT" "its layer directory is a symbolic link"
 assert_not_contains "dry-run: the linked layer leaks nothing" "$OUT" "$CANARY"
+
+# #34: the linter ran the same blind sweep, so it reported the hostile tree `ok` and exited
+# 0 -- the tool the refusal notice sends the reader to said the attack was honourable. Half
+# of #34 is exactly this, so it is driven here and not only through the hooks.
+P="$(new_project dryrun-dotfile)"
+D="$P/.claude/jit-context/tools/00-manual"
+ln -sf "$OUTSIDE/secret.txt" "$D/.hidden.md"
+printf 'legit body\n' > "$D/good.md"
+printf 'Bash\tsectarget\t.hidden.md\t\t\t\n' > "$D/00-index.tsv"
+printf 'Bash\tsectarget\tgood.md\t\t\t\n' >> "$D/00-index.tsv"
+OUT="$(bash "$SCRIPTS/jit-dry-run.sh" --base "$P/.claude/jit-context" --tool Bash --command "sectarget run" 2>&1)"
+RC=$?
+assert_contains "dry-run: the dot-named row is REFUSED" "$OUT" "REFUSED"
+assert_contains "dry-run: and the reason names the dot" "$OUT" "begins with a dot"
+assert_not_contains "dry-run: the dot-named target is never read into the report" "$OUT" "$CANARY"
+assert_contains "dry-run: the honest row beside it still lints ok" "$OUT" "good.md"
+if [ "$RC" -eq 1 ]; then
+  PASS=$((PASS + 1)); echo "  PASS: dry-run exits 1 on the dot-named row"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: dry-run exited $RC on the dot-named row, expected 1"
+fi
 
 # Negative control: a clean tree must lint clean, or the linter is refusing everything.
 P="$(new_project dryrun-clean)"
