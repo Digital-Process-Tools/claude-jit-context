@@ -1,0 +1,133 @@
+name: changelog
+
+# Deliberately not a job inside `tests.yml`. "Did this PR add a changelog fragment" is
+# not a test — it is a policy read of the PR's diff — and putting it in its own file also
+# means the file every contributor used to edit at once is not the file this check lives
+# in. Ported from claude-supertool, whose #906 is where the convention started.
+#
+# `github.base_ref` and the PR's labels ARE interpolated into a run: block below, unlike
+# `tests.yml` which interpolates nothing. Both are quoted into an `env:` block and read
+# as shell variables rather than pasted into the script text, which is the shape that
+# keeps a branch named `$(...)` from being a command.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  fragment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Full history: the diff is taken against the base branch, and actions/checkout
+      # clones at depth 1 by default.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # The fragment guard IS a CommonMark parser, so this leg has to have one. Upstream
+      # this job was checkout plus a bare python3, and the assembler was stdlib-only to
+      # match; without the install the check reports `skipped` on every pull request and
+      # exits non-zero — a red leg that pins nothing, which is one step better than a
+      # green leg that pins nothing and no more than that.
+      #
+      # It is also the reason `tests/test-assemble-changelog.sh` is run HERE and not only
+      # in `tests.yml`: the three legs there have no markdown-it-py, so that suite exits 2
+      # and reports SKIPPED on all of them. A suite that skips everywhere is untested.
+      - name: Install the CommonMark parser the fragment guard is
+        run: python3 -m pip install --disable-pip-version-check markdown-it-py
+
+      # Names must parse before anything else is claimed about them. Repo-wide, not
+      # diff-scoped: a fragment somebody else merged with a bad name is a release that
+      # will refuse, and the PR that has to find out is not the one cutting the tag.
+      - name: Every fragment name and body parses
+        run: python3 .github/scripts/assemble_changelog.py --check
+
+      - name: The assembler's own suite, where the parser exists
+        run: bash tests/test-assemble-changelog.sh
+
+      # Repo-wide and every PR. A fragment named by a tracked file is red on the tag that
+      # deletes it and green everywhere before, so the run that finds it must not be the
+      # run cutting the release.
+      - name: No tracked file names a fragment that is still on disk
+        run: bash tests/test-changelog-fragment-refs.sh
+
+      - name: A user-visible change carries a fragment
+        env:
+          BASE: ${{ github.base_ref }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only "origin/${BASE}...HEAD")
+          if [ -z "$changed" ]; then
+            echo "changelog   : skipped     (no files changed against origin/${BASE})"
+            exit 0
+          fi
+          case ",${LABELS}," in
+            *,no-changelog,*)
+              echo "changelog   : skipped     (label 'no-changelog' set on this PR)"
+              exit 0 ;;
+          esac
+          # `--name-only` alone lists a DELETION identically to an addition, so a PR that
+          # *removed* somebody else's pending fragment used to satisfy this gate
+          # upstream: it announced nothing, dropped an already-approved entry from the
+          # next release, and went green (their #925). The two states have to be read
+          # apart, and that is two diffs rather than one flag.
+          fragment_re='^changelog\.d/[0-9]+\.[a-z]+.*\.md$'
+          added=$(git diff --name-only --diff-filter=AM "origin/${BASE}...HEAD" | grep -E "$fragment_re" || true)
+          removed=$(git diff --name-only --diff-filter=D "origin/${BASE}...HEAD" | grep -E "$fragment_re" || true)
+          # Deleting fragments is exactly what a release cut does — it folds them into
+          # CHANGELOG.md and adds none — so that shape is a pass, and is named as one
+          # rather than being waved through the branch below. The test for it is
+          # "CHANGELOG.md was rewritten in the same PR", which is a claim about the diff
+          # and not a proof the entries survived; the assembler's own entry-balance
+          # refusal is what proves that, and it runs where the file is written.
+          assembled=$(printf '%s\n' "$changed" | grep -Fx 'CHANGELOG.md' || true)
+          # Deliberately ABOVE the user-visible-paths gate below, and the ordering is the
+          # finding rather than a detail. Losing a fragment needs no code change to go
+          # with it: `git rm changelog.d/<n>.<section>.md` on its own leaves `shipped` empty,
+          # so a version of this check that tested the paths first reported "nothing to
+          # announce" and exited 0 on the plainest instance of the bug it closes.
+          if [ -n "$removed" ] && [ -z "$assembled" ]; then
+            echo "changelog   : finding     (fragment(s) deleted without being assembled into CHANGELOG.md)"
+            printf '%s\n' "$removed" | sed 's/^/  deleted   /'
+            echo "  fix       restore them — a pending entry is dropped from the next release, silently"
+            echo "  or        if this is a release cut, it must also write CHANGELOG.md"
+            exit 1
+          fi
+          # What a user could notice: the four hooks and the shared library, the plugin
+          # manifest and its hook registration, and the shipped example entries. Docs and
+          # tests are excluded on purpose — requiring a fragment for a typo fix is how the
+          # discipline decays into a reflex-added empty file.
+          shipped=$(printf '%s\n' "$changed" | grep -E '^(scripts/|hooks/|\.claude-plugin/|examples/)' || true)
+          if [ -z "$shipped" ]; then
+            echo "changelog   : skipped     (no user-visible paths changed — nothing to announce)"
+            exit 0
+          fi
+          if [ -z "$added" ]; then
+            if [ -n "$removed" ]; then
+              echo "changelog   : ok          (release: $(printf '%s\n' "$removed" | wc -l | tr -d ' ') fragment(s) assembled into CHANGELOG.md)"
+              printf '%s\n' "$removed" | sed 's/^/  consumed  /'
+              exit 0
+            fi
+            echo "changelog   : finding     (user-visible change with no changelog.d/ fragment)"
+            echo "  changed   $(printf '%s\n' "$shipped" | tr '\n' ' ')"
+            echo "  fix       add changelog.d/<issue>.<section>.md — see changelog.d/README.md"
+            echo "  or        label the PR 'no-changelog' if it genuinely announces nothing"
+            exit 1
+          fi
+          echo "changelog   : ok          ($(printf '%s\n' "$added" | wc -l | tr -d ' ') fragment(s))"
+          printf '%s\n' "$added" | sed 's/^/  /'
+          # A PR that adds its own fragment and consumes others is legitimate (a release
+          # that also carries an entry) and would otherwise report only what it added. The
+          # deletions are half of what it did, and a receipt that prints one half is the
+          # shape this whole job exists to refuse.
+          if [ -n "$removed" ]; then
+            printf '%s\n' "$removed" | sed 's/^/  consumed  /'
+          fi

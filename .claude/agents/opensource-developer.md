@@ -79,8 +79,12 @@ both cuts select against the answer. Narrow the op instead.
    compile probe. A green local run is not evidence about the other legs. Audit for shell builtins
    that differ, hardcoded POSIX path literals in tests, and anything assuming GNU tools — and say
    which platform claims are **observed** and which are **reasoned**.
-7. **Docs are part of the change.** `README.md` for anything user-facing, `CHANGELOG.md` always. A
-   change nobody can discover is not shipped.
+7. **Docs are part of the change.** `README.md` for anything user-facing, and **a fragment in
+   `changelog.d/` always** — `<issue>.<section>.md`, the entry exactly as it should read, naming its
+   own issue in the body. **Do not edit `CHANGELOG.md`**; the release assembles it. Check yours with
+   `python3 .github/scripts/assemble_changelog.py --check`. Read `changelog.d/README.md` first: it
+   carries the naming rule, the rule that nothing outside that directory may name a fragment by
+   path, and what the CommonMark guard refuses. A change nobody can discover is not shipped.
 8. **Commit. Do not push. Do not open a PR. Do not comment on the issue.** Unconditionally — not
    "unless something blocks you". Tell the maintainer and they will.
 
