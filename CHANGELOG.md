@@ -36,10 +36,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one-sided mistake `#31` names, one level down. Nothing in the tool dimension is folded at
   index time, so there is no migration: an existing `tools/00-index.tsv` matches unchanged.
 
-  Two consequences worth stating rather than discovering. Tool-rule matching is now
+  Three consequences worth stating rather than discovering. Tool-rule matching is now
   accent-insensitive in both directions — `forbid: secret` will also catch `sécret` —
   which is the semantic the vocabulary dimension has had since `#31` and is documented in
-  the README. And `rebuild-tsv.sh` folds without the pin while the hooks fold with it:
+  the README. A `~match` **range** across accented endpoints is widened by the same fold:
+  under the pin `[é-ü]` was a bracket expression over raw bytes matching almost nothing,
+  and folded it becomes `[e-u]`, which matches a third of the lowercase alphabet. No such
+  pattern is known to exist and a range over accented endpoints has never meant what its
+  author intended, but this widens it rather than fixing it; refusing non-ASCII inside a
+  bracket expression was the alternative and would have killed `[éè]`, which is
+  legitimate and works. And `rebuild-tsv.sh` folds without the pin while the hooks fold with it:
   that is safe, and now says why in the code rather than being verified case by case —
   `jit_fold_latin1()` is `index()`/`substr()` over a table carrying both cases, so it
   decodes nothing and asks the locale nothing. `tolower()` was the only locale-sensitive

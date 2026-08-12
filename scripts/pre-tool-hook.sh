@@ -33,7 +33,8 @@ jit_tmp_open
 # the same verdict under C as under UTF-8, on either engine. A comparison that does not is
 # a live defect.
 #
-# This hook has two such comparisons and #68 only checked one of them. The vocabulary
+# This hook has two FAMILIES of such comparison -- one vocabulary lookup and the four
+# tool-rule sites below -- and #68 only checked the first. The vocabulary
 # lookup folds its subject below and reads an index rebuild-tsv.sh folded with the same
 # table -- that half was driven over four spellings of `detail` on both engines under both
 # locales, and again as a differential over a mixed ASCII/French/German/Greek/Cyrillic
@@ -263,9 +264,24 @@ END {
       # because every entry in the table maps a Latin-1 LETTER to ASCII letters -- it can
       # introduce no metacharacter, so a pattern that compiled before still compiles.
       # It runs AFTER jit_bad_pattern(), so the author is diagnosed against what they
-      # wrote. A two-letter expansion inside a bracket expression does widen it (`[æ]`
-      # becomes `[ae]`); that is the same accent-insensitivity the plain terms get, and
-      # a range across the fold (`[é-ü]`) was already meaningless under the `C` pin.
+      # wrote.
+      #
+      # NOT tolower()-ed, unlike the three index() sites below. That is deliberate and
+      # unchanged: the subject has always been lowercased and the pattern never was, so a
+      # pattern carrying an ASCII capital has matched nothing since this line was written.
+      # Lowercasing it here would wake rules that are dead today -- including `block`
+      # rules -- which is a behaviour change nobody asked for and not this fix.
+      #
+      # The fold is a literal substitution with no bracket-expression awareness, and two
+      # shapes are widened by it. `[æ]` becomes `[ae]`, which is the accent-insensitivity
+      # the plain terms get. A RANGE across the fold is worse: under `C` `[é-ü]` is a
+      # bracket expression over the raw bytes and matches almost nothing -- measured, it
+      # does not match `exemple de phrase` -- while the folded `[e-u]` matches a third of
+      # the lowercase alphabet, and it does. Nobody has written such a pattern and a range
+      # over accented endpoints has never meant what its author intended, but this widens
+      # rather than fixes it, and a `block` rule is the one that would notice. Refusing
+      # non-ASCII inside a bracket expression was the alternative and is worse: it kills
+      # `[éè]`, which is legitimate and works.
       if (match(fold_full, jit_fold_latin1(substr(r_match, 2))) == 0) continue
     } else {
       if (index(fold_cmd, jit_fold_latin1(tolower(r_match))) == 0) continue

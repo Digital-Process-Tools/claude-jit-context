@@ -533,6 +533,15 @@ for eng in $ENGINES; do
   OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"supprimer les donnes$u\"}}")
   assert_empty "[$eng] a near miss on the accented regex pattern stays silent" "$OUT"
 
+  # A `~match` PATTERN is folded but deliberately not lowercased -- the subject is, the
+  # pattern never was, so an ASCII capital in a pattern matches nothing. That is unchanged
+  # by #76 and would be green without it; it is here because the README now states it as a
+  # contract, and a documented contract with no assertion is one nobody notices breaking.
+  printf 'Bash\t~SUPPRIMER[[:space:]]+TOUT%s\tuc-%s.md\tremind\t\t\n' "$u" "$u" >> "$TOOLS_DIR/00-index.tsv"
+  echo "uppercase regex rule context" > "$TOOLS_DIR/uc-$u.md"
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"SUPPRIMER TOUT$u\"}}")
+  assert_empty "[$eng] an ASCII capital in a ~match pattern still matches nothing" "$OUT"
+
   # The control that catches a fold applied too broadly: an ASCII-only rule must behave
   # exactly as it does today, in all three directions.
   OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"asciirule$u --key SECRET\"}}")
