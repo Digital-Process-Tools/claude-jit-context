@@ -470,6 +470,79 @@ for eng in $ENGINES; do
   OUT=$(run_hook_engine_utf8 "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mojiblok$u $BADBYTE now\"}}")
   assert_empty "[$eng] and does not block a command the rule never matched" "$OUT"
 
+  echo "=== [$eng] non-ASCII tool-rule terms fold like vocabulary does (issue #76) ==="
+  # #68 pinned LC_ALL=C on this awk. Under `C` neither engine's tolower() folds a multibyte
+  # capital, and the tool matcher -- unlike the vocabulary half -- never called the Latin-1
+  # fold table. So a rule whose term carries an accent stopped matching the uppercase
+  # spelling of the same word: a `forbid` that blocked the command started injecting
+  # advisory text instead, exit 0, nothing on stderr. Failing OPEN on the one dimension
+  # that can refuse a call.
+  #
+  # Every assertion is inside the per-engine PATH shim because the defect is a property of
+  # tolower() and the two engines differ about it. Both directions are driven for each
+  # rule kind: the accented rule must fire on the uppercase AND the lowercase spelling,
+  # and a near miss must still produce {} -- folding may not widen matching into a rule
+  # that fires on everything.
+  printf 'Bash\tdeploy%s\tfb-%s.md\tremind\t\tclé-privée\n' "$u" "$u" >> "$TOOLS_DIR/00-index.tsv"
+  printf 'Bash\tship%s\trq-%s.md\tremind\tvalidé\t\n' "$u" "$u" >> "$TOOLS_DIR/00-index.tsv"
+  printf 'Bash\tdonnées%s\tmt-%s.md\tremind\t\t\n' "$u" "$u" >> "$TOOLS_DIR/00-index.tsv"
+  printf 'Bash\t~supprimer[[:space:]]+les[[:space:]]+données%s\trx-%s.md\tremind\t\t\n' "$u" "$u" >> "$TOOLS_DIR/00-index.tsv"
+  printf 'Bash\tasciirule%s\tas-%s.md\tremind\t\tsecret\n' "$u" "$u" >> "$TOOLS_DIR/00-index.tsv"
+  echo "accented forbid rule context" > "$TOOLS_DIR/fb-$u.md"
+  echo "accented require rule context" > "$TOOLS_DIR/rq-$u.md"
+  echo "accented match rule context" > "$TOOLS_DIR/mt-$u.md"
+  echo "accented regex rule context" > "$TOOLS_DIR/rx-$u.md"
+  echo "ascii control rule context" > "$TOOLS_DIR/as-$u.md"
+
+  # forbid -- the reproduction in the issue. Fails open when it regresses.
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"deploy$u --key CLÉ-PRIVÉE\"}}")
+  assert_blocked "[$eng] accented forbid term blocks the uppercase spelling" "$OUT"
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"deploy$u --key clé-privée\"}}")
+  assert_blocked "[$eng] accented forbid term still blocks the lowercase spelling" "$OUT"
+  # The other direction. The rule still MATCHES here, so the reminder is injected and {}
+  # would be the wrong assertion -- what must be absent is the block.
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"deploy$u --key CLE-PUBLIQUE\"}}")
+  assert_contains "[$eng] near miss: the forbid rule still fires as a reminder" "$OUT" "accented forbid rule context"
+  assert_not_contains "[$eng] near miss on the forbid term does not block" "$OUT" '"decision":"block"'
+
+  # require -- the mirror. Fails CLOSED when it regresses: a command that satisfies the
+  # requirement is refused. Safer direction, still wrong.
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ship$u --flag VALIDÉ\"}}")
+  assert_contains "[$eng] accented require rule still fires" "$OUT" "accented require rule context"
+  assert_not_contains "[$eng] uppercase spelling satisfies an accented require term" "$OUT" '"decision":"block"'
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ship$u --flag validé\"}}")
+  assert_not_contains "[$eng] lowercase spelling still satisfies it" "$OUT" '"decision":"block"'
+  # The positive control for the two above: without the term at all, the row must block.
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"ship$u now\"}}")
+  assert_blocked "[$eng] control: the require row does block when the term is absent" "$OUT"
+
+  # plain match: term compared with index() against the truncated command.
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"wipe DONNÉES$u now\"}}")
+  assert_contains "[$eng] accented match term matches the uppercase spelling" "$OUT" "accented match rule context"
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"wipe données$u now\"}}")
+  assert_contains "[$eng] accented match term matches the lowercase spelling" "$OUT" "accented match rule context"
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"wipe DONNES$u now\"}}")
+  assert_empty "[$eng] a near miss on the accented match term stays silent" "$OUT"
+
+  # regex match: an ERE out of the index compiled against the folded subject. Folding one
+  # side alone is the same bug one level down -- an accented PATTERN becomes unmatchable.
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"SUPPRIMER LES DONNÉES$u\"}}")
+  assert_contains "[$eng] accented regex pattern matches the uppercase spelling" "$OUT" "accented regex rule context"
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"supprimer les données$u\"}}")
+  assert_contains "[$eng] accented regex pattern matches the lowercase spelling" "$OUT" "accented regex rule context"
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"supprimer les donnes$u\"}}")
+  assert_empty "[$eng] a near miss on the accented regex pattern stays silent" "$OUT"
+
+  # The control that catches a fold applied too broadly: an ASCII-only rule must behave
+  # exactly as it does today, in all three directions.
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"asciirule$u --key SECRET\"}}")
+  assert_blocked "[$eng] ASCII forbid term still blocks, unchanged" "$OUT"
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"asciirule$u --key public\"}}")
+  assert_contains "[$eng] ASCII rule still fires as a reminder" "$OUT" "ascii control rule context"
+  assert_not_contains "[$eng] ASCII rule does not block without the term" "$OUT" '"decision":"block"'
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"asciirul$u --key SECRET\"}}")
+  assert_empty "[$eng] ASCII near miss stays silent" "$OUT"
+
   echo "=== [$eng] control characters in an entry body (issue #15) ==="
   OUT=$(run_hook_engine "$eng" '{"tool_name":"Bash","tool_input":{"command":"crlfcmd now"}}')
   assert_contains "[$eng] CRLF rule is injected" "$OUT" "CRLF rule line one"

@@ -28,19 +28,19 @@ VOCAB_PATHS="${JIT_CONTEXT_VOCAB_PATHS:-${DYNAMIC_RULES_VOCAB_PATHS:-${DVSI_AUTO
 # place. Under `C` both engines read the record as bytes and neither has anything to
 # decode, so neither can fail to.
 #
-# WHAT IT COSTS, checked rather than assumed. Under `C`, tolower() stops case-folding
-# non-ASCII. The Latin-1 fold table added in #31 already carries BOTH cases explicitly --
-# it had to, because one-true-awk tolower() never folded a multibyte capital -- so under
-# `C` gawk simply takes the branch one-true-awk always took. Driven over four spellings of
-# `detail` on both engines under both locales: all sixteen match. Driven again as a
-# differential over a mixed ASCII/French/German/Greek/Cyrillic corpus against this
-# repository own tree: the injected output is byte-identical UTF-8 vs C on each engine,
-# and byte-identical between the two engines under C.
+# WHAT IT COSTS HERE: nothing, and for a narrower reason than the one this comment used to
+# give. It claimed the Latin-1 fold table from #31 absorbed the change, on the grounds that
+# one-true-awk tolower() never folded a multibyte capital. Both halves were shaky: awk
+# 20200816 DOES fold `CLÉ` to `clé` under a UTF-8 locale, exactly as gawk 5.4.1 does
+# (measured 2026-08-12), and this hook calls neither tolower() nor the fold table. Its path
+# patterns are matched case-sensitively, byte for byte, against the raw path -- so the pin
+# cannot change a verdict here in either direction, whatever tolower() does.
 #
-# A letter outside Latin-1 is unaffected either way: the strip maps every non-ASCII byte
-# to a space regardless of case, so the two locales cannot disagree about it.
+# The paragraph mattered because the same text sat in pre-tool-hook.sh, where it was false:
+# that hook has a tolower()-only comparison in its tool-rule matcher, and a `forbid` rule
+# stopped blocking under the pin (#76). Stated per file now rather than pasted three times.
 #
-# The alternative -- sanitising the bytes before tolower() -- needs a pass that cannot
+# The alternative -- sanitising the bytes before matching -- needs a pass that cannot
 # itself decode, which is the same trap one layer down.
 #
 # Scoped to this awk, not exported: rebuild-tsv.sh has its own awk and the opposite

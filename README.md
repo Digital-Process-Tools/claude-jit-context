@@ -255,6 +255,21 @@ A command spanning several lines is one string with real newlines in it. `^` anc
 whole string, not each line, so a rule that must catch the second command needs the
 newline in its anchor class — see below.
 
+All four comparisons are **case-insensitive and accent-insensitive**, on both sides and by
+the same rule the vocabulary dimension uses: the command and the term are lowercased and
+their Latin-1 accents folded to the ASCII base before either is compared. So
+`forbid: clé-privée` refuses `--key CLÉ-PRIVÉE`, and `require: validé` is satisfied by
+`VALIDÉ`. Write the accented spelling — it is the one your team reads. The fold drops the
+accent, never the letter, so `cle-prive` still does not match `clé-privée`; what it does
+mean is that the unaccented spelling of the *same* word matches, in both directions. This
+applies to `~match` regexes too: the pattern is folded with the subject, so an accented
+character class keeps working. Drive it yourself:
+
+```bash
+printf '{"tool_name":"Bash","tool_input":{"command":"deploy --key CLÉ-PRIVÉE"}}' \
+  | CLAUDE_PROJECT_DIR=. bash scripts/pre-tool-hook.sh
+```
+
 ### Anchoring on an invocation
 
 That anchor is the load-bearing part of a rule, and it is the part nobody can verify by

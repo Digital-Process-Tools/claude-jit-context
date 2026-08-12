@@ -19,14 +19,25 @@ jit_tmp_open
 # place. Under `C` both engines read the record as bytes and neither has anything to
 # decode, so neither can fail to.
 #
-# WHAT IT COSTS, checked rather than assumed. Under `C`, tolower() stops case-folding
-# non-ASCII. The Latin-1 fold table added in #31 already carries BOTH cases explicitly --
-# it had to, because one-true-awk tolower() never folded a multibyte capital -- so under
-# `C` gawk simply takes the branch one-true-awk always took. Driven over four spellings of
-# `detail` on both engines under both locales: all sixteen match. Driven again as a
-# differential over a mixed ASCII/French/German/Greek/Cyrillic corpus against this
-# repository own tree: the injected output is byte-identical UTF-8 vs C on each engine,
-# and byte-identical between the two engines under C.
+# WHAT IT COSTS. Under `C`, tolower() stops case-folding non-ASCII -- on BOTH engines.
+# The sentence this comment carried until #76, that one-true-awk tolower() never folded a
+# multibyte capital, is wrong: awk 20200816 folds `CLÉ` to `clé` under a UTF-8 locale
+# exactly as gawk 5.4.1 does, and neither folds it under `C`. Measured 2026-08-12. So the
+# pin changes the verdict of every comparison that leans on tolower() ALONE.
+#
+# What makes the pin free is jit_fold_latin1() (#31), never tolower(): the table carries
+# both cases explicitly and is applied with index()/substr(), so it decodes nothing and
+# asks the locale nothing. A comparison that runs the fold on BOTH of its sides reaches
+# the same verdict under C as under UTF-8, on either engine.
+#
+# This hook has exactly one such comparison, the vocabulary lookup, and it does fold: the
+# subject below and the keyword rebuild-tsv.sh wrote, with the same table. Driven over
+# four spellings of `detail` on both engines under both locales, all sixteen match; and
+# again as a differential over a mixed ASCII/French/German/Greek/Cyrillic corpus against
+# this repository own tree, byte-identical UTF-8 vs C on each engine and between the two
+# engines under C. That check was real and it did NOT cover pre-tool-hook.sh, whose tool
+# rules folded nowhere and failed open for it (#76) -- so read this paragraph as a claim
+# about this file only.
 #
 # A letter outside Latin-1 is unaffected either way: the strip maps every non-ASCII byte
 # to a space regardless of case, so the two locales cannot disagree about it.
