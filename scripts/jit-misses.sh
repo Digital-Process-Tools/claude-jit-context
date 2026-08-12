@@ -131,18 +131,39 @@ BEGIN {
         "one two three four five six seven eight nine ten", sw, " ")
   for (i in sw) stop[sw[i]] = 1
 
-  # Latin-1 letters fold to their ASCII base BEFORE the strip below. Without this,
-  # `cassee` came out of `cassée` as the token `cass` and `detaillee` out of `détaillée`
-  # as `taill` -- the accent is replaced by a space, so one word becomes two fragments
-  # nobody typed, offered as a candidate entry name. Measured under both awks, so it is
-  # not an engine quirk: the character class is ASCII either way.
-  #
-  # Split on "[ ]" and not " ": one-true-awk splits a one-character separator on newlines
-  # too, gawk does not, and this list has to mean the same thing on both.
-  ntr = split("á a à a â a ä a ã a å a æ ae ç c é e è e ê e ë e í i ì i î i ï i ñ n " \
-              "ó o ò o ô o ö o õ o œ oe ß ss ú u ù u û u ü u ý y ÿ y " \
-              "Á a À a Â a Ä a Ã a Å a Æ ae Ç c É e È e Ê e Ë e Í i Ì i Î i Ï i Ñ n " \
-              "Ó o Ò o Ô o Ö o Õ o Œ oe Ú u Ù u Û u Ü u Ý y", tr, "[ ]")
+}
+
+# A byte-identical copy of jit_fold_latin1() and its table from common.sh, which this
+# script deliberately does not source -- see the header. The hooks and rebuild-tsv.sh use
+# the common.sh copy, and a letter in one table but not the other is a keyword indexed one
+# way and reported another, so tests/test-jit-misses.sh compares the two rather than
+# trusting them.
+#
+# Latin-1 letters fold to their ASCII base BEFORE the strip below. Without this, `cassee`
+# came out of `cassée` as the token `cass` and `detaillee` out of `détaillée` as `taill`
+# -- the accent is replaced by a space, so one word becomes two fragments nobody typed,
+# offered as a candidate entry name. Measured under both awks: the character class is
+# ASCII either way.
+#
+# index()/substr() and not gsub(): gsub() with a multibyte character as its pattern
+# decodes the subject, and this script reads an 80-character log excerpt that may end
+# mid-character. Split on "[ ]" and not " ": one-true-awk splits a one-character
+# separator on newlines too, gawk does not, and this list has to mean the same on both.
+function jit_fold_latin1(s,   i, p, out) {
+  if (_jit_fold_n == 0)
+    _jit_fold_n = split("á a à a â a ä a ã a å a æ ae ç c é e è e ê e ë e í i ì i î i ï i ñ n " \
+                        "ó o ò o ô o ö o õ o œ oe ß ss ú u ù u û u ü u ý y ÿ y " \
+                        "Á a À a Â a Ä a Ã a Å a Æ ae Ç c É e È e Ê e Ë e Í i Ì i Î i Ï i Ñ n " \
+                        "Ó o Ò o Ô o Ö o Õ o Œ oe Ú u Ù u Û u Ü u Ý y", _jit_fold_tr, "[ ]")
+  for (i = 1; i + 1 <= _jit_fold_n; i += 2) {
+    out = ""
+    while ((p = index(s, _jit_fold_tr[i])) > 0) {
+      out = out substr(s, 1, p - 1) _jit_fold_tr[i+1]
+      s = substr(s, p + length(_jit_fold_tr[i]))
+    }
+    s = out s
+  }
+  return s
 }
 
 {
@@ -184,9 +205,8 @@ BEGIN {
 
   norm = tolower(msg)
   # tolower() leaves a multibyte capital alone on one-true-awk, so the table carries both
-  # cases and runs after it. gsub takes its pattern as a string here; every entry is a
-  # plain letter, so there is no regex metacharacter to escape.
-  for (i = 1; i + 1 <= ntr; i += 2) if (index(norm, tr[i]) > 0) gsub(tr[i], tr[i+1], norm)
+  # cases and the fold runs after it.
+  norm = jit_fold_latin1(norm)
   gsub(/[^a-z0-9 -]/, " ", norm)
   gsub(/  +/, " ", norm)
   sub(/^ /, "", norm); sub(/ $/, "", norm)

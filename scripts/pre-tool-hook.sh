@@ -19,7 +19,7 @@ cat | awk \
   -v home="$HOME" \
   -v project="${CLAUDE_PROJECT_DIR:-.}" \
   -v log_tmp="$JIT_TMP" \
-  "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_JSON"'
+  "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_JSON$JIT_AWK_FOLD"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -287,10 +287,23 @@ END {
   }
   tt = tolower(cc)
   gsub(/^[[:space:]]+|[[:space:]]+$/, "", tt)
-  # 2. Pad + strip non-alnum (keep hyphens) for space-bounded kw lookup
-  padded = " " tt " "
+  # 2. Pad, fold Latin-1 accents, strip non-alnum (keep hyphens) for space-bounded kw
+  # lookup. This hook reads the SAME vocabulary index as pre-prompt-hook.sh, so it has to
+  # normalise a path token exactly as rebuild-tsv.sh normalises the keyword: without the
+  # fold, src/Détail/a.php reaches the lookup as `d tail` and a folded row is dead here
+  # while it fires from a prompt (#31). The stale variant is the same compatibility path
+  # as the prompt hook -- an index built before the fold carries `d tail` as its keyword,
+  # and only the unfolded subject can still reach it. Built only when the fold changed
+  # something, so an ASCII command pays one comparison.
+  low = " " tt " "
+  padded = jit_fold_latin1(low)
+  stale = (padded != low) ? low : ""
   gsub(/[^a-z0-9 -]/, " ", padded)
   gsub(/  +/, " ", padded)
+  if (stale != "") {
+    gsub(/[^a-z0-9 -]/, " ", stale)
+    gsub(/  +/, " ", stale)
+  }
 
   if (tt != "") {
     split("00-manual 10-auto 20-grouped 30-crosscutting", layers, " ")
@@ -318,9 +331,12 @@ END {
           }
           continue
         }
-        if (!(vfile in shown) && index(padded, " " kw " ") > 0) {
-          if (vfile in vmatch) vmatch[vfile] = vmatch[vfile] "|" kw
-          else vmatch[vfile] = kw
+        if (!(vfile in shown) && (index(padded, " " kw " ") > 0 || (stale != "" && index(stale, " " kw " ") > 0))) {
+          # Named once -- see the same guard in pre-prompt-hook.sh. Folding the keyword
+          # makes two spellings of it collide, and the header read `(matched: x|x)`.
+          if (vfile in vmatch) {
+            if (index("|" vmatch[vfile] "|", "|" kw "|") == 0) vmatch[vfile] = vmatch[vfile] "|" kw
+          } else vmatch[vfile] = kw
         }
       }
       close(lookup)

@@ -1009,6 +1009,58 @@ function jit_config_notice(list, n) {
 # the backslash of an unknown escape would turn `\\d` into `d` and hand the matcher a
 # subject its author never typed. \\uXXXX is in that set deliberately -- decoding it needs
 # UTF-8 assembly no awk here can be trusted to do.
+
+# --- Shared Latin-1 accent fold ----------------------------------------------
+# Prepended to any awk program that normalises text for vocabulary lookup, so the index
+# writer and both matchers arrive at the same spelling.
+#
+# The strip that follows a fold maps every byte outside [a-z0-9 -] to a space, so without
+# this an accent does not merely fail to match: it cuts the word in two. `détail` became
+# the two tokens `d` and `tail` -- on the prompt side AND in the index, which is why an
+# accented keyword matched an accented prompt by accident and an ASCII one never (#31).
+# So the fold has to run on BOTH sides. rebuild-tsv.sh folds the keyword; pre-prompt-hook.sh
+# and pre-tool-hook.sh fold their subject. Folding one side alone silently kills the rows
+# that used to line up, which is a worse bug than the one it fixes.
+#
+# Latin-1 Supplement plus the two ligatures, and deliberately no further: folding beyond
+# that is a much larger claim about languages nobody here has measured.
+#
+# The substitution is index() and substr(), not gsub(). Measured 2026-08-12 on awk version
+# 20200816: gsub() with a multibyte character as its pattern decodes the SUBJECT, so a
+# truncated sequence anywhere in the string raised `towc: multibyte conversion failure` --
+# the #14 abort, in the function added to fix #14's other half. index()/substr() do not
+# decode, and on a record carrying a lone 0xC3 the splice returns a non-match and keeps
+# going. Verified byte-identical to the gsub form on well-formed French, German and
+# Spanish input under both awk 20200816 and gawk 5.4.1.
+#
+# The table carries both cases and is applied AFTER tolower(), because one-true-awk's
+# tolower() leaves a multibyte capital alone and gawk's does not.
+#
+# Split on "[ ]" and not " ": one-true-awk splits a one-character separator on newlines
+# too, gawk does not, and this list has to mean the same thing on both.
+#
+# jit-misses.sh carries a byte-identical copy of the table, because it deliberately does
+# not source this file (see its header). tests/test-jit-misses.sh asserts the two agree.
+# shellcheck disable=SC2034
+JIT_AWK_FOLD='
+function jit_fold_latin1(s,   i, p, out) {
+  if (_jit_fold_n == 0)
+    _jit_fold_n = split("á a à a â a ä a ã a å a æ ae ç c é e è e ê e ë e í i ì i î i ï i ñ n " \
+                        "ó o ò o ô o ö o õ o œ oe ß ss ú u ù u û u ü u ý y ÿ y " \
+                        "Á a À a Â a Ä a Ã a Å a Æ ae Ç c É e È e Ê e Ë e Í i Ì i Î i Ï i Ñ n " \
+                        "Ó o Ò o Ô o Ö o Õ o Œ oe Ú u Ù u Û u Ü u Ý y", _jit_fold_tr, "[ ]")
+  for (i = 1; i + 1 <= _jit_fold_n; i += 2) {
+    out = ""
+    while ((p = index(s, _jit_fold_tr[i])) > 0) {
+      out = out substr(s, 1, p - 1) _jit_fold_tr[i+1]
+      s = substr(s, p + length(_jit_fold_tr[i]))
+    }
+    s = out s
+  }
+  return s
+}
+'
+
 # shellcheck disable=SC2034
 JIT_AWK_JSON='
 function jit_trailing_backslashes(s,   c, n) {

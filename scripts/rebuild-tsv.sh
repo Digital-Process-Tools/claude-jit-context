@@ -100,6 +100,14 @@ build_vocab_tsv() {
 
     [ -z "$kw_line" ] && continue
 
+    # Fold Latin-1 accents to ASCII BEFORE the per-keyword strip below, which maps every
+    # remaining non-[a-z0-9 -] byte to a space: `keywords: détail` would otherwise index as
+    # the row `d tail`, reachable only from a prompt carrying the same accent and never
+    # from `detail`. Both hooks fold their subject with the same table (#31). Once per
+    # file rather than once per keyword -- the fold is per character and leaves the commas
+    # this line is about to be split on alone.
+    kw_line=$(printf '%s\n' "$kw_line" | awk "$JIT_AWK_FOLD"'{ print jit_fold_latin1($0) }')
+
     # Split on ", " and write each keyword → filename
     echo "$kw_line" | tr ',' '\n' | while read -r kw; do
       # Normalize IDENTICALLY to the matcher (pre-prompt-hook.sh): lowercase, then

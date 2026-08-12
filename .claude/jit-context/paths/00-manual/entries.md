@@ -17,7 +17,8 @@ Body edits need no rebuild — the body is read from the file at fire time. Fron
 
 - Only `00-manual/` is hand-edited. `10-auto/`, `20-grouped/`, `30-crosscutting/` belong to generators.
 - Prefer **paths** over keywords. The folder is the situation; keywords fire on what someone is talking about, paths on what they are touching.
-- Keywords are normalised: CamelCase split, lowercased, anything outside `[a-z0-9 -]` becomes a space. A keyword written `docs.example.com` matches nothing a prompt can produce. Matching is space-bounded, so `microbilling` does not match `billing`.
+- Keywords are normalised: CamelCase split, lowercased, Latin-1 accents folded to their ASCII base, anything else outside `[a-z0-9 -]` becomes a space. A keyword written `docs.example.com` matches nothing a prompt can produce. Matching is space-bounded, so `microbilling` does not match `billing`.
+- The accent fold runs on the **keyword** and on the **prompt**, so `détail` and `detail` are one keyword in every direction (#31). Write the accented spelling. It is only true of an index built since the fold landed — an older one has `détail` stored as `d tail` — so `bash scripts/rebuild-tsv.sh` is what makes it so.
 - One ordinary English word fires constantly. Prefer product nouns and multi-word keys.
 - `rebuild-tsv.sh` prints an ambiguity report. A keyword in more than five entries drags all five into context on one stray mention.
 
