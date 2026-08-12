@@ -404,14 +404,17 @@ Each dimension can hold several layers, scanned in order:
 
 | Layer              | Meaning                                                     |
 | ------------------ | ----------------------------------------------------------- |
-| `00-manual/`       | Hand-written. This is where you author, and what is indexed. |
+| `00-manual/`       | Hand-written. This is where you author.                     |
 | `10-auto/`         | Reserved for a generator you supply                         |
 | `20-grouped/`      | Reserved — coarser groupings                                |
 | `30-crosscutting/` | Reserved — themes that span the codebase                    |
 
 **Most projects need only `00-manual/`, and that is the whole feature.** The other three are extension points, not shipped functionality — worth understanding before you plan around them:
 
-`rebuild-tsv.sh` indexes `00-manual/` and nothing else. The hooks, however, scan all four layers in the order above. So a generated layer works only if the generator writes its own `00-index.tsv` in the same format; creating `20-grouped/*.md` and running the rebuild produces silence, because nothing indexed it.
+`rebuild-tsv.sh` indexes **every** subdirectory of each dimension, not just `00-manual/`. Drop entries into `20-grouped/`, run the rebuild, and they are indexed and they fire. Two consequences follow, and both are worth knowing before you plan a generator around them:
+
+- **A rebuild rewrites a generated layer's index too.** If a generator maintains its own `00-index.tsv`, a hand-run `rebuild-tsv.sh` regenerates it from the entries' frontmatter — so those entries must carry frontmatter the rebuild can read, or a working index is replaced by a thinner one.
+- **The hooks read exactly four layer names**, in this order: `00-manual/`, `10-auto/`, `20-grouped/`, `30-crosscutting/`. A directory with any other name — `40-custom/`, `local/` — is indexed by the rebuild and then read by nobody. The `.tsv` is there, the entry is there, and the rule can never fire: no error, no warning, and it looks exactly like a rule that runs and never matches. Name your layer one of the four.
 
 No generator ships with this plugin. The layers exist so that bulk-generated coverage can sit beside hand-written entries without either overwriting the other — the arrangement a large codebase ends up wanting. If you are not generating entries, leave the three directories absent.
 

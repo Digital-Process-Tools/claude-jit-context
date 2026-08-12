@@ -126,6 +126,19 @@ the user to do anything beyond opening the project.
 
 ### Fixed
 
+- **The README said `rebuild-tsv.sh` indexes `00-manual/` "and nothing else", and that
+  creating `20-grouped/*.md` and rebuilding "produces silence, because nothing indexed
+  it".** Both were the opposite of what the code does: the rebuild globs every
+  subdirectory of each dimension, so every layer directory present is indexed. Driven,
+  not read off a grep — a `40-custom/` entry and a `20-grouped/` entry, one rebuild, and
+  both got a `00-index.tsv`.
+
+  The hooks then read four hardcoded layer names, so the `20-grouped/` entry fired on its
+  keyword and the `40-custom/` one returned `{}`. A layer named anything else is indexed
+  and read by nobody: a rule that exists, is indexed, and can never fire — this
+  repository's own defect shape, produced by its own documentation. The README now says
+  which four names are read and what happens to a directory with any other name.
+
 - **A `match:` pattern could not contain a double quote, and nothing said so.** The
   frontmatter reader deleted every `"` in the value on its way to the index, so `["]` —
   the way you anchor on a quoted argument, and the way the invocation macros do it —
