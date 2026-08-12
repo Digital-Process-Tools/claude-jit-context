@@ -534,7 +534,7 @@ It reads and prints. No file is written, no entry is created, no hook fires and 
 bash tests/run-all.sh
 ```
 
-584 assertions across fourteen suites, covering matching, normalization, modes, blocking, session-once behaviour, malformed input, the dry-run, the miss report, and what a hostile project directory can make the hooks read, write or say. Engine-sensitive assertions run once per `awk` on the machine. No dependencies beyond bash, `awk` and `perl`.
+605 assertions across fourteen suites, covering matching, normalization, modes, blocking, session-once behaviour, malformed input, the dry-run, the miss report, and what a hostile project directory can make the hooks read, write or say. Engine-sensitive assertions run once per `awk` on the machine. No dependencies beyond bash, `awk` and `perl`.
 
 The two containment suites build their fixtures with `ln -s`, and a platform that does not create symbolic links cannot construct the attack they exist to refuse — Git Bash copies the target instead unless `MSYS=winsymlinks:nativestrict` is set and the process may create links. Those suites **probe for that first and skip loudly rather than pass**, and `run-all.sh` reports a skipped suite as neither a pass nor a failure. A suite that reported success where it could not test anything would be the exact defect this plugin exists to describe.
 
