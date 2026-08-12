@@ -20,8 +20,13 @@
 #       already there and a copy you edited is not ours to replace, or the rebuild did
 #       not complete and the entry is on disk and inert | 2 could not evaluate: a bad
 #       argument, a --base that is not a <project>/.claude/jit-context path, a symbolic
-#       link on the way in, an install with no template to copy, or a directory that
-#       could not be created.
+#       link at or below .claude, an install with no template to copy, or a directory
+#       that could not be created.
+#
+# --base is resolved before anything is written, so what it prints is the physical
+# location of the files and not the spelling you handed it: a link above .claude is
+# followed and reported, `..` is folded. A link at or below .claude is refused instead —
+# the hooks will not read an entry through one, so seeding past it is a dead rule.
 #
 # This is tooling, not a hook. It is run deliberately, by a person, and it fails loudly —
 # the opposite of scripts/*-hook.sh, which must never fail at all. See
@@ -82,6 +87,62 @@ case "$BASE" in
     ;;
 esac
 
+# The receipt has to name the place the file is at. mkdir and cp both follow a symbolic
+# link in silence, so `--base .../sym/link/.claude/jit-context` wrote into the link's
+# target while "seeded <path>" named the link, and so did the CLAUDE_PROJECT_DIR printed
+# at the end for the reader to copy (#99). `..` was never folded either.
+#
+# The split with the refusal below is not a compromise between two remedies; it is where
+# the hooks already draw the line. AT OR BELOW .claude a link is REFUSED, because the
+# hooks refuse to read an entry through one (#13, #27, #45) — seeding past it writes a
+# rule that can never fire. ABOVE .claude a link is FOLLOWED and REPORTED TRUTHFULLY:
+# pointing --base anywhere on the disk is this tool's entire job, /tmp is a link to
+# /private/tmp on every Mac and a bind mount is one in every container, and nothing
+# downstream reads the project directory as anything but a directory.
+#
+# There is no realpath on macOS and no new dependency is allowed here, so: walk up to the
+# deepest component that exists, resolve THAT with `cd -P`, and fold `.` and `..` in what
+# is left over. What is left over does not exist yet, so it cannot contain a link — which
+# is the only reason folding it textually is sound.
+resolve_dir() {
+  # $1: an absolute path that need not exist. Prints its physical location.
+  local head="$1" tail="" phys out c
+  while [ ! -d "$head" ]; do
+    case "$head" in */*) ;; *) break ;; esac    # "C:" on Git Bash, or a bare word
+    tail="${head##*/}${tail:+/}$tail"
+    head="${head%/*}"
+    [ -n "$head" ] || head="/"
+  done
+  if [ -d "$head" ]; then
+    # A directory that exists but cannot be entered leaves the path unresolved rather
+    # than aborting here: mkdir under it is about to fail anyway, and that failure is
+    # already an exit 2 naming the directory.
+    phys="$(CDPATH='' cd -P "$head" 2>/dev/null && pwd -P)"
+    [ -n "$phys" ] && head="$phys"
+  fi
+  if [ -z "$tail" ]; then
+    printf '%s\n' "$head"
+    return 0
+  fi
+  out="${head%/}"
+  local IFS=/
+  set -f
+  for c in $tail; do
+    case "$c" in
+      ''|.) ;;
+      ..)   out="${out%/*}" ;;
+      *)    out="$out/$c" ;;
+    esac
+  done
+  set +f
+  [ -n "$out" ] || out="/"
+  printf '%s\n' "$out"
+}
+
+# Command substitution, so the IFS and `set -f` above stay inside the subshell.
+PROJECT="$(resolve_dir "$PROJECT")"
+BASE="$PROJECT/.claude/jit-context"
+
 SEED="$BASE/$SEED_REL"
 TEMPLATE="$TEMPLATE_ROOT/$SEED_REL"
 
@@ -91,13 +152,20 @@ if [ ! -f "$TEMPLATE" ]; then
   exit 2
 fi
 
-# A linked component is refused rather than followed: the write would land outside the
-# tree you named, and "seeded <path>" would then be a receipt for a file somewhere else.
-# EVERY component on the way to the entry, not just the two nearest the project root — a
-# linked `vocabulary/` or `vocabulary/00-manual/` put the entry and its whole index outside
-# the tree while the receipt still named a path inside it, which is worse than the escape.
+# A linked component AT OR BELOW .claude is refused rather than followed. Two things are
+# wrong with following one: the write lands outside the tree you named while "seeded
+# <path>" stays a receipt for a file somewhere else, and — the half that resolution
+# cannot repair — the hooks refuse to read an entry through a link (#13, #27, #45), so
+# whatever is seeded past it is a rule that can never fire.
+#
+# EVERY component from .claude down, not just the two nearest the project root: a linked
+# `vocabulary/` or `vocabulary/00-manual/` put the entry and its whole index outside the
+# tree while the receipt still named a path inside it, which is worse than the escape.
 # mkdir -p follows a link silently and cp writes through one, so neither of them can be
 # the check.
+#
+# Everything ABOVE .claude has already been resolved, not refused (#99) — see the block
+# above for why that boundary is the hooks' boundary and not an arbitrary one.
 LINKED=""
 for part in "$PROJECT/.claude" "$BASE"; do
   [ -L "$part" ] && LINKED="$part"

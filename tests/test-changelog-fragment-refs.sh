@@ -44,12 +44,21 @@ if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
   exit 2
 fi
 
-# Which tracked files name this string. -I skips binaries; the fragment itself and
+# Which tracked files name this fragment. -I skips binaries; the fragment itself and
 # anything else inside changelog.d/ are excluded by the caller, not here.
+#
+# The left edge is anchored on a non-digit, and a plain -F substring scan is what made
+# that necessary: every fragment name is a substring of the ones whose issue number it is
+# a prefix of — `<n>.fixed.md` sits inside `<n>7.fixed.md` — so a document naming one of
+# those was reported as naming the other. The name is matched rather than the
+# `changelog.d/` path because #1231 upstream was a bare filename in a tuple of paths and
+# never wrote the directory at all. Dots are escaped; a fragment name holds nothing else
+# an ERE reads.
 names_it() {
   local needle="$1"
   shift
-  grep -lIF -- "$needle" "$@" 2>/dev/null
+  local re="${needle//./\.}"
+  grep -lIE -- "(^|[^0-9])$re" "$@" 2>/dev/null
 }
 
 # --- the control, first --------------------------------------------------------------
@@ -75,6 +84,23 @@ case "$control" in
      echo "  Stopping here rather than printing a clean sweep nobody performed."
      exit 1 ;;
 esac
+
+# A fragment name is a substring of every longer-numbered one sharing its prefix, and a
+# -F scan reported that as a reference. It is not a cosmetic loss: the finding tells an
+# author to remove a reference that is not in the file, which is unactionable, and the
+# only way out of it is to renumber the issue.
+#
+# Both numbers here are far outside any issue this tracker will hand out, on purpose:
+# this file is itself swept below, so a control written with a plausible number would
+# flag the very fragment that number belongs to on the day it is filed.
+printf 'a doc that names changelog.d/9999997.fixed.md by path\n' > "$WORK/prefix.md"
+false_positive=$(names_it "999997.fixed.md" "$WORK/prefix.md")
+if [ -n "$false_positive" ]; then
+  fail "control: a name that is a prefix of a longer one is not a reference to it" \
+       "999997.fixed.md was found in a document that names only 9999997.fixed.md"
+else
+  pass "control: a name that is a prefix of a longer one is not a reference to it"
+fi
 
 # --- the real tree -------------------------------------------------------------------
 FRAGMENTS=""

@@ -289,6 +289,98 @@ else
 fi
 
 echo ""
+echo "=== a symbolic link ABOVE .claude is followed, and the receipt says where ==="
+# #99. The section above covers .claude and everything under it -- the components the
+# hooks themselves refuse to read through, so seeding past one of those would write a
+# rule that can never load. NOTHING above .claude was checked, and `..` was never
+# folded: `--base .../sym/link/.claude/jit-context` wrote into the link target and
+# printed "seeded .../sym/link/..." for a file that was not there. Pointing --base
+# anywhere on the disk is this tool's whole job and stays allowed; the receipt naming a
+# place the file is not is the defect.
+SYMA="$TMP/syma"
+mkdir -p "$SYMA/proj/sym" "$SYMA/proj/escape"
+if ln -s ../escape "$SYMA/proj/sym/link" 2>/dev/null && [ -L "$SYMA/proj/sym/link" ]; then
+  ESCAPE_PHYS="$(cd "$SYMA/proj/escape" && pwd -P)"
+  bash "$INIT" --base "$SYMA/proj/sym/link/.claude/jit-context" > "$TMP/initsym.txt" 2>&1
+  SYM_RC=$?
+  if [ "$SYM_RC" -eq 0 ]; then
+    ok "a symlinked ancestor above .claude still seeds (exit 0)"
+  else
+    bad "a symlinked ancestor above .claude still seeds (exit 0)" "exit=$SYM_RC"
+    cat "$TMP/initsym.txt"
+  fi
+  if [ -f "$ESCAPE_PHYS/.claude/jit-context/$ENTRY_REL" ]; then
+    ok "the entry landed in the link target, which is where --base points"
+  else
+    bad "the entry landed in the link target, which is where --base points" \
+        "nothing at $ESCAPE_PHYS/.claude/jit-context/$ENTRY_REL"
+  fi
+  if grep -qF "seeded  $ESCAPE_PHYS/.claude/jit-context/$ENTRY_REL" "$TMP/initsym.txt"; then
+    ok "and the receipt names the resolved location, not the link"
+  else
+    bad "and the receipt names the resolved location, not the link" \
+        "expected: seeded  $ESCAPE_PHYS/.claude/jit-context/$ENTRY_REL"
+    cat "$TMP/initsym.txt"
+  fi
+  # Not just the "seeded" line: the follow-up commands it prints are copy-pasted, and a
+  # CLAUDE_PROJECT_DIR through the link is the same lie one level up.
+  if grep -qF "/sym/link/" "$TMP/initsym.txt"; then
+    bad "no line of the output names the unresolved path" "still printed through the link"
+    grep -F "/sym/link/" "$TMP/initsym.txt"
+  else
+    ok "no line of the output names the unresolved path"
+  fi
+  assert_prompt_fires "and the entry fires from the resolved project" \
+    "$ESCAPE_PHYS" "how do I write a jit entry" "writing-rules.md"
+else
+  echo "  SKIPPED: ln -s did not produce a symbolic link here, so a symlinked ancestor"
+  echo "           cannot be constructed. Nothing in this half was tested."
+  echo "           On Git Bash that needs MSYS=winsymlinks:nativestrict."
+fi
+
+# The must-seed half, same code path, same run: an ordinary --base with no link above it
+# still seeds. If this one ever goes red the refusals and rewrites above prove nothing.
+P7="$TMP/p7"
+mkdir -p "$P7"
+P7_PHYS="$(cd "$P7" && pwd -P)"
+bash "$INIT" --base "$P7/.claude/jit-context" > "$TMP/init7.txt" 2>&1
+INIT7_RC=$?
+if [ "$INIT7_RC" -eq 0 ] && [ -f "$P7/.claude/jit-context/$ENTRY_REL" ]; then
+  ok "an ordinary --base still seeds"
+else
+  bad "an ordinary --base still seeds" "exit=$INIT7_RC"
+  cat "$TMP/init7.txt"
+fi
+if grep -qF "seeded  $P7_PHYS/.claude/jit-context/$ENTRY_REL" "$TMP/init7.txt"; then
+  ok "and its receipt is the physical path of that tree"
+else
+  bad "and its receipt is the physical path of that tree" \
+      "expected: seeded  $P7_PHYS/.claude/jit-context/$ENTRY_REL"
+  cat "$TMP/init7.txt"
+fi
+
+# `..` stays accepted -- this tool writes where you point it -- but what it prints is the
+# folded spelling of that place rather than the argument it was handed.
+P8="$TMP/p8"
+mkdir -p "$P8/inner"
+P8_PHYS="$(cd "$P8" && pwd -P)"
+bash "$INIT" --base "$P8/inner/../.claude/jit-context" > "$TMP/init8.txt" 2>&1
+INIT8_RC=$?
+if [ "$INIT8_RC" -eq 0 ] && [ -f "$P8/.claude/jit-context/$ENTRY_REL" ]; then
+  ok "a --base carrying .. is honoured, not refused"
+else
+  bad "a --base carrying .. is honoured, not refused" "exit=$INIT8_RC"
+  cat "$TMP/init8.txt"
+fi
+if grep -qF "seeded  $P8_PHYS/.claude/jit-context/$ENTRY_REL" "$TMP/init8.txt"; then
+  ok "and the receipt has no .. left in it"
+else
+  bad "and the receipt has no .. left in it" \
+      "expected: seeded  $P8_PHYS/.claude/jit-context/$ENTRY_REL"
+  cat "$TMP/init8.txt"
+fi
+
+echo ""
 echo "=== a relative --base is resolved, not half-honoured ==="
 # The dangerous shape: mkdir/cp are happy with a relative path, but rebuild-tsv.sh
 # resolves JIT_BASE from $CLAUDE_PROJECT_DIR, so a project dir derived by stripping a
