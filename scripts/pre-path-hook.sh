@@ -19,7 +19,33 @@ jit_tmp_open
 # The pre-0.2 name is still honoured so existing runners do not break silently.
 VOCAB_PATHS="${JIT_CONTEXT_VOCAB_PATHS:-${DYNAMIC_RULES_VOCAB_PATHS:-${DVSI_AUTONOMOUS_VOCAB_PATHS:-0}}}"
 
-cat | awk \
+# LC_ALL=C on this awk and nowhere else (#68). A malformed UTF-8 byte in the payload --
+# a paste out of a Latin-1 file, a multibyte sequence cut at a copy boundary, a filename
+# echoed from a differently-encoded checkout -- made one-true-awk abort the END block with
+# `illegal byte sequence`: nothing on stdout, not even `{}`, the diagnostic written into
+# the session, exit 0. Failing open AND being loud, which is what the top of common.sh
+# forbids in one sentence. gawk did not abort but printed a multibyte warning to the same
+# place. Under `C` both engines read the record as bytes and neither has anything to
+# decode, so neither can fail to.
+#
+# WHAT IT COSTS, checked rather than assumed. Under `C`, tolower() stops case-folding
+# non-ASCII. The Latin-1 fold table added in #31 already carries BOTH cases explicitly --
+# it had to, because one-true-awk tolower() never folded a multibyte capital -- so under
+# `C` gawk simply takes the branch one-true-awk always took. Driven over four spellings of
+# `detail` on both engines under both locales: all sixteen match. Driven again as a
+# differential over a mixed ASCII/French/German/Greek/Cyrillic corpus against this
+# repository own tree: the injected output is byte-identical UTF-8 vs C on each engine,
+# and byte-identical between the two engines under C.
+#
+# A letter outside Latin-1 is unaffected either way: the strip maps every non-ASCII byte
+# to a space regardless of case, so the two locales cannot disagree about it.
+#
+# The alternative -- sanitising the bytes before tolower() -- needs a pass that cannot
+# itself decode, which is the same trap one layer down.
+#
+# Scoped to this awk, not exported: rebuild-tsv.sh has its own awk and the opposite
+# contract (it may fail loudly), and it sources this hook shared file too.
+cat | LC_ALL=C awk \
   -v paths_base="$JIT_BASE/paths" \
   -v vocab_base="$JIT_BASE/vocabulary" \
   -v vocab_paths="$VOCAB_PATHS" \
@@ -303,16 +329,22 @@ END {
     if (match(p, /src2\//)) p = substr(p, RSTART)
     fp_short = fp_short p
   }
-  fp_short = substr(fp_short, 1, 80)
+  # jit_log_text() first, THEN the truncation. fp_short is payload text after
+  # jit_unescape(), so a JSON newline escape is a real newline here; stripping after the
+  # cut would leave the first 80 bytes still carrying one. See common.sh (#65).
+  fp_short = substr(jit_log_text(fp_short), 1, 80)
   if (log_matches == "") log_matches = "(none)"
   # Empty means bash could not get a scratch file at all -- see jit_tmp_open() in
   # common.sh. Redirecting to "" is a FATAL awk error raised inside END, which would take
   # the injection below with it: the #50 shape, out of the line meant to record it.
   if (log_tmp != "") {
-    printf "%s\t%s\n", log_matches, fp_short > log_tmp
-    # Lines 2..N of the same channel: one `path<TAB>key` per mark. bash appends them,
-    # because bash can test `[ -L ]` and survive a redirect that fails. See common.sh.
+    # Marks FIRST, then the sentinel jit_shown_flush() writes, then the log line. The log
+    # line ends with payload text, so anything after it can be forged with a newline --
+    # which is how a `block` rule was silently marked already-shown (#65). One `path<TAB>key`
+    # per mark; bash appends them, because bash can test `[ -L ]` and survive a redirect
+    # that fails. See common.sh.
     jit_shown_flush(log_tmp)
+    printf "%s\t%s\n", log_matches, fp_short > log_tmp
     close(log_tmp)
   }
 
@@ -335,11 +367,14 @@ TOTAL=$((T_END - T_START))
 # line made of empty fields. Removal is the EXIT trap in common.sh, not a line here --
 # one creator, one remover, and the crash path covered too.
 if [ -n "$JIT_TMP" ] && [ -s "$JIT_TMP" ]; then
-  # One open: the log line, then every marker append awk asked for.
+  # One open: every marker append awk asked for, the sentinel that ends them, then the
+  # log line. Marks are read into memory and applied AFTER the file is closed, so a
+  # channel with no sentinel applies nothing -- see jit_marks_read() in common.sh (#65).
   {
+    jit_marks_read
     IFS=$'\t' read -r AWK_MATCHES AWK_PATH
-    jit_shown_apply
   } < "$JIT_TMP"
+  jit_shown_apply
   _log_hook "pre-path" "$TOTAL" "$AWK_MATCHES << $AWK_PATH"
 fi
 

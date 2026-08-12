@@ -11,7 +11,33 @@ T_START=$(_ms)
 # process, and empty when this platform could not give us one. See common.sh (#60).
 jit_tmp_open
 
-cat | awk \
+# LC_ALL=C on this awk and nowhere else (#68). A malformed UTF-8 byte in the payload --
+# a paste out of a Latin-1 file, a multibyte sequence cut at a copy boundary, a filename
+# echoed from a differently-encoded checkout -- made one-true-awk abort the END block with
+# `illegal byte sequence`: nothing on stdout, not even `{}`, the diagnostic written into
+# the session, exit 0. Failing open AND being loud, which is what the top of common.sh
+# forbids in one sentence. gawk did not abort but printed a multibyte warning to the same
+# place. Under `C` both engines read the record as bytes and neither has anything to
+# decode, so neither can fail to.
+#
+# WHAT IT COSTS, checked rather than assumed. Under `C`, tolower() stops case-folding
+# non-ASCII. The Latin-1 fold table added in #31 already carries BOTH cases explicitly --
+# it had to, because one-true-awk tolower() never folded a multibyte capital -- so under
+# `C` gawk simply takes the branch one-true-awk always took. Driven over four spellings of
+# `detail` on both engines under both locales: all sixteen match. Driven again as a
+# differential over a mixed ASCII/French/German/Greek/Cyrillic corpus against this
+# repository own tree: the injected output is byte-identical UTF-8 vs C on each engine,
+# and byte-identical between the two engines under C.
+#
+# A letter outside Latin-1 is unaffected either way: the strip maps every non-ASCII byte
+# to a space regardless of case, so the two locales cannot disagree about it.
+#
+# The alternative -- sanitising the bytes before tolower() -- needs a pass that cannot
+# itself decode, which is the same trap one layer down.
+#
+# Scoped to this awk, not exported: rebuild-tsv.sh has its own awk and the opposite
+# contract (it may fail loudly), and it sources this hook shared file too.
+cat | LC_ALL=C awk \
   -v tools_tsv="$JIT_BASE/tools/00-manual/00-index.tsv" \
   -v tools_dir="$JIT_BASE/tools/00-manual" \
   -v vocab_base="$JIT_BASE/vocabulary" \
@@ -389,18 +415,25 @@ END {
   }
   # --- Write log info to temp file (bash reads it for timing) ---
   sc = 0; for (s in shown) sc++
-  tt_short = substr(tt, 1, 120)
+  # jit_log_text() first, THEN the truncation: both of these are payload text after
+  # jit_unescape(), so a JSON newline escape is a real newline by now and the log line
+  # would end early with the rest read back as marker lines (#65). See common.sh.
+  tt_short = substr(jit_log_text(tt), 1, 120)
+  tool_log = jit_log_text(tool_name)
   if (log_matches == "") log_matches = "(none)"
   # Empty means bash could not get a scratch file at all -- see jit_tmp_open() in
   # common.sh. Redirecting to "" is a FATAL awk error raised inside END, which would take
   # the block decision below with it: the #50 shape, out of the line meant to record it.
   if (log_tmp != "") {
-    printf "%s\t%s\t%d\t%s\n", tool_name, log_matches, sc, tt_short > log_tmp
-    # Lines 2..N of the same channel: one `path<TAB>key` per mark. bash appends them,
-    # because bash can test `[ -L ]` and survive a redirect that fails. This is also why a
-    # `block` decision can no longer be lost to an unusable marker: nothing between the
-    # rule matching and the print below opens a file any more. See common.sh.
+    # Marks FIRST, then the sentinel jit_shown_flush() writes, then the log line. One
+    # `path<TAB>key` per mark; bash appends them, because bash can test `[ -L ]` and
+    # survive a redirect that fails. This is also why a `block` decision can no longer be
+    # lost to an unusable marker: nothing between the rule matching and the print below
+    # opens a file any more. The ORDER is #65: the log line ends with payload text, so
+    # marks written after it could be forged with a newline -- and the rule forged
+    # already-shown here was a `block` one. See common.sh.
     jit_shown_flush(log_tmp)
+    printf "%s\t%s\t%d\t%s\n", tool_log, log_matches, sc, tt_short > log_tmp
     close(log_tmp)
   }
 
@@ -426,11 +459,14 @@ TOTAL=$((T_END - T_START))
 # line made of empty fields. Removal is the EXIT trap in common.sh, not a line here --
 # one creator, one remover, and the crash path covered too.
 if [ -n "$JIT_TMP" ] && [ -s "$JIT_TMP" ]; then
-  # One open: the log line, then every marker append awk asked for.
+  # One open: every marker append awk asked for, the sentinel that ends them, then the
+  # log line. Marks are read into memory and applied AFTER the file is closed, so a
+  # channel with no sentinel applies nothing -- see jit_marks_read() in common.sh (#65).
   {
+    jit_marks_read
     IFS=$'\t' read -r AWK_TOOL AWK_MATCHES AWK_SHOWN AWK_TEXT
-    jit_shown_apply
   } < "$JIT_TMP"
+  jit_shown_apply
   _log_hook "pre-tool ($AWK_TOOL)" "$TOTAL" "$AWK_MATCHES [shown:$AWK_SHOWN] << $AWK_TEXT"
 fi
 

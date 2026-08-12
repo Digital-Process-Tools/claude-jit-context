@@ -9,6 +9,68 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A tool payload could forge a marker write and silently disable a `block` rule** (#65).
+  The hooks hand awk one scratch file: line 1 was the log line, lines 2..N were the
+  `path<TAB>key` marks that `#59` moved out of awk and into the shell. Nothing separated
+  the two regions — and every hook's log line **ends** with a field taken verbatim from the
+  tool payload after `jit_unescape()`, so a JSON `\n` is a real newline by the time it is
+  written. A `Read` payload whose `file_path` carried one wrote a mark of its choosing, and
+  the rule it named was then treated as already-shown: a `block` rule that was indexed,
+  matched and had something to say did not fire, with no notice, nothing on stderr and exit
+  0. Failing open on the one dimension that can refuse a call.
+
+  It was not reachable against Claude Code, and that is why it was worth fixing rather than
+  why it was not: the 80-byte truncation of the log field is what stopped it against a
+  36-character session id. A truncation constant is not a check. Raising it, reordering a
+  log field or adding a payload-derived one turns the hole back on, and none of those reads
+  as a security change; `jit_session_key` accepts session ids from 1 character up.
+
+  The channel now has a boundary the payload cannot get in front of: marks are written
+  **first**, then a sentinel line, then the log line, and bash stops reading marks at the
+  first sentinel. Payload bytes therefore only ever land downstream of it, so a payload that
+  spells the sentinel out achieves nothing. A count written by awk was considered and
+  rejected — with the log line still first, a forged newline puts the forgery *inside* the
+  counted region and the count is honoured. A second temp file was rejected for its second
+  `mktemp` fork on a path budgeted at 30-110 ms. When the boundary itself is missing or
+  truncated, nothing is applied: that costs deduplication, never a rule.
+
+  Two things ride along. Every payload-derived log field now goes through `jit_log_text()`,
+  which strips `\n` and `\r` **before** the truncation — defence in depth, and it fixes a
+  reporting bug that needed no attacker: a multi-line prompt truncated its own log line at
+  the first newline, so `jit-misses.sh` reported it shorter than the user typed it. And the
+  marker-name filter in `jit_shown_apply()`, which tested for `/` alone, now refuses a
+  backslash as well — the check `jit_bad_entry_file()` has carried for Windows since 0.3.0,
+  with the comment explaining that Git Bash's Win32 layer treats it as a separator, did not
+  come along when the write moved into the shell. Not demonstrated as a traversal on
+  Windows; closed because this repository's own code says it must be.
+
+- **A malformed UTF-8 byte in a prompt silenced `pre-prompt-hook.sh` completely, and was
+  loud about it** (#68). A lone `0xE9` — a paste out of a Latin-1 file, a multibyte sequence
+  cut at a copy boundary — made the whole-record `tolower()`/`gsub()` pair abort
+  one-true-awk's `END` block with `illegal byte sequence`. Nothing on stdout, not even `{}`,
+  the awk diagnostic written into the user's session, exit 0. Failing open **and** being
+  loud, the two things the top of `common.sh` forbids, in one statement — and the plain
+  ASCII keyword sitting beside the bad byte was lost with everything else. gawk did not
+  abort but printed `Invalid multibyte data detected` into the same session.
+
+  Filed against the prompt hook and present in all three: driven on `pre-tool-hook.sh`, a
+  bad byte anywhere in a Bash command **defeated a `block` rule** — `git push <0xE9> origin`
+  returned nothing where `git push origin` was refused — and on `pre-path-hook.sh` it lost
+  the injection. All three awk invocations are now pinned to `LC_ALL=C`, where both engines
+  read the record as bytes and have nothing to decode.
+
+  The cost of `C` is that `tolower()` stops case-folding non-ASCII, and that was checked
+  rather than assumed: the Latin-1 table added in #31 already carries **both** cases,
+  because one-true-awk's `tolower()` never folded a multibyte capital anyway, so under `C`
+  gawk simply takes the branch one-true-awk always took. All four spellings of `detail`
+  match on both engines under both locales, and a differential over a mixed
+  ASCII/French/German/Greek/Cyrillic corpus is byte-identical UTF-8 against `C` on each
+  engine, and byte-identical between the two engines under `C`. On well-formed input the
+  engines already agreed; what changes is that they now agree on malformed input too. A
+  letter outside Latin-1 is unaffected either way: the strip maps every non-ASCII byte to a
+  space regardless of case. The pin is on the `awk` invocation and not exported;
+  `rebuild-tsv.sh` has the opposite contract and keeps its own locale.
+
 - **`pre-prompt-hook.sh` said it stripped accents; it called `tolower` and nothing else**
   (#31). The comment above the normalisation read "Lowercase + strip accents (basic ASCII
   transliteration)" and the line under it was a bare `tolower()`. It sat above the variable

@@ -334,6 +334,59 @@ printf 'CRLF rule line one\r\nbare\rCR mid-line\r\nCRLF rule line two\r\n' > "$T
 # put a raw byte in the JSON, and assert_no_raw_controls holds for both readings.
 printf 'blocked \001 reason \014 text \037 here\nnul \000 tail\n' > "$TOOLS_DIR/block-rule.md"
 
+# --- Issue #68: a malformed UTF-8 byte must not silence the hook ---------------------
+# The same defect as in test-pre-prompt-hook.sh, reached through a tool command instead
+# of a prompt, and worse here: on one-true-awk a lone 0xE9 anywhere in the command made
+# the END block abort, so a `block` rule that was indexed, correctly written and
+# genuinely matched did NOT block. `git push \351 origin` returned nothing at all while
+# `git push origin` was refused. Failing OPEN on the one dimension that can refuse a
+# call. gawk did not abort but printed a multibyte warning into the session.
+#
+# Both legs are needed and neither carries the other: "no error appeared" is true of a
+# hook that never ran, which is the failure being fixed.
+#
+# The locale is the caller's and it matters: `C` is where the bug does not reproduce.
+pick_utf8_locale() {
+  local c
+  for c in en_US.UTF-8 C.UTF-8 en_US.utf8 C.utf8; do
+    if [ "$(LC_ALL="$c" locale charmap 2>/dev/null)" = "UTF-8" ]; then
+      printf '%s' "$c"; return 0
+    fi
+  done
+  # No `locale` command, or no UTF-8 locale installed (Git Bash is the case in mind).
+  printf '%s' "${LC_ALL:-${LANG:-C}}"
+}
+UTF8_LOCALE="$(pick_utf8_locale)"
+BADBYTE="$(printf '\351')"
+echo ""
+echo "caller locale for the malformed-byte assertions: $UTF8_LOCALE"
+
+run_hook_engine_utf8() {
+  printf '%s\n' "$2" | LC_ALL="$UTF8_LOCALE" PATH="$ENGINE_BIN/$1:$PATH" \
+    CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2>/dev/null
+}
+
+assert_survives_malformed() {
+  local desc="$1" eng="$2" payload="$3" needle="$4" out err
+  out=$(mktemp); err=$(mktemp)
+  printf '%s\n' "$payload" | LC_ALL="$UTF8_LOCALE" PATH="$ENGINE_BIN/$eng:$PATH" \
+    CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" > "$out" 2> "$err"
+  if LC_ALL=C grep -qF "$needle" "$out"; then
+    PASS=$((PASS + 1)); echo "  PASS: $desc -- the rule still fired"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc -- the rule did NOT fire"
+    echo "    stdout: $(LC_ALL=C tr -c '[:print:]' '?' < "$out")"
+    echo "    stderr: $(LC_ALL=C tr -c '[:print:]' '?' < "$err")"
+  fi
+  if [ -s "$err" ]; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc -- the hook wrote into the session stderr"
+    echo "    stderr: $(LC_ALL=C tr -c '[:print:]' '?' < "$err")"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: $desc -- nothing reached stderr"
+  fi
+  rm -f "$out" "$err"
+}
+
 for eng in $ENGINES; do
   # Vocabulary matches are deduped per session. That used to mean a /tmp file keyed on
   # $PPID, which no test could name and which a recycled pid could poison (#17, #23); the
@@ -376,6 +429,23 @@ for eng in $ENGINES; do
 
   OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat src/détailcamel$u/x.php\"}}")
   assert_empty "[$eng] no case transition, no match" "$OUT"
+
+  echo "=== [$eng] a malformed UTF-8 byte does not defeat a block rule (issue #68) ==="
+  # `require` with no `remind`: the row blocks whenever --safe is absent, which is the
+  # strongest thing this hook does and the thing that must not fail open.
+  printf 'Bash\tmojiblock%s\tmbk-%s.md\tremind\t--safe\t\n' "$u" "$u" >> "$TOOLS_DIR/00-index.tsv"
+  echo "mojiblock rule context" > "$TOOLS_DIR/mbk-$u.md"
+  # The control, in the same fixture and the same run: an ordinary command blocks.
+  OUT=$(run_hook_engine_utf8 "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mojiblock$u now\"}}")
+  assert_blocked "[$eng] control: the rule blocks on a clean command" "$OUT"
+  assert_survives_malformed "[$eng] a bad byte in the command does not defeat the block" "$eng" \
+    "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mojiblock$u $BADBYTE now\"}}" \
+    '"decision":"block"'
+  # Both directions: the bad byte must not start blocking things the rule never matched.
+  # assert_empty rather than assert_not_contains, because "no block appeared" is also
+  # true of a hook that printed nothing at all -- which is the defect being fixed.
+  OUT=$(run_hook_engine_utf8 "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"mojiblok$u $BADBYTE now\"}}")
+  assert_empty "[$eng] and does not block a command the rule never matched" "$OUT"
 
   echo "=== [$eng] control characters in an entry body (issue #15) ==="
   OUT=$(run_hook_engine "$eng" '{"tool_name":"Bash","tool_input":{"command":"crlfcmd now"}}')

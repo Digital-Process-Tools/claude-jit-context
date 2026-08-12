@@ -283,6 +283,58 @@ printf 'CRLF rule line one\r\nbare\rCR mid-line\r\nCRLF rule line two\r\n' > "$P
 # put a raw byte in the JSON, and assert_no_raw_controls holds for both readings.
 printf 'control \001 and \014 and \037 here\nnul \000 tail\n' > "$PATHS_DIR/00-manual/ctrl.md"
 
+# --- Issue #68: a malformed UTF-8 byte must not silence the hook ---------------------
+# Filed against pre-prompt-hook.sh and reached here too: a lone 0xE9 in a file path made
+# one-true-awk abort the END block, so the hook printed NOTHING -- not even `{}` -- wrote
+# `illegal byte sequence` into the session and exited 0. gawk did not abort but printed a
+# multibyte warning to the same place. A path carrying a Latin-1 byte is not exotic: a
+# checkout made on a machine with a different filesystem encoding produces one.
+#
+# Both legs are needed and neither carries the other: "no error appeared" is true of a
+# hook that never ran, which is the failure being fixed.
+#
+# The locale is the caller's and it matters: `C` is where the bug does not reproduce.
+pick_utf8_locale() {
+  local c
+  for c in en_US.UTF-8 C.UTF-8 en_US.utf8 C.utf8; do
+    if [ "$(LC_ALL="$c" locale charmap 2>/dev/null)" = "UTF-8" ]; then
+      printf '%s' "$c"; return 0
+    fi
+  done
+  # No `locale` command, or no UTF-8 locale installed (Git Bash is the case in mind).
+  printf '%s' "${LC_ALL:-${LANG:-C}}"
+}
+UTF8_LOCALE="$(pick_utf8_locale)"
+BADBYTE="$(printf '\351')"
+echo ""
+echo "caller locale for the malformed-byte assertions: $UTF8_LOCALE"
+
+run_hook_engine_utf8() {
+  printf '%s\n' "$2" | LC_ALL="$UTF8_LOCALE" PATH="$ENGINE_BIN/$1:$PATH" \
+    CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2>/dev/null
+}
+
+assert_survives_malformed() {
+  local desc="$1" eng="$2" payload="$3" needle="$4" out err
+  out=$(mktemp); err=$(mktemp)
+  printf '%s\n' "$payload" | LC_ALL="$UTF8_LOCALE" PATH="$ENGINE_BIN/$eng:$PATH" \
+    CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" > "$out" 2> "$err"
+  if LC_ALL=C grep -qF "$needle" "$out"; then
+    PASS=$((PASS + 1)); echo "  PASS: $desc -- the rule still fired"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc -- the rule did NOT fire"
+    echo "    stdout: $(LC_ALL=C tr -c '[:print:]' '?' < "$out")"
+    echo "    stderr: $(LC_ALL=C tr -c '[:print:]' '?' < "$err")"
+  fi
+  if [ -s "$err" ]; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc -- the hook wrote into the session stderr"
+    echo "    stderr: $(LC_ALL=C tr -c '[:print:]' '?' < "$err")"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: $desc -- nothing reached stderr"
+  fi
+  rm -f "$out" "$err"
+}
+
 for eng in $ENGINES; do
   # Four rules per engine, each fired exactly once. This hook marks a rule file shown on
   # every fire, and within ONE call that mark still applies -- so the assertions below own
@@ -309,6 +361,23 @@ for eng in $ENGINES; do
   # The other direction: a path no rule names still says nothing at all.
   OUT=$(run_hook_engine "$eng" '{"tool_name":"Read","tool_input":{"file_path":"/project/src/OtherDir/x.txt"}}')
   assert_empty "[$eng] unmatched path stays silent" "$OUT"
+
+  echo "=== [$eng] a malformed UTF-8 byte does not silence the hook (issue #68) ==="
+  printf 'MojiP%s/\tmoji-%s.md\n' "$eng" "$eng" >> "$PATHS_DIR/00-manual/00-index.tsv"
+  echo "mojibake path body" > "$PATHS_DIR/00-manual/moji-$eng.md"
+  # The control first, in the same fixture: without it a green below could mean the rule
+  # was unreachable for a reason that has nothing to do with the bad byte.
+  OUT=$(run_hook_engine_utf8 "$eng" "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/project/src/MojiP$eng/x.txt\"}}")
+  assert_contains "[$eng] control: the rule matches with no bad byte" "$OUT" "mojibake path body"
+  # This hook marks a rule shown on every fire, but these payloads name no session, so
+  # nothing carries between calls and the same rule may fire again below.
+  assert_survives_malformed "[$eng] a bad byte elsewhere in the path does not lose the rule" "$eng" \
+    "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/project/src/MojiP$eng/${BADBYTE}x.txt\"}}" \
+    "mojibake path body"
+  # Both directions, and assert_empty rather than a not-contains: "the rule did not fire"
+  # is also true of a hook that printed nothing at all, which is the defect being fixed.
+  OUT=$(run_hook_engine_utf8 "$eng" "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/project/src/MojiQ$eng/${BADBYTE}x.txt\"}}")
+  assert_empty "[$eng] and a bad byte does not make an unnamed path match" "$OUT"
 done
 
 rm -rf "$ENGINE_BIN"

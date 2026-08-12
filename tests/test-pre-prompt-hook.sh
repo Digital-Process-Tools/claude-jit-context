@@ -310,6 +310,69 @@ assert_no_raw_controls() {
   rm -f "$out"
 }
 
+# --- Issue #68: a malformed UTF-8 byte must not silence the hook ---------------------
+# A lone 0xE9 -- a Latin-1 `e-acute` pasted out of a non-UTF-8 file, or a multibyte
+# sequence cut at a copy boundary -- made one-true-awk abort the END block with
+# `illegal byte sequence`, print NOTHING (not even `{}`), write the diagnostic into the
+# session and exit 0. gawk did not abort but printed `Invalid multibyte data detected`
+# to the same place. Failing open AND being loud: the two things common.sh forbids.
+#
+# The guarantee asserted: a malformed byte anywhere in the prompt must not stop a valid
+# ASCII keyword ELSEWHERE in that prompt from matching, and nothing may reach stderr.
+#
+# BOTH legs are needed and neither carries the other. "No error appeared" is true of a
+# hook that never ran -- which is the failure being fixed -- so the keyword leg is the
+# positive control, and it is taken from the SAME call rather than a neighbouring one.
+#
+# The locale is the caller's, and it matters: `C` is precisely where the bug does not
+# reproduce, so a suite that happened to inherit `C` would assert nothing. This picks a
+# UTF-8 locale when the machine has one. The hook pins the locale of its own awk, so
+# what is chosen here only controls what the caller hands it.
+pick_utf8_locale() {
+  local c
+  for c in en_US.UTF-8 C.UTF-8 en_US.utf8 C.utf8; do
+    if [ "$(LC_ALL="$c" locale charmap 2>/dev/null)" = "UTF-8" ]; then
+      printf '%s' "$c"; return 0
+    fi
+  done
+  # No `locale` command, or no UTF-8 locale installed (Git Bash is the case in mind).
+  # Falls back to whatever the caller already has rather than inventing one.
+  printf '%s' "${LC_ALL:-${LANG:-C}}"
+}
+UTF8_LOCALE="$(pick_utf8_locale)"
+BADBYTE="$(printf '\351')"
+TRUNCSEQ="$(printf '\303')"
+echo ""
+echo "caller locale for the malformed-byte assertions: $UTF8_LOCALE"
+
+# The bad byte has to reach awk under the caller locale chosen above, not the ambient
+# one, or the assertion silently stops being about anything on a machine set to `C`.
+run_hook_engine_utf8() {
+  printf '%s\n' "$2" | LC_ALL="$UTF8_LOCALE" PATH="$ENGINE_BIN/$1:$PATH" \
+    CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2>/dev/null
+}
+
+assert_survives_malformed() {
+  local desc="$1" eng="$2" payload="$3" needle="$4" out err
+  out=$(mktemp); err=$(mktemp)
+  printf '%s\n' "$payload" | LC_ALL="$UTF8_LOCALE" PATH="$ENGINE_BIN/$eng:$PATH" \
+    CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" > "$out" 2> "$err"
+  if LC_ALL=C grep -qF "$needle" "$out"; then
+    PASS=$((PASS + 1)); echo "  PASS: $desc -- the ASCII keyword still matched"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc -- the ASCII keyword did NOT match"
+    echo "    stdout: $(LC_ALL=C tr -c '[:print:]' '?' < "$out")"
+    echo "    stderr: $(LC_ALL=C tr -c '[:print:]' '?' < "$err")"
+  fi
+  if [ -s "$err" ]; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc -- the hook wrote into the session stderr"
+    echo "    stderr: $(LC_ALL=C tr -c '[:print:]' '?' < "$err")"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: $desc -- nothing reached stderr"
+  fi
+  rm -f "$out" "$err"
+}
+
 for eng in $ENGINES; do
   # Every fixture below is unique per engine AND per suite run. That was originally a guard
   # against the $PPID marker collision (#17, #23), which no test could name; the payloads
@@ -425,6 +488,24 @@ for eng in $ENGINES; do
   OUT=$(run_rebuilt "{\"prompt\":\"le detail$u deux fois\"}")
   assert_contains "[$eng] two spellings of one keyword still fire" "$OUT" "two spellings body"
   assert_not_contains "[$eng] and are named once, not twice" "$OUT" "detail$u|detail$u"
+
+  echo "=== [$eng] a malformed UTF-8 byte does not silence the hook (issue #68) ==="
+  printf 'mojibake%s\tmb-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"
+  echo "mojibake body" > "$VOCAB_DIR/00-manual/mb-$u.md"
+  # The control first, in the same fixture: without it a green below could mean the entry
+  # was unreachable for a reason that has nothing to do with the bad byte.
+  OUT=$(run_hook_engine "$eng" "{\"prompt\":\"mojibake$u please\"}")
+  assert_contains "[$eng] control: the ASCII keyword matches with no bad byte" "$OUT" "mojibake body"
+  assert_survives_malformed "[$eng] lone 0xE9 beside an ASCII keyword" "$eng" \
+    "{\"prompt\":\"mojibake$u $BADBYTE please\"}" "mojibake body"
+  # The other way this arrives: a paste cut at a copy boundary leaves a lead byte with no
+  # continuation byte after it.
+  assert_survives_malformed "[$eng] truncated multibyte sequence beside an ASCII keyword" "$eng" \
+    "{\"prompt\":\"mojibake$u $TRUNCSEQ please\"}" "mojibake body"
+  # And the negative direction, so this is not a rule that fires on everything: a bad byte
+  # must not conjure a match the same prompt without it would not produce.
+  OUT=$(run_hook_engine_utf8 "$eng" "{\"prompt\":\"mojibak$u $BADBYTE please\"}")
+  assert_empty "[$eng] a bad byte does not make a near miss match" "$OUT"
 
   echo "=== [$eng] control characters in an entry body (issue #15) ==="
   OUT=$(run_hook_engine "$eng" "{\"prompt\":\"a crlf$u question\"}")
