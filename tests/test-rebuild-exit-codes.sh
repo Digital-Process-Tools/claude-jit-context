@@ -155,7 +155,7 @@ rebuild
 assert_rc "and removing it returns to 0" 0 "$RC"
 
 echo ""
-echo "=== E. the two ADVISORY reports never move the exit code ==="
+echo "=== E. an ADVISORY report never moves the exit code ==="
 # An ambiguous keyword and a missing description: are both costs, not broken rows. The
 # entries fire correctly; nothing is refused. If either moved the code, the default tree
 # -- inject=full, descriptions optional by documented design -- would exit non-zero for
@@ -176,7 +176,9 @@ write_entry tools/00-manual/nodesc.md \
 rebuild
 assert_rc "an ambiguous keyword and a missing description: still exit 0" 0 "$RC"
 assert_contains "the ambiguity report still fired" "$(cat "$ERR")" "sharedterm"
-assert_contains "the no-description report still fired" "$(cat "$ERR")" "nodesc.md"
+# The no-description report belongs to the injection budget (#1) and is not on this
+# branch. What #47 asserts here is only that an advisory finding never moves the code:
+# the entry with no description: is still indexed, and the run still exits 0 above.
 # And the codes are not simply unreachable on this fixture: put the bad macro back beside
 # the advisories and 1 comes through them.
 write_entry tools/00-manual/bogus.md \
