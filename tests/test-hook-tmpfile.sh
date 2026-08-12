@@ -32,10 +32,14 @@
 #      log line, because it has no channel to carry one. That last assertion is the
 #      discriminating half -- before the fix the log line was written regardless, since
 #      $TMPDIR had nothing to do with the path.
-#   D  is the cleanup contract from #43: whatever creates the file removes it, keyed to
-#      this process. `rm -f /tmp/claude-hook-log-*.tmp` once deleted other live sessions'
-#      temps and must not come back, so the removal is an EXIT trap in the creating
-#      process and nothing sweeps by wildcard.
+#   D  is the cleanup contract from #43, and it is the WEAKEST of the four: read on its
+#      own, "the hooks left nothing behind" is satisfied by a hook that never touched
+#      $TMPDIR at all, which is exactly the pre-#60 behaviour. Driven against the unfixed
+#      scripts, D goes green. It is kept for the half that does discriminate -- a foreign
+#      file in the same directory SURVIVES, which is the regression `rm -f
+#      /tmp/claude-hook-log-*.tmp` was (it deleted other live sessions' in-flight temps)
+#      and which no future wildcard sweep could pass. What proves the file is under
+#      $TMPDIR in the first place is C, not D.
 #
 # Usage: bash tests/test-hook-tmpfile.sh
 
@@ -308,10 +312,16 @@ fi
 chmod 755 "$C_TMPDIR" 2>/dev/null
 
 echo ""
-echo "=== D: the creating process is the one that removes it, and nothing is left ==="
+echo "=== D: a foreign file in the same directory survives, and nothing is left ==="
 # #43: `rm -f /tmp/claude-hook-log-*.tmp` deleted other live sessions' in-flight temps.
-# The removal is keyed to this process, so a private TMPDIR must be empty afterwards --
-# and a foreign file sitting in it must survive.
+# The removal is keyed to this process, so a private TMPDIR holds nothing of ours
+# afterwards -- and the foreign file in it is still there.
+#
+# Half of this is weak by construction and is not dressed up: "nothing was left" passes
+# for a hook that never opened this directory, so it says nothing about the #60 fix. The
+# survival of the foreign file is the assertion with teeth, and it points forward rather
+# than back -- it fails the day someone reaches for a wildcard again. C is what shows the
+# scratch file is under $TMPDIR at all.
 D_TMPDIR="$TMP/mytmp"
 mkdir -p "$D_TMPDIR"
 FOREIGN="$D_TMPDIR/claude-jit-FOREIGN.tmp"
