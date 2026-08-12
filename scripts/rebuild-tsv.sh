@@ -16,6 +16,65 @@ LOG_FILE="$LOG_DIR/pipeline.log"
 # shellcheck disable=SC2034
 if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
 
+# --- Three outcomes, never two (#47) -----------------------------------------
+# This script used to have no non-zero exit at all: it already detected a macro it could
+# not expand, named it on stderr, and returned 0. So a clean rebuild and a rebuild that
+# indexed a row the matcher will refuse at load time were the same result -- and an index
+# built by a warned rebuild looks exactly like a good one on disk, gets committed, and
+# lives for months. That is this repository own defect class sitting in its index writer.
+#
+#   0  the index was written and every row can be honoured
+#   1  the index was written, and at least one row will be REFUSED by the matcher
+#   2  the index was not written, or not completely -- what is on disk is not this run
+#
+# The same 0/1/2 jit-dry-run.sh uses, on purpose: the two are read together and documented
+# in one table in paths/00-manual/tooling.md.
+#
+# NOT behind a --strict flag, and this was the judgement call. rebuild-tsv.sh is run by
+# hand after every frontmatter edit, so a new non-zero exit breaks `&&` chains people have
+# in their fingers -- but 1 is reachable ONLY through a `~@macro` an author wrote and got
+# wrong (jit_expand_match returns 0 for every value that is not a macro), so the chain that
+# stops belongs to the person who just wrote the dead rule. A flag only CI passes would
+# hand that person back the exit 0 that is the bug.
+#
+# The two ADVISORY reports below -- ambiguous keywords, and entries carrying no
+# `description:` -- never move the code. Those entries are indexed and fire correctly;
+# nothing about them is refused. Failing on them would make the documented default tree
+# exit non-zero and teach every author to ignore the status.
+JIT_RC=0
+# 2 outranks 1: an index that was not written is a worse claim than one that was.
+jit_rc() { [ "$1" -gt "$JIT_RC" ] && JIT_RC="$1"; return 0; }
+
+# Deliberately NOT `[ -d "$JIT_BASE" ]`. common.sh mkdir -p's "$JIT_BASE/.discovery/logs"
+# at source time, so the base directory exists by the time this line runs even in a project
+# that has no entry tree at all -- measured, and the reason the first cut of this guard
+# never fired. The question that survives that is whether any DIMENSION is there; if none
+# is, this run indexed nothing and 0 would be a lie about a tree it never saw.
+JIT_DIMS_FOUND=0
+for _jit_d in tools paths vocabulary; do
+  [ -d "$JIT_BASE/$_jit_d" ] && JIT_DIMS_FOUND=1
+done
+unset _jit_d
+if [ "$JIT_DIMS_FOUND" = 0 ]; then
+  echo "FATAL    no entry tree at $JIT_BASE" >&2
+  echo "         -- none of tools/, paths/ or vocabulary/ is there, so nothing was indexed." >&2
+  echo "         JIT_BASE resolves against CLAUDE_PROJECT_DIR, never the working directory," >&2
+  echo "         so a rebuild run from the wrong root indexes nothing and used to say so" >&2
+  echo "         with an exit 0. Currently CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so .>}" >&2
+  exit 2
+fi
+
+# Truncation failing left the previous index in place while every line after it reported
+# the rule count read back OUT of that stale file -- a success, with a number, for an index
+# nobody rebuilt. The other dimensions are independent, so the run continues and the code
+# is raised once at the end.
+truncate_index() {
+  if : > "$1" 2>/dev/null; then return 0; fi
+  echo "FATAL    $1: could not be written -- that index was NOT rebuilt and is now stale." >&2
+  jit_rc 2
+  return 1
+}
+
 # --- Tool rules: parse frontmatter from .md files ---
 # Extracts tool, match, mode, require, forbid from YAML frontmatter
 build_tool_tsv() {
@@ -26,7 +85,7 @@ build_tool_tsv() {
   T0=$(_ms)
 
   [ -d "$dir" ] || return
-  : > "$tsv"
+  truncate_index "$tsv" || return
 
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -48,7 +107,7 @@ build_tool_tsv() {
     # awk pattern and no hook learns a new vocabulary. jit_expand_match returns anything
     # that is not a macro unchanged, and names a macro it cannot honour on stderr while
     # writing the row through -- see common.sh for why the row is not dropped.
-    match=$(jit_expand_match "$match" tools "$label/$filename")
+    match=$(jit_expand_match "$match" tools "$label/$filename") || jit_rc 1
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$tool" "$match" "$filename" "${mode:-remind}" "$require" "$forbid" >> "$tsv"
   done
@@ -86,7 +145,7 @@ build_vocab_tsv() {
     return
   fi
 
-  : > "$tsv"  # truncate
+  truncate_index "$tsv" || return
 
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -147,7 +206,7 @@ build_vocab_path_tsv() {
   T0=$(_ms)
 
   [ -d "$dir" ] || return
-  : > "$tsv"
+  truncate_index "$tsv" || return
 
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -194,7 +253,7 @@ build_path_tsv() {
   T0=$(_ms)
 
   [ -d "$dir" ] || return
-  : > "$tsv"
+  truncate_index "$tsv" || return
 
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -209,7 +268,7 @@ build_path_tsv() {
     # Paths carry no invocation macro -- their subject is a file path, not a command --
     # but the check runs here so that writing one is REFUSED and named rather than
     # indexed as a literal that can never match a path.
-    match_line=$(jit_expand_match "$match_line" paths "$label/$filename")
+    match_line=$(jit_expand_match "$match_line" paths "$label/$filename") || jit_rc 1
 
     printf '%s\t%s\n' "$match_line" "$filename" >> "$tsv"
   done
@@ -247,3 +306,13 @@ for tsv in "$VOCAB_BASE"/*/00-index.tsv; do
 done
 [ "$HAS_AMBIG" = "0" ] && echo "(none — all keywords appear in ≤$THRESHOLD files)" >&2
 echo "" >&2
+# One line saying which of the three this run was. The REFUSED and FATAL lines above are
+# the detail, but they scroll past inside two reports; this is what is on screen when the
+# shell hands the prompt back, and it is the only place the number itself is spelled out.
+case "$JIT_RC" in
+  1) echo "rebuild-tsv: exit 1 -- the index was written, and at least one row above will be REFUSED" >&2
+     echo "             by the matcher. That rule is on disk and will never fire." >&2 ;;
+  2) echo "rebuild-tsv: exit 2 -- an index could not be written. What is on disk is NOT what this" >&2
+     echo "             run built." >&2 ;;
+esac
+exit "$JIT_RC"

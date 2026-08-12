@@ -13,7 +13,7 @@ match: (^|/)(scripts/(rebuild-tsv|jit-dry-run|jit-misses)\.sh|\.github/scripts/a
 | --- | --- | --- | --- |
 | `jit-dry-run.sh` | every pattern honourable, every index current, every `config.env` line honoured | at least one pattern refused, or a `00-manual/` entry is `STALE` — you did not rebuild | could not evaluate the tree at all. Never a pass. |
 | `jit-misses.sh` | findings, **or** the log was read and nothing recurs — the two are distinguished in the text, not the status | — | `SKIPPED`, with a named reason |
-| `rebuild-tsv.sh` | **every path, including a refused macro** — measured 2026-08-12, it has no non-zero exit at all | — | — |
+| `rebuild-tsv.sh` | the index was written and every row can be honoured | the index was written, and at least one row will be **refused** by the matcher — a `~@macro` it could not expand, written through unexpanded | could not build the index: no `tools/`, `paths/` or `vocabulary/` under `JIT_BASE`, or an index file it could not write |
 | `assemble_changelog.py` | assembled, or `--check` found nothing to refuse | a fragment or the request was refused — bad filename, unknown section, a body that does not name its own issue, a fragment the CommonMark guard rejects, an entry count that did not balance, or a `--version` disagreeing with `plugin.json` | could not evaluate: no `changelog.d/`, no `CHANGELOG.md`, no `[Unreleased]` heading, an unreadable `plugin.json`, nothing to assemble, **or `markdown-it-py` not importable** |
 
 **`assemble_changelog.py` is Python and that is not the runtime rule being broken.** The `bash`/`awk`/`perl` promise is about the hooks, which run in a stranger's session; this runs in CI and at a tag. It lives under `.github/` rather than `scripts/` so the separation is structural — nothing in `.github/` ships inside the plugin — and its exit codes were **swapped** on the way over from `claude-supertool`, whose script uses 1 for skipped and 2 for refused. A fifth tool here with inverted codes is exactly the trap this repository exists to describe.
@@ -22,9 +22,12 @@ Its guard is a real CommonMark parser and there is deliberately **no text-scanni
 
 `--version` is an argument *and* is verified against the manifest: reading it out of `plugin.json` would make the `CHANGELOG.md` heading a copy of that file, and `tests/test-version-sites.sh` compares exactly those two — the guard would then be asserting only that this script ran.
 
-A `WARN` row in `jit-dry-run.sh` never moves the exit code. If you add a check, decide which of the three it is before you write it.
+A `WARN` row in `jit-dry-run.sh` never moves the exit code, and neither does `rebuild-tsv.sh`'s **advisory** ambiguous-keyword tally. Those entries are indexed and fire correctly; nothing about them is refused, and failing on them would make the documented default tree exit non-zero and teach every author to ignore the status. If you add a check, decide which of the three it is before you write it.
 
-That `rebuild-tsv.sh` row is a gap, not a design. It reports a refused macro on stderr and then exits `0`, so CI cannot tell a clean rebuild from one that indexed a pattern the hook will refuse — the rule reads as enforced and never fires, which is the whole failure this repository is about. If you are already in this file for another reason, that is the fix to make; do not import the hook's exit-`0` contract as a justification for leaving it.
+`rebuild-tsv.sh`'s codes were only added in #47 — until then it reported a refused macro on stderr and exited `0`, so CI could not tell a clean rebuild from one that indexed a pattern the hook will refuse. Two things about them are worth knowing before you change them:
+
+- **`1` is not a general lint tally.** `jit_expand_match()` returns 0 for every value that is not a macro, so the only way to reach `1` is a `~@macro` an author wrote and got wrong. That is why there is no `--strict` flag: the `&&` chain that stops belongs to the person who just wrote the dead rule, and a flag only CI passes would hand that person back the exit `0` that was the bug.
+- **`2` cannot be `[ -d "$JIT_BASE" ]`.** `common.sh` `mkdir -p`s `$JIT_BASE/.discovery/logs` when it is sourced, so the base directory exists by the time this script runs even in a project with no entry tree at all. The guard asks whether any **dimension** directory is there.
 
 **`rebuild-tsv.sh` is the only writer of `00-index.tsv`.** The markdown is the source; the TSV is what the hooks read, and nothing else may write it — `tools/00-manual/no-hand-editing-the-index.md` blocks the edit. It also expands the `~@invocation` macros into real EREs, so a macro it does not know is refused, named, and written through unexpanded, which makes the hook refuse that row too rather than silently match nothing.
 
@@ -41,6 +44,7 @@ Which suite covers what — run the one you touched, then `tests/run-all.sh`:
 ```bash
 bash tests/test-jit-dry-run.sh        # jit-dry-run.sh: flags, exit codes, STALE detection
 bash tests/test-jit-misses.sh         # jit-misses.sh: the three outcomes
+bash tests/test-rebuild-exit-codes.sh # rebuild-tsv.sh: 0/1/2, each against a fixture
 bash tests/test-invocation-macro.sh   # rebuild-tsv.sh: macro expansion, and refusal
 bash tests/test-frontmatter-quotes.sh # rebuild-tsv.sh: frontmatter parsing
 bash tests/test-assemble-changelog.sh # assemble_changelog.py: the guard, every refusal, the count
@@ -48,5 +52,7 @@ bash tests/test-changelog-fragment-refs.sh # nothing names a fragment the next t
 bash tests/test-dogfood-entries.sh    # this repo's own rules, both directions
 bash tests/run-all.sh                 # non-zero on any failure
 ```
+
+**A suite that drives `rebuild-tsv.sh` over a deliberately broken fixture must not run under `set -e`.** `test-invocation-macro.sh` and `test-frontmatter-quotes.sh` each build a tree containing a macro the writer refuses, on purpose — since #47 that rebuild exits `1`, and `set -e` would abort the suite at the fixture it exists to construct. They use `set -uo pipefail` for that reason; adding the `-e` most other suites carry is the tidy-up that breaks them.
 
 **Write the test first and watch it fail.** A test written after the fix asserts what the code happens to do. `paths/00-manual/tests.md` fires when you open the suite and carries what makes an assertion here non-vacuous.
