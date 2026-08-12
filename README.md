@@ -452,13 +452,38 @@ Timings and matches are appended to `.claude/jit-context/.discovery/logs/hooks.l
 
 `(none)` in the match column means nothing fired — useful for finding knowledge gaps.
 
+## What the team keeps asking that nobody has written down
+
+A prompt that matched nothing is already recorded, on every machine that has the plugin installed. When the same words come back a third time, that is not a hunch about what the documentation is missing — it is a count.
+
+```bash
+bash scripts/jit-misses.sh
+```
+
+```
+jit-misses: .claude/jit-context/.discovery/logs/hooks.log
+  1361 line(s), 27 prompt record(s), 26 with no vocabulary match, 14 set aside (slash command or harness block)
+
+  recurring misses — prompts sharing a content word, most-missed first:
+
+  2x  tdd
+        are you tdd ?
+        so is tdd in your skill ?
+```
+
+Two prompts are **the same miss** when they share a content word — a token of three or more characters that is not a stopword — after the same normalisation the prompt hook applies before looking a keyword up. So `xsd validation` and `validate the xsd` group on `xsd`; `validation` and `validate` do not, because nothing here stems. There is no similarity metric and no threshold to tune, and every prompt behind a row is printed under it, so you can always see why two merged and disagree with the grouping.
+
+It reads and prints. No file is written, no entry is created, no hook fires and nothing leaves the machine — it tells you what is worth writing, and the entry still has an author. Three outcomes, never two: a ranked list, `ok` when the log was read and nothing recurs, or `SKIPPED` with the reason named and exit 2 when the log is absent, empty, in another format, or holds no prompt records at all. An empty report that could mean either is the defect this plugin exists to talk about.
+
+`--log PATH` reads a log elsewhere, `--min N` changes how many misses make a recurrence (default 2), `--top N` caps the list, `--help` carries the grouping rule.
+
 ## Tests
 
 ```bash
 bash tests/run-all.sh
 ```
 
-84 assertions across the three hooks, covering matching, normalization, modes, blocking, session-once behaviour and malformed input. No dependencies beyond bash and awk.
+380 assertions across ten suites, covering matching, normalization, modes, blocking, session-once behaviour, malformed input, the dry-run and the miss report. Engine-sensitive assertions run once per `awk` on the machine. No dependencies beyond bash, `awk` and `perl`.
 
 ## Why not `.claude/rules/`?
 

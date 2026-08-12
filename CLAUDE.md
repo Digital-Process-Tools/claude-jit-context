@@ -67,6 +67,7 @@ Lints every pattern in the tree you name, prints which rule fires for a sample c
 | `scripts/common.sh`      | Sourced by all of them. Paths, logging, optional `config.env`.             |
 | `scripts/rebuild-tsv.sh` | Frontmatter → `00-index.tsv`. The only writer of that file.               |
 | `scripts/jit-dry-run.sh` | Lints one tree's patterns and dry-runs a sample call against it.          |
+| `scripts/jit-misses.sh`  | Reads the hook log and reports repeated vocabulary misses. Writes nothing. |
 | `tests/test-*.sh`        | One suite per hook, plus `run-all.sh`.                                     |
 | `examples/jit-context/`  | Shipped example entries. They carry real frontmatter and must stay valid.  |
 | `.claude/jit-context/`   | This repo's own entries. Not shipped — dogfood.                            |
