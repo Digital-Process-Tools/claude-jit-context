@@ -211,7 +211,11 @@ fi
 # the hole -- there is one function so there is one place to check.
 jit_log_write() {
   if [ "$JIT_LOG_DISABLED" = 0 ]; then
-    printf '%s\n' "$1" >> "$LOG_FILE" 2>/dev/null
+    # Same ordering trap as jit_shown_apply below: `>> "$LOG_FILE" 2>/dev/null` suppresses
+    # nothing, because the redirection that fails is applied before the one that would have
+    # hidden it. A log directory removed after common.sh created it printed straight into
+    # the session.
+    printf '%s\n' "$1" 2>/dev/null >> "$LOG_FILE"
   fi
 }
 
@@ -265,6 +269,83 @@ if [ -n "$JIT_STATE_DIR" ] && [ -d "$JIT_BASE" ] && [ ! -d "$JIT_STATE_DIR" ]; t
   fi
 fi
 if [ ! -d "$JIT_STATE_DIR" ] || [ ! -w "$JIT_STATE_DIR" ]; then JIT_STATE_DIR=""; fi
+
+# --- The marker FILE gets no sweep, and that is a measurement, not an oversight ---------
+# The four tests above are on ancestors. The marker itself got none, awk cannot lstat, and
+# `print key >> file` therefore followed a committed link and appended entry names into a file
+# outside the tree (#49) -- the shape #27 closed for hooks.log, one concatenation to the left.
+#
+# The WRITE now gets a real `[ -L ]`, because the write moved into bash: see
+# jit_shown_apply() below. That is the whole of #49 and it costs one builtin.
+#
+# The READ stays in awk, because only awk knows the session id, and it is NOT swept. The
+# obvious sweep -- glob this directory, refuse it if anything in it is a link or not an
+# ordinary file -- was written, measured and removed. It is O(entries), and the number of
+# entries is a quantity a CLONED REPOSITORY chooses: `.discovery/state/` is inside the tree
+# and git carries whatever is committed there. Interleaved against the unpatched hook on the
+# same machine, 60 calls per point:
+#
+#     entries      0      500     2000     8000
+#     unpatched   30 ms   30 ms   30 ms    45 ms
+#     swept       30 ms   41 ms   84 ms   238 ms   (worst sample 565 ms)
+#
+# That is JIT_SYMLINKS_MAX's failure re-introduced by the fix for another one: a repository
+# choosing how long every prompt in the session takes. A cap does not save it either, because
+# the cost is the glob expansion itself, before any test in the loop runs.
+#
+# What the unswept read can actually do, stated so it can be argued with: it can read a file
+# it should not have (a link), and the only use of what it reads is a set of names to SKIP.
+# So the worst outcome is fewer injections -- never a write outside the tree, never content
+# in the context, never a lost injection. On one-true-awk one shape is also loud: a path that
+# opens and then cannot be read, i.e. a DIRECTORY at the marker name, raises a fatal i/o
+# error at program exit. jit_shown_load() drops its close() so that error lands AFTER every
+# print has flushed rather than instead of them, and session-start-hook.sh removes a link or
+# an empty directory sitting at this session's two names before any hook runs. Both routes
+# need the session id guessed first.
+
+# --- Applying the marks awk asked for ----------------------------------------
+# awk used to append them itself. An unopenable marker path is a FATAL awk error, raised
+# inside END before the final `print`, so a rule that was indexed, matched and had something
+# to say emitted NOTHING, exited 0, and printed an awk diagnostic into the session's stderr
+# (#50): failing open and being loud, the two things this file's own comment at the top
+# forbids. Three routes reached it -- a missing directory, an unwritable file, and the state
+# directory being removed between the `[ -d ]` above and the write, which needs no guessed
+# session id at all.
+#
+# awk cannot guard a redirect and this repo will not add a runtime dependency to get one.
+# bash can: `>>` with `2>/dev/null` is a builtin that cannot kill anything, and `[ -L ]` is
+# the check awk was missing. So awk emits `path<TAB>key` lines down the temp channel every
+# hook already uses for its log line, and this reads them back.
+#
+# There is still exactly ONE answer to "what is a session id": awk parses it, awk builds the
+# path, and bash never re-derives either. What bash does here is CONTAIN what it was handed
+# -- the same posture as jit_bad_entry_file() -- because that channel is a file in /tmp named
+# after a pid, and a path arriving over it is not evidence of anything.
+jit_shown_apply() {
+  local f k name
+  [ -n "$JIT_STATE_DIR" ] || return 0
+  while IFS=$'\t' read -r f k; do
+    [ -n "$f" ] && [ -n "$k" ] || continue
+    name="${f#"$JIT_STATE_DIR"/}"
+    # Unchanged means the path was not under the state directory at all.
+    [ "$name" != "$f" ] || continue
+    case "$name" in
+      */*) continue ;;
+      path-shown-*.txt | vocab-shown-*.txt) ;;
+      *) continue ;;
+    esac
+    # The test awk could not make. Checked here rather than in the sweep above as well,
+    # because a link can be planted after that sweep ran and before this line does.
+    [ -L "$f" ] && continue
+    # `2>/dev/null` BEFORE the append, not after. Redirections are applied left to right,
+    # so with `>> "$f" 2>/dev/null` the append is the one that fails and it fails while
+    # stderr is still the session -- which printed "No such file or directory" into the
+    # stranger's terminal, the exact loudness this whole change is about, out of the line
+    # written to prevent it. Driven: it is what section C of the suite caught.
+    printf '%s\n' "$k" 2>/dev/null >> "$f"
+  done
+  return 0
+}
 
 # Timestamp with ms precision (single perl call, ~11ms)
 _ts() { perl -MTime::HiRes -MPOSIX -e 'my $t=Time::HiRes::time(); printf("%s.%03d\n", strftime("%H:%M:%S",localtime($t)), ($t*1000)%1000)'; }
@@ -894,17 +975,34 @@ function jit_shown_file(dir, kind, raw, fs, fe, n,   k) {
   if (k == "") return ""
   return dir "/" kind "-shown-" k ".txt"
 }
+# No close(). getline itself is safe -- an unopenable path returns -1 and a path that opens
+# but cannot be read returns 0 -- but one-true-awk raises a FATAL i/o error from close() on,
+# say, a directory, and raises it again at program exit if the close is dropped. Dropping it
+# is still worth doing: the diagnostic then arrives after every print has been flushed rather
+# than instead of them. The state-directory sweep in bash is what stops it arriving at all;
+# this is the second layer, and neither one costs a fork.
+#
+# Nothing re-reads a marker inside one invocation, so no handle needs freeing: the process is
+# about to exit.
 function jit_shown_load(file, set,   line) {
   if (file == "") return
   while ((getline line < file) > 0) set[line] = 1
-  close(file)
 }
+# Accumulated, never written. `print key >> file` is fatal when the path will not open, and
+# it is fatal inside END -- taking the injection, the block decision and the log line with
+# it, and printing an awk diagnostic into a stranger session (#50). It also followed a
+# symbolic link, because awk cannot lstat (#49). Both belong to bash now: jit_shown_flush()
+# hands these lines to the hook temp channel and jit_shown_apply() in the shell does the
+# append, behind a `[ -L ]` and a `2>/dev/null` that awk has no way to write.
 function jit_shown_mark(file, key) {
   if (file == "") return
-  print key >> file
+  JIT_MARKS = JIT_MARKS file "\t" key "\n"
 }
-function jit_shown_close(file) {
-  if (file != "") close(file)
+# Called once, straight after the hook writes its log line to the same file, so the marks are
+# lines 2..N of a channel bash was already opening. A second temp file would be a second
+# create and unlink on a path budgeted at 30-110 ms.
+function jit_shown_flush(out) {
+  if (JIT_MARKS != "") printf "%s", JIT_MARKS > out
 }
 function jit_field(raw, a, b,   o, i) {
   if (a == "" || b == "" || a > b) return ""

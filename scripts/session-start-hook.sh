@@ -45,7 +45,15 @@ if [ -n "$JIT_STATE_DIR" ]; then
   # and every other session in this project is none of our business.
   if [ -n "$SESSION_ID" ]; then
     rm -f "$JIT_STATE_DIR/vocab-shown-$SESSION_ID.txt" \
-          "$JIT_STATE_DIR/path-shown-$SESSION_ID.txt"
+          "$JIT_STATE_DIR/path-shown-$SESSION_ID.txt" 2>/dev/null
+    # A directory at one of those two names is what makes one-true-awk raise a fatal i/o
+    # error on the marker READ, which the hooks cannot test for and cannot afford to sweep
+    # for (see common.sh). It is O(1) here, once per session, before any hook runs. `rmdir`
+    # and not `rm -rf`: this clears what got in the way, it does not delete a tree because a
+    # name matched. git cannot commit an empty directory, so a directory that survives this
+    # was made locally -- and is left alone rather than removed by a hook.
+    rmdir "$JIT_STATE_DIR/vocab-shown-$SESSION_ID.txt" \
+          "$JIT_STATE_DIR/path-shown-$SESSION_ID.txt" 2>/dev/null
   fi
   # Markers die with the tree, which bounds the leak but does not bound a long-lived
   # checkout: one pair per session, forever. So they age out here -- in a directory this

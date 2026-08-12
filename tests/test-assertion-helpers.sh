@@ -163,10 +163,34 @@ fi
 # `grep -q` and `head` are the two early-exiting right-hand sides in this tree.
 echo ""
 echo "Structural: nothing pipes into an early-exiting reader"
+# Comments are skipped: this repository documents the rule in the suites it applies to,
+# and a scan that cannot tell a prohibition from an occurrence punishes writing it down.
+# The control below proves the skip did not disarm the scan.
+scan_file() {
+  awk '/^[[:space:]]*#/ { next }
+       /\|[[:space:]]*(grep[[:space:]]+-[a-zA-Z]*q|head[[:space:]])/ { print FNR ": " $0 }' "$1"
+}
+
+CONTROL_FIXTURE="$WORK/scan-control.sh"
+# Assembled rather than written out: this file is itself scanned, and a literal
+# occurrence here would be indistinguishable from the thing being prohibited.
+Q="q"
+printf '%s\n' \
+  "# a piped read, in prose -- must not flag: cmd | grep -$Q needle" \
+  "cmd | grep -$Q needle" > "$CONTROL_FIXTURE"
+control_hits=$(scan_file "$CONTROL_FIXTURE")
+case "$control_hits" in
+  *"2: "*) case "$control_hits" in
+             *"1: "*) fail "control: the scan flagged the commented line" "$control_hits" ;;
+             *)       pass "control: the scan flags real code and skips the comment" ;;
+           esac ;;
+  *) fail "control: the scan found nothing -- every result below is vacuous" "$control_hits" ;;
+esac
+
 SCANNED=0
 for f in "$TESTS_DIR"/*.sh; do
   SCANNED=$((SCANNED + 1))
-  hits=$(grep -nE '\|[[:space:]]*(grep[[:space:]]+-[a-zA-Z]*q|head[[:space:]])' "$f")
+  hits=$(scan_file "$f")
   if [ -n "$hits" ]; then
     fail "$(basename "$f"): pipes into an early-exiting reader" "$hits"
   fi

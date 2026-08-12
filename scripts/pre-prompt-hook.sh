@@ -181,13 +181,14 @@ END {
     cnote = jit_config_notice(config_refused, config_refused_n)
     matched = (matched == "") ? cnote : cnote "\n---\n" matched
   }
-  jit_shown_close(shown_file)
-
   # --- Log info ---
   sc = 0; for (s in shown) sc++
   msg_short = substr(msg, 1, 80)
   if (log_matches == "") log_matches = "(none)"
   printf "%s\t%d\t%s\n", log_matches, sc, msg_short > log_tmp
+  # Lines 2..N of the same channel: one `path<TAB>key` per mark. bash appends them, because
+  # bash can test `[ -L ]` and survive a redirect that fails. See common.sh.
+  jit_shown_flush(log_tmp)
   close(log_tmp)
 
   # --- Output JSON ---
@@ -205,7 +206,11 @@ T_END=$(_ms)
 TOTAL=$((T_END - T_START))
 
 if [ -f "$LOG_TMP" ]; then
-  IFS=$'\t' read -r AWK_MATCHES AWK_SHOWN AWK_MSG < "$LOG_TMP"
+  # One open: the log line, then every marker append awk asked for.
+  {
+    IFS=$'\t' read -r AWK_MATCHES AWK_SHOWN AWK_MSG
+    jit_shown_apply
+  } < "$LOG_TMP"
   _log_hook "pre-prompt" "$TOTAL" "$AWK_MATCHES [shown:$AWK_SHOWN] << $AWK_MSG"
   rm -f "$LOG_TMP"
 fi
