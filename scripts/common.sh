@@ -6,9 +6,137 @@ _ms() { perl -MTime::HiRes -e 'printf("%.0f\n",Time::HiRes::time()*1000)'; }
 
 JIT_BASE="${CLAUDE_PROJECT_DIR:-.}/.claude/jit-context"
 
+# --- Entry files and layer directories that are SYMBOLIC LINKS ---------------
+# PR #11 stopped an index row from NAMING a path outside its layer. It did not stop the
+# entry file from BEING a link to one: the name in the index is bare, so it passes that
+# check, and getline follows the link. Reproduced 2026-08-11 at all five read sites, and
+# again with any directory on the way to one linked instead -- the layer, the dimension,
+# .claude/jit-context/ or .claude/ -- each of which needs nothing inside the tree but the
+# one link, since the linked directory carries its own 00-index.tsv. git clone recreates
+# all of them, so cloning a repository is the whole attack.
+#
+# awk cannot lstat, and the architecture is one awk process per hook with no per-row
+# subprocess. So the lstat is paid ONCE per hook invocation, here, and never per row.
+#
+# It is paid with a glob and a [ -L ] test, both of which are shell BUILTINS -- this forks
+# nothing. Measured end to end on a 1008-entry tree, interleaved against the unpatched
+# hook to cancel machine load: 31 ms before, 43 ms after. On a 5-entry tree the difference
+# did not clear the noise floor. A find fork costs the same walk plus a process.
+#
+# Every hook does its own sweep. Nothing is cached to a marker and nothing is carried
+# between hooks, because a cache is only as good as the run that filled it: a session
+# whose runner never fires SessionStart would have failed OPEN, and failing open is the
+# wrong direction for a disclosure.
+#
+# The verdict is structural, not a resolution: a link is refused whether or not its target
+# is inside the tree. awk has no realpath, and buying one costs a process per row -- the
+# exact cost this design exists to avoid. An entry that needs to live elsewhere is a copy
+# or a generated layer, not a link.
+#
+# The list travels to the hooks through the ENVIRONMENT, for the reason JIT_CONFIG_REFUSED
+# does: it is newline-separated, and a newline in an awk -v value is a fatal error raised
+# before the program runs.
+export JIT_SYMLINKS=""
+
+# Populated shallow-to-deep, so a directory already in the set marks its children too --
+# a regular file inside a linked layer directory is not itself a link, and lstat on it
+# says nothing. Membership is a newline-delimited substring test, because macOS ships
+# bash 3.2 and has no associative arrays.
+#
+# nullglob is deliberately NOT set: an unmatched glob stays literal, that literal is
+# neither a link nor a known parent, and it falls out of both tests on its own. Toggling
+# a shell option in a sourced file would change it for whatever sourced us.
+JIT_NL="
+"
+jit_scan_symlinks() {
+  local base="$1" f parent found=0
+  JIT_SYMLINKS="$JIT_NL"
+  # `.claude/` is inside the repository too, and git carries it as a link like anything
+  # else, so `.claude -> /elsewhere` reaches the same disclosure one level above anything
+  # the glob below can see -- with a jit-context/ inside the target it needs nothing in the
+  # clone but that one link. Driven, not reasoned: it leaked on the first cut of this fix.
+  #
+  # Exactly one ancestor is tested and the walk stops there. Everything above the project
+  # directory is the user's own filesystem rather than something the clone chose, and on
+  # macOS /tmp is itself a symlink -- a sweep that walked to the root would refuse every
+  # honest tree opened through one.
+  if [ "${base%/*}" != "$base" ] && [ -L "${base%/*}" ]; then
+    JIT_SYMLINKS="$JIT_SYMLINKS${base%/*}$JIT_NL$base$JIT_NL"
+    found=1
+  fi
+  for f in "$base" "$base"/* "$base"/*/* "$base"/*/*/*; do
+    if [ -L "$f" ]; then
+      JIT_SYMLINKS="$JIT_SYMLINKS$f$JIT_NL"
+      found=1
+      continue
+    fi
+    # The parent test is skipped entirely until a link has actually been seen, and on a
+    # tree with none it never runs at all. That guard is the whole cost story, and it is
+    # the reason the 12 ms above is 12 and not 70: measured in isolation on the same
+    # 1008-entry tree, the sweep cost 70 ms with this test running unconditionally and
+    # 12 ms with it guarded -- against a glob-and-lstat floor of 12 ms, so guarded it adds
+    # nothing measurable of its own. The cost was the pattern match, per file, against a
+    # set that is empty in every honest tree.
+    #
+    # The globs are issued shallow-to-deep as four separate batches, so every entry at one
+    # depth is recorded before any entry at the next is tested. Descendants can only follow
+    # an ancestor, and nothing is missed by not looking earlier.
+    [ "$found" = 1 ] || continue
+    [ "$f" != "$base" ] || continue
+    parent="${f%/*}"
+    case "$JIT_SYMLINKS" in
+      *"$JIT_NL$parent$JIT_NL"*) JIT_SYMLINKS="$JIT_SYMLINKS$f$JIT_NL" ;;
+    esac
+  done
+  export JIT_SYMLINKS
+}
+
+jit_scan_symlinks "$JIT_BASE"
+
+# --- The log path is inside the project, so a clone chooses where we write ---
+# LOG_DIR and LOG_FILE are built by concatenating onto JIT_BASE, and until 2026-08-12
+# nothing checked them. `mkdir -p` follows a symlink and `>>` follows a symlink, and git
+# tracks symlinks as mode 120000 -- so a committed
+# `.claude/jit-context/.discovery/logs/hooks.log -> ~/.zshenv` means one prompt appends
+# attacker-chosen text to the victim's rc file, and it runs at the next shell start.
+# Reproduced with NO keyword match, NO rule fired and NO entry file present: the refusal
+# path alone writes a line, and the row's file-name column is the payload.
+#
+# jit_scan_symlinks() does not cover this. It globs with `*`, which does not match a
+# leading dot, so `.discovery` is invisible to it by construction -- and the log path is a
+# different concatenation from the entry path in any case. Four positions reach the same
+# write and all four are tested: hooks.log, logs/, .discovery/, and the two directories
+# above JIT_BASE that the entry sweep already refuses.
+#
+# On refusal, logging is DISABLED for the run and the hook carries on. A hook that cannot
+# log still has a job to do, and this file runs before every one of them -- exiting here
+# would be the "fail hard" this whole design forbids. Nothing is injected about it either:
+# the log is for the person, and a notice would be a second attacker-triggered channel.
+#
+# Five `[ -L ]` tests, all shell builtins, forking nothing.
+JIT_LOG_DISABLED=0
 LOG_DIR="$JIT_BASE/.discovery/logs"
-mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/hooks.log"
+for _jit_p in "${JIT_BASE%/*}" "$JIT_BASE" "$JIT_BASE/.discovery" "$LOG_DIR"; do
+  if [ -L "$_jit_p" ]; then JIT_LOG_DISABLED=1; fi
+done
+unset _jit_p
+# The mkdir is what MATERIALISES a directory through a link, so it is gated too, not just
+# the append. `2>/dev/null` because a read-only or unwritable tree is a reason to say
+# nothing, never a reason to print to a session's stderr.
+if [ "$JIT_LOG_DISABLED" = 0 ]; then
+  mkdir -p "$LOG_DIR" 2>/dev/null
+  # Checked after the mkdir as well: hooks.log may be a dangling link, which `mkdir -p`
+  # on its parent neither creates nor disturbs.
+  if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
+fi
+# Every writer goes through this. A caller that appends to "$LOG_FILE" directly reopens
+# the hole -- there is one function so there is one place to check.
+jit_log_write() {
+  if [ "$JIT_LOG_DISABLED" = 0 ]; then
+    printf '%s\n' "$1" >> "$LOG_FILE" 2>/dev/null
+  fi
+}
 
 # Timestamp with ms precision (single perl call, ~11ms)
 _ts() { perl -MTime::HiRes -MPOSIX -e 'my $t=Time::HiRes::time(); printf("%s.%03d\n", strftime("%H:%M:%S",localtime($t)), ($t*1000)%1000)'; }
@@ -118,18 +246,35 @@ jit_load_config() {
   done < "$file"
 }
 
-if [ -f "$JIT_BASE/config.env" ]; then
+# config.env is the same trust boundary as the log, one file over. It is a direct child of
+# JIT_BASE -- so jit_scan_symlinks() already records it when it is a link -- but this read
+# opened it by name and consulted nothing. git carries the link, so a clone chose a file
+# OUTSIDE the project to be read line by line, and any JIT_CONTEXT_*, DYNAMIC_RULES_* or
+# DVSI_* line that happened to be in the target then took effect. No line text leaves this
+# function, but the settings do, and so does the shape of a file nobody meant to expose.
+#
+# Refused and NAMED, through the channel config.env refusals already use. Ignoring the file
+# in silence would be this repo's own defect class wearing a fix as a disguise: a setting
+# that reads as applied and is not.
+#
+# The whole file is one refusal, so it is reported without a line number -- there is no line
+# to point at, and inventing one would be worse than saying so plainly.
+if [ -L "$JIT_BASE/config.env" ]; then
+  JIT_CONFIG_REFUSED_N=1
+  JIT_CONFIG_REFUSED="- the file itself: config.env is a symbolic link, so it was not read"
+  jit_log_write "$(printf '[%s] config.env | refused: symbolic link' "$(_ts)")"
+elif [ -f "$JIT_BASE/config.env" ]; then
   jit_load_config "$JIT_BASE/config.env"
   if [ "$JIT_CONFIG_REFUSED_N" -gt 0 ]; then
-    printf '[%s] config.env | %d line(s) refused\n%s\n' \
-      "$(_ts)" "$JIT_CONFIG_REFUSED_N" "$JIT_CONFIG_REFUSED" >> "$LOG_FILE"
+    jit_log_write "$(printf '[%s] config.env | %d line(s) refused\n%s' \
+      "$(_ts)" "$JIT_CONFIG_REFUSED_N" "$JIT_CONFIG_REFUSED")"
   fi
 fi
 
 # Pipeline log: _log "step" duration_ms "message"  → [HH:MM:SS.mmm] step 42ms | message
 _log() {
   local line="$1 ${2}ms | $3"
-  echo "[$(_ts)] $line" >> "$LOG_FILE"
+  jit_log_write "[$(_ts)] $line"
   echo "$line"
 }
 
@@ -412,13 +557,46 @@ JIT_AWK_ENTRY='
 function jit_row_id(layer, rown) {
   return layer " row " rown
 }
-function jit_bad_entry_file(f) {
+# What the LOG may say about a refused row. hooks.log is a file on the disk of whoever
+# cloned the repository, read by a person, and the containment branch was writing the row
+# file-name column into it verbatim -- the one string jit_bad_entry_file() deliberately
+# withholds from the model. A name that FAILED the bare-name check now gets the treatment
+# the model-facing notice already gets: the row is named by POSITION, the raw text dropped.
+#
+# A name that PASSED is bare by construction -- no separator, not . or .. -- and it is what
+# an author fixing an unhonourable pattern actually needs, so it is kept. That includes a
+# row refused for being a symbolic link: the name passed, only the file behind it did not.
+#
+# No apostrophes in this block. It is a single-quoted bash string and one would close it.
+function jit_log_name(f, layer, rown, why) {
+  return (why == "not a bare file name") ? jit_row_id(layer, rown) : f
+}
+# The set built by jit_scan_symlinks() in the bash half, keyed by full path. Loaded once
+# per awk process, lazily, so a hook whose tree has no index pays nothing for it.
+function jit_symlinked(p,   n, i, a) {
+  if (!jit_sym_init) {
+    jit_sym_init = 1
+    n = split(ENVIRON["JIT_SYMLINKS"], a, "\n")
+    for (i = 1; i <= n; i++) if (a[i] != "") jit_sym[a[i]] = 1
+  }
+  return (p in jit_sym)
+}
+# dir is the layer directory the caller is about to concatenate this name onto -- the same
+# string the hook builds for getline, so the lookup is an exact match against what the
+# bash sweep globbed. A caller that passes no dir gets the name checks only.
+function jit_bad_entry_file(f, dir) {
   # An empty column is a blank index line, not a rule. It carries no pattern either and
   # the caller skips it on the existing content == "" path; refusing it would fire a
   # notice at the author over stray whitespace.
   if (f == "") return ""
   if (index(f, "/") > 0 || index(f, "\\") > 0) return "not a bare file name"
   if (f == "." || f == "..") return "not a bare file name"
+  if (dir != "") {
+    # The directory first: when the layer itself is a link, every row in it is unreadable
+    # for the same reason, and naming the file would point the author at the wrong thing.
+    if (jit_symlinked(dir)) return "its layer directory is a symbolic link"
+    if (jit_symlinked(dir "/" f)) return "the entry file is a symbolic link"
+  }
   return ""
 }
 function jit_refusal_notice(list, n) {
@@ -521,5 +699,5 @@ _log_hook() {
   local hook="$1"
   local ms="$2"
   local matches="${3:-(none)}"
-  echo "[$(_ts)] $hook ${ms}ms | $matches" >> "$LOG_FILE"
+  jit_log_write "[$(_ts)] $hook ${ms}ms | $matches"
 }

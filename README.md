@@ -335,6 +335,17 @@ notice naming the rule and the construct, once per session. Two things this repl
 a rule that read as enforced for as long as it existed, and a single malformed pattern
 (`~a[b` is a fatal awk error) that silenced every rule in its index at once.
 
+**Nothing on the way to an entry may be a symbolic link** — not the entry file, not its
+layer directory, not the dimension directory, not `config.env`, and not `.claude/` or
+`.claude/jit-context/` themselves. All of them are refused through that same channel, named the same way. The
+hooks read every entry with the privileges of your session, and `.claude/` arrives with the
+repository: a link is a file outside the project being handed to the model by a directory
+the reader has not audited, and `git clone` recreates every one of those shapes. The check
+does not resolve the link, so one pointing back inside the tree is refused too; keep a copy
+there, or generate the layer. Directories *above* your project are yours rather than the
+clone's and are not checked, so a project reached through a symlinked parent works
+normally.
+
 ### Compatibility — tools that touch files through `Bash`
 
 Path rules read `file_path` from `Read`/`Edit`/`Write`/`Glob`/`Grep`. Anything that reaches a file some other way does not carry that field, and a naive implementation would stop matching the moment a session used one — every path rule you wrote would go quiet, with no error and nothing in the log to explain it.
@@ -455,6 +466,15 @@ Timings and matches are appended to `.claude/jit-context/.discovery/logs/hooks.l
 
 `(none)` in the match column means nothing fired — useful for finding knowledge gaps.
 
+**If any part of that path is a symbolic link, logging is switched off for the run and the
+hooks carry on.** The log path is built inside the project, so a cloned repository would
+otherwise choose the file the hooks append to — and `mkdir -p` and `>>` both follow a link.
+A hook that cannot log still has a job to do, so nothing fails and nothing is injected
+about it; the empty `.discovery/logs/` is the symptom. The one line a refused row
+contributes never carries the raw file-name column from the index either, for a name that
+failed the containment check: that is unvalidated text from the repository, and this file
+is read by a person.
+
 ## What the team keeps asking that nobody has written down
 
 A prompt that matched nothing is already recorded, on every machine that has the plugin installed. When the same words come back a third time, that is not a hunch about what the documentation is missing — it is a count.
@@ -486,7 +506,9 @@ It reads and prints. No file is written, no entry is created, no hook fires and 
 bash tests/run-all.sh
 ```
 
-380 assertions across ten suites, covering matching, normalization, modes, blocking, session-once behaviour, malformed input, the dry-run and the miss report. Engine-sensitive assertions run once per `awk` on the machine. No dependencies beyond bash, `awk` and `perl`.
+478 assertions across twelve suites, covering matching, normalization, modes, blocking, session-once behaviour, malformed input, the dry-run, the miss report, and what a hostile project directory can make the hooks read, write or say. Engine-sensitive assertions run once per `awk` on the machine. No dependencies beyond bash, `awk` and `perl`.
+
+The two containment suites build their fixtures with `ln -s`, and a platform that does not create symbolic links cannot construct the attack they exist to refuse — Git Bash copies the target instead unless `MSYS=winsymlinks:nativestrict` is set and the process may create links. Those suites **probe for that first and skip loudly rather than pass**, and `run-all.sh` reports a skipped suite as neither a pass nor a failure. A suite that reported success where it could not test anything would be the exact defect this plugin exists to describe.
 
 ## Why not `.claude/rules/`?
 

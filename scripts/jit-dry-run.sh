@@ -8,9 +8,10 @@
 # in a branch worktree on 2026-08-10 were verifiable only by hand-running a hook with
 # CLAUDE_PROJECT_DIR overridden, which is neither discoverable nor checkable in CI.
 #
-# This reads the tree you point it at, and answers two questions the hooks cannot:
+# This reads the tree you point it at, and answers three questions the hooks cannot:
 #   1. can every match pattern actually be honoured?   (a rule that never runs)
 #   2. which rule fires for this call?                 (a rule that never matches)
+#   3. is that tree config.env honoured line by line?  (a setting that never applies)
 #
 # Usage:
 #   bash scripts/jit-dry-run.sh [--base DIR]
@@ -21,8 +22,8 @@
 # --base defaults to ./.claude/jit-context — the tree you are standing in, deliberately
 # not $CLAUDE_PROJECT_DIR, which is the thing that cannot be tested from here.
 #
-# Exit: 0 every pattern honourable and every index current | 1 at least one refused or
-#       stale | 2 could not evaluate.
+# Exit: 0 every pattern honourable, every index current and every config.env line
+#       honoured | 1 at least one refused or stale | 2 could not evaluate.
 
 set -uo pipefail
 
@@ -89,6 +90,59 @@ VOCAB_REFUSED=0
 CHECKED=0
 LISTED=0
 INDEXES=0
+CONFIG_REFUSED=0
+
+# --- config.env, for the tree named by --base --------------------------------
+# common.sh resolves JIT_BASE from $CLAUDE_PROJECT_DIR, so sourcing it parsed the SESSION
+# config and never the tree being linted. A tree carrying `touch /tmp/nope` and `PATH=/evil`
+# reported "0 refused" and said nothing else at all -- an absence produced by the tool,
+# read as an absence in the world, in the tool written to report exactly that. The notices
+# that send a reader here tell them to treat config.env as hostile because it arrived with
+# the repository, so silence is the worst of the three answers this can give.
+#
+# Three outcomes, never two: no file, read and every line honoured, or read with the
+# refused lines named.
+#
+# jit_load_config() READS and never executes -- that is what closed the config.env hole --
+# but it does ASSIGN the settings it accepts, and those must not silently become this
+# linter's own configuration. So it runs in a SUBSHELL and only the refusal report crosses
+# back out. A linter must not take its behaviour from the tree it was asked to judge.
+#
+# Line NUMBER and reason only, never the line's text -- the same rule common.sh follows
+# for the same reason. This prints to a terminal that a person is reading.
+if [ -L "$BASE/config.env" ]; then
+  # Same refusal common.sh reaches, for the same reason: git carries the link, so a clone
+  # chooses a file outside the project to be read. Whole-file, so no line number.
+  CONFIG_REFUSED=1
+  printf 'REFUSED  %-18s %-30s config.env is a symbolic link, so it is not read at all\n' "config.env" ""
+  printf '         %-18s %-30s the hooks refuse it too — replace the link with the file\n' "" ""
+elif [ -f "$BASE/config.env" ]; then
+  CONFIG_LINES="$(
+    # Both are reset, not just the one read back: jit_load_config() appends to the list
+    # and increments the count, and common.sh has already run it once against the SESSION
+    # config. Inheriting either would report this tree as carrying another tree lines.
+    JIT_CONFIG_REFUSED=""
+    # Incremented by jit_load_config() in common.sh, which shellcheck cannot see here.
+    # shellcheck disable=SC2034
+    JIT_CONFIG_REFUSED_N=0
+    jit_load_config "$BASE/config.env"
+    printf '%s' "$JIT_CONFIG_REFUSED"
+  )"
+  if [ -n "$CONFIG_LINES" ]; then
+    while IFS= read -r _cl; do
+      [ -n "$_cl" ] || continue
+      CONFIG_REFUSED=$((CONFIG_REFUSED + 1))
+      printf 'REFUSED  %-18s %-30s %s\n' "config.env" "" "${_cl#- }"
+    done <<CONFIG_EOF
+$CONFIG_LINES
+CONFIG_EOF
+    printf '         %-18s %-30s those lines do not take effect — the hooks read this file as plain KEY=VALUE\n' "" ""
+  else
+    printf 'ok       %-18s %-30s every line honoured\n' "config.env" ""
+  fi
+else
+  printf 'ok       %-18s %-30s no config.env in this tree\n' "config.env" ""
+fi
 
 check_pattern() {
   # $1 layer label, $2 rule file, $3 pattern
@@ -125,13 +179,26 @@ check_pattern() {
 # tree here; this is the check that makes the advice true. Verdict from the same shared
 # awk function the hooks use, never a second copy in bash that can drift from it.
 # Returns 0 when the name is honourable, 1 when it was refused.
+# The tree being linted is --base, which is not this session's project, so the symlink
+# sweep common.sh already ran against JIT_BASE is about the wrong tree. Re-run it here or
+# the linter would clear a row every hook refuses.
+jit_scan_symlinks "$BASE"
+
 check_entry_file() {
-  # $1 layer label, $2 entry file name
-  local label="$1" file="$2" why
-  why="$(JIT_ENTRY="$file" awk "$JIT_AWK_ENTRY"'BEGIN { print jit_bad_entry_file(ENVIRON["JIT_ENTRY"]) }')"
+  # $1 layer label, $2 entry file name, $3 layer directory
+  local label="$1" file="$2" dir="${3:-}" why
+  why="$(JIT_ENTRY="$file" JIT_DIR="$dir" awk "$JIT_AWK_ENTRY"'BEGIN { print jit_bad_entry_file(ENVIRON["JIT_ENTRY"], ENVIRON["JIT_DIR"]) }')"
   [ -n "$why" ] || return 0
   printf 'REFUSED  %-18s %-30s %s\n' "$label" "$file" "$why"
-  printf '         %-18s %-30s the hook reads <layer>/<name>, so this row leaves the tree\n' "" ""
+  # Two different faults reach here and they need different second lines. "leaves the
+  # tree" is true of a name carrying a separator and false of a link, whose name is bare;
+  # printing it for both would send an author looking at the wrong column.
+  case "$why" in
+    *"symbolic link"*)
+      printf '         %-18s %-30s the hook would follow it out of the tree — replace the link with the file\n' "" "" ;;
+    *)
+      printf '         %-18s %-30s the hook reads <layer>/<name>, so this row leaves the tree\n' "" "" ;;
+  esac
   return 1
 }
 
@@ -195,7 +262,7 @@ for tsv in "$BASE"/tools/*/00-index.tsv; do
     [ -n "${r_match:-}" ] || continue
     [ -n "${r_file:-}" ] || continue
     LISTED=$((LISTED + 1))
-    check_entry_file "$label" "$r_file" || { REFUSED=$((REFUSED + 1)); continue; }
+    check_entry_file "$label" "$r_file" "$(dirname "$tsv")" || { REFUSED=$((REFUSED + 1)); continue; }
     # A bare match is a substring test (index()), not a regex — nothing to compile.
     case "$r_match" in
       "~"*) check_pattern "$label" "$r_file" "${r_match#\~}" ;;
@@ -212,7 +279,7 @@ for tsv in "$BASE"/paths/*/00-index.tsv; do
     [ -n "${p_match:-}" ] || continue
     [ -n "${p_file:-}" ] || continue
     LISTED=$((LISTED + 1))
-    check_entry_file "$label" "$p_file" || { REFUSED=$((REFUSED + 1)); continue; }
+    check_entry_file "$label" "$p_file" "$(dirname "$tsv")" || { REFUSED=$((REFUSED + 1)); continue; }
     check_pattern "$label" "$p_file" "$p_match"
   done < "$tsv"
 done
@@ -229,7 +296,7 @@ for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; 
     # Counted apart from REFUSED, which is a subset of the rules the summary line says
     # were indexed and compiled. Folding these in printed "2 refused" under "1 rule
     # indexed", which is the kind of arithmetic that makes a reader distrust the tool.
-    check_entry_file "$label" "$v_file" || VOCAB_REFUSED=$((VOCAB_REFUSED + 1))
+    check_entry_file "$label" "$v_file" "$(dirname "$tsv")" || VOCAB_REFUSED=$((VOCAB_REFUSED + 1))
   done < "$tsv"
 done
 
@@ -256,6 +323,10 @@ fi
 if [ "$VOCAB_REFUSED" -gt 0 ]; then
   echo "$VOCAB_REFUSED vocabulary row(s) refused on the entry file name."
   echo "Vocabulary carries no patterns, so it is swept for that alone and never counted above."
+fi
+if [ "$CONFIG_REFUSED" -gt 0 ]; then
+  echo "$CONFIG_REFUSED config.env line(s) refused. They are settings that do not apply."
+  echo "If a refused line is not one you wrote, treat that file as hostile — it arrived with the repository."
 fi
 
 # --- Phase 2: which rule fires for this call? --------------------------------
@@ -347,5 +418,6 @@ if [ -n "$SAMPLE_TOOL$SAMPLE_COMMAND$SAMPLE_FILE$SAMPLE_PROMPT" ]; then
   esac
 fi
 
-[ "$REFUSED" -eq 0 ] && [ "$VOCAB_REFUSED" -eq 0 ] && [ "$STALE" -eq 0 ] || exit 1
+[ "$REFUSED" -eq 0 ] && [ "$VOCAB_REFUSED" -eq 0 ] && [ "$STALE" -eq 0 ] \
+  && [ "$CONFIG_REFUSED" -eq 0 ] || exit 1
 exit 0

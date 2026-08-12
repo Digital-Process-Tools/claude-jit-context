@@ -169,6 +169,59 @@ echo "=== every regex row gets an engine verdict as well as a structural one ===
 OUT=$(cd "$CLEAN" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" 2>&1) && ST=0 || ST=$?
 assert_contains "reports the live awk that evaluated it" "$OUT" "engine:"
 
+echo ""
+echo "=== config.env is linted for the tree named by --base, not the session ==="
+# JIT_BASE resolves from $CLAUDE_PROJECT_DIR in common.sh, so sourcing it parsed the
+# SESSION config and never the tree being linted. A tree carrying `touch /tmp/nope` and
+# `PATH=/evil` reported "0 refused" and said nothing at all -- an absence produced by the
+# tool, read as an absence in the world, in the tool written to report exactly that.
+#
+# The notices that send a reader here tell them to treat config.env as hostile because it
+# arrived with the repository, so silence on it is the worst of the three answers.
+#
+# Three outcomes, never two: refused lines, honoured lines, or no file. Each is driven.
+
+CONFTREE=$(mktemp -d)
+make_tree "$CONFTREE"
+CANARY_FILE="$CONFTREE/EXECUTED-CANARY"
+printf 'touch %s\nPATH=/evil\nJIT_CONTEXT_VOCAB_PATHS=1\n' "$CANARY_FILE" \
+  > "$CONFTREE/.claude/jit-context/config.env"
+OUT=$(cd "$ELSEWHERE" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --base "$CONFTREE/.claude/jit-context" 2>&1) && ST=0 || ST=$?
+assert_contains "the hostile config.env is reported at all" "$OUT" "config.env"
+assert_contains "the shell line is named by position" "$OUT" "line 1"
+assert_contains "and by reason" "$OUT" "not a KEY=VALUE assignment"
+assert_contains "the PATH line is named too" "$OUT" "line 2"
+assert_contains "and says why it is not settable" "$OUT" "unknown setting"
+assert_status "exit 1 when a tree carries a config.env line that cannot be honoured" "$ST" "1"
+# common.sh reports the line NUMBER and never the line TEXT, because the premise is that
+# this file may be hostile. The linter prints to a terminal a person is reading.
+assert_not_contains "the refused line text is never echoed" "$OUT" "PATH=/evil"
+assert_not_contains "nor the shell it would have been" "$OUT" "touch "
+# The linter must READ that file, never run it, and never adopt its settings.
+if [ -e "$CANARY_FILE" ]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: the linter EXECUTED the tree's config.env"
+else
+  PASS=$((PASS + 1)); echo "  PASS: the linter did not execute the tree's config.env"
+fi
+
+# Positive control on the same shape: a config.env whose every line IS honourable must be
+# reported as read and must not push the exit code. Without this, "names the refused
+# lines" is satisfied by a linter that refuses every config.env it ever sees.
+printf 'JIT_CONTEXT_VOCAB_PATHS=1\n# a comment\n\n' > "$CONFTREE/.claude/jit-context/config.env"
+OUT=$(cd "$ELSEWHERE" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --base "$CONFTREE/.claude/jit-context" 2>&1) && ST=0 || ST=$?
+assert_status "exit 0 when every config.env line is honourable" "$ST" "0"
+assert_contains "an honourable config.env is still reported as read" "$OUT" "config.env"
+assert_not_contains "nothing is refused" "$OUT" "line 1:"
+
+# Third outcome: no config.env at all. Distinct from "read and clean", because the reader
+# needs to tell "there is nothing to check" from "I checked and found nothing".
+rm -f "$CONFTREE/.claude/jit-context/config.env"
+OUT=$(cd "$ELSEWHERE" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --base "$CONFTREE/.claude/jit-context" 2>&1) && ST=0 || ST=$?
+assert_status "exit 0 when the tree has no config.env" "$ST" "0"
+assert_contains "and says so rather than staying silent" "$OUT" "no config.env"
+
+rm -rf "$CONFTREE"
+
 rm -rf "$CLEAN" "$BROKEN" "$ELSEWHERE"
 
 echo ""

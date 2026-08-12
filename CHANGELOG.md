@@ -9,10 +9,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
-Both of these treat `.claude/jit-context/` as what it actually is: a directory that
+All three of these treat `.claude/jit-context/` as what it actually is: a directory that
 arrives with the repository. The hooks run on the first prompt of a session, before
 anyone has read the code they were cloned with, so every file under that directory is
-attacker-controlled input rather than configuration the user wrote. Neither finding needs
+attacker-controlled input rather than configuration the user wrote. None of them needs
 the user to do anything beyond opening the project.
 
 - **`config.env` was executed as shell on every prompt and every tool call.** `common.sh`
@@ -73,12 +73,153 @@ the user to do anything beyond opening the project.
   whose name *passes* the check cannot contain a separator, and an unhonourable **pattern**
   is still reported by file name, which is what an author fixing it needs.
 
-  **This closes the string form and not the symlink form.** An entry file that is itself a
-  symlink out of the tree still has its target read: the name in the index is bare, so it
-  passes, and `getline` follows the link like any `open()`. `awk` cannot `lstat`, and the
-  architecture is one `awk` process per hook with no per-row subprocess, so closing it is a
-  design decision about where a tree walk belongs — not something to slip into this change.
-  Tracked separately.
+  **This closes the string form.** The symlink form was closed separately, below.
+
+- **An entry file that is a symlink out of the tree had its target read and injected.**
+  The containment check above stops a row from *naming* a path outside its layer; it does
+  not stop the entry file from *being* a link to one. The name in the index is bare, so it
+  passes every check, and `getline` follows the link like any `open()`. Reproduced at all
+  five read sites, and again with every directory on the way to one linked instead: the
+  **layer directory**, the dimension directory, `.claude/jit-context/`, and `.claude/`
+  itself. Each of those needs nothing inside the repository but the one link, because the
+  linked directory carries its own `00-index.tsv`. `git clone` recreates all of them, so
+  cloning a repository is the whole attack.
+
+  Nothing on the way to an entry may now be a symbolic link — the entry file, its layer,
+  its dimension, `.claude/jit-context/` or `.claude/` — and each is refused and named in the
+  same once-per-session channel as the other two classes. The verdict is structural rather
+  than a resolution: a link is refused whether or not its target is inside the tree, because
+  `awk` has no `realpath` and buying one costs a process per row. An entry that needs to
+  live elsewhere is a copy, or a generated layer, not a link.
+
+  The walk stops one directory above `.claude/jit-context/` and does not climb to the
+  filesystem root. Above the project is the user's own filesystem rather than anything the
+  clone chose, and on macOS `/tmp` is itself a symlink — a sweep that walked all the way up
+  would refuse every honest tree opened through one.
+
+  `awk` cannot `lstat`, and the architecture is deliberately one `awk` process per hook
+  with no per-row subprocess. So the `lstat` is paid **once per hook invocation** — a glob
+  and a `[ -L ]` test in `common.sh`, both shell builtins, forking nothing. Measured
+  against the 1,000-entry corpus the README cites: **31 ms before, 43 ms after**. On a tree
+  of a few dozen entries the difference is below the noise floor of the measurement.
+
+  Every hook runs its own sweep. Nothing is cached to a marker and nothing is carried
+  between hooks: the obvious cheaper design is one tree walk in `session-start-hook.sh`,
+  and it fails **open** for any runner that does not fire `SessionStart` — the wrong
+  direction for a disclosure. Refusing the row in `rebuild-tsv.sh` fails open for the same
+  reason and a worse one: the attack ships a committed `00-index.tsv`, and the victim never
+  runs `rebuild-tsv.sh` at all.
+
+  `scripts/jit-dry-run.sh` reaches the same verdict from the same shared `awk` function,
+  against the tree named by `--base` rather than the session's own.
+
+- **`config.env` could itself be a symbolic link out of the tree, and was read.** Found by
+  review of the change above rather than filed: the log path was hardened and the file
+  beside it was not. `config.env` is a direct child of `.claude/jit-context/`, so the
+  symlink sweep already recorded it — the read just never consulted that set. `git clone`
+  carries the link, so a cloned repository chose a file outside the project to be read line
+  by line, and any `JIT_CONTEXT_*`, `DYNAMIC_RULES_*` or `DVSI_*` line that happened to be
+  in the target took effect. No line text ever left the parser, but the settings did.
+
+  Refused as a whole file, and **named** through the channel `config.env` refusals already
+  use — reported without a line number, because there is no line to point at and inventing
+  one would be worse than saying so plainly. Ignoring it in silence would have been this
+  repository's own defect class wearing a fix as a disguise: a setting that reads as applied
+  and is not. `jit-dry-run.sh` reaches the same verdict for the tree it was given.
+
+- **`jit-dry-run.sh --base <tree>` did not lint that tree's `config.env`.** `JIT_BASE`
+  resolves from `$CLAUDE_PROJECT_DIR`, so the file it parsed was the session's and never
+  the one being linted: a tree carrying `touch /tmp/nope` and `PATH=/evil` printed
+  "0 refused" and nothing else. That is an absence produced by the tool, read as an absence
+  in the world — in the tool written to report exactly that, and reached by following the
+  advice in a notice that has just called the file hostile.
+
+  The linter now reads `<tree>/config.env` through the same `jit_load_config()` the hooks
+  use, and gives three answers rather than two: no file, every line honoured, or the
+  refused lines named by position and reason. A refused line makes it exit 1. The parse
+  runs in a **subshell**: `jit_load_config()` reads and never executes, but it does assign
+  the settings it accepts, and a linter must not take its own behaviour from the tree it
+  was asked to judge.
+
+- **The hooks wrote their log through a path a cloned repository controls.** `common.sh`
+  built `.claude/jit-context/.discovery/logs/hooks.log` by concatenation and checked
+  nothing. `mkdir -p` follows a symlink and `>>` follows a symlink, and git tracks symlinks
+  as mode `120000` — so a committed `hooks.log -> ~/.zshenv` meant one prompt appended
+  attacker-chosen text to the reader's shell rc file, and it ran at the next shell start.
+  Reproduced with no keyword match, no rule fired and no entry file present: the refusal
+  path on its own writes a line, and the index row's file-name column is the payload.
+
+  Four link positions reach that write and all four are now tested before anything is
+  created — `hooks.log`, `logs/`, `.discovery/`, and the two directories above
+  `.claude/jit-context/` — five `[ -L ]` tests, all shell builtins. The symlink sweep above
+  does not cover this: it globs with `*`, which does not match a leading dot, so
+  `.discovery` is invisible to it by construction.
+
+  On refusal **logging is switched off for the run and the hook carries on**. A hook that
+  cannot log still has a job to do, and `common.sh` runs before every one of them; failing
+  here would be exactly the hard failure the design forbids. Nothing is injected about it
+  either — a notice would be a second attacker-triggered channel into the context.
+
+  The content half went with it. The containment branch wrote the row's file-name column
+  into the log verbatim — the one string `jit_bad_entry_file()` deliberately withholds from
+  the model. A name that failed the bare-name check is now reported by position there too.
+  A name that passed is bare by construction and is still named, because that is what an
+  author fixing an unhonourable pattern needs.
+
+- **The refusal notice echoed the index's mode column into the model's context.**
+  `pre-tool-hook.sh` derives `r_kind` — `" (a block rule)"` — precisely so that TSV column 4
+  never travels, and the containment branch honours it thirty-five lines above. The
+  pattern-refusal branch interpolated the raw column instead. It needs no rule to match and
+  no entry file to exist, so a mode column reading `IGNORE ALL PREVIOUS INSTRUCTIONS: …`
+  arrived in `additionalContext` on the first `Bash` call of the session. Both branches now
+  use `r_kind`. The other two hooks were checked for the same shape and do not have it —
+  neither index carries a mode column, and every other interpolation is a row position or a
+  name that already passed the bare-name check.
+
+- **A containment suite that cannot build a symbolic link now says so instead of passing.**
+  Windows CI failed 28 assertions in `tests/test-symlink-entry.sh` while `ubuntu`, `macos`
+  and `shellcheck` were green. The cause was the fixtures, not the hooks: on Git Bash the
+  MSYS runtime does not create a symbolic link by default, it **copies the target**. `[ -L ]`
+  is then correctly false, the guard correctly stays quiet, the canary is correctly injected
+  from an ordinary file — and the suite asserts a refusal for a threat that platform never
+  built.
+
+  Settled from the job log rather than argued. A layer directory linked *before* its files
+  were written came back empty, while one linked *after* came back full: no symbolic link
+  can behave both ways, and a copy taken at `ln` time behaves exactly so.
+
+  Both suites now probe first, and the probe tests the property the fixtures depend on
+  rather than `[ -L ]` alone — content written to the target after the link exists must be
+  visible through it. The verdict is printed on every platform, every run. When it is `no`,
+  the containment cases are **skipped loudly and the suite exits 2**, and `run-all.sh` keeps
+  that apart from both a pass and a failure. A suite reporting success where it could not
+  test anything is the defect this project exists to describe, and it was sitting inside the
+  suite written to prove containment.
+
+  `tests/test-log-containment.sh` was the quieter half of the same problem: it reported
+  **30/30 on Windows while four of its sections tested nothing**, because a copied
+  `hooks.log` lives inside the project and "nothing was appended to the victim file" is then
+  true for a reason unrelated to the guard. Seventeen of those thirty assertions were
+  vacuous there. `tests/test-security.sh` builds no links and its green was always real.
+
+  This is a gap in what CI can *observe* on Windows, not a hole in the hooks — and it is
+  still a gap: with `core.symlinks=true` a Windows clone does carry the link, so the guard
+  matters there and is currently unexercised. Making it exercisable needs
+  `MSYS=winsymlinks:nativestrict` and the privilege to create links on the runner, which is
+  a workflow change rather than a code one.
+
+- **`tests/test-log-containment.sh`** — new suite. Every "nothing was written outside the
+  tree" assertion is preceded by a positive control on the same shape, because that
+  assertion passes when nothing happened at all: the honest tree must produce a log line,
+  and the hook must still inject its notice while refusing to log. If those controls go
+  red, the suite says in as many words that everything below them is vacuous.
+
+- **`tests/test-symlink-entry.sh`** — new suite, red before the fix at all five read sites
+  and for every shape: the entry file, the layer directory, `.claude/jit-context/` and
+  `.claude/`. Paired with positive controls that a real entry still fires, that an unrelated
+  command still matches nothing, that a tree with no link in it is refused nothing at all,
+  and that a project reached through a symlinked *parent* still fires every rule — a refusal
+  mechanism that fires on everything looks identical to one that works, from one side only.
 
 - **`tests/test-security.sh`** — new suite, red before either fix. Every "did not
   exfiltrate" case is paired with a positive control that a legitimate entry still fires,

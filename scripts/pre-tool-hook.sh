@@ -129,11 +129,11 @@ END {
     # The mode is DERIVED, never echoed: like the file name, column 4 is attacker text.
     # "this was a block rule and it did not run" is worth saying; the raw column is not.
     r_kind = (index(r_modes, "block") > 0) ? " (a block rule)" : ""
-    why = jit_bad_entry_file(r_file)
+    why = jit_bad_entry_file(r_file, tools_dir)
     if (why != "") {
       n_refused++
       refused = refused (refused == "" ? "- " : "\n- ") jit_row_id("tools/00-manual", rown) r_kind ": " why
-      log_matches = log_matches sep "refused:" r_file "(" why ")"
+      log_matches = log_matches sep "refused:" jit_log_name(r_file, "tools/00-manual", rown, why) "(" why ")"
       sep = ", "
       continue
     }
@@ -161,7 +161,14 @@ END {
         # Named, not positioned — see the same decision in pre-path-hook.sh: this row
         # already passed the bare-name check, so the name is safe to echo and is the thing
         # an author needs. tests/test-rule-guard.sh asserts this half by file name.
-        refused = refused (refused == "" ? "- " : "\n- ") r_file " (" r_modes "): " why
+        #
+        # r_kind, never r_modes. Column 4 is free text from a committed index and this
+        # branch was interpolating it raw, thirty-five lines under the comment saying why
+        # that is not allowed and one branch over from the code that honours it. It needs
+        # no rule to match and no entry file to exist, so a mode column reading "IGNORE ALL
+        # PREVIOUS INSTRUCTIONS: ..." arrived in the context on the first Bash call of the
+        # session. Reproduced 2026-08-12; tests/test-security.sh drives both halves.
+        refused = refused (refused == "" ? "- " : "\n- ") r_file r_kind ": " why
         log_matches = log_matches sep "refused:" r_file "(" why ")"
         sep = ", "
         continue
@@ -288,7 +295,7 @@ END {
         vrown++
         split(vl, vf, "\t")
         kw = vf[1]; vfile = vf[2]
-        why = jit_bad_entry_file(vfile)
+        why = jit_bad_entry_file(vfile, vocab_base "/" layer)
         if (why != "") {
           # Same concatenation, same refusal. Keyed on the name so one bad row is counted
           # once, not once per keyword that happens to point at it.
@@ -296,7 +303,7 @@ END {
             vrefused[layer "/" vfile] = 1
             n_refused++
             refused = refused (refused == "" ? "- " : "\n- ") jit_row_id(layer, vrown) ": " why
-            log_matches = log_matches sep "refused:" vfile "(" why ")"
+            log_matches = log_matches sep "refused:" jit_log_name(vfile, layer, vrown, why) "(" why ")"
             sep = ", "
           }
           continue
