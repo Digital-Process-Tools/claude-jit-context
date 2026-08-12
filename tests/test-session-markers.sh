@@ -32,7 +32,7 @@ FAIL=0
 
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if echo "$output" | grep -qF "$expected"; then
+  if grep -qF "$expected" <<<"$output"; then
     PASS=$((PASS + 1)); echo "  PASS: $desc"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
