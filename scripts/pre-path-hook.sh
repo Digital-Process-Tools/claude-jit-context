@@ -29,6 +29,38 @@ cat | awk \
   -v shown_file="$SHOWN_FILE" \
   -v log_tmp="$LOG_TMP" \
   "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_JSON"'
+# RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
+# entitled to reject the whole object -- which renders as this hook having had nothing to
+# say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
+# because an entry authored on Windows has CRLF line endings and this repo .gitattributes
+# covers OUR files, not a user (issue #15).
+#
+# Backslash goes first, or every escape introduced after it is doubled.
+#
+# The tail loop is guarded by index() rather than a regex: index() is a byte search with no
+# multibyte decode -- the same reason the CamelCase split in the prompt and tool hooks uses
+# it -- and no byte of a UTF-8 sequence falls in 0x00-0x1F, so it can never cut a multibyte
+# character in half.
+#
+# U+0000 IS reachable, on exactly one of the two engines. gawk is NUL-transparent and
+# carries an embedded NUL through getline into the buffer; one-true-awk truncates the line
+# at it and cannot even build a one-byte NUL with sprintf("%c", 0). So the loop starts at 0
+# and skips the code point the engine cannot represent -- without that skip, index(s, "")
+# returns 1 and gsub would be handed an empty regex, which matches at every position.
+function jit_json_escape(s,   k, c) {
+  gsub(/\\/, "\\\\", s)
+  gsub(/"/, "\\\"", s)
+  gsub(/\t/, "\\t", s)
+  gsub(/\n/, "\\n", s)
+  gsub(/\r/, "\\r", s)
+  for (k = 0; k <= 31; k++) {
+    if (k == 9 || k == 10 || k == 13) continue
+    c = sprintf("%c", k)
+    if (length(c) == 0) continue
+    if (index(s, c) > 0) gsub(c, sprintf("\\u%04x", k), s)
+  }
+  return s
+}
 { input = input $0 }
 END {
   # --- Parse JSON: extract file_path, path, or command ---
@@ -269,8 +301,7 @@ END {
 
   # --- Output JSON ---
   if (matched != "") {
-    gsub(/\\/, "\\\\", matched); gsub(/"/, "\\\"", matched)
-    gsub(/\t/, "\\t", matched); gsub(/\n/, "\\n", matched)
+    matched = jit_json_escape(matched)
     printf "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"%s\"}}", matched
   } else {
     print "{}"
