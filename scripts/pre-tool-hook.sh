@@ -387,7 +387,7 @@ END {
         # This half fails CLOSED when it breaks -- it refuses a command that met its
         # requirement -- which is the safer direction and still wrong.
         if (index(fold_full, jit_fold_latin1(tolower(reqs[ri]))) == 0) {
-          blocked = "BLOCKED: Missing required: " reqs[ri] ". " content
+          blocked = "BLOCKED: Missing required: " reqs[ri] ". " body
           log_matches = log_matches sep "tool:" r_file "(BLOCKED:" reqs[ri] ")"
           sep = ", "; break
         }
@@ -402,7 +402,7 @@ END {
         # Folded on both sides (#76). This is the half that failed OPEN: `forbid:
         # clé-privée` stopped seeing `CLÉ-PRIVÉE` and the deny-list rule allowed the call.
         if (index(fold_full, jit_fold_latin1(tolower(forbs[fi]))) > 0) {
-          blocked = "BLOCKED: Forbidden: " forbs[fi] ". " content
+          blocked = "BLOCKED: Forbidden: " forbs[fi] ". " body
           log_matches = log_matches sep "tool:" r_file "(BLOCKED:" forbs[fi] ")"
           sep = ", "; break
         }

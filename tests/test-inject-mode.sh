@@ -165,10 +165,22 @@ printf '%s\n' \
   "" \
   "DEPLOY-BODY-MARKER" > "$T/deploy.md"
 
+printf '%s\n' \
+  "---" \
+  "title: Never fetch over an unverified transport" \
+  "description: The fetch helper refuses --insecure." \
+  "tool: Bash" \
+  "match: bin/fetch" \
+  "forbid: --insecure" \
+  "---" \
+  "" \
+  "FETCH-BODY-MARKER" > "$T/fetch.md"
+
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
   Bash "bin/phpunit" phpunit.md remind ""          "" \
   Bash "git push"    gitpush.md  block  ""          "" \
-  Bash "bin/deploy"  deploy.md   remind "--dry-run" "" > "$T/00-index.tsv"
+  Bash "bin/deploy"  deploy.md   remind "--dry-run" "" \
+  Bash "bin/fetch"   fetch.md    remind ""          "--insecure" > "$T/00-index.tsv"
 
 # --- Helpers -----------------------------------------------------------------
 
@@ -370,6 +382,21 @@ echo "=== Paired: the same rule NOT blocking is a summary ==="
 OUT=$(run_tool "bin/deploy production --dry-run")
 assert_contains     "the description arrives" "$OUT" "The deploy script has no undo"
 assert_not_contains "the body does not"       "$OUT" "DEPLOY-BODY-MARKER"
+
+# A forbid: refusal is the same contract as require:, and it was NOT covered here.
+# Both refusal paths read `body` and never `content` -- a rebase that resolved one of
+# them to `content` left the other passing, which is the shape this file exists to catch.
+echo ""
+echo "=== A forbid: block injects its whole body even under summary ==="
+OUT=$(run_tool "bin/fetch --insecure https://example.invalid")
+assert_contains "the block reason is the whole entry" "$OUT" "FETCH-BODY-MARKER"
+assert_contains "and it names what was forbidden"     "$OUT" "Forbidden"
+
+echo ""
+echo "=== Paired: the same forbid rule NOT blocking is a summary ==="
+OUT=$(run_tool "bin/fetch https://example.invalid")
+assert_contains     "the description arrives" "$OUT" "The fetch helper refuses --insecure"
+assert_not_contains "the body does not"       "$OUT" "FETCH-BODY-MARKER"
 
 # =============================================
 # SECTION 9: the pull is observable
