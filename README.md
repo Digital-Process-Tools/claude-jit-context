@@ -411,6 +411,11 @@ carries, which is a rule that exists on disk and never runs. That used to be vis
 reading the index, because the index carried the author's own text; with an invocation
 macro it carries the expansion instead, so the eyeball check is done here.
 
+And it reports **`WARN`**: a `paths` pattern carrying no `/`, no `^` and no `$`. `Billing`
+matches `src/Billing`, `vendor/acme/Billing` and a scratchpad under `/tmp` alike — nothing
+in it says *where*. Sometimes that is what you meant, so this is a warning and **not** a
+refusal: it names the row and leaves the exit code alone.
+
 **It reads the tree you are standing in**, or `--base DIR`. That matters because the
 hooks resolve rules against `$CLAUDE_PROJECT_DIR` and never the current directory, so a
 git worktree, a checkout under review, or a plugin being developed cannot load or test

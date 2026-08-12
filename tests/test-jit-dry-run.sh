@@ -222,6 +222,104 @@ assert_contains "and says so rather than staying silent" "$OUT" "no config.env"
 
 rm -rf "$CONFTREE"
 
+# --- a paths pattern that names a name rather than a place ------------------
+# #24. `Billing` matches src/Billing, vendor/acme/Billing and /tmp/scratch/Billing
+# alike: it carries no `/`, no `^` and no `$`, so nothing in it says WHERE. That is
+# sometimes exactly what the author meant, so this WARNS and never refuses, and it must
+# not move the exit code — a heuristic that fails an honest tree on upgrade is worse
+# than no heuristic.
+#
+# Every silence assertion below is paired with a firing one in the SAME tree, because a
+# harness that produces no output at all satisfies every "does not warn" on its own.
+
+FRAG=$(mktemp -d)
+make_tree "$FRAG"
+FRAGBASE="$FRAG/.claude/jit-context"
+{
+  printf 'Billing\tbare.md\n'
+  printf '^src/Billing\tanchored.md\n'
+  printf '\\.php$\text.md\n'
+  printf 'src/Billing/\tnested.md\n'
+} >> "$FRAGBASE/paths/00-manual/00-index.tsv"
+for n in bare anchored ext nested; do echo "$n body" > "$FRAGBASE/paths/00-manual/$n.md"; done
+# A tools regex with no `/`, `^` or `$` at all. The lint is about the PATHS dimension --
+# a tool pattern matches a command line, where anchoring on a tree means nothing -- so
+# this row proves the warning is scoped and not merely "any pattern without a slash".
+printf 'Bash\t~grep[[:space:]]+-r\tgrep.md\tremind\t\t\n' >> "$FRAGBASE/tools/00-manual/00-index.tsv"
+echo "grep body" > "$FRAGBASE/tools/00-manual/grep.md"
+
+# Only the WARN rows. Every name here also appears on an `ok` line, so an unscoped
+# grep for a name passes whether or not it was ever warned about.
+warn_rows() { printf '%s\n' "$1" | grep '^WARN' || true; }
+
+echo ""
+echo '=== a paths pattern with no /, ^ or $ is warned about, and only that one ==='
+OUT=$(cd "$ELSEWHERE" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --base "$FRAGBASE" 2>&1) && ST=0 || ST=$?
+WARNS=$(warn_rows "$OUT")
+assert_contains "the bare fragment is warned about" "$WARNS" "bare.md"
+assert_contains "and the row says WARN, not REFUSED" "$OUT" "WARN"
+assert_not_contains "a ^-anchored pattern is not warned about" "$WARNS" "anchored.md"
+assert_not_contains "a dollar-anchored extension rule is not warned about" "$WARNS" "ext.md"
+assert_not_contains "a pattern carrying a / is not warned about" "$WARNS" "nested.md"
+assert_not_contains "the tools dimension is not swept for this at all" "$WARNS" "grep.md"
+assert_contains "the summary says how many" "$OUT" "1 paths pattern(s)"
+
+echo ""
+echo "=== the warning does not move the exit code ==="
+# The load-bearing assertion of the whole feature. jit-dry-run.sh is run in CI and in
+# user trees; 1 means refused and 2 means could-not-evaluate, and a bare fragment is
+# neither. Upgrading must not turn an honest tree red.
+assert_status "exit 0 — a warning is not a refusal" "$ST" "0"
+assert_contains "and nothing was refused" "$OUT" "0 refused."
+
+echo ""
+echo "=== a ^ or $ inside a bracket expression is not an anchor ==="
+# In `[^0-9]Billing` the `^` negates a character class; in `Billing[$]` the `$` is a
+# literal dollar. Neither says WHERE, and a bare index() for the character credits both
+# as anchored — the exact false negative this lint is for. Paired, in the same tree,
+# with two patterns whose brackets sit beside a REAL anchor and must stay silent.
+{
+  printf '[^0-9]Billing\tclassneg.md\n'
+  printf 'Billing[$]\tclassdollar.md\n'
+  printf '^src/[A-Z]\tclassanchored.md\n'
+  printf 'src/[^/]*\\.php$\tclassnested.md\n'
+} >> "$FRAGBASE/paths/00-manual/00-index.tsv"
+for n in classneg classdollar classanchored classnested; do
+  echo "$n body" > "$FRAGBASE/paths/00-manual/$n.md"
+done
+OUT=$(cd "$ELSEWHERE" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --base "$FRAGBASE" 2>&1) && ST=0 || ST=$?
+WARNS=$(warn_rows "$OUT")
+assert_contains "a negated class is not a start anchor" "$WARNS" "classneg.md"
+assert_contains "a bracketed dollar is not an end anchor" "$WARNS" "classdollar.md"
+assert_not_contains "a real ^ beside a class is still an anchor" "$WARNS" "classanchored.md"
+assert_not_contains "a real / and \\$ beside a class are still anchors" "$WARNS" "classnested.md"
+assert_contains "and the count follows" "$OUT" "3 paths pattern(s)"
+assert_status "still exit 0 — none of this is a refusal" "$ST" "0"
+
+echo ""
+echo "=== --help prints the exit contract it documents ==="
+# The Exit: block is the only place --help says what a WARN row does to the exit code.
+# usage() prints it with a hardcoded line range, which is off by one every time a line
+# is added above it and silently truncates instead of erroring.
+OUT=$(bash "$DRYRUN" --help 2>&1) && ST=0 || ST=$?
+assert_contains "--help still explains exit 1" "$OUT" "1 at least one refused or stale"
+assert_contains "--help says a WARN row does not move the exit code" "$OUT" "WARN row never moves the exit code"
+
+echo ""
+echo "=== a pattern that is already refused is not warned about on top ==="
+# `bad\s` carries no /, ^ or $ either, so the fragment test would fire on it. It is
+# already dead, and a dead rule reported twice reads as two problems.
+printf 'bad\\s\tdead-path.md\n' >> "$FRAGBASE/paths/00-manual/00-index.tsv"
+echo "dead path body" > "$FRAGBASE/paths/00-manual/dead-path.md"
+OUT=$(cd "$ELSEWHERE" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --base "$FRAGBASE" 2>&1) && ST=0 || ST=$?
+WARNS=$(warn_rows "$OUT")
+assert_contains "the refused row is still refused" "$OUT" "dead-path.md"
+assert_not_contains "and is not also warned about" "$WARNS" "dead-path.md"
+assert_contains "the honest fragment is still warned about alongside it" "$WARNS" "bare.md"
+assert_status "exit 1 — the refusal still decides the exit code" "$ST" "1"
+
+rm -rf "$FRAG"
+
 rm -rf "$CLEAN" "$BROKEN" "$ELSEWHERE"
 
 echo ""

@@ -24,6 +24,7 @@
 #
 # Exit: 0 every pattern honourable, every index current and every config.env line
 #       honoured | 1 at least one refused or stale | 2 could not evaluate.
+#       A WARN row never moves the exit code — see check_paths_fragment below.
 
 set -uo pipefail
 
@@ -38,7 +39,10 @@ SAMPLE_FILE=""
 SAMPLE_PROMPT=""
 
 usage() {
-  sed -n '2,25p' "$0"
+  # Through the end of the Exit: block, which is where --help says what a WARN row does
+  # to the exit code. A line added above this shifts it and truncates silently, so
+  # tests/test-jit-dry-run.sh asserts on the last sentence rather than on the range.
+  sed -n '2,27p' "$0"
   exit "${1:-0}"
 }
 
@@ -87,6 +91,7 @@ fi
 
 REFUSED=0
 VOCAB_REFUSED=0
+WARNED=0
 CHECKED=0
 LISTED=0
 INDEXES=0
@@ -168,9 +173,66 @@ check_pattern() {
     REFUSED=$((REFUSED + 1))
     printf 'REFUSED  %-18s %-30s %s%s\n' "$label" "$file" "$why" "$hint"
     printf '         %-18s %-30s engine: %s\n' "" "$pat" "$engine"
+    return 1
   else
     printf 'ok       %-18s %-30s engine: %s\n' "$label" "$file" "$engine"
   fi
+  return 0
+}
+
+# A `paths` pattern that carries no `/`, no `^` and no `$` names a NAME, not a place in a
+# tree. `Billing` matches src/Billing, vendor/acme/Billing and a scratchpad under /tmp
+# alike, and nothing in the pattern says which was meant.
+#
+# This WARNS and never refuses, and it deliberately does not touch the exit code. Three
+# reasons, and the third is the one that decides it:
+#
+#   1. A floating fragment is sometimes exactly what the author wanted -- `\.php$` aside,
+#      a rule that should fire on a directory name wherever it appears is legitimate.
+#   2. REFUSED means the matcher cannot honour the row and 2 means the tree could not be
+#      evaluated. Neither is true here: this pattern compiles and runs exactly as written.
+#   3. jit-dry-run.sh is run in CI, in user trees, against rules written before this lint
+#      existed. A heuristic that turns an honest tree red on upgrade gets switched off,
+#      and then it protects nobody. It is loud in the report and silent in the exit code.
+#
+# What this does NOT catch, stated plainly because the issue that asked for it claimed the
+# opposite: the historical defect it cites, `jit-context/.*\.md$`, carries both a `/` and a
+# `$` and passes this check clean. It is also structurally identical to
+# `scripts/.*-hook\.sh$`, which is correct. No test on the pattern text can separate those
+# two -- the difference is how likely that directory name is to occur outside your project,
+# which is not in the pattern. This catches the narrower class it can actually see.
+#
+# Scoped to `paths`. A `tools` pattern matches a command line, where `/` and `^` mean
+# something else entirely and anchoring on a tree means nothing.
+check_paths_fragment() {
+  # $1 layer label, $2 rule file, $3 pattern
+  local label="$1" file="$2" pat="$3"
+  # Two strips before the question is asked, because in both of them the character is
+  # present and is not an anchor — and crediting it as one is a MISS, which is the failure
+  # mode this whole lint is about:
+  #
+  #   escapes    `\$` is a literal dollar, `\^` a literal caret. Removed as pairs, so a
+  #              run of backslashes pairs off left to right the way the matcher reads it.
+  #   brackets   in `[^0-9]Billing` the `^` NEGATES a class and in `Billing[$]` the `$` is
+  #              a literal — neither says where, and a bare character test passes both.
+  #              `[^]]` is POSIX: a `]` first in a class is that character, not the close.
+  #
+  # Escapes first: an escaped `\[` is not a bracket opener, so stripping it beforehand is
+  # what makes the second gsub read only real ones.
+  #
+  # index() rather than a bracket expression of our own for the final test: a `/` inside
+  # an awk regex literal is exactly the kind of thing spelled differently across awks.
+  JIT_PAT="$pat" awk '
+    BEGIN {
+      p = ENVIRON["JIT_PAT"]
+      gsub(/\\./, "", p)
+      gsub(/\[[^]]*\]/, "", p)
+      exit((index(p, "/") || index(p, "^") || index(p, "$")) ? 0 : 1)
+    }' && return 0
+  WARNED=$((WARNED + 1))
+  printf 'WARN     %-18s %-30s names a name, not a place — no /, ^ or $, so it fires wherever that name occurs\n' "$label" "$file"
+  printf '         %-18s %-30s fine if you meant it; otherwise anchor it with ^ or a parent directory\n' "" "$pat"
+  return 1
 }
 
 # An entry file name is CONCATENATED onto its layer directory by every hook, so a name
@@ -289,7 +351,9 @@ for tsv in "$BASE"/paths/*/00-index.tsv; do
     [ -n "${p_file:-}" ] || continue
     LISTED=$((LISTED + 1))
     check_entry_file "$label" "$p_file" "$(dirname "$tsv")" || { REFUSED=$((REFUSED + 1)); continue; }
-    check_pattern "$label" "$p_file" "$p_match"
+    # Only if the pattern can be honoured at all. A refused row is already dead; warning
+    # that it is also badly anchored reports one problem as two.
+    check_pattern "$label" "$p_file" "$p_match" && check_paths_fragment "$label" "$p_file" "$p_match"
   done < "$tsv"
 done
 
@@ -328,6 +392,13 @@ echo "$LISTED rule(s) indexed, $CHECKED regex pattern(s) compiled, $REFUSED refu
 if [ "$STALE" -gt 0 ]; then
   echo "$STALE entry file(s) whose frontmatter is not what the index carries."
   echo "Those rules are inert: the hooks read the index, never the markdown."
+fi
+if [ "$WARNED" -gt 0 ]; then
+  # Named here as well as inline, because the inline rows scroll off a tree of any size
+  # and this is the only line a reader skimming the tail will see. Not folded into the
+  # counts line above: those are refusals, and this is not one.
+  echo "$WARNED paths pattern(s) name a name rather than a place — they fire wherever that name occurs."
+  echo "That is a warning, not a refusal: it does not change the exit code. Anchor with ^ or a parent directory if it was not deliberate."
 fi
 if [ "$VOCAB_REFUSED" -gt 0 ]; then
   echo "$VOCAB_REFUSED vocabulary row(s) refused on the entry file name."
