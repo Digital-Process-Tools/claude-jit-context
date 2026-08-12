@@ -45,11 +45,18 @@ JIT_RC=0
 # 2 outranks 1: an index that was not written is a worse claim than one that was.
 jit_rc() { [ "$1" -gt "$JIT_RC" ] && JIT_RC="$1"; return 0; }
 
-# Deliberately NOT `[ -d "$JIT_BASE" ]`. common.sh mkdir -p's "$JIT_BASE/.discovery/logs"
-# at source time, so the base directory exists by the time this line runs even in a project
-# that has no entry tree at all -- measured, and the reason the first cut of this guard
-# never fired. The question that survives that is whether any DIMENSION is there; if none
-# is, this run indexed nothing and 0 would be a lie about a tree it never saw.
+# Deliberately NOT `[ -d "$JIT_BASE" ]`, and the reason CHANGED under this line in #51.
+#
+# It used to be that common.sh mkdir -p'd "$JIT_BASE/.discovery/logs" at source time, so the
+# base directory existed by the time this line ran even in a project with no entry tree at
+# all -- measured, and the reason the first cut of this guard never fired. That mkdir is now
+# gated on the base already existing, so the test would answer honestly today.
+#
+# It is still the wrong test, for the reason that was always the load-bearing one: a
+# `.claude/jit-context/` holding no tools/, paths/ or vocabulary/ is a tree this script
+# cannot index, and `[ -d "$JIT_BASE" ]` would call it fine. The question is whether any
+# DIMENSION is there; if none is, this run indexed nothing and 0 would be a lie about a
+# tree it never saw. Do not simplify this back on the strength of the first paragraph.
 JIT_DIMS_FOUND=0
 for _jit_d in tools paths vocabulary; do
   [ -d "$JIT_BASE/$_jit_d" ] && JIT_DIMS_FOUND=1

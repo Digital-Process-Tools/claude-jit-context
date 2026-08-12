@@ -609,14 +609,37 @@ Timings and matches are appended to `.claude/jit-context/.discovery/logs/hooks.l
 
 `(none)` in the match column means nothing fired — useful for finding knowledge gaps.
 
+**Nothing is written in a project that has no `.claude/jit-context/` directory.** The
+plugin installs globally and then runs in every repository you open, so it creates nothing
+until you have opted in by making that directory — `bash scripts/jit-init.sh`, or a
+`mkdir` of your own. Until then all four hooks run, match nothing, log nothing and exit 0,
+and `git status` in a project that never asked for any of this stays clean. Once the
+directory exists, the log and the once-per-session markers live under
+`.claude/jit-context/.discovery/`, which is a good line for your `.gitignore`:
+
+```gitignore
+.claude/jit-context/.discovery/
+```
+
+**A log line is capped at 2048 bytes of matches, and says how many it dropped.** An index
+with hundreds of rows that all match writes a name for each one, which measured between 16
+and 22 KB per line on a 400-row tree — once per prompt and once per tool call. What fits is
+written whole; the rest is accounted for rather than silently cut:
+
+```
+… tool:billing.md(billing), [+3442 bytes not listed here; this line is capped at 2048 bytes -- scripts/jit-dry-run.sh prints the whole tree] [shown:0] << src/Billing/Totals.php
+```
+
+The trailing `[shown:N] << …` field is never cut — it is what `jit-misses.sh` reads.
+
 **If any part of that path is a symbolic link, logging is switched off for the run and the
 hooks carry on.** The log path is built inside the project, so a cloned repository would
 otherwise choose the file the hooks append to — and `mkdir -p` and `>>` both follow a link.
 A hook that cannot log still has a job to do, so nothing fails and nothing is injected
-about it; the empty `.discovery/logs/` is the symptom. The one line a refused row
-contributes never carries the raw file-name column from the index either, for a name that
-failed the containment check: that is unvalidated text from the repository, and this file
-is read by a person.
+about it; no log line arriving in a tree that has entries is the symptom. The one line a
+refused row contributes never carries the raw file-name column from the index either, for a
+name that failed the containment check: that is unvalidated text from the repository, and
+this file is read by a person.
 
 ## What the team keeps asking that nobody has written down
 

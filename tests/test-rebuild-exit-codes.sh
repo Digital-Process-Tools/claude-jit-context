@@ -203,9 +203,12 @@ rebuild "$EMPTY"
 assert_rc "a project with no jit-context tree exits 2" 2 "$RC"
 assert_contains "and names the path it looked for" "$(cat "$ERR")" "$EMPTY/.claude/jit-context"
 assert_not_contains "and does not claim to have indexed anything" "$(cat "$ERR")" "entr(ies) indexed"
-# The base DIRECTORY is not the assertion: common.sh creates "$JIT_BASE/.discovery/logs"
-# when it is sourced, by every hook as well as by this script. What must be true is that
-# no index was written, since an index is the thing whose absence exit 0 would deny.
+# The base DIRECTORY is not the assertion, and since #51 it is not created here either:
+# common.sh creates "$JIT_BASE/.discovery/logs" when it is sourced only where "$JIT_BASE"
+# already exists, which in this fixture it does not. What must be true is what was always
+# the point -- that no index was written, since an index is the thing whose absence exit 0
+# would deny. Asserting on the directory instead would now pass for a second reason and
+# stop being evidence about this script at all.
 if [ -n "$(find "$EMPTY" -name "00-index.tsv" -print 2>/dev/null)" ]; then
   bad "it wrote no index under a root it could not evaluate"
 else

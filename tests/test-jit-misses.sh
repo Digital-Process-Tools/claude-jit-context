@@ -326,7 +326,10 @@ WDIR="$TMP/wdir"
 mkdir -p "$WDIR"
 # No --log here on purpose: this is the only assertion that exercises the DEFAULT path,
 # which the script derives itself rather than taking from common.sh (common.sh mkdir -p's
-# the log directory at load, and a reporting tool must not create what it reports on).
+# the log directory at load -- since #51 only where `.claude/jit-context/` already exists,
+# which is every tree this tool is pointed at -- and a reporting tool must not create what
+# it reports on). The `reading created no .claude tree` assertion below is about THIS
+# script and holds either way: it never sourced common.sh, so it never created anything.
 OUT=$(cd "$WDIR" && CLAUDE_PROJECT_DIR="$WDIR" bash "$MISSES" 2>&1) && ST=0 || ST=$?
 assert_status "no log under CLAUDE_PROJECT_DIR is exit 2" "$ST" "2"
 assert_contains "and it names the path it derived" "$OUT" ".claude/jit-context/.discovery/logs/hooks.log"
@@ -338,9 +341,10 @@ assert_status "the working dir still holds exactly one entry (itself)" "$COUNT" 
 # =============================================
 # SECTION: the fold table is duplicated, so assert it has not drifted
 # =============================================
-# jit-misses.sh deliberately does not source common.sh (its header says why: common.sh
-# mkdir -p's the log directory at load, and a reporting tool must not create the thing it
-# reports). So the Latin-1 fold table exists twice. Drift is not a cosmetic problem: the
+# jit-misses.sh deliberately does not source common.sh (its header says why, and says what
+# #51 changed about it: common.sh mkdir -p's the log directory at load, now only where the
+# tree already exists, and a reporting tool must not create the thing it reports). So the
+# Latin-1 fold table exists twice. Drift is not a cosmetic problem: the
 # index writer folds a keyword with common.sh's copy, and a letter present in one table
 # and missing from the other is a keyword that indexes one way and is reported another.
 # Compared as a character sequence, because the two copies are indented differently.
