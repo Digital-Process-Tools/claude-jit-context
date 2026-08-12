@@ -285,6 +285,56 @@ for dir in "$PATHS_BASE"/*/; do
   build_path_tsv "$dir" "$dir/00-index.tsv" "$label"
 done
 
+# --- Rows the hooks will refuse, named at build time (#77) -------------------
+# Nothing above validates bytes, and it cannot: every column reaches printf through a
+# $( ) capture, which is also why a NUL can never get this far (bash drops them out of
+# command substitution) and why #78 needed no change here. A non-UTF-8 byte DOES get
+# through -- under LC_ALL=C the awk in jit_frontmatter() has nothing to decode and copies
+# it out verbatim, which was measured, and under a UTF-8 locale that awk aborts loudly
+# and the entry is dropped instead. Neither reading tells the author what happened.
+#
+# It matters most for the one column nobody looks at twice: a `forbid:` value saved in
+# ISO-8859-1 indexes fine, and the hook then refuses the whole row -- so a block rule goes
+# dark, and the only notice of it arrives at runtime, in a session, naming a row number.
+# This file is the loud half, so it says so here, with the entry file name, which is what
+# an author can act on.
+#
+# One awk per index file, after it is written, using the same jit_bad_bytes() the hooks
+# refuse with -- never a second opinion that can disagree with theirs. LC_ALL=C on the
+# invocation, because the byte range it builds is a decode failure in a UTF-8 locale.
+#
+# It does NOT change the exit code, matching jit_expand_match(): the row is written
+# through and refused at load, which is a rule that reads as refused rather than one that
+# silently vanished. That this script has no non-zero exit at all is a known gap, recorded
+# in .claude/jit-context/paths/00-manual/tooling.md, and it is not this change to make.
+report_bad_bytes() {
+  local tsv="$1" label="$2" col="$3"
+  [ -f "$tsv" ] || return 0
+  LC_ALL=C JIT_COL="$col" awk "$JIT_AWK_ENTRY"'
+    BEGIN { col = ENVIRON["JIT_COL"] + 0 }
+    {
+      why = jit_bad_bytes($0, "the index row")
+      if (why == "") next
+      n = split($0, f, "\t")
+      printf "rebuild-tsv: %s row %d: %s -- the hooks will refuse this row%s\n", \
+        lbl, NR, why, (f[col] != "" && why ~ /UTF-8/ ? ", written from " f[col] : "")
+    }' lbl="$label" "$tsv" >&2
+}
+
+for dir in "$TOOLS_BASE"/*/; do
+  [ -d "$dir" ] || continue
+  report_bad_bytes "${dir%/}/00-index.tsv" "tools/$(basename "${dir%/}")" 3
+done
+for dir in "$PATHS_BASE"/*/; do
+  [ -d "$dir" ] || continue
+  report_bad_bytes "${dir%/}/00-index.tsv" "paths/$(basename "${dir%/}")" 2
+done
+for dir in "$VOCAB_BASE"/*/; do
+  [ -d "$dir" ] || continue
+  report_bad_bytes "${dir%/}/00-index.tsv" "vocabulary/$(basename "${dir%/}")" 2
+  report_bad_bytes "${dir%/}/01-paths.tsv" "vocabulary/$(basename "${dir%/}")" 2
+done
+
 # --- Ambiguity report: kw appearing in >5 files (vocab only) ---
 THRESHOLD=5
 echo "" >&2

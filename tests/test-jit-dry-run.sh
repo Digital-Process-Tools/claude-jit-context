@@ -462,6 +462,67 @@ assert_contains "and the note names that column as tree text, not only the marke
   "$OUT" "the file-name column below"
 
 rm -rf "$HOSTILE"
+# =============================================================================
+# Bytes the hook channel cannot deliver (#77, #78)
+# =============================================================================
+# The refusal notice the hooks inject sends the reader HERE. A class the hooks refuse and
+# this tool reports as ok makes that advice false, which is the defect class the notice
+# exists to close.
+#
+# Driven once per awk on this machine: the byte range this check builds is a decode under
+# a UTF-8 locale, and one-true-awk aborted the whole program on it before the LC_ALL=C pin
+# went on -- the linter falling over on precisely the input it was added for.
+echo ""
+echo "=== a body and a row the hook cannot carry are refused, per engine ==="
+BYTEBIN=$(mktemp -d)
+BYTE_ENGINES=""
+BYTE_SEEN=""
+for cand in awk gawk nawk mawk; do
+  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  case " $BYTE_SEEN " in *" $cand_path "*) continue ;; esac
+  BYTE_SEEN="$BYTE_SEEN $cand_path"
+  mkdir -p "$BYTEBIN/$cand"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$cand_path" > "$BYTEBIN/$cand/awk"
+  chmod +x "$BYTEBIN/$cand/awk"
+  BYTE_ENGINES="$BYTE_ENGINES $cand"
+done
+
+BYTETREE=$(mktemp -d)
+make_tree "$BYTETREE"
+BYTEBASE="$BYTETREE/.claude/jit-context"
+# One clean row, one whose body is Latin-1, one naming a file that is not there, and one
+# whose own bytes are not UTF-8. billing.md from make_tree is the positive control.
+printf 'entry body saved as Latin-1 \351 end\n' > "$BYTEBASE/paths/00-manual/latin1.md"
+{ printf 'Latin1/\tlatin1.md\n'
+  printf 'Gone/\tgone-from-disk.md\n'
+  printf 'Bytes\351/\tbilling.md\n'; } >> "$BYTEBASE/paths/00-manual/00-index.tsv"
+
+for ENG in $BYTE_ENGINES; do
+  OUT=$(cd "$ELSEWHERE" && PATH="$BYTEBIN/$ENG:$PATH" CLAUDE_PROJECT_DIR="$ELSEWHERE" \
+    bash "$DRYRUN" --base "$BYTEBASE" 2>&1) && ST=0 || ST=$?
+  assert_contains "[$ENG] the linter ran at all" "$OUT" "rule(s) indexed"
+  assert_contains "[$ENG] a non-UTF-8 body is refused" "$OUT" "the entry file is not valid UTF-8"
+  assert_contains "[$ENG] a row naming a file that is gone is refused" "$OUT" "the entry file could not be read"
+  assert_contains "[$ENG] a non-UTF-8 index row is refused" "$OUT" "the index row is not valid UTF-8"
+  assert_contains "[$ENG] the refused row is named by position" "$OUT" "row 4"
+  assert_contains "[$ENG] and counted in the summary" "$OUT" "3 row(s) carry bytes"
+  assert_contains "[$ENG] the clean row is still reported ok" "$OUT" "billing.md"
+  assert_not_contains "[$ENG] the clean body is not refused" "$OUT" "billing body"
+  assert_status "[$ENG] exit 1 — a refusal decides the exit code" "$ST" "1"
+done
+
+# The positive control for the whole block: with those three rows gone, the same tree is
+# clean and exits 0. Without it, every assertion above would also pass against a linter
+# that refused everything it was shown.
+printf 'Billing/\tbilling.md\n' > "$BYTEBASE/paths/00-manual/00-index.tsv"
+for ENG in $BYTE_ENGINES; do
+  OUT=$(cd "$ELSEWHERE" && PATH="$BYTEBIN/$ENG:$PATH" CLAUDE_PROJECT_DIR="$ELSEWHERE" \
+    bash "$DRYRUN" --base "$BYTEBASE" 2>&1) && ST=0 || ST=$?
+  assert_not_contains "[$ENG] a tree with none of those faults is not refused" "$OUT" "row(s) carry bytes"
+  assert_contains "[$ENG] and its honest rule is still listed" "$OUT" "billing.md"
+  assert_status "[$ENG] exit 0 on the clean tree" "$ST" "0"
+done
+rm -rf "$BYTETREE" "$BYTEBIN"
 
 rm -rf "$CLEAN" "$BROKEN" "$ELSEWHERE"
 

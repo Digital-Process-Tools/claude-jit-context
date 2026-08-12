@@ -176,9 +176,26 @@ END {
 
     # Single pass: match keywords, collect files + matched keywords
     delete vmatch
+    # The row a matched file was FIRST seen at, so a body this loop cannot deliver is
+    # named by position like every other refusal -- the loop below walks files, not rows.
+    delete vmrow
     vrown = 0
     while ((getline vl < lookup) > 0) {
       vrown++
+
+      # The index row is a channel into additionalContext too -- the keyword column is
+      # echoed in the (matched: ...) header (#77) -- and a NUL in the file column silently
+      # truncated the dedup key (#78). Checked before the split, so no column of an
+      # unusable row is read at all. See jit_bad_bytes() in common.sh.
+      why = jit_bad_bytes(vl, "the index row")
+      if (why != "") {
+        n_refused++
+        refused = jit_refuse_add(refused, jit_row_id("vocabulary/" layer, vrown) ": " why)
+        log_matches = log_matches sep "refused:" jit_row_id("vocabulary/" layer, vrown) "(" why ")"
+        sep = ", "
+        continue
+      }
+
       split(vl, vf, "\t")
       kw = vf[1]; vfile = vf[2]
       # vfile is concatenated onto the layer directory below. A row of ../../../x made
@@ -204,21 +221,29 @@ END {
         # index() on the delimited string, not an array: awk has no `in` for a substring.
         if (vfile in vmatch) {
           if (index("|" vmatch[vfile] "|", "|" kw "|") == 0) vmatch[vfile] = vmatch[vfile] "|" kw
-        } else vmatch[vfile] = kw
+        } else { vmatch[vfile] = kw; vmrow[vfile] = vrown }
       }
     }
     close(lookup)
 
     for (vfile in vmatch) {
-      shown[vfile] = 1
-      jit_shown_mark(shown_file, vfile)
-
-      vc = ""
-      vpath = vocab_base "/" layer "/" vfile
-      while ((getline vcl < vpath) > 0) vc = vc (vc == "" ? "" : "\n") vcl
-      close(vpath)
+      # Read the body BEFORE marking anything shown. A row whose entry file will not open
+      # was marked delivered anyway, which is exactly what a NUL-truncated row looks like
+      # to one-true-awk (#78), and a body the JSON channel cannot carry is refused rather
+      # than voiding every other entry in the same call (#77).
+      why = jit_read_body(vocab_base "/" layer "/" vfile)
+      if (why != "") {
+        n_refused++
+        refused = jit_refuse_add(refused, jit_row_id("vocabulary/" layer, vmrow[vfile]) ": " why)
+        log_matches = log_matches sep "refused:" jit_log_name(vfile, layer, vmrow[vfile], why) "(" why ")"
+        sep = ", "
+        continue
+      }
+      vc = JIT_BODY
 
       if (vc != "") {
+        shown[vfile] = 1
+        jit_shown_mark(shown_file, vfile)
         vh = "# Vocabulary: " vfile " (matched: " vmatch[vfile] ")"
         if (layer ~ /00-manual/) vh = vh "\\n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
         log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")"

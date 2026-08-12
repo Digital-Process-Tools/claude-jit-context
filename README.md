@@ -402,6 +402,27 @@ reports is always the true total, and the row numbers it did list are true posit
 the file, not places in the shortened list. Every row is still evaluated: the bound is on
 what gets said, never on what gets checked.
 
+**An entry the JSON channel cannot carry is refused, and its neighbours still arrive.** A
+hook answers in a JSON object, and JSON is UTF-8. An entry saved in ISO-8859-1 — one `é` in
+`Préferez rm -i`, which `file` reports as `ISO-8859 text` and no editor complains about —
+used to travel into that object byte for byte, so a strict reader rejected the **whole**
+response: the two clean entries injected in the same call were lost with it, and a `block`
+decision that had been reached could not be read. The entry is now refused like an
+unhonourable pattern — named by position, everything else delivered — and text that is
+valid UTF-8, accents and emoji included, is unchanged.
+
+On the tool dimension a rule whose **body** cannot be delivered still blocks, and says so in
+place of its text: `mode`, `require` and `forbid` all come from the index row, so the
+decision was reached and throwing it away would turn an unreadable rule into an allowed
+call. When the bad bytes are in the **row** itself those are the decision inputs, there is
+no verdict to preserve, and the row is refused like an unhonourable pattern — the call is
+not blocked, and the notice says a block rule is the one that went dark rather than leaving
+that to be guessed. `rebuild-tsv.sh` names such a row at build time, by entry file, so the
+first you hear of it is not a row number in someone's session.
+
+A row whose entry file cannot be opened at all — a stale index naming a file you deleted —
+is refused the same way instead of reading as a rule that matched nothing.
+
 **Nothing on the way to an entry may be a symbolic link** — not the entry file, not its
 layer directory, not the dimension directory, not `config.env`, and not `.claude/` or
 `.claude/jit-context/` themselves. All of them are refused through that same channel, named the same way. The

@@ -235,65 +235,73 @@ refuses() {
   assert_not_contains "  ...and not the clean entry beside it" "$out" "12.added.md"
 }
 
-refuses "an ATX heading at column 0" 70.fixed.md \
-"- **An entry** (#70). Prose.
+# Every fixture name below carries a SLUG and a number outside the tracker range, and
+# neither is cosmetic. tests/test-changelog-fragment-refs.sh refuses any tracked file that
+# names a fragment currently on disk, because the release deletes fragments and such a
+# reference is green only until the next tag — and it compares by substring. A fixture
+# named for a plain issue number IS that reference, so this suite reddened the guard the
+# moment a real PR wrote a fragment with the same number: one test file quietly making a
+# range of live issue numbers unusable by whoever fixes them. The number alone is not
+# enough either, since a longer number ends with a shorter one. Give a new fixture a slug.
+refuses "an ATX heading at column 0" 9070.fixed.fixture.md \
+"- **An entry** (#9070). Prose.
 
 # INJECTED HEADING"
 
 # Upstream #927 anchored at column 0 and #930 found three ways past. This is one of them.
-refuses "an ATX heading indented three spaces" 71.fixed.md \
-"- **An entry** (#71). Prose.
+refuses "an ATX heading indented three spaces" 9071.fixed.fixture.md \
+"- **An entry** (#9071). Prose.
 
    ### INJECTED"
 
 # The advice this convention used to give. Inside a bullet the content column is 2, so
 # four spaces is TWO relative columns — an ordinary paragraph, in which a heading is live.
-refuses "a heading indented four spaces inside the bullet" 72.fixed.md \
-"- **An entry** (#72). Prose.
+refuses "a heading indented four spaces inside the bullet" 9072.fixed.fixture.md \
+"- **An entry** (#9072). Prose.
 
     ## [Unreleased]"
 
-refuses "a setext heading" 73.fixed.md \
-"- **An entry** (#73). Prose.
+refuses "a setext heading" 9073.fixed.fixture.md \
+"- **An entry** (#9073). Prose.
 
 INJECTED
 ========"
 
 # Not an html_block, and the previous upstream guard refused a line STARTING with a tag.
-refuses "an inline HTML heading tag mid-paragraph" 74.fixed.md \
-"- **An entry** (#74). Prose and then <h1>INJECTED</h1> after a word."
+refuses "an inline HTML heading tag mid-paragraph" 9074.fixed.fixture.md \
+"- **An entry** (#9074). Prose and then <h1>INJECTED</h1> after a word."
 
-refuses "a link reference definition" 75.fixed.md \
-"- **An entry** (#75). Prose.
+refuses "a link reference definition" 9075.fixed.fixture.md \
+"- **An entry** (#9075). Prose.
 
 [Unreleased]: https://evil.example/pwned"
 
 # Upstream #936 walked through a fence: a line reaching column 0 ends the fence, the
 # bullet and the list, so what was being quoted goes live at document level.
-refuses "a fence that never closes" 76.fixed.md \
-"- **An entry** (#76). Prose.
+refuses "a fence that never closes" 9076.fixed.fixture.md \
+"- **An entry** (#9076). Prose.
 
   \`\`\`markdown
   ## [Unreleased]"
 
 # The balance guard counts lines beginning with a dash and a space, and trusts that
 # count. An ordered list at the top level makes the arithmetic and the document disagree.
-refuses "a top level that is not a - bullet list" 77.fixed.md \
-"1. **An entry** (#77). Prose."
+refuses "a top level that is not a - bullet list" 9077.fixed.fixture.md \
+"1. **An entry** (#9077). Prose."
 
-refuses "a tab" 78.fixed.md \
-"- **An entry** (#78).	Prose after a tab."
+refuses "a tab" 9078.fixed.fixture.md \
+"- **An entry** (#9078).	Prose after a tab."
 
 echo ""
 echo "=== an unknown section is refused, beside one that is not ==="
 F="$WORK/badsection"
 make_fixture "$F" || { echo "SKIPPED: could not build the fixture"; exit 2; }
 frag "$F" 65.fixed.md    "- **A fixed thing** (#65). Prose."
-frag "$F" 70.improved.md "- **Improved is not a Keep a Changelog heading** (#70). Prose."
+frag "$F" 9070.improved.md "- **Improved is not a Keep a Changelog heading** (#9070). Prose."
 
 out=$(run "$F" --version 0.4.0 --title "T")
 assert_status "exit 1 on an unknown section" "$?" "1"
-assert_contains "names the offending file"   "$out" "70.improved.md"
+assert_contains "names the offending file"   "$out" "9070.improved.md"
 assert_contains "names the unknown section"  "$out" "improved"
 assert_not_contains "does not blame the valid fragment beside it" "$out" "65.fixed.md"
 assert_eq "wrote nothing at all" "$(count_lines_matching "^## .0\.4\.0." "$F/CHANGELOG.md")" "0"
@@ -439,7 +447,7 @@ assert_contains "  ...and names which of the three it did" "$out" "skipped"
 
 F="$WORK/checkbad"
 make_fixture "$F" || { echo "SKIPPED: could not build the fixture"; exit 2; }
-frag "$F" 70.improved.md "- **Unknown section** (#70). Prose."
+frag "$F" 9070.improved.md "- **Unknown section** (#9070). Prose."
 out=$(run "$F" --check)
 assert_status "--check: exit 1 on a directory that would be refused" "$?" "1"
 
