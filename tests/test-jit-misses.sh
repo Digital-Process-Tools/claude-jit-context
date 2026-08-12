@@ -18,7 +18,7 @@ FAIL=0
 
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if echo "$output" | grep -qF -- "$expected"; then
+  if grep -qF -- "$expected" <<<"$output"; then
     PASS=$((PASS + 1)); echo "  PASS: $desc"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
@@ -29,7 +29,7 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if echo "$output" | grep -qF -- "$unexpected"; then
+  if grep -qF -- "$unexpected" <<<"$output"; then
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: $(echo "$output" | cut -c1-400)"
@@ -43,7 +43,7 @@ assert_not_contains() {
 # the output either way. The claim is about the ROW, so match the whole line.
 assert_no_token_row() {
   local desc="$1" output="$2" token="$3"
-  if printf '%s\n' "$output" | grep -qE "^ +[0-9]+x  $token\$"; then
+  if grep -qE "^ +[0-9]+x  $token\$" <<<"$output"; then
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
     echo "    should have no row for token: $token"
   else
@@ -53,7 +53,7 @@ assert_no_token_row() {
 
 assert_token_row() {
   local desc="$1" output="$2" token="$3"
-  if printf '%s\n' "$output" | grep -qE "^ +[0-9]+x  $token\$"; then
+  if grep -qE "^ +[0-9]+x  $token\$" <<<"$output"; then
     PASS=$((PASS + 1)); echo "  PASS: $desc"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"

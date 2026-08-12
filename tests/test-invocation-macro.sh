@@ -26,7 +26,7 @@ bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    
 
 assert_contains() {
   local desc="$1" out="$2" want="$3"
-  if printf '%s' "$out" | grep -qF "$want"; then
+  if grep -qF "$want" <<<"$out"; then
     ok "$desc"
   else
     bad "$desc" "expected to contain: $want"
@@ -36,7 +36,7 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" out="$2" unwanted="$3"
-  if printf '%s' "$out" | grep -qF "$unwanted"; then
+  if grep -qF "$unwanted" <<<"$out"; then
     bad "$desc" "must NOT contain: $unwanted"
     echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
   else

@@ -7,6 +7,51 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every assertion helper in the test suite could report the opposite of what it found.**
+  Fourteen of the fifteen suites decided PASS/FAIL with `echo "$output" | grep -q "$needle"`. `grep -q`
+  exits the instant it matches; the writer on the left of the pipe is then writing into a
+  closed pipe, takes `SIGPIPE`, and under `set -o pipefail` the pipeline reports non-zero
+  *having found the string*. The verdict inverts (#56).
+
+  The issue described this as a false red, and that is the half that gets noticed:
+  `assert_contains` prints FAIL on a hit. The other half is worse and was not filed —
+  `assert_not_contains` takes its `else` branch and prints **PASS on a hit**, so an
+  assertion that "the rule did not fire" passes while the rule fired. Driven both ways
+  against the unfixed helpers: 27 of the 51 helper calls returned the wrong verdict —
+  15 false reds and 12 false greens — and the shape was present in every suite that asserts containment. `test-version-sites.sh`
+  is the one that does not: it compares extracted strings with `[ = ]` and was left alone.
+
+  It is length-dependent — the output has to exceed the pipe buffer before the writer
+  blocks — so it stays invisible until some unrelated change makes a hook's output long,
+  and then reads as a regression in that change. Two corrections to the diagnosis while
+  fixing it: the writer is irrelevant, `printf` takes the signal exactly as `echo` does,
+  so `printf '%s' … | grep -q` in `test-frontmatter-quotes.sh`, `test-invocation-macro.sh`
+  and `test-jit-misses.sh` was equally affected; and bash's `pipefail` returns the *last*
+  non-zero status, not the first.
+
+  Every site now reads from a here-string — `grep -qF "$needle" <<<"$output"` — which
+  gives grep a regular file and no pipe to close. `test-dogfood-entries.sh`'s harness
+  probe, the control that declares every result below it vacuous, was piped the same way
+  and would have inverted itself; it captures first now. The ten `$(echo "$output" | head -c 200)`
+  diagnostics are `${output:0:200}`, and the three `perl … | head -c 200` truncations
+  happen inside perl.
+
+### Added
+
+- **`tests/test-assertion-helpers.sh` — the harness asserting about itself.** It extracts
+  every suite's real helper functions and calls them directly with a 1 MB payload, rather
+  than trying to make some hook produce long output: "long enough to fill the pipe buffer"
+  is a platform-dependent number and CI is Linux, macOS and Windows. 1 MB is roughly 16x
+  the largest pipe buffer any of the three uses, so the signal is raised on all three legs
+  or on none of them. 51 helper calls in both directions — a present needle must report
+  PASS and an absent one FAIL, and the same for the negative helpers — plus a structural
+  scan that refuses `| grep -q` and `| head` anywhere in `tests/`, which covers helper
+  names the suite does not enumerate. A floor on the number of helpers actually driven
+  fails loudly if extraction ever stops finding them, so the suite cannot go green on
+  having tested nothing.
+
 ## [0.3.1] — A session, and a red that means something
 
 ### Added

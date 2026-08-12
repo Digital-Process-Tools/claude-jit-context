@@ -30,7 +30,11 @@ fired_for() {
 
 # Proves the harness can see the tree at all. Without it, every assert_silent below
 # would pass in an environment where the dry-run silently evaluates nothing.
-if ! fired_for "scripts/pre-path-hook.sh" | grep -q "hooks.md"; then
+# Captured first, not piped: `grep -q` exits on the match and the writer on the left of
+# the pipe takes SIGPIPE, which under pipefail turns a found string into a non-zero
+# status. That is issue #56, and here it would have inverted the guard itself.
+harness_probe=$(fired_for "scripts/pre-path-hook.sh")
+if ! grep -q "hooks.md" <<<"$harness_probe"; then
   echo "  FAIL: harness cannot evaluate this repo's own tree — every result below would be vacuous"
   exit 1
 fi
@@ -38,7 +42,7 @@ fi
 assert_fires() {
   local desc="$1" path="$2" rule="$3" out
   out=$(fired_for "$path")
-  if echo "$out" | grep -qF "$rule"; then
+  if grep -qF "$rule" <<<"$out"; then
     PASS=$((PASS + 1)); echo "  PASS: $desc"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
@@ -50,7 +54,7 @@ assert_fires() {
 assert_silent() {
   local desc="$1" path="$2" rule="$3" out
   out=$(fired_for "$path")
-  if echo "$out" | grep -qF "$rule"; then
+  if grep -qF "$rule" <<<"$out"; then
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
     echo "    $rule must NOT fire for: $path"
     echo "    got: $out"

@@ -63,18 +63,18 @@ run_hook() {
 
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if echo "$output" | grep -q "$expected"; then
+  if grep -q "$expected" <<<"$output"; then
     PASS=$((PASS + 1)); echo "  PASS: $desc"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
-    echo "    got: $(echo "$output" | head -c 200)"
+    echo "    got: ${output:0:200}"
   fi
 }
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if echo "$output" | grep -q "$unexpected"; then
+  if grep -q "$unexpected" <<<"$output"; then
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
   else
@@ -89,18 +89,18 @@ assert_empty() {
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
     echo "    expected: {}"
-    echo "    got: $(echo "$output" | head -c 200)"
+    echo "    got: ${output:0:200}"
   fi
 }
 
 assert_blocked() {
   local desc="$1" output="$2"
-  if echo "$output" | grep -q '"decision":"block"'; then
+  if grep -q '"decision":"block"' <<<"$output"; then
     PASS=$((PASS + 1)); echo "  PASS: $desc"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
     echo "    expected decision:block"
-    echo "    got: $(echo "$output" | head -c 200)"
+    echo "    got: ${output:0:200}"
   fi
 }
 
@@ -311,7 +311,7 @@ assert_no_raw_controls() {
     PASS=$((PASS + 1)); echo "  PASS: $desc"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
-    echo "    raw control byte in: $(LC_ALL=C perl -0777 -pe 's/([\x00-\x1f])/sprintf("<%02X>",ord($1))/ge' "$out" | head -c 200)"
+    echo "    raw control byte in: $(LC_ALL=C perl -0777 -pe 's/([\x00-\x1f])/sprintf("<%02X>",ord($1))/ge; $_ = substr($_, 0, 200)' "$out")"
   fi
   rm -f "$out"
 }
