@@ -174,6 +174,22 @@ END {
     rown = 0
     while ((getline tline < index_file) > 0) {
       rown++
+
+      # An index row is a channel into additionalContext in its own right: the pattern
+      # column is echoed back in the (matched: ...) header, so a byte the JSON string
+      # cannot carry reaches stdout without ever being in an entry file (#77). A NUL here
+      # truncated the dedup key on both engines (#78). Checked BEFORE the split, so no
+      # column of an unusable row is read at all.
+      why = jit_bad_bytes(tline, "the index row")
+      if (why != "") {
+        n_refused++
+        refused = jit_refuse_add(refused, jit_row_id("paths/" layer, rown) ": " why)
+        # Positioned, never quoted: the raw text is the thing that could not be carried.
+        log_matches = log_matches sep "refused:" jit_row_id("paths/" layer, rown) "(" why ")"
+        sep = ", "
+        continue
+      }
+
       split(tline, tf, "\t")
       pattern = tf[1]; rule_file = tf[2]
 
@@ -223,15 +239,25 @@ END {
       }
       if (!path_matched) continue
 
-      shown[rule_file] = 1
-      jit_shown_mark(shown_file, rule_file)
-
-      content = ""
-      rpath = paths_base "/" layer "/" rule_file
-      while ((getline rl < rpath) > 0) content = content (content == "" ? "" : "\n") rl
-      close(rpath)
+      # The body is read BEFORE anything is marked shown. A row whose entry file will not
+      # open used to be marked anyway -- nothing injected, nothing refused, and the key
+      # recorded as delivered, which is how a NUL-truncated row went missing in silence on
+      # one-true-awk (#78). A mark now records an injection that happened.
+      why = jit_read_body(paths_base "/" layer "/" rule_file)
+      if (why != "") {
+        n_refused++
+        refused = jit_refuse_add(refused, jit_row_id("paths/" layer, rown) ": " why)
+        # The name PASSED the bare-name check above, so it is what an author fixing this
+        # needs and jit_log_name() keeps it -- the log is read by a person, not a model.
+        log_matches = log_matches sep "refused:" jit_log_name(rule_file, layer, rown, why) "(" why ")"
+        sep = ", "
+        continue
+      }
+      content = JIT_BODY
 
       if (content != "") {
+        shown[rule_file] = 1
+        jit_shown_mark(shown_file, rule_file)
         header = "# JIT Context: " rule_file " (matched: " pattern ")"
         log_matches = log_matches sep layer ":" rule_file "(" pattern ")"
         sep = ", "
@@ -256,6 +282,17 @@ END {
       vrown = 0
       while ((getline vline < vindex) > 0) {
         vrown++
+
+        # Same two channels as the rule loop above, same verdict. See jit_bad_bytes().
+        why = jit_bad_bytes(vline, "the index row")
+        if (why != "") {
+          n_refused++
+          refused = jit_refuse_add(refused, jit_row_id("vocabulary/" layer, vrown) ": " why)
+          log_matches = log_matches sep "refused:" jit_row_id("vocabulary/" layer, vrown) "(" why ")"
+          sep = ", "
+          continue
+        }
+
         split(vline, vf, "\t")
         vpattern = vf[1]; vocab_file = vf[2]
 
@@ -277,15 +314,20 @@ END {
         }
         if (!vmatched) continue
 
-        vshown[vocab_file] = 1
-        jit_shown_mark(vocab_shown_file, vocab_file)
-
-        vcontent = ""
-        vfpath = vocab_base "/" layer "/" vocab_file
-        while ((getline vl < vfpath) > 0) vcontent = vcontent (vcontent == "" ? "" : "\n") vl
-        close(vfpath)
+        # Read first, mark only what was delivered. Same reason as the rule loop above.
+        why = jit_read_body(vocab_base "/" layer "/" vocab_file)
+        if (why != "") {
+          n_refused++
+          refused = jit_refuse_add(refused, jit_row_id("vocabulary/" layer, vrown) ": " why)
+          log_matches = log_matches sep "refused:" jit_log_name(vocab_file, layer, vrown, why) "(" why ")"
+          sep = ", "
+          continue
+        }
+        vcontent = JIT_BODY
 
         if (vcontent != "") {
+          vshown[vocab_file] = 1
+          jit_shown_mark(vocab_shown_file, vocab_file)
           vheader = "# Vocabulary: " vocab_file " (matched path: " vpattern ")"
           log_matches = log_matches sep layer ":" vocab_file "(" vpattern ")"
           sep = ", "

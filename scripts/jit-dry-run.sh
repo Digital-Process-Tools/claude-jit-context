@@ -149,6 +149,7 @@ print_untrusted() {
 #     evaluate is not a rule.
 
 REFUSED=0
+BYTES_REFUSED=0
 VOCAB_REFUSED=0
 WARNED=0
 CHECKED=0
@@ -471,6 +472,72 @@ for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; 
   done < "$tsv"
 done
 
+# --- Bytes a row or a body carries that the JSON channel cannot (#77, #78) ---
+# The refusal notice the hooks inject tells the reader to lint the tree HERE, so a class
+# the hooks refuse and this tool clears makes that advice false -- which is this
+# repository own defect class, in the tool written to report it.
+#
+# Three faults, all of them invisible to the loops above: a non-UTF-8 byte anywhere in the
+# row, which reaches additionalContext through the (matched: ...) header; a NUL in the
+# row, which truncated the dedup key; and a body the hook cannot deliver, which those
+# loops never open at all.
+#
+# One awk per index file rather than one per entry: the bash loops above read rows with
+# `read -r`, which truncates at a NUL and so cannot see the byte this is about, and a fork
+# per entry costs a thousand processes on a thousand-entry tree.
+#
+# The verdicts come from the same shared functions the hooks use -- jit_bad_bytes() and
+# jit_read_body() in common.sh -- never a second copy in bash that can drift from them.
+# jit_bad_entry_file() gates the body read for the same reason the hooks do it: this must
+# not be the one reader that follows a link out of the tree.
+#
+# LC_ALL=C on the awk, and it is load-bearing rather than tidy. This is the only awk in
+# this file that compares BYTES, and the byte range it builds is not a character in a
+# UTF-8 locale: unpinned, one-true-awk aborted the whole program with "multibyte conversion
+# failure" on the first row of a tree carrying the byte this check exists to find -- the
+# linter falling over on exactly the input it was added for. The hooks pin it on every awk
+# for the same reason (#68); this file does not, because its other awks read text.
+#
+# What it cannot see, stated rather than implied: one-true-awk truncates a record at a NUL
+# before this program is reached, exactly as it does in the hooks, so on that engine the
+# row reports as the shorter name it became -- and the body of that shorter name will not
+# open, which is the reading this reports instead.
+check_row_bytes() {
+  # $1 layer label, $2 index file, $3 layer directory, $4 dimension
+  local label="$1" rown why file
+  while IFS=$(printf '\t') read -r rown why file; do
+    [ -n "$rown" ] || continue
+    BYTES_REFUSED=$((BYTES_REFUSED + 1))
+    printf 'REFUSED  %-18s %-30s %s\n' "$label" "${file:-row $rown}" "$why"
+    printf '         %-18s %-30s the hooks refuse this row and name it as "%s row %s"\n' "" "" "$label" "$rown"
+  done <<EOF
+$(LC_ALL=C JIT_DIR="$3" JIT_DIM="$4" awk "$JIT_AWK_ENTRY"'
+  BEGIN { dir = ENVIRON["JIT_DIR"]; col = (ENVIRON["JIT_DIM"] == "tools") ? 3 : 2 }
+  {
+    why = jit_bad_bytes($0, "the index row")
+    if (why != "") { printf "%d\t%s\t\n", NR, why; next }
+    n = split($0, f, "\t")
+    if (f[col] == "") next
+    if (jit_bad_entry_file(f[col], dir) != "") next
+    why = jit_read_body(dir "/" f[col])
+    if (why != "") printf "%d\t%s\t%s\n", NR, why, f[col]
+  }' "$2" 2>/dev/null)
+EOF
+}
+
+for tsv in "$BASE"/tools/*/00-index.tsv; do
+  [ -f "$tsv" ] || continue
+  check_row_bytes "tools/$(basename "$(dirname "$tsv")")" "$tsv" "$(dirname "$tsv")" tools
+done
+for tsv in "$BASE"/paths/*/00-index.tsv; do
+  [ -f "$tsv" ] || continue
+  check_row_bytes "paths/$(basename "$(dirname "$tsv")")" "$tsv" "$(dirname "$tsv")" paths
+done
+for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; do
+  [ -f "$tsv" ] || continue
+  check_row_bytes "vocabulary/$(basename "$(dirname "$tsv")")" "$tsv" "$(dirname "$tsv")" vocabulary
+done
+
 if [ "$INDEXES" -eq 0 ]; then
   echo "SKIPPED: no 00-index.tsv under $BASE."
   echo "         Entries are inert until indexed — run scripts/rebuild-tsv.sh in that tree."
@@ -497,6 +564,10 @@ if [ "$WARNED" -gt 0 ]; then
   # counts line above: those are refusals, and this is not one.
   echo "$WARNED paths pattern(s) name a name rather than a place — they fire wherever that name occurs."
   echo "That is a warning, not a refusal: it does not change the exit code. Anchor with ^ or a parent directory if it was not deliberate."
+fi
+if [ "$BYTES_REFUSED" -gt 0 ]; then
+  echo "$BYTES_REFUSED row(s) carry bytes the hook channel cannot deliver, or name a body it cannot read."
+  echo "The hooks refuse those rows and name them by position; nothing else in this report sees them."
 fi
 # Unconditional once anything was swept, not only when something was refused. The count
 # above it is tools and paths alone, so on a vocabulary-only tree that line reads "0
@@ -609,5 +680,5 @@ if [ -n "$SAMPLE_TOOL$SAMPLE_COMMAND$SAMPLE_FILE$SAMPLE_PROMPT" ]; then
 fi
 
 [ "$REFUSED" -eq 0 ] && [ "$VOCAB_REFUSED" -eq 0 ] && [ "$STALE" -eq 0 ] \
-  && [ "$CONFIG_REFUSED" -eq 0 ] || exit 1
+  && [ "$CONFIG_REFUSED" -eq 0 ] && [ "$BYTES_REFUSED" -eq 0 ] || exit 1
 exit 0

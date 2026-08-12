@@ -1008,6 +1008,105 @@ function jit_bad_entry_file(f, dir) {
   }
   return ""
 }
+# --- Bytes an entry can carry that the JSON channel cannot (#77, #78) --------
+#
+# jit_json_escape() escapes 0x00-0x1F, quote and backslash and NOTHING above 0x7F, which
+# is right: valid UTF-8 needs no escaping inside a JSON string. What it cannot do is
+# decode. So an entry saved in ISO-8859-1 -- one 0xE9 in "Preferez rm -i" -- travelled
+# into additionalContext intact and the emitted object was not UTF-8. Exit 0, stderr
+# empty, and a strict reader rejects the WHOLE object: the other entries injected in the
+# same call went down with the bad one, and a block decision that had been reached became
+# unreadable.
+#
+# Escaping the byte instead was the alternative and is worse: a \u escape needs the code
+# point, which needs a decoder, which is the multibyte trap this file has been bitten by
+# three times. Transliterating silently rewrites an entry. So the byte is REFUSED, through
+# the machinery that already exists for a pattern the matcher cannot honour: the ROW is
+# refused, named by POSITION in the notice, and every other row still fires.
+#
+# Bytes only, no decode. Under LC_ALL=C -- which every hook awk is pinned to -- both
+# engines read a record as bytes, and sprintf("%c", k) builds exactly one byte for k in
+# 1..255 on both; verified on awk version 20200816 and GNU Awk 5.4.1. No regex is matched
+# against a single character, so the rule at the top of this file is intact.
+#
+# The fast path is the whole cost story: an all-ASCII string clears in ONE regex match
+# against a bracketed byte range, and the per-byte loop runs only for a string that
+# carries a high byte at all. Measured end to end on a 1001-row paths index with two
+# entries injected, one of them 4 KB, interleaved against the unpatched hook to cancel
+# machine load: 22.2 ms before, 23.3 ms after, on awk version 20200816. The loop itself,
+# when it does run, costs about 1 ms per 4 KB of accented body.
+function jit_utf8_init(   k) {
+  if (jit_utf8_ready) return
+  jit_utf8_ready = 1
+  for (k = 1; k <= 255; k++) jit_ord[sprintf("%c", k)] = k
+  jit_hi_re = "[" sprintf("%c", 128) "-" sprintf("%c", 255) "]"
+  # Stored rather than rebuilt per call, because the two engines disagree about whether it
+  # exists: gawk is NUL-transparent and one-true-awk cannot build a one-byte NUL at all.
+  # index(s, "") returns 1, so an unguarded search reports every string as carrying one.
+  jit_nul = sprintf("%c", 0)
+}
+# Structure only, in the RFC 3629 ranges: no overlong form, no surrogate, nothing above
+# U+10FFFF. A lone continuation byte and a truncated sequence are the two shapes a Latin-1
+# save and a copy cut at a buffer boundary actually produce, and both are refused.
+function jit_bad_utf8(s,   i, n, b, need, lo, hi, j, cb) {
+  jit_utf8_init()
+  if (s !~ jit_hi_re) return 0
+  n = length(s)
+  for (i = 1; i <= n; i++) {
+    b = jit_ord[substr(s, i, 1)] + 0
+    if (b < 128) continue
+    if (b < 194 || b > 244) return 1
+    if (b < 224) { need = 1; lo = 128; hi = 191 }
+    else if (b < 240) { need = 2; lo = (b == 224) ? 160 : 128; hi = (b == 237) ? 159 : 191 }
+    else { need = 3; lo = (b == 240) ? 144 : 128; hi = (b == 244) ? 143 : 191 }
+    if (i + need > n) return 1
+    for (j = 1; j <= need; j++) {
+      cb = jit_ord[substr(s, i + j, 1)] + 0
+      if (j == 1) { if (cb < lo || cb > hi) return 1 }
+      else if (cb < 128 || cb > 191) return 1
+    }
+    i += need
+  }
+  return 0
+}
+# One verdict for both channels. NUL comes first and is NOT a UTF-8 fault -- U+0000 is a
+# code point and jit_json_escape() escapes it -- but the mark channel is line-based and
+# bash read -r truncates at it, so a NUL in an index row silently shortened the dedup key
+# and a marker was written for an entry nothing had injected (#78). one-true-awk truncates
+# the RECORD at the NUL and never reaches here with it; that reading is caught one step
+# later, when the file the shortened name points at does not open.
+function jit_bad_bytes(s, what) {
+  jit_utf8_init()
+  if (length(jit_nul) == 1 && index(s, jit_nul) > 0) return what " contains a NUL byte"
+  if (jit_bad_utf8(s)) return what " is not valid UTF-8"
+  return ""
+}
+# The ONE reader of an entry body, so this check cannot be added at four sites and missed
+# at the fifth -- there are five, and they are in three different files. The body lands in
+# JIT_BODY rather than in the return value, because awk returns one scalar and the reason
+# is what every caller has to branch on.
+#
+# getline < 0 is "could not open", which a row naming a deleted or renamed entry produces.
+# It used to be indistinguishable from an EMPTY entry file: nothing injected, nothing
+# refused, and the shown-marker written anyway. That is the reading one-true-awk takes of
+# a NUL-bearing row, so this is where #78 is caught on the engine that hides the byte.
+function jit_read_body(path,   line, r, first) {
+  JIT_BODY = ""
+  first = 1
+  while ((r = (getline line < path)) > 0) {
+    JIT_BODY = JIT_BODY (first ? "" : "\n") line
+    first = 0
+  }
+  close(path)
+  if (r < 0) return "the entry file could not be read"
+  # UTF-8 only, and deliberately NOT jit_bad_bytes(). A NUL in a BODY is already handled
+  # and already tested: U+0000 is a code point, jit_json_escape() emits it as a unicode
+  # escape, and a body never reaches the line-based mark channel that #78 is about -- a
+  # mark carries the entry FILE NAME. Refusing it here would break delivery that works,
+  # and break it on gawk alone, since one-true-awk truncates the line at the NUL and
+  # never sees one. The index row keeps the NUL check; the body does not need it.
+  return jit_bad_utf8(JIT_BODY) ? "the entry file is not valid UTF-8" : ""
+}
 # --- The refusal list is bounded; the COUNT beside it is not (#38) ------------
 #
 # The sibling of the config.env cap, one channel over and a different failure. This string

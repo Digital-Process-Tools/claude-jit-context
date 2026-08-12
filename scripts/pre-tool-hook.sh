@@ -197,6 +197,7 @@ END {
   rown = 0
   while ((getline tline < tools_tsv) > 0) {
     rown++
+
     split(tline, tf, "\t")
     r_tool = tf[1]; r_match = tf[2]; r_file = tf[3]
     r_modes = tf[4]; r_require = tf[5]; r_forbid = tf[6]
@@ -207,6 +208,31 @@ END {
     # The mode is DERIVED, never echoed: like the file name, column 4 is attacker text.
     # "this was a block rule and it did not run" is worth saying; the raw column is not.
     r_kind = (index(r_modes, "block") > 0) ? " (a block rule)" : ""
+
+    # The row itself. The match column is echoed back in the (matched: ...) header and the
+    # require and forbid columns are echoed in a block reason, so a byte the JSON string
+    # cannot carry reaches stdout from the index alone, with no entry file involved (#77).
+    # A NUL truncated the dedup key (#78).
+    #
+    # Unlike an undeliverable BODY, this refuses the row and the call is not blocked -- and
+    # the difference is not an inconsistency. A bad body leaves the decision intact, since
+    # mode, require and forbid all come from the row, so refusing there would throw away a
+    # verdict that was reached. Bad bytes in the ROW are the decision inputs themselves:
+    # there is no verdict to preserve, and blocking a call on a rule nobody can read is not
+    # the safe direction, it is a different failure. Same posture as jit_bad_pattern().
+    #
+    # Which is why this sits AFTER r_kind and not before the split: "a block rule went
+    # dark" is the part of an untrusted row worth saying, and it is DERIVED from column 4
+    # rather than quoted out of it -- exactly what the comment above already argues.
+    why = jit_bad_bytes(tline, "the index row")
+    if (why != "") {
+      n_refused++
+      refused = jit_refuse_add(refused, jit_row_id("tools/00-manual", rown) r_kind ": " why)
+      log_matches = log_matches sep "refused:" jit_row_id("tools/00-manual", rown) "(" why ")"
+      sep = ", "
+      continue
+    }
+
     why = jit_bad_entry_file(r_file, tools_dir)
     if (why != "") {
       n_refused++
@@ -287,19 +313,33 @@ END {
       if (index(fold_cmd, jit_fold_latin1(tolower(r_match))) == 0) continue
     }
 
-    # "once" mode
+    # "once" mode. The mark moved BELOW the read (#78): a rule whose body never arrived
+    # used to consume its own once-per-session budget, so the next call skipped the row
+    # entirely and the rule was silently gone for the session.
+    key = ""
     if (index(r_modes, "once") > 0) {
       key = "rule:" r_file
       if (key in shown) continue
+    }
+
+    # Read rule .md. A body that cannot be delivered does NOT cancel the decision: mode,
+    # require and forbid all come out of the index row, so a block rule whose text is
+    # unreadable still blocks and says why in place of the text (#77). Refusing the row
+    # outright would turn an unhonourable rule into an allowed call, which is the one
+    # direction this dimension may never fail in. The row is named in the notice either
+    # way, and the substitute is ASCII, so the reason survives the JSON channel.
+    why = jit_read_body(tools_dir "/" r_file)
+    content = JIT_BODY
+    if (why != "") {
+      content = "(the text of this rule was not delivered: " why ")"
+      n_refused++
+      refused = jit_refuse_add(refused, jit_row_id("tools/00-manual", rown) r_kind ": " why)
+      log_matches = log_matches sep "refused:" jit_log_name(r_file, "tools/00-manual", rown, why) "(" why ")"
+      sep = ", "
+    } else if (key != "") {
       shown[key] = 1
       jit_shown_mark(shown_file, key)
     }
-
-    # Read rule .md
-    content = ""
-    rpath = tools_dir "/" r_file
-    while ((getline rl < rpath) > 0) content = content (content == "" ? "" : "\n") rl
-    close(rpath)
 
     # Check require
     if (r_require != "") {
@@ -417,9 +457,23 @@ END {
 
       # Single pass: match keywords, collect files + matched keywords
       delete vmatch
+      # The row a matched file was FIRST seen at, so a body this pass cannot deliver is
+      # named by position -- the loop below walks files, not rows.
+      delete vmrow
       vrown = 0
       while ((getline vl < lookup) > 0) {
         vrown++
+
+        # Same two channels as the rule loop above. See jit_bad_bytes() in common.sh.
+        why = jit_bad_bytes(vl, "the index row")
+        if (why != "") {
+          n_refused++
+          refused = jit_refuse_add(refused, jit_row_id("vocabulary/" layer, vrown) ": " why)
+          log_matches = log_matches sep "refused:" jit_row_id("vocabulary/" layer, vrown) "(" why ")"
+          sep = ", "
+          continue
+        }
+
         split(vl, vf, "\t")
         kw = vf[1]; vfile = vf[2]
         why = jit_bad_entry_file(vfile, vocab_base "/" layer)
@@ -440,21 +494,27 @@ END {
           # makes two spellings of it collide, and the header read `(matched: x|x)`.
           if (vfile in vmatch) {
             if (index("|" vmatch[vfile] "|", "|" kw "|") == 0) vmatch[vfile] = vmatch[vfile] "|" kw
-          } else vmatch[vfile] = kw
+          } else { vmatch[vfile] = kw; vmrow[vfile] = vrown }
         }
       }
       close(lookup)
 
       for (vfile in vmatch) {
-        shown[vfile] = 1
-        jit_shown_mark(shown_file, vfile)
-
-        vc = ""
-        vpath = vocab_base "/" layer "/" vfile
-        while ((getline vcl < vpath) > 0) vc = vc (vc == "" ? "" : "\n") vcl
-        close(vpath)
+        # Read first, mark only what was delivered -- see the same loop in
+        # pre-prompt-hook.sh for why the old order marked entries nothing had injected.
+        why = jit_read_body(vocab_base "/" layer "/" vfile)
+        if (why != "") {
+          n_refused++
+          refused = jit_refuse_add(refused, jit_row_id("vocabulary/" layer, vmrow[vfile]) ": " why)
+          log_matches = log_matches sep "refused:" jit_log_name(vfile, layer, vmrow[vfile], why) "(" why ")"
+          sep = ", "
+          continue
+        }
+        vc = JIT_BODY
 
         if (vc != "") {
+          shown[vfile] = 1
+          jit_shown_mark(shown_file, vfile)
           vh = "# Vocabulary: " vfile " (matched: " vmatch[vfile] ")"
           if (layer ~ /00-manual/) vh = vh "\\n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
           log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")"
