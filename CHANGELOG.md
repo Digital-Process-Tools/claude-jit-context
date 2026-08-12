@@ -9,10 +9,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
-Both of these treat `.claude/jit-context/` as what it actually is: a directory that
+All three of these treat `.claude/jit-context/` as what it actually is: a directory that
 arrives with the repository. The hooks run on the first prompt of a session, before
 anyone has read the code they were cloned with, so every file under that directory is
-attacker-controlled input rather than configuration the user wrote. Neither finding needs
+attacker-controlled input rather than configuration the user wrote. None of them needs
 the user to do anything beyond opening the project.
 
 - **`config.env` was executed as shell on every prompt and every tool call.** `common.sh`
@@ -73,12 +73,52 @@ the user to do anything beyond opening the project.
   whose name *passes* the check cannot contain a separator, and an unhonourable **pattern**
   is still reported by file name, which is what an author fixing it needs.
 
-  **This closes the string form and not the symlink form.** An entry file that is itself a
-  symlink out of the tree still has its target read: the name in the index is bare, so it
-  passes, and `getline` follows the link like any `open()`. `awk` cannot `lstat`, and the
-  architecture is one `awk` process per hook with no per-row subprocess, so closing it is a
-  design decision about where a tree walk belongs — not something to slip into this change.
-  Tracked separately.
+  **This closes the string form.** The symlink form was closed separately, below.
+
+- **An entry file that is a symlink out of the tree had its target read and injected.**
+  The containment check above stops a row from *naming* a path outside its layer; it does
+  not stop the entry file from *being* a link to one. The name in the index is bare, so it
+  passes every check, and `getline` follows the link like any `open()`. Reproduced at all
+  five read sites, and again with every directory on the way to one linked instead: the
+  **layer directory**, the dimension directory, `.claude/jit-context/`, and `.claude/`
+  itself. Each of those needs nothing inside the repository but the one link, because the
+  linked directory carries its own `00-index.tsv`. `git clone` recreates all of them, so
+  cloning a repository is the whole attack.
+
+  Nothing on the way to an entry may now be a symbolic link — the entry file, its layer,
+  its dimension, `.claude/jit-context/` or `.claude/` — and each is refused and named in the
+  same once-per-session channel as the other two classes. The verdict is structural rather
+  than a resolution: a link is refused whether or not its target is inside the tree, because
+  `awk` has no `realpath` and buying one costs a process per row. An entry that needs to
+  live elsewhere is a copy, or a generated layer, not a link.
+
+  The walk stops one directory above `.claude/jit-context/` and does not climb to the
+  filesystem root. Above the project is the user's own filesystem rather than anything the
+  clone chose, and on macOS `/tmp` is itself a symlink — a sweep that walked all the way up
+  would refuse every honest tree opened through one.
+
+  `awk` cannot `lstat`, and the architecture is deliberately one `awk` process per hook
+  with no per-row subprocess. So the `lstat` is paid **once per hook invocation** — a glob
+  and a `[ -L ]` test in `common.sh`, both shell builtins, forking nothing. Measured
+  against the 1,000-entry corpus the README cites: **31 ms before, 43 ms after**. On a tree
+  of a few dozen entries the difference is below the noise floor of the measurement.
+
+  Every hook runs its own sweep. Nothing is cached to a marker and nothing is carried
+  between hooks: the obvious cheaper design is one tree walk in `session-start-hook.sh`,
+  and it fails **open** for any runner that does not fire `SessionStart` — the wrong
+  direction for a disclosure. Refusing the row in `rebuild-tsv.sh` fails open for the same
+  reason and a worse one: the attack ships a committed `00-index.tsv`, and the victim never
+  runs `rebuild-tsv.sh` at all.
+
+  `scripts/jit-dry-run.sh` reaches the same verdict from the same shared `awk` function,
+  against the tree named by `--base` rather than the session's own.
+
+- **`tests/test-symlink-entry.sh`** — new suite, red before the fix at all five read sites
+  and for every shape: the entry file, the layer directory, `.claude/jit-context/` and
+  `.claude/`. Paired with positive controls that a real entry still fires, that an unrelated
+  command still matches nothing, that a tree with no link in it is refused nothing at all,
+  and that a project reached through a symlinked *parent* still fires every rule — a refusal
+  mechanism that fires on everything looks identical to one that works, from one side only.
 
 - **`tests/test-security.sh`** — new suite, red before either fix. Every "did not
   exfiltrate" case is paired with a positive control that a legitimate entry still fires,

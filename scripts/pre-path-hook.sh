@@ -152,7 +152,7 @@ END {
       # Containment first, before the shown set and before the pattern: the file name is
       # about to be concatenated onto this layer directory, and a row of ../../../x made
       # the hook read that file and inject it. See jit_bad_entry_file in common.sh.
-      why = jit_bad_entry_file(rule_file)
+      why = jit_bad_entry_file(rule_file, paths_base "/" layer)
       if (why != "") {
         n_refused++
         refused = refused (refused == "" ? "- " : "\n- ") jit_row_id(layer, rown) ": " why
@@ -224,7 +224,7 @@ END {
         vpattern = vf[1]; vocab_file = vf[2]
 
         # Same containment check as the rule loop above: this name is concatenated too.
-        why = jit_bad_entry_file(vocab_file)
+        why = jit_bad_entry_file(vocab_file, vocab_base "/" layer)
         if (why != "") {
           n_refused++
           refused = refused (refused == "" ? "- " : "\n- ") jit_row_id(layer, vrown) ": " why

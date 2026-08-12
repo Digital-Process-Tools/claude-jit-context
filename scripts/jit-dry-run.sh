@@ -125,13 +125,26 @@ check_pattern() {
 # tree here; this is the check that makes the advice true. Verdict from the same shared
 # awk function the hooks use, never a second copy in bash that can drift from it.
 # Returns 0 when the name is honourable, 1 when it was refused.
+# The tree being linted is --base, which is not this session's project, so the symlink
+# sweep common.sh already ran against JIT_BASE is about the wrong tree. Re-run it here or
+# the linter would clear a row every hook refuses.
+jit_scan_symlinks "$BASE"
+
 check_entry_file() {
-  # $1 layer label, $2 entry file name
-  local label="$1" file="$2" why
-  why="$(JIT_ENTRY="$file" awk "$JIT_AWK_ENTRY"'BEGIN { print jit_bad_entry_file(ENVIRON["JIT_ENTRY"]) }')"
+  # $1 layer label, $2 entry file name, $3 layer directory
+  local label="$1" file="$2" dir="${3:-}" why
+  why="$(JIT_ENTRY="$file" JIT_DIR="$dir" awk "$JIT_AWK_ENTRY"'BEGIN { print jit_bad_entry_file(ENVIRON["JIT_ENTRY"], ENVIRON["JIT_DIR"]) }')"
   [ -n "$why" ] || return 0
   printf 'REFUSED  %-18s %-30s %s\n' "$label" "$file" "$why"
-  printf '         %-18s %-30s the hook reads <layer>/<name>, so this row leaves the tree\n' "" ""
+  # Two different faults reach here and they need different second lines. "leaves the
+  # tree" is true of a name carrying a separator and false of a link, whose name is bare;
+  # printing it for both would send an author looking at the wrong column.
+  case "$why" in
+    *"symbolic link"*)
+      printf '         %-18s %-30s the hook would follow it out of the tree — replace the link with the file\n' "" "" ;;
+    *)
+      printf '         %-18s %-30s the hook reads <layer>/<name>, so this row leaves the tree\n' "" "" ;;
+  esac
   return 1
 }
 
@@ -195,7 +208,7 @@ for tsv in "$BASE"/tools/*/00-index.tsv; do
     [ -n "${r_match:-}" ] || continue
     [ -n "${r_file:-}" ] || continue
     LISTED=$((LISTED + 1))
-    check_entry_file "$label" "$r_file" || { REFUSED=$((REFUSED + 1)); continue; }
+    check_entry_file "$label" "$r_file" "$(dirname "$tsv")" || { REFUSED=$((REFUSED + 1)); continue; }
     # A bare match is a substring test (index()), not a regex — nothing to compile.
     case "$r_match" in
       "~"*) check_pattern "$label" "$r_file" "${r_match#\~}" ;;
@@ -212,7 +225,7 @@ for tsv in "$BASE"/paths/*/00-index.tsv; do
     [ -n "${p_match:-}" ] || continue
     [ -n "${p_file:-}" ] || continue
     LISTED=$((LISTED + 1))
-    check_entry_file "$label" "$p_file" || { REFUSED=$((REFUSED + 1)); continue; }
+    check_entry_file "$label" "$p_file" "$(dirname "$tsv")" || { REFUSED=$((REFUSED + 1)); continue; }
     check_pattern "$label" "$p_file" "$p_match"
   done < "$tsv"
 done
@@ -229,7 +242,7 @@ for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; 
     # Counted apart from REFUSED, which is a subset of the rules the summary line says
     # were indexed and compiled. Folding these in printed "2 refused" under "1 rule
     # indexed", which is the kind of arithmetic that makes a reader distrust the tool.
-    check_entry_file "$label" "$v_file" || VOCAB_REFUSED=$((VOCAB_REFUSED + 1))
+    check_entry_file "$label" "$v_file" "$(dirname "$tsv")" || VOCAB_REFUSED=$((VOCAB_REFUSED + 1))
   done < "$tsv"
 done
 

@@ -129,7 +129,7 @@ END {
     # The mode is DERIVED, never echoed: like the file name, column 4 is attacker text.
     # "this was a block rule and it did not run" is worth saying; the raw column is not.
     r_kind = (index(r_modes, "block") > 0) ? " (a block rule)" : ""
-    why = jit_bad_entry_file(r_file)
+    why = jit_bad_entry_file(r_file, tools_dir)
     if (why != "") {
       n_refused++
       refused = refused (refused == "" ? "- " : "\n- ") jit_row_id("tools/00-manual", rown) r_kind ": " why
@@ -288,7 +288,7 @@ END {
         vrown++
         split(vl, vf, "\t")
         kw = vf[1]; vfile = vf[2]
-        why = jit_bad_entry_file(vfile)
+        why = jit_bad_entry_file(vfile, vocab_base "/" layer)
         if (why != "") {
           # Same concatenation, same refusal. Keyed on the name so one bad row is counted
           # once, not once per keyword that happens to point at it.

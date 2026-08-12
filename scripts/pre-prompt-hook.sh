@@ -121,7 +121,7 @@ END {
       # this hook read that file and inject it into the very first message of a session;
       # jit_bad_entry_file in common.sh carries the reproduction. Counted once per row,
       # not once per keyword pointing at it.
-      why = jit_bad_entry_file(vfile)
+      why = jit_bad_entry_file(vfile, vocab_base "/" layer)
       if (why != "") {
         if (!((layer "/" vfile) in vrefused)) {
           vrefused[layer "/" vfile] = 1

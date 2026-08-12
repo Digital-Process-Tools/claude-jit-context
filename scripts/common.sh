@@ -6,6 +6,93 @@ _ms() { perl -MTime::HiRes -e 'printf("%.0f\n",Time::HiRes::time()*1000)'; }
 
 JIT_BASE="${CLAUDE_PROJECT_DIR:-.}/.claude/jit-context"
 
+# --- Entry files and layer directories that are SYMBOLIC LINKS ---------------
+# PR #11 stopped an index row from NAMING a path outside its layer. It did not stop the
+# entry file from BEING a link to one: the name in the index is bare, so it passes that
+# check, and getline follows the link. Reproduced 2026-08-11 at all five read sites, and
+# again with any directory on the way to one linked instead -- the layer, the dimension,
+# .claude/jit-context/ or .claude/ -- each of which needs nothing inside the tree but the
+# one link, since the linked directory carries its own 00-index.tsv. git clone recreates
+# all of them, so cloning a repository is the whole attack.
+#
+# awk cannot lstat, and the architecture is one awk process per hook with no per-row
+# subprocess. So the lstat is paid ONCE per hook invocation, here, and never per row.
+#
+# It is paid with a glob and a [ -L ] test, both of which are shell BUILTINS -- this forks
+# nothing. Measured end to end on a 1008-entry tree, interleaved against the unpatched
+# hook to cancel machine load: 31 ms before, 43 ms after. On a 5-entry tree the difference
+# did not clear the noise floor. A find fork costs the same walk plus a process.
+#
+# Every hook does its own sweep. Nothing is cached to a marker and nothing is carried
+# between hooks, because a cache is only as good as the run that filled it: a session
+# whose runner never fires SessionStart would have failed OPEN, and failing open is the
+# wrong direction for a disclosure.
+#
+# The verdict is structural, not a resolution: a link is refused whether or not its target
+# is inside the tree. awk has no realpath, and buying one costs a process per row -- the
+# exact cost this design exists to avoid. An entry that needs to live elsewhere is a copy
+# or a generated layer, not a link.
+#
+# The list travels to the hooks through the ENVIRONMENT, for the reason JIT_CONFIG_REFUSED
+# does: it is newline-separated, and a newline in an awk -v value is a fatal error raised
+# before the program runs.
+export JIT_SYMLINKS=""
+
+# Populated shallow-to-deep, so a directory already in the set marks its children too --
+# a regular file inside a linked layer directory is not itself a link, and lstat on it
+# says nothing. Membership is a newline-delimited substring test, because macOS ships
+# bash 3.2 and has no associative arrays.
+#
+# nullglob is deliberately NOT set: an unmatched glob stays literal, that literal is
+# neither a link nor a known parent, and it falls out of both tests on its own. Toggling
+# a shell option in a sourced file would change it for whatever sourced us.
+JIT_NL="
+"
+jit_scan_symlinks() {
+  local base="$1" f parent found=0
+  JIT_SYMLINKS="$JIT_NL"
+  # `.claude/` is inside the repository too, and git carries it as a link like anything
+  # else, so `.claude -> /elsewhere` reaches the same disclosure one level above anything
+  # the glob below can see -- with a jit-context/ inside the target it needs nothing in the
+  # clone but that one link. Driven, not reasoned: it leaked on the first cut of this fix.
+  #
+  # Exactly one ancestor is tested and the walk stops there. Everything above the project
+  # directory is the user's own filesystem rather than something the clone chose, and on
+  # macOS /tmp is itself a symlink -- a sweep that walked to the root would refuse every
+  # honest tree opened through one.
+  if [ "${base%/*}" != "$base" ] && [ -L "${base%/*}" ]; then
+    JIT_SYMLINKS="$JIT_SYMLINKS${base%/*}$JIT_NL$base$JIT_NL"
+    found=1
+  fi
+  for f in "$base" "$base"/* "$base"/*/* "$base"/*/*/*; do
+    if [ -L "$f" ]; then
+      JIT_SYMLINKS="$JIT_SYMLINKS$f$JIT_NL"
+      found=1
+      continue
+    fi
+    # The parent test is skipped entirely until a link has actually been seen, and on a
+    # tree with none it never runs at all. That guard is the whole cost story, and it is
+    # the reason the 12 ms above is 12 and not 70: measured in isolation on the same
+    # 1008-entry tree, the sweep cost 70 ms with this test running unconditionally and
+    # 12 ms with it guarded -- against a glob-and-lstat floor of 12 ms, so guarded it adds
+    # nothing measurable of its own. The cost was the pattern match, per file, against a
+    # set that is empty in every honest tree.
+    #
+    # The globs are issued shallow-to-deep as four separate batches, so every entry at one
+    # depth is recorded before any entry at the next is tested. Descendants can only follow
+    # an ancestor, and nothing is missed by not looking earlier.
+    [ "$found" = 1 ] || continue
+    [ "$f" != "$base" ] || continue
+    parent="${f%/*}"
+    case "$JIT_SYMLINKS" in
+      *"$JIT_NL$parent$JIT_NL"*) JIT_SYMLINKS="$JIT_SYMLINKS$f$JIT_NL" ;;
+    esac
+  done
+  export JIT_SYMLINKS
+}
+
+jit_scan_symlinks "$JIT_BASE"
+
 LOG_DIR="$JIT_BASE/.discovery/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/hooks.log"
@@ -412,13 +499,32 @@ JIT_AWK_ENTRY='
 function jit_row_id(layer, rown) {
   return layer " row " rown
 }
-function jit_bad_entry_file(f) {
+# The set built by jit_scan_symlinks() in the bash half, keyed by full path. Loaded once
+# per awk process, lazily, so a hook whose tree has no index pays nothing for it.
+function jit_symlinked(p,   n, i, a) {
+  if (!jit_sym_init) {
+    jit_sym_init = 1
+    n = split(ENVIRON["JIT_SYMLINKS"], a, "\n")
+    for (i = 1; i <= n; i++) if (a[i] != "") jit_sym[a[i]] = 1
+  }
+  return (p in jit_sym)
+}
+# dir is the layer directory the caller is about to concatenate this name onto -- the same
+# string the hook builds for getline, so the lookup is an exact match against what the
+# bash sweep globbed. A caller that passes no dir gets the name checks only.
+function jit_bad_entry_file(f, dir) {
   # An empty column is a blank index line, not a rule. It carries no pattern either and
   # the caller skips it on the existing content == "" path; refusing it would fire a
   # notice at the author over stray whitespace.
   if (f == "") return ""
   if (index(f, "/") > 0 || index(f, "\\") > 0) return "not a bare file name"
   if (f == "." || f == "..") return "not a bare file name"
+  if (dir != "") {
+    # The directory first: when the layer itself is a link, every row in it is unreadable
+    # for the same reason, and naming the file would point the author at the wrong thing.
+    if (jit_symlinked(dir)) return "its layer directory is a symbolic link"
+    if (jit_symlinked(dir "/" f)) return "the entry file is a symbolic link"
+  }
   return ""
 }
 function jit_refusal_notice(list, n) {

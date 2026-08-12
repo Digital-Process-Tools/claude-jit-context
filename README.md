@@ -335,6 +335,17 @@ notice naming the rule and the construct, once per session. Two things this repl
 a rule that read as enforced for as long as it existed, and a single malformed pattern
 (`~a[b` is a fatal awk error) that silenced every rule in its index at once.
 
+**Nothing on the way to an entry may be a symbolic link** — not the entry file, not its
+layer directory, not the dimension directory, and not `.claude/` or `.claude/jit-context/`
+themselves. All of them are refused through that same channel, named the same way. The
+hooks read every entry with the privileges of your session, and `.claude/` arrives with the
+repository: a link is a file outside the project being handed to the model by a directory
+the reader has not audited, and `git clone` recreates every one of those shapes. The check
+does not resolve the link, so one pointing back inside the tree is refused too; keep a copy
+there, or generate the layer. Directories *above* your project are yours rather than the
+clone's and are not checked, so a project reached through a symlinked parent works
+normally.
+
 ### Compatibility — tools that touch files through `Bash`
 
 Path rules read `file_path` from `Read`/`Edit`/`Write`/`Glob`/`Grep`. Anything that reaches a file some other way does not carry that field, and a naive implementation would stop matching the moment a session used one — every path rule you wrote would go quiet, with no error and nothing in the log to explain it.
