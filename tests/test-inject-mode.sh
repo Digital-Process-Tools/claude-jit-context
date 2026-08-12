@@ -20,6 +20,9 @@ PASS=0
 FAIL=0
 
 TEST_DIR=$(mktemp -d)
+# Cleanup on EVERY exit, not only the last line: this suite runs without `set -e`, so an
+# interrupted or aborted run would otherwise leave its fixture tree behind.
+trap 'rm -rf "$TEST_DIR"' EXIT
 BASE="$TEST_DIR/.claude/jit-context"
 V="$BASE/vocabulary/00-manual"
 P="$BASE/paths/00-manual"
@@ -345,6 +348,47 @@ else
 fi
 
 # =============================================
+# SECTION 9b: a YAML-quoted value, and the build-time count agreeing with the hook
+# =============================================
+# `inject: "full"` is ordinary YAML. The hook strips a wrapping quote pair the way
+# jit_frontmatter() does; the report in rebuild-tsv.sh has its own parser and did not,
+# so it counted the entry as summary while the hook injected the whole body. A budget
+# that disagrees with the thing it is budgeting is worse than no budget -- and it is the
+# report the CHANGELOG points at as the answer to "nobody measures the drift".
+echo ""
+echo "=== inject: \"full\" is honoured, and counted ==="
+set_config ""
+printf '%s\n' \
+  "---" \
+  "title: Quoted" \
+  "description: \"A quoted description.\"" \
+  "inject: \"full\"" \
+  "keywords: quoted" \
+  "---" \
+  "" \
+  "QUOTED-BODY-MARKER" > "$V/quoted.md"
+printf 'quoted\tquoted.md\n' >> "$V/00-index.tsv"
+
+OUT=$(run_prompt "the quoted one")
+assert_contains "the hook honours the quoted value" "$OUT" "QUOTED-BODY-MARKER"
+REPORT=$(CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh" 2>&1 >/dev/null)
+assert_contains "and rebuild-tsv counts it as arriving whole" "$REPORT" "quoted.md"
+# Paired, in the same report: the entry that is genuinely a summary is NOT counted.
+assert_not_contains "and does not count a summary entry as whole" "$REPORT" "billing.md"
+
+# rebuild-tsv.sh rewrote every index in the fixture tree from frontmatter, which is not
+# what the rest of this suite indexed by hand. Put them back, or every later assertion
+# would be measuring the rebuild rather than the hooks.
+printf '%s\t%s\n' \
+  billing  billing.md \
+  payments payments.md \
+  nodesc   nodesc.md \
+  bare     bare.md \
+  weird    weird.md \
+  longdesc longdesc.md \
+  quoted   quoted.md > "$V/00-index.tsv"
+
+# =============================================
 # SECTION 10: awk engine matrix -- a clipped multibyte description
 # =============================================
 # The clip is a substr, and substr counts BYTES on one-true-awk and CHARACTERS on gawk.
@@ -415,5 +459,4 @@ TOTAL=$((PASS + FAIL))
 echo "  $PASS/$TOTAL passed, $FAIL failed"
 echo "========================"
 
-rm -rf "$TEST_DIR"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

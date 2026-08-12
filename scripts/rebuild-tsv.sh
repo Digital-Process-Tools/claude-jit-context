@@ -461,11 +461,22 @@ FNR == 1 { flush(); fname = FILENAME; nfm = 0; inj = ""; desc = 0; bytes = 0; fm
 { bytes += length($0) + 1 }
 FNR == 1 && line == "---" { nfm = 1; fmok = 1; next }
 nfm == 1 && line == "---" { nfm = 2; next }
+# The same wrapped-scalar strip jit_frontmatter() and the hooks apply. Without it,
+# `inject: "full"` was counted as an unrecognised value and folded into the project
+# default -- so the entry arrived whole at runtime and this report said it would not.
+# A budget that disagrees with the thing it is budgeting is worse than no budget, and it
+# is the report the CHANGELOG points at as the answer to "nobody measures the drift".
+function unquote(v) {
+  sub(/^[[:space:]]+/, "", v)
+  sub(/[[:space:]]+$/, "", v)
+  if (v ~ /^"[^"]*"$/) v = substr(v, 2, length(v) - 2)
+  return v
+}
 nfm == 1 && index(line, "description:") == 1 {
-  v = substr(line, 13); gsub(/[[:space:]]/, "", v); if (v != "") desc = 1; next
+  v = unquote(substr(line, 13)); gsub(/[[:space:]]/, "", v); if (v != "") desc = 1; next
 }
 nfm == 1 && index(line, "inject:") == 1 {
-  inj = substr(line, 8); gsub(/[[:space:]]/, "", inj); inj = tolower(inj); next
+  inj = unquote(substr(line, 8)); gsub(/[[:space:]]/, "", inj); inj = tolower(inj); next
 }
 END {
   flush()

@@ -706,7 +706,7 @@ Every hook is a **single `awk` process**. Frontmatter is parsed at build time in
 Timings and matches are appended to `.claude/jit-context/.discovery/logs/hooks.log`:
 
 ```
-[23:48:14.393] pre-tool (Bash) 29ms | 10-auto/billing.md(billing)[summary] [shown:11] << src/Billing/Totals.php
+[23:48:14.393] pre-tool (Bash) 29ms | 10-auto:billing.md(billing)[summary] [shown:11] << src/Billing/Totals.php
 ```
 
 `(none)` in the match column means nothing fired — useful for finding knowledge gaps. The bracket after a match says what it cost: `[summary]`, `[full]`, `[full:block]`, or `[summary:no-description]` for an entry that could only be named.

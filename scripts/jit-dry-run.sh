@@ -771,7 +771,7 @@ json_quote() {
 
 report_hook() {
   # $1 hook script, $2 JSON payload, $3 project dir
-  local out names verdict errf annotated nm
+  local out names verdict errf annotated nm fired summarised
   # Phase 2 discarded stderr for the same reason phase 1 did, and lost the same thing with
   # it (#98): the hook that died mid-decision printed an awk diagnostic and no JSON, and
   # this read that as "no rule fired" -- which is indistinguishable from a rule that had
@@ -817,12 +817,25 @@ report_hook() {
     # text -- "read <path> for the entry" -- so this reads the hook actual output rather
     # than re-deriving the mode and risking a report that disagrees with the hook it is
     # reporting on.
+    #
+    # Counted, not substring-tested. Two matched entries can share a basename across
+    # layers or dimensions -- the layers exist precisely to hold parallel entries -- and
+    # a bare `case "$out" in *"/$nm for the entry"*` would then label BOTH from whichever
+    # one happened to be a summary. The direction that mistake goes is the wrong one for
+    # a budget: it understates the cost. So the marker count is compared with how many
+    # times the name fired, and a genuinely mixed pair says so rather than guessing.
     annotated=""
     for nm in $names; do
-      case "$out" in
-        *"/$nm for the entry"*) annotated="$annotated$nm(summary) " ;;
-        *)                      annotated="$annotated$nm(WHOLE BODY) " ;;
-      esac
+      case " $annotated" in *" $nm("*) continue ;; esac
+      fired=$(printf '%s\n' $names | grep -c -x -F "$nm")
+      summarised=$(printf '%s' "$out" | grep -o -F "/$nm for the entry" | grep -c .)
+      if [ "$summarised" -eq 0 ]; then
+        annotated="$annotated$nm(WHOLE BODY) "
+      elif [ "$summarised" -ge "$fired" ]; then
+        annotated="$annotated$nm(summary) "
+      else
+        annotated="$annotated$nm(summary and WHOLE BODY, $fired entries share this name) "
+      fi
     done
     printf '  %s%-20s %s\n' "$verdict" "$1" "${annotated% }"
   fi
