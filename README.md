@@ -540,6 +540,8 @@ The assertion count is deliberately not written here. It was wrong three times i
 
 The two containment suites build their fixtures with `ln -s`, and a platform that does not create symbolic links cannot construct the attack they exist to refuse — Git Bash copies the target instead unless `MSYS=winsymlinks:nativestrict` is set and the process may create links. Those suites **probe for that first and skip loudly rather than pass**, and `run-all.sh` reports a skipped suite as neither a pass nor a failure. A suite that reported success where it could not test anything would be the exact defect this plugin exists to describe.
 
+CI sets `MSYS=winsymlinks:nativestrict` on the Windows leg so those suites actually run there, and declares it with `JIT_TESTS_REQUIRE_SYMLINKS=1`. That second variable separates two things a bare skip cannot tell apart: a platform that never had symbolic links, which skips, and an environment configured to have them that did not get them, which **fails** — a skip renders green, so a setting that quietly stopped applying would restore the hole without anyone noticing. Set it yourself if you want the same guarantee locally; leave it unset and the honest skip is what you get.
+
 ## Why not `.claude/rules/`?
 
 Files in `.claude/rules/` auto-load at session start — all of them, every session. When we measured this on a large codebase in early 2026, `globs` frontmatter did not change that: `/context` showed every rule file resident, whatever its scope. Claude Code moves quickly, so check it yourself with `/context` before taking our word for it — but that measurement is why this plugin exists.

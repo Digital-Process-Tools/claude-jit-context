@@ -123,6 +123,12 @@ run_prompt() {
 # Verified through the link, not with `[ -L ]` alone: content written to the target after
 # the link exists must be visible through it, which is the one thing a copy cannot do.
 # tests/test-symlink-entry.sh carries the full diagnosis.
+#
+# JIT_TESTS_REQUIRE_SYMLINKS=1 says the environment was CONFIGURED to have symbolic links
+# (the Windows leg of .github/workflows/tests.yml pairs it with MSYS=winsymlinks:nativestrict).
+# A probe that then says "no" is a broken configuration rather than a platform without the
+# capability, and it is failed rather than skipped -- run-all.sh renders a skip green.
+REQUIRE_SYMLINKS="${JIT_TESTS_REQUIRE_SYMLINKS:-}"
 CAN_SYMLINK=no
 probe_symlinks() {
   local d="$TMP/.symlink-probe"
@@ -140,6 +146,9 @@ probe_symlinks() {
 probe_symlinks
 SKIPPED_SECTIONS=0
 echo "symlink support: $CAN_SYMLINK (files and directories, verified through the link)"
+if [ "$REQUIRE_SYMLINKS" = 1 ]; then
+  echo "symbolic links are REQUIRED by this environment (JIT_TESTS_REQUIRE_SYMLINKS=1, MSYS=${MSYS:-<unset>})"
+fi
 echo ""
 
 echo "=== Positive control: the honest tree logs, so the negatives below mean something ==="
@@ -168,6 +177,18 @@ if [ "$CAN_SYMLINK" != yes ]; then
   echo "    hooks.log an ordinary file INSIDE the project -- every 'nothing was written"
   echo "    outside the tree' assertion then holds for a reason unrelated to the guard."
   echo "    This is not a clean result for those four sections."
+  if [ "$REQUIRE_SYMLINKS" = 1 ]; then
+    FAIL=$((FAIL + 1))
+    echo ""
+    echo "  FAIL: SYMBOLIC LINKS WERE REQUIRED AND NOT OBTAINED."
+    echo "        JIT_TESTS_REQUIRE_SYMLINKS=1 says this environment was configured to have"
+    echo "        them, so the skip above is a broken configuration and not a platform"
+    echo "        without the capability. On the GitHub Windows image, MSYS=winsymlinks:nativestrict"
+    echo "        must reach the bash step; Developer Mode is already on in the image, and"
+    echo "        git config core.symlinks=true covers a checkout carrying a committed link."
+    echo "        Failed rather than skipped because run-all.sh renders a skip green. Nothing"
+    echo "        here is a defect in the hooks."
+  fi
 else
   echo "=== S4a: hooks.log is a symlink to a file outside the project ==="
 
@@ -273,7 +294,9 @@ assert_contains "honest tree: the match is still logged by file name" "$LOG" "go
 assert_not_contains "honest tree: nothing is refused" "$LOG" "refused:"
 
 echo ""
-if [ "$SKIPPED_SECTIONS" -gt 0 ]; then
+if [ "$SKIPPED_SECTIONS" -gt 0 ] && [ "$REQUIRE_SYMLINKS" = 1 ]; then
+  echo "$PASS passed, $FAIL failed, $SKIPPED_SECTIONS section(s) NOT RUN (symbolic links were REQUIRED and not obtained)"
+elif [ "$SKIPPED_SECTIONS" -gt 0 ]; then
   echo "$PASS passed, $FAIL failed, $SKIPPED_SECTIONS section(s) SKIPPED (no symbolic links on this platform)"
 else
   echo "$PASS passed, $FAIL failed"
