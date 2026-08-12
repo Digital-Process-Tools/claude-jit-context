@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.2] — Untrusted bytes, and the harness that misreported them
 
 ### Fixed
 
@@ -50,20 +50,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `jit_fold_latin1()` is `index()`/`substr()` over a table carrying both cases, so it
   decodes nothing and asks the locale nothing. `tolower()` was the only locale-sensitive
   step, and no comparison depends on it alone any more.
-
-### Changed
-
-- **The `LC_ALL=C` header comment in all three hooks said this could not happen.** It was
-  a real check of the vocabulary dimension, presented as a check of the file it was pasted
-  into — so three files asserted in prose that the defect above was impossible, which is
-  how an area stops being looked at. Each hook now states what it actually compares:
-  `pre-prompt-hook.sh` has one folded comparison, `pre-tool-hook.sh` has two and only one
-  of them was checked, and `pre-path-hook.sh` calls neither `tolower()` nor the fold table
-  and matches paths byte for byte, so the pin cannot reach it at all.
-
-## [0.3.2] — Untrusted bytes, and the harness that misreported them
-
-### Fixed
 
 - **A tool payload could forge a marker write and silently disable a `block` rule** (#65).
   The hooks hand awk one scratch file: line 1 was the log line, lines 2..N were the
@@ -384,6 +370,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not to write it down. Comment lines are skipped now, and a control fixture proves the
   skip did not disarm the scan: a commented occurrence must not flag, a real one must.
   Found when this branch rebased onto that one — neither PR could have seen it alone.
+
+### Changed
+
+- **The `LC_ALL=C` header comment in all three hooks said this could not happen.** It was
+  a real check of the vocabulary dimension, presented as a check of the file it was pasted
+  into — so three files asserted in prose that the defect above was impossible, which is
+  how an area stops being looked at. Each hook now states what it actually compares:
+  `pre-prompt-hook.sh` has one folded comparison, `pre-tool-hook.sh` has two and only one
+  of them was checked, and `pre-path-hook.sh` calls neither `tolower()` nor the fold table
+  and matches paths byte for byte, so the pin cannot reach it at all.
 
 ### Added
 
