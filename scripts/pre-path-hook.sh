@@ -45,13 +45,23 @@ VOCAB_PATHS="${JIT_CONTEXT_VOCAB_PATHS:-${DYNAMIC_RULES_VOCAB_PATHS:-${DVSI_AUTO
 #
 # Scoped to this awk, not exported: rebuild-tsv.sh has its own awk and the opposite
 # contract (it may fail loudly), and it sources this hook shared file too.
-cat | LC_ALL=C awk \
-  -v paths_base="$JIT_BASE/paths" \
-  -v vocab_base="$JIT_BASE/vocabulary" \
-  -v vocab_paths="$VOCAB_PATHS" \
-  -v state_dir="$JIT_STATE_DIR" \
-  -v log_tmp="$JIT_TMP" \
-  "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_JSON"'
+# The project directory, and the sentinel that opens the candidate channel below. The
+# directory is read from ENVIRON inside awk rather than passed with -v: a -v value has its
+# escape sequences PROCESSED, so a checkout under a directory with a backslash in its name
+# would arrive mangled, and a newline in one is a fatal awk error raised before the program
+# runs. ENVIRON does neither. bash needs the same value, so it is normalised once here.
+JIT_PROJECT="${CLAUDE_PROJECT_DIR:-.}"
+while [ "${JIT_PROJECT%/}" != "$JIT_PROJECT" ] && [ "$JIT_PROJECT" != "/" ]; do
+  JIT_PROJECT="${JIT_PROJECT%/}"
+done
+JIT_CAND_BEGIN='--jit-candidates--'
+
+# ONE program, TWO possible passes. See the candidate section in END: the first pass parses
+# the payload, and when a Bash command yields path candidates it writes them to the scratch
+# channel and prints NOTHING, because whether they are real files is a question awk must not
+# ask (a getline probe on a directory is a fatal i/o error on one-true-awk, which is the awk
+# macOS ships). bash answers it with builtins and runs the program again over the survivors.
+JIT_PATH_PROG=$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_JSON'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -84,6 +94,88 @@ function jit_json_escape(s,   k, c) {
   }
   return s
 }
+# --- Path candidates out of an arbitrary Bash command (#85) -------------------
+# The path dimension used to see a Bash payload and collect NOTHING unless the command
+# matched a supertool invocation. `vim scripts/pre-tool-hook.sh` reached no path rule;
+# `Read` of the same file reached every one of them. The tool the agent happened to use
+# decided whether the rule existed, and neither the session nor the log said so.
+#
+# So a token is a candidate now. What makes guessing safe is not this function -- it is
+# the EXISTENCE test in the bash half: a token becomes a path only if it names a regular
+# file inside the project. Everything here is the confinement that has to hold BEFORE
+# anything is stat-ed, because a stat follows what it is given:
+#
+#   * `..` in ANY position is refused, including a traversal that resolves back inside.
+#     There is no realpath here that costs nothing, so the verdict is lexical -- the same
+#     trade jit_bad_entry_file() makes for a symbolic link one dimension over.
+#   * An ABSOLUTE token must sit under the project directory, and is made relative to it.
+#     One outside is dropped, not tested.
+#   * A BACKSLASH drops the token. Here it is a shell escape; on Git Bash the Win32 API
+#     underneath treats it as a separator, so a dot-dot spelled with backslashes traverses
+#     there while reading as an ordinary character in every check above. jit_shown_apply()
+#     draws the same line for the same reason.
+#   * A NUL drops the token, because the channel that carries candidates back to bash is
+#     line-based and `read -r` truncates at one (#78, one channel over).
+#
+# No verb is inspected and no intent is guessed. `grep foo scripts/common.sh` fires the
+# rule about common.sh, and that is correct: the rule is about the file the agent is about
+# to read. Over-firing is not the defect; silence is.
+#
+# The count is capped because the command length is chosen by the payload and each survivor
+# costs bash a stat. 64 is far above any honest command line.
+function jit_cand_sep(   q) {
+  if (jit_sep_re == "") {
+    q = sprintf("%c", 39)
+    jit_sep_re = "[ \t\n\r;&|()<>\"`," q "=]+"
+  }
+  return jit_sep_re
+}
+function jit_cand_ctl(s) {
+  if (jit_ctl_re == "") jit_ctl_re = "[" sprintf("%c", 1) "-" sprintf("%c", 31) sprintf("%c", 127) "]"
+  return (s ~ jit_ctl_re)
+}
+function jit_cand_tokens(c, out,   nt, tk, i, t, project, plen, k) {
+  jit_utf8_init()
+  project = ENVIRON["CLAUDE_PROJECT_DIR"]
+  if (project == "") project = "."
+  sub(/\/+$/, "", project)
+  if (project == "") project = "/"
+  k = 0
+  nt = split(c, tk, jit_cand_sep())
+  for (i = 1; i <= nt; i++) {
+    if (k >= 64) break
+    t = tk[i]
+    if (t == "") continue
+    # An option is not a path. Its VALUE still is: `=` is a separator above, so
+    # --file=src/x.php arrives here as two tokens and the second one survives.
+    if (substr(t, 1, 1) == "-") continue
+    if (index(t, "\\") > 0) continue
+    # one-true-awk truncates the record at a NUL and never sees one; gawk carries it.
+    if (length(jit_nul) == 1 && index(t, jit_nul) > 0) continue
+    if (jit_cand_ctl(t)) continue
+    if (substr(t, 1, 1) == "/") {
+      plen = length(project)
+      if (project == "/") t = substr(t, 2)
+      else if (substr(t, 1, plen + 1) == project "/") t = substr(t, plen + 2)
+      else continue
+    } else if (t ~ /^[A-Za-z]:/) continue
+    if (t == "" || substr(t, 1, 1) == "/") continue
+    if (t == "." || t == "..") continue
+    if (t ~ /(^|\/)\.\.(\/|$)/) continue
+    k++
+    out[k] = t
+  }
+  return k
+}
+# The survivors, handed back by the bash half through the environment for the second pass.
+# The environment rather than -v for the reason JIT_SYMLINKS uses it: the list is
+# newline-separated, and a newline in a -v value is fatal before the program runs.
+function jit_cand_load(out,   nc, a, i, k) {
+  k = 0
+  nc = split(ENVIRON["JIT_PATH_CANDIDATES"], a, "\n")
+  for (i = 1; i <= nc; i++) if (a[i] != "") { k++; out[k] = a[i] }
+  return k
+}
 { input = input $0 }
 END {
   # --- Parse JSON: extract file_path, path, or command ---
@@ -110,7 +202,15 @@ END {
 
   # --- Collect paths to match against ---
   path_count = 0
-  if (file_path != "") {
+  # The SECOND pass (#85). Its stdin is empty, so everything parsed above came out blank;
+  # the paths were extracted from a Bash command in the first pass and bash kept the ones
+  # that name a regular file inside the project. The session key rides back with them so
+  # that both passes address the same marker file rather than two.
+  if (cand_mode == 1) {
+    path_count = jit_cand_load(all_paths)
+    shown_file = jit_shown_path(state_dir, "path", ENVIRON["JIT_SESSION_KEY"])
+    vocab_shown_file = jit_shown_path(state_dir, "vocab", ENVIRON["JIT_SESSION_KEY"])
+  } else if (file_path != "") {
     path_count = 1; all_paths[1] = file_path
   # \n joins the class for the same reason ; and | are in it: a decoded multi-line
   # command puts the second invocation after a real newline, and without it the call was
@@ -151,6 +251,32 @@ END {
         sub(/^[^:]+:/, "", arg)
         if (arg != "") { path_count++; all_paths[path_count] = arg }
       }
+    }
+  }
+
+  # --- A Bash command that named no supertool op: ask bash about its tokens (#85) ---
+  # Nothing is printed on this branch. The hook has not decided anything yet: the tokens
+  # go down the scratch channel, bash keeps the ones that name a regular file inside the
+  # project, and either runs this program again over them or prints {} itself.
+  #
+  # WHY THE EXISTENCE TEST IS NOT HERE. It is a stat, and awk has none. The nearest thing
+  # is `(getline x < t) >= 0`, and a token is very often a DIRECTORY -- `ls -la scripts/`.
+  # Measured on awk version 20200816, the awk macOS ships: getline on a directory returns 0
+  # and then raises `i/o error occurred on scripts/`, which exits 2 and prints into the
+  # stranger session. Failing hard and being loud, from the line meant to add a feature.
+  # gawk returns -1 there and is fine, so a local green run would have said nothing about
+  # it. common.sh already records the same engine trap for close() on a directory.
+  #
+  # Without a scratch file there is no channel, and the branch degrades to what this hook
+  # did before: no candidates, no injection, exit 0. That is the same degradation an
+  # unwritable TMPDIR already costs the log and the dedup.
+  if (cand_mode != 1 && path_count == 0 && cmd != "" && log_tmp != "") {
+    n_cand = jit_cand_tokens(cmd, cands)
+    if (n_cand > 0) {
+      printf "%s\n%s\n", cand_begin, jit_session_key(raw, fs, fe, n) > log_tmp
+      for (ci = 1; ci <= n_cand; ci++) printf "%s\n", cands[ci] > log_tmp
+      close(log_tmp)
+      exit
     }
   }
 
@@ -399,6 +525,114 @@ END {
   }
 }
 '
+
+# One place the -v list lives, because this program may run twice. cand_mode is the only
+# thing that differs: 0 parses the payload on stdin, 1 takes its paths from the environment.
+jit_path_awk() {
+  LC_ALL=C awk \
+    -v paths_base="$JIT_BASE/paths" \
+    -v vocab_base="$JIT_BASE/vocabulary" \
+    -v vocab_paths="$VOCAB_PATHS" \
+    -v state_dir="$JIT_STATE_DIR" \
+    -v log_tmp="$JIT_TMP" \
+    -v cand_mode="$1" \
+    -v cand_begin="$JIT_CAND_BEGIN" \
+    "$JIT_PATH_PROG"
+}
+
+cat | jit_path_awk 0
+
+# --- The question awk cannot ask: does this token name a file? (#85) ----------
+# `[ -f ]` and `[ -L ]` are shell BUILTINS -- this forks nothing, and it is the same trade
+# jit_scan_symlinks() makes at the top of common.sh: the tests awk has no syscall for are
+# paid in bash, once, with no per-row subprocess.
+#
+# `-f` or `-d`, never `-e`. A directory is a path a rule can be about -- `grep -r x
+# src/Billing/Components` is the case README calls "a test runner pointed at a directory"
+# -- so it counts. What -e would ALSO admit is a fifo, a socket and a device node, and
+# those are refused: nothing here opens a candidate, but the moment something did, opening
+# a fifo for reading blocks until somebody writes, and a clone chooses what is in the tree.
+#
+# A SYMBOLIC LINK is refused at every component, leaf included, whether or not its target
+# is inside the tree. That is the verdict common.sh already gives an entry file, and for
+# the same reason: resolving instead would need a realpath this design cannot afford, and a
+# structural answer is the same answer on every platform.
+#
+# What a bad candidate could actually do is worth stating, because it bounds this: the path
+# is never opened and never read. It is matched against rule patterns and written to the
+# log tail. So the cost of getting containment wrong is a rule firing for a file the
+# project does not contain -- and #13 and #27 are why that is still refused rather than
+# argued down.
+# The accepted token comes back in JIT_CAND_VALUE rather than on stdout: `$( )` is a fork,
+# and this runs once per token. A DIRECTORY is normalised to a trailing slash there, which
+# is how path rules are written -- `Components/`, `src/Billing/` -- and how the supertool
+# glob extractor above has always handed one over. Without it `grep -r x src/Components`
+# and `grep -r x src/Components/` are the same directory and only one of them fires.
+JIT_CAND_VALUE=""
+jit_cand_ok() {
+  local tok="$1" rest comp pre=""
+  JIT_CAND_VALUE=""
+  case "$tok" in
+    "" | /*) return 1 ;;
+    *\\*) return 1 ;;
+    .. | ../* | */../* | */..) return 1 ;;
+  esac
+  rest="$tok"
+  while [ "$rest" != "${rest#*/}" ]; do
+    comp="${rest%%/*}"
+    rest="${rest#*/}"
+    [ -n "$comp" ] || continue
+    pre="$pre$comp"
+    if [ -L "$JIT_PROJECT/$pre" ]; then return 1; fi
+    pre="$pre/"
+  done
+  if [ -L "$JIT_PROJECT/$tok" ]; then return 1; fi
+  if [ -d "$JIT_PROJECT/$tok" ]; then
+    case "$tok" in */) JIT_CAND_VALUE="$tok" ;; *) JIT_CAND_VALUE="$tok/" ;; esac
+    return 0
+  fi
+  [ -f "$JIT_PROJECT/$tok" ] || return 1
+  JIT_CAND_VALUE="$tok"
+  return 0
+}
+
+# The first pass printed NOTHING if it wrote this channel, so exactly one of the three
+# branches below produces the hook output: the second pass, or the `{}` beside it, or --
+# when the channel holds no candidate sentinel -- the first pass, which already printed.
+#
+# Capped in bytes, like JIT_SYMLINKS and JIT_CONFIG_REFUSED, and for the same reason: the
+# list crosses an exec into the second pass, and its length is chosen by the payload.
+JIT_CANDIDATES=""
+JIT_SESSION_KEY=""
+if [ -n "$JIT_TMP" ] && [ -s "$JIT_TMP" ]; then
+  IFS= read -r JIT_CAND_HEAD < "$JIT_TMP" || JIT_CAND_HEAD=""
+  if [ "$JIT_CAND_HEAD" = "$JIT_CAND_BEGIN" ]; then
+    {
+      IFS= read -r _JIT_SENTINEL
+      IFS= read -r JIT_SESSION_KEY
+      while IFS= read -r JIT_TOK; do
+        [ "${#JIT_CANDIDATES}" -lt 4096 ] || break
+        if jit_cand_ok "$JIT_TOK"; then
+          JIT_CANDIDATES="$JIT_CANDIDATES$JIT_CAND_VALUE$JIT_NL"
+        fi
+      done
+    } < "$JIT_TMP"
+    # awk built this key out of the payload and constrained it; checked again here because
+    # it is about to become part of a file name in the second pass.
+    case "$JIT_SESSION_KEY" in *[!A-Za-z0-9_-]*) JIT_SESSION_KEY="" ;; esac
+    # Emptied either way. The second pass rewrites this file with its marks and its log
+    # line; without one, the block at the bottom would read leftover candidate lines as a
+    # marks channel and a log line.
+    : > "$JIT_TMP"
+    if [ -n "$JIT_CANDIDATES" ]; then
+      export JIT_PATH_CANDIDATES="$JIT_CANDIDATES"
+      export JIT_SESSION_KEY
+      jit_path_awk 1 < /dev/null
+    else
+      echo "{}"
+    fi
+  fi
+fi
 
 # --- Timing + log ---
 T_END=$(_ms)

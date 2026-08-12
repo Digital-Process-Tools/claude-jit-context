@@ -452,7 +452,7 @@ refused and reported, and `jit-dry-run.sh` refuses the same row.
 
 Path rules read `file_path` from `Read`/`Edit`/`Write`/`Glob`/`Grep`. Anything that reaches a file some other way does not carry that field, and a naive implementation would stop matching the moment a session used one — every path rule you wrote would go quiet, with no error and nothing in the log to explain it.
 
-So `Bash` commands are scanned too: **any path-like token (anything containing `/`) counts as a path being touched.** That covers `sed -i src/Billing/Totals.php`, a test runner pointed at a directory, a shell loop over a glob, or a batching wrapper such as [supertool](https://github.com/Digital-Process-Tools/claude-supertool), whose quoted arguments are unpacked so that
+So `Bash` commands are scanned too: **a token counts as a path being touched when it names a file or directory that exists inside the project.** That covers `sed -i src/Billing/Totals.php`, `vim src/Billing/Totals.php`, a test runner pointed at a directory, or a batching wrapper such as [supertool](https://github.com/Digital-Process-Tools/claude-supertool), whose quoted arguments are unpacked so that
 
 ```bash
 ./supertool 'read:src/Billing/Totals.php' 'grep:getAmount:src/Billing/:10'
@@ -460,7 +460,9 @@ So `Bash` commands are scanned too: **any path-like token (anything containing `
 
 still fires the rules for `src/Billing/`.
 
-Commands with no path in them match nothing — deliberately, so that a stray word in a commit message cannot drag an unrelated entry into context.
+Existence on disk is what makes that safe to guess at. A word in a commit message, a branch name, a flag or a package name is not a file in your checkout, so it drags no entry into context; a command with no such token matches nothing at all. The verb is never read, so `grep pattern src/Billing/Totals.php` fires the rules for that file just as `vim` does — you are about to look at it either way.
+
+Three kinds of token are refused before anything on disk is consulted, and each one is a path that would resolve outside the project you opened: anything containing a `..` component, an absolute path that is not under the project directory, and any token whose name — or any directory on the way to it — is a symbolic link. A rule fires for the files your project contains, and for nothing else.
 
 ## Rebuild after every edit
 

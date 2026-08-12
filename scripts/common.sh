@@ -1334,9 +1334,15 @@ function jit_session_key(raw, fs, fe, n,   i, k) {
 # invocation, and forgets at exit. Every read and write of the set goes through the
 # functions below, so the empty case is handled in one place rather than at nine.
 function jit_shown_file(dir, kind, raw, fs, fe, n,   k) {
-  if (dir == "") return ""
-  k = jit_session_key(raw, fs, fe, n)
-  if (k == "") return ""
+  return jit_shown_path(dir, kind, jit_session_key(raw, fs, fe, n))
+}
+# The name, built from a key the caller already has. Split out because pre-path-hook.sh
+# runs a SECOND awk pass for its Bash path candidates -- the payload is parsed once, in
+# the first pass, and the second one is handed the key rather than the JSON. One format
+# string, so the two passes cannot drift into writing two different marker files for one
+# session, which would cost the dedup silently.
+function jit_shown_path(dir, kind, k) {
+  if (dir == "" || k == "") return ""
   return dir "/" kind "-shown-" k ".txt"
 }
 # No close(). getline itself is safe -- an unopenable path returns -1 and a path that opens
