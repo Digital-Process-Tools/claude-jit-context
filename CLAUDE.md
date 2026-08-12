@@ -19,7 +19,7 @@ Most of what used to be written out here now lives in `.claude/jit-context/`, an
 | Entry                                       | Fires when                             | Carries                                                             |
 | ------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------- |
 | `paths/00-manual/hooks.md`                  | you open a `scripts/*-hook.sh` or `common.sh` | never fail hard, no new dependencies, test-first, both platforms |
-| `paths/00-manual/tooling.md`                | you open `rebuild-tsv.sh`, `jit-dry-run.sh` or `jit-misses.sh` | the opposite contract — fail loudly, what each exit code means, which suite covers it |
+| `paths/00-manual/tooling.md`                | you open `rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh`, `jit-init.sh` or `.github/scripts/assemble_changelog.py` | the opposite contract — fail loudly, what each exit code means, which suite covers it |
 | `paths/00-manual/tests.md`                  | you open anything in `tests/`          | a negative assertion needs a positive control; `$( )` drops NUL bytes |
 | `paths/00-manual/entries.md`                | you edit any `jit-context/*.md`         | the rebuild trap, keyword normalisation, how to prove an entry fires |
 | `paths/00-manual/release.md`                | you edit `.claude-plugin/plugin.json`  | the three version sites and the sweep that finds them                |
