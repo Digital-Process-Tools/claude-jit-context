@@ -347,6 +347,52 @@ jit_shown_apply() {
   return 0
 }
 
+# --- The scratch channel the hooks hand to awk -------------------------------
+# Every hook needs one file that awk writes and bash reads back: the log line, then the
+# marker appends of jit_shown_flush(). It used to be built by concatenation --
+# `/tmp/claude-path-log-$$.tmp`, and the same shape twice more -- and awk opened it with
+# `>`, which truncates and follows a symbolic link. awk cannot lstat, so awk could not
+# have checked; the `[ -f ]` bash did afterwards checked nothing either, because `-f`
+# follows the link too and a link to a regular file passes it. A pid is not a secret and
+# /tmp is world-writable: the attack is to pre-create the plausible range and wait (#60).
+#
+# `[ -L ]` before the write is NOT the fix. That is check-then-act on a directory anyone
+# can write, which is the one place the race is cheap for the attacker to win. mktemp
+# creates with O_EXCL and an unpredictable name in a single step, so there is no window
+# and nothing to check: the file cannot be one that already existed.
+#
+# The cost is one fork per hook fire, on a path budgeted at 30-110 ms. Measured at ~2 ms
+# here. The alternative that avoids it -- $JIT_STATE_DIR, which already carries four
+# `[ -L ]` ancestor tests -- would put a write inside the user project on every prompt and
+# every tool call, which #51 is separately arguing against, and would go silent whenever
+# that directory is unavailable.
+#
+# WHO REMOVES IT. #43: `rm -f /tmp/claude-hook-log-*.tmp` in SessionStart deleted other
+# live sessions' in-flight temps. So nothing sweeps by wildcard, and nothing but the
+# creating process removes this file -- an EXIT trap, which also covers the crash the
+# unpredictable name would otherwise leak forever (bash runs it on a normal exit and on
+# every trappable signal; SIGKILL leaks one file of a few dozen bytes, which is the same
+# thing the old name leaked, minus the rest of the class).
+#
+# FAILING TO GET ONE IS NOT AN ERROR. An unwritable or missing $TMPDIR leaves JIT_TMP
+# empty, and awk is told so: the hook then has no log line and no dedup, and still
+# matches, still injects, still exits 0. Passing "" to awk unguarded would be worse than
+# the bug -- an unopenable redirect is FATAL inside END and takes the injection with it,
+# which is #50 exactly -- so each hook guards the write on `log_tmp != ""`.
+JIT_TMP=""
+jit_tmp_open() {
+  local d
+  d="${TMPDIR:-/tmp}"
+  d="${d%/}"
+  JIT_TMP="$(mktemp "$d/claude-jit-XXXXXXXX" 2>/dev/null)" || JIT_TMP=""
+  [ -n "$JIT_TMP" ] || return 0
+  # Single-quoted on purpose: expanded when the trap fires, so it names the file this
+  # process created and no other.
+  # shellcheck disable=SC2064
+  trap 'rm -f "$JIT_TMP"' EXIT
+  return 0
+}
+
 # Timestamp with ms precision (single perl call, ~11ms)
 _ts() { perl -MTime::HiRes -MPOSIX -e 'my $t=Time::HiRes::time(); printf("%s.%03d\n", strftime("%H:%M:%S",localtime($t)), ($t*1000)%1000)'; }
 

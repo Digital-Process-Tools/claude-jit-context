@@ -149,7 +149,9 @@ Copy this directory to `<your-project>/.claude/claude-jit-context/` and register
 
 ### Requirements
 
-Bash, `awk`, `perl` (used only for millisecond timestamps). **No `jq`, no Python, no Node.**
+Bash, `awk`, `perl` (used only for millisecond timestamps) and `mktemp` (one scratch file per hook fire, created with an unpredictable name so nothing outside your project can be pointed at). **No `jq`, no Python, no Node.**
+
+`mktemp` is the only soft one: a system without it, or with no writable `$TMPDIR`, loses the hook log and the once-per-session dedup and keeps everything else — rules still match, entries still inject, the hook still exits `0`.
 
 Linux, macOS and Windows. The suite runs on all three in CI — including macOS's bash 3.2 and Windows under Git Bash. On Windows the hooks need a `bash` on `PATH`, which Git Bash provides; that is the same requirement every hook-based plugin in this family has.
 
