@@ -454,6 +454,17 @@ character an author actually types stay honourable — and `rebuild-tsv.sh` cann
 dot-name in the first place, so no entry you wrote is affected. An index row naming one is
 refused and reported, and `jit-dry-run.sh` refuses the same row.
 
+**An entry path that is not a regular file is refused, and the rule around it still runs.**
+A row can name a directory — `dirent.md/` with a file inside it, which git commits happily —
+or leave the file column empty, which points the read at the layer directory itself. On the
+`awk` macOS ships, reading either one is a fatal error rather than a failed read: the hook
+died mid-decision, printed no JSON at all, and a `block` rule further down the same index
+did not block. The check has to run in `bash`, because `awk` cannot ask whether a path is a
+file before opening it, so it rides the sweep that is already walking the tree. The row is
+refused and named; every other rule in that index, including a `block` rule after it, fires
+exactly as before. A FIFO at an entry path is refused by the same test — reading one would
+hang the hook rather than fail it.
+
 ### Compatibility — tools that touch files through `Bash`
 
 Path rules read `file_path` from `Read`/`Edit`/`Write`/`Glob`/`Grep`. Anything that reaches a file some other way does not carry that field, and a naive implementation would stop matching the moment a session used one — every path rule you wrote would go quiet, with no error and nothing in the log to explain it.

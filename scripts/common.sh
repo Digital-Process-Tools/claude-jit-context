@@ -73,6 +73,37 @@ export JIT_SYMLINKS=""
 JIT_SYMLINKS_MAX=8192
 export JIT_SYMLINKS_ALL=""
 
+# --- The second thing bash can see and awk cannot: what is not a regular file (#97) ---
+#
+# Same channel, same walk, a different property. `getline < path` where path is a DIRECTORY
+# is a FATAL i/o error on one-true-awk -- the awk macOS ships -- raised wherever the read
+# happens, which for these hooks is inside END. The process dies, stdout carries no JSON at
+# all, and a `block` decision already reached dies with it: the tool dimension fails OPEN.
+# Driven at f63555e on awk version 20200816; GNU Awk 5.4.1 returns -1 from the same read and
+# survives, which is why this cannot be tested on one engine.
+#
+# awk cannot stat, so it cannot answer this before reading -- and it cannot catch it after,
+# because the abort is not a return value on the engine that matters. The check has to run
+# in bash, which is the same conclusion session-start-hook.sh reached for a directory
+# planted at a MARKER name and closed with an rmdir.
+#
+# It rides the sweep below rather than adding a pass: that walk already globs and lstats
+# every path an index row can name, so the extra cost is one `[ -f ]` builtin per file, and
+# the common case (a regular file) short-circuits on the first test.
+#
+# NOT ONLY DIRECTORIES, and the wider net is the point. A FIFO at an entry path does not
+# abort the read -- it HANGS it, forever, in a hook that must answer inside 110 ms -- and a
+# device node reads as whatever the device says. "is a regular file" is the property the
+# reader actually needs, so it is the one that is asked.
+#
+# 4096 rather than the 8192 above, and the two sets are additive in one environment block:
+# an honest tree records ZERO here, so this bounds a quantity that is anomalous at one. The
+# smaller figure keeps the pair under 12 KB on Windows, where the limit that bites is the
+# 32767-character process environment block.
+export JIT_NONFILES=""
+export JIT_NONFILES_ALL=""
+JIT_NONFILES_MAX=4096
+
 # Populated shallow-to-deep, so a directory already in the set marks its children too --
 # a regular file inside a linked layer directory is not itself a link, and lstat on it
 # says nothing. Membership is a newline-delimited substring test, because macOS ships
@@ -83,10 +114,18 @@ export JIT_SYMLINKS_ALL=""
 # a shell option in a sourced file would change it for whatever sourced us.
 JIT_NL="
 "
+# Two sets out of one walk, and the name is narrower than the job: since #97 this also
+# records every path at ENTRY DEPTH that is not a regular file. Both answer the same
+# question -- what can bash see about this tree that awk cannot -- and both are consumed by
+# jit_bad_entry_file()/jit_read_body() through ENVIRON. It stayed one function because it is
+# one glob walk and one lstat per path; splitting it would double the floor cost to answer
+# two questions about the same stat.
 jit_scan_symlinks() {
-  local base="$1" f parent found=0
+  local base="$1" f parent rel found=0
   JIT_SYMLINKS="$JIT_NL"
   JIT_SYMLINKS_ALL=""
+  JIT_NONFILES="$JIT_NL"
+  JIT_NONFILES_ALL=""
   # `.claude/` is inside the repository too, and git carries it as a link like anything
   # else, so `.claude -> /elsewhere` reaches the same disclosure one level above anything
   # the glob below can see -- with a jit-context/ inside the target it needs nothing in the
@@ -123,7 +162,13 @@ jit_scan_symlinks() {
       if [ "${#JIT_SYMLINKS}" -gt "$JIT_SYMLINKS_MAX" ]; then
         JIT_SYMLINKS="$JIT_NL"
         JIT_SYMLINKS_ALL=1
-        export JIT_SYMLINKS JIT_SYMLINKS_ALL
+        # The walk stops here, so the non-file set is incomplete from this point on and a
+        # membership test against it would clear a path nobody looked at. Its own sentinel
+        # rather than a read of the link one: the two are consumed by different functions,
+        # and a caller that had to know about both would be one edit away from checking one.
+        JIT_NONFILES="$JIT_NL"
+        JIT_NONFILES_ALL=1
+        export JIT_SYMLINKS JIT_SYMLINKS_ALL JIT_NONFILES JIT_NONFILES_ALL
         return 0
       fi
       continue
@@ -145,6 +190,45 @@ jit_scan_symlinks() {
     # before either form at the next, so every entry at one depth is recorded before any
     # entry at the next is tested. Descendants can only follow an ancestor, and nothing is
     # missed by not looking earlier.
+    # THE STAT FIRST, and the order was measured rather than reasoned. Not a link -- the
+    # branch above returned -- so lstat and stat agree, and `[ -f ]` is TRUE for every entry
+    # file in an honest tree, which short-circuits the whole block on the only path that
+    # runs a thousand times. Putting the cheap-looking string test first was tried and is
+    # the slower order by a wide margin -- 173 ms against a 94 ms baseline in the same
+    # harness -- because it moves work ONTO that path instead of off it: a `[ -f ]` that
+    # answers yes is cheaper than a parameter expansion plus a `case`, and it also skips
+    # both. Reasoning about which builtin looks cheaper got this backwards.
+    #
+    # `[ -e ]` separates a real non-file from a glob that matched nothing -- nullglob is
+    # deliberately unset here (see above), so an unmatched term arrives as its own literal.
+    #
+    # Measured on that layer, interleaved against the merge-base to cancel machine load,
+    # with the path hook firing one rule, twice over 36 invocations a side: 73.1 ms before
+    # against 84.0 ms after, then 73.0 against 82.6. About 10 us per file, which is the
+    # stat, paid once per hook on the largest tree anyone has built. A tree of the size this
+    # plugin is usually pointed at pays a fraction of a millisecond.
+    if [ ! -f "$f" ] && [ -e "$f" ] && [ "$f" != "$base" ]; then
+      # ENTRY DEPTH only. The layer directories themselves are directories in every honest
+      # tree, and recording them would put a dozen paths in the set of a tree with nothing
+      # wrong with it -- while answering about a path no index row can name, since
+      # jit_bad_entry_file() refuses a `/` in the file-name column. What a row CAN name is
+      # <base>/<dimension>/<layer>/<name>, the three-segment form below, and it is the
+      # deepest this loop globs.
+      rel="${f#"$base"/}"
+      case "$rel" in
+        */*/*)
+          JIT_NONFILES="$JIT_NONFILES$f$JIT_NL"
+          # Capped for the reason JIT_SYMLINKS is, and with the same posture: a set that
+          # did not fit is a set that clears rows nobody looked at, so it sets a sentinel
+          # instead. The sweep does not return here -- the link half of this walk is a
+          # containment check and still has work to do.
+          if [ "${#JIT_NONFILES}" -gt "$JIT_NONFILES_MAX" ]; then
+            JIT_NONFILES="$JIT_NL"
+            JIT_NONFILES_ALL=1
+          fi
+          ;;
+      esac
+    fi
     [ "$found" = 1 ] || continue
     [ "$f" != "$base" ] || continue
     parent="${f%/*}"
@@ -157,13 +241,15 @@ jit_scan_symlinks() {
         if [ "${#JIT_SYMLINKS}" -gt "$JIT_SYMLINKS_MAX" ]; then
           JIT_SYMLINKS="$JIT_NL"
           JIT_SYMLINKS_ALL=1
-          export JIT_SYMLINKS JIT_SYMLINKS_ALL
+          JIT_NONFILES="$JIT_NL"
+          JIT_NONFILES_ALL=1
+          export JIT_SYMLINKS JIT_SYMLINKS_ALL JIT_NONFILES JIT_NONFILES_ALL
           return 0
         fi
         ;;
     esac
   done
-  export JIT_SYMLINKS JIT_SYMLINKS_ALL
+  export JIT_SYMLINKS JIT_SYMLINKS_ALL JIT_NONFILES JIT_NONFILES_ALL
 }
 
 jit_scan_symlinks "$JIT_BASE"
@@ -1005,6 +1091,22 @@ function jit_symlinked(p,   n, i, a) {
   }
   return (p in jit_sym)
 }
+# The other half of the same sweep (#97): paths at entry depth that are NOT regular files.
+# Same shape as jit_symlinked() above, deliberately -- one idiom for one job -- and the
+# same sentinel posture: a set the bash half could not finish enumerating answers yes for
+# everything, because the alternative is clearing a path nobody looked at.
+#
+# Answering YES here costs one body, never the hook: every caller turns it into a reason
+# string and keeps going. Answering wrongly NO on the engine that matters costs the process.
+function jit_nonfile(p,   n, i, a) {
+  if (ENVIRON["JIT_NONFILES_ALL"] == "1") return 1
+  if (!jit_nf_init) {
+    jit_nf_init = 1
+    n = split(ENVIRON["JIT_NONFILES"], a, "\n")
+    for (i = 1; i <= n; i++) if (a[i] != "") jit_nf[a[i]] = 1
+  }
+  return (p in jit_nf)
+}
 # dir is the layer directory the caller is about to concatenate this name onto -- the same
 # string the hook builds for getline, so the lookup is an exact match against what the
 # bash sweep globbed. A caller that passes no dir gets the name checks only.
@@ -1130,6 +1232,28 @@ function jit_bad_bytes(s, what) {
 # a NUL-bearing row, so this is where #78 is caught on the engine that hides the byte.
 function jit_read_body(path,   line, r, first) {
   JIT_BODY = ""
+  # --- Before the read, because on one engine there is no after (#97) --------------
+  #
+  # Every caller builds this path as <layer dir> "/" <file-name column>, and two shapes of
+  # that concatenation name something `getline` must never open. Both are refused HERE, at
+  # the one funnel all five call sites pass through, rather than at each site: a guard a
+  # site can forget is a guard that protects four sites out of five.
+  #
+  # A trailing slash is an EMPTY file-name column, which concatenates to the layer directory
+  # itself. jit_bad_entry_file() lets that column through on purpose -- an empty column is a
+  # blank index line, and refusing it would fire a notice at an author over stray whitespace
+  # -- but a row that reached a body read has a tool, a match and a mode, so it is a rule
+  # naming no entry rather than a blank line, and saying so is the honest reading.
+  #
+  # A path in the non-file set is a directory, a FIFO or a device node. On one-true-awk the
+  # first is a fatal i/o error inside END and the second never returns at all.
+  #
+  # THE ROW IS REFUSED, NEVER THE FILE, and never the decision. This returns a reason like
+  # every other unreadable body, so the caller substitutes text and carries on -- a block
+  # rule whose entry is a directory still blocks. That is the jit_bad_pattern() posture, and
+  # the whole of #97 is that a malformed thing was fatal to the program instead.
+  if (substr(path, length(path), 1) == "/") return "the row names no entry file"
+  if (jit_nonfile(path)) return "the entry file is not a regular file"
   first = 1
   while ((r = (getline line < path)) > 0) {
     JIT_BODY = JIT_BODY (first ? "" : "\n") line
