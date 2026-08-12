@@ -49,6 +49,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   these are this repository's own dogfood entries.
   `.github/workflows/` is still uncovered and is filed separately. The dogfood table in
   `CLAUDE.md` is updated with the two new rows.
+- **`SECURITY.md` is the fourth version site, and it is now asserted too.** Its supported-
+  versions table read `0.2.x` throughout the whole of 0.3.0 — a release that shipped nine
+  containment fixes — so this project's security policy told anyone reporting a
+  vulnerability that the current release was unsupported. It is compared as `major.minor`
+  and never as an exact string, because it names a supported *line* rather than a release,
+  and a check that failed on every patch release would be deleted within two of them.
+
+  Found by the release audit, not by the hand sweep that had just been run across the other
+  three sites — an allowlist of three files cannot see a fourth.
+
 - **The three version sites are now asserted to agree.** `.claude-plugin/plugin.json`,
   the README badge and the topmost released `## [x.y.z]` heading here were kept in step by
   a hand sweep, and nothing failed when they drifted. A stale badge is the expensive
@@ -88,7 +98,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   repository ships — its own three and the one shipped example — the check warns on none of
   them. It catches the narrower class it can actually see, and the release note says so
   rather than borrowing credit for a bug it would have missed.
+
 ### Fixed
+
+- **The README claimed a symbolic-link check on the marker file that does not exist.** The
+  four *directory* tests are real — a linked `.claude`, `jit-context`, `.discovery` or
+  `state` means no markers are kept at all — but the marker file itself gets none, and a
+  link left at a marker's path is written through. Driven with a canary: the write does
+  follow the link when the name is known. What bounds it is that the name *is* the
+  `session_id` the runner generates, so a cloned repository cannot arrive with a link
+  already waiting at a path nobody can predict. That is a bound on reachability rather than
+  a check, and the README now says which of the two it has.
+
+- **`SECURITY.md` said `0.2.x` was the supported line.** It is `0.3.x`, and a test now
+  fails if that drifts again.
 
 - **`$PPID` was standing in for a session, and it is not one.** Every hook keyed its
   once-per-session markers on `/tmp/claude-{vocab,path}-shown-$PPID.txt`. Under `$( ... )`
