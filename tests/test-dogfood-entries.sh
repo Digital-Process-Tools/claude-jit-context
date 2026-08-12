@@ -96,10 +96,14 @@ assert_silent "a test for a hook"      "tests/test-pre-path-hook.sh" "hooks.md"
 assert_silent "a lookalike directory"  "myscripts/common.sh"       "hooks.md"
 
 echo ""
-echo "=== tooling.md fires on the three build and diagnostic scripts ==="
+echo "=== tooling.md fires on the four build, diagnostic and release scripts ==="
 assert_fires  "the index writer"       "scripts/rebuild-tsv.sh"    "tooling.md"
 assert_fires  "the linter"             "scripts/jit-dry-run.sh"    "tooling.md"
 assert_fires  "the miss reporter"      "scripts/jit-misses.sh"     "tooling.md"
+# Same contract, same reason: it is run at a tag by a person, never in a stranger's
+# session, so it fails loudly with exit codes that mean distinct things (#66).
+assert_fires  "the changelog assembler" ".github/scripts/assemble_changelog.py" "tooling.md"
+assert_silent "a lookalike outside .github"  "scripts/assemble_changelog.py" "tooling.md"
 # The inverse of the split above: these run in someone else session and are governed by
 # hooks.md, so the tooling contract must not reach them.
 assert_silent "a hook script"          "scripts/pre-tool-hook.sh"  "tooling.md"
@@ -120,6 +124,16 @@ echo ""
 echo "=== release.md fires on the manifest only ==="
 assert_fires  "the plugin manifest"    ".claude-plugin/plugin.json" "release.md"
 assert_silent "some other json"        ".supertool.json"            "release.md"
+
+echo ""
+echo "=== changelog.md fires on the assembled file, and not on the fragments ==="
+assert_fires  "the assembled file"     "CHANGELOG.md"               "changelog.md"
+assert_fires  "it from a subdirectory" "vendor/thing/CHANGELOG.md"  "changelog.md"
+# The directory documents itself, and a rule saying "do not edit this, write a fragment"
+# arriving while you write a fragment is the rule firing against its own advice.
+assert_silent "the convention page"    "changelog.d/README.md"      "changelog.md"
+assert_silent "a fragment"             "changelog.d/70.fixed.md"    "changelog.md"
+assert_silent "a lookalike name"       "docs/CHANGELOG.md.tmpl"     "changelog.md"
 
 echo ""
 echo "========================"

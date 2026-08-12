@@ -30,8 +30,9 @@ therefore already ageing. Re-derive before acting.
 | Runtime | `bash` + `awk` + `perl`. **No `jq`, no Python, no Node** |
 | Tests | `bash tests/run-all.sh` — three hook suites, non-zero on any failure |
 | Lint | `shellcheck -S warning scripts/*.sh tests/*.sh` |
-| PR checks | **4** — `hooks` on ubuntu/macos/windows, plus `shellcheck`. One workflow, `tests.yml` |
+| PR checks | **5** — `hooks` on ubuntu/macos/windows and `shellcheck` from `tests.yml`, plus `fragment` from `changelog.yml`, which installs `markdown-it-py` and runs `--check` and the two changelog suites |
 | Version sites | **3** — `.claude-plugin/plugin.json`, the README badge, the `CHANGELOG.md` heading |
+| Changelog | `changelog.d/<issue>.<section>.md` per PR; `.github/scripts/assemble_changelog.py` at the tag |
 
 **Re-derive that block rather than trusting it.** In the repo this was adapted from, four of six rows
 in the equivalent table were wrong on one measured day, each a claim the maintainer would have acted
@@ -183,7 +184,9 @@ Every brief carries these:
    is checked on the way in, not taken on trust: see *Verify the red, not the green* under Reviewing.
    Every "must not fire" case is paired with a "must fire" case in the same fixture, because a
    silence assertion passes when the harness is broken.
-5. **Require the docs** — `README.md` for anything user-facing, `CHANGELOG.md` always.
+5. **Require the docs** — `README.md` for anything user-facing, and a `changelog.d/` fragment
+   always, never an edit to `CHANGELOG.md`. Two PRs that both edit that file conflict even when they
+   share no other line; a fragment per change is why they no longer do (#66).
 6. **Name the live worktrees**, so agents know about each other. Two agents in one file is reckless
    at any fleet size; the binding constraint is how many file-disjoint areas are open right now.
 7. **Unconditional publishing clause:** commit, do not push, do not open a PR, do not comment on the

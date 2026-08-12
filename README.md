@@ -572,6 +572,8 @@ bash tests/run-all.sh
 
 One suite per hook, plus the dry-run, the miss report, and what a hostile project directory can make the hooks read, write or say — matching, normalization, modes, blocking, session-once behaviour and malformed input. Engine-sensitive assertions run once per `awk` on the machine. No dependencies beyond bash, `awk` and `perl`.
 
+Two suites are the exception, and they are about the release tooling rather than the hooks: `test-assemble-changelog.sh` drives `.github/scripts/assemble_changelog.py`, which needs `python3` and `markdown-it-py`. Without either it **skips loudly and exits 2**, the same as the containment suites below — so `run-all.sh` still needs nothing but bash, `awk` and `perl`, and says in as many words what went untested when that is all it has. CI runs those two in their own `changelog` workflow, which installs the parser first; a suite that skipped on every leg would be testing nothing.
+
 The assertion count is deliberately not written here. It was wrong three times in one hour on the day this sentence was rewritten: every branch that adds a test invalidates it, and nothing fails when it drifts — the same defect `tests/test-version-sites.sh` exists to catch for the version number. Run the suite; it prints the number it actually has.
 
 The two containment suites build their fixtures with `ln -s`, and a platform that does not create symbolic links cannot construct the attack they exist to refuse — Git Bash copies the target instead unless `MSYS=winsymlinks:nativestrict` is set and the process may create links. Those suites **probe for that first and skip loudly rather than pass**, and `run-all.sh` reports a skipped suite as neither a pass nor a failure. A suite that reported success where it could not test anything would be the exact defect this plugin exists to describe.
@@ -586,7 +588,13 @@ On a project with a real body of institutional knowledge, that is the difference
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md).
+See [CHANGELOG.md](CHANGELOG.md). It is assembled at release from one fragment per change —
+contributors add `changelog.d/<issue>.<section>.md` and never edit the file itself. The
+convention is in [changelog.d/README.md](changelog.d/README.md).
+
+That assembler is Python and lives under `.github/`, which is **not** the runtime this page
+promises: nothing in `.github/` ships inside the plugin, and the four hooks that run in your
+session are still `bash` + `awk` + `perl` with no install step.
 
 ## License
 

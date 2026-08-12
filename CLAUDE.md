@@ -23,6 +23,7 @@ Most of what used to be written out here now lives in `.claude/jit-context/`, an
 | `paths/00-manual/tests.md`                  | you open anything in `tests/`          | a negative assertion needs a positive control; `$( )` drops NUL bytes |
 | `paths/00-manual/entries.md`                | you edit any `jit-context/*.md`         | the rebuild trap, keyword normalisation, how to prove an entry fires |
 | `paths/00-manual/release.md`                | you edit `.claude-plugin/plugin.json`  | the three version sites and the sweep that finds them                |
+| `paths/00-manual/changelog.md`              | you open `CHANGELOG.md`                | it is assembled, not edited — write a `changelog.d/` fragment instead |
 | `tools/00-manual/no-hand-editing-the-index.md` | you try to edit a `00-index.tsv`    | blocks it — the file is generated                                    |
 | `vocabulary/00-manual/jit-context.md`       | someone names a hook or `rebuild-tsv`  | the dimension/hook/layer map                                         |
 
@@ -70,6 +71,8 @@ Lints every pattern in the tree you name, prints which rule fires for a sample c
 | `scripts/rebuild-tsv.sh` | Frontmatter → `00-index.tsv`. The only writer of that file.               |
 | `scripts/jit-dry-run.sh` | Lints one tree's patterns and dry-runs a sample call against it.          |
 | `scripts/jit-misses.sh`  | Reads the hook log and reports repeated vocabulary misses. Writes nothing. |
+| `.github/scripts/assemble_changelog.py` | Folds `changelog.d/` fragments into `CHANGELOG.md` at release. The only writer of that file. Python, under `.github/`, and **not** part of the runtime — see below. |
+| `changelog.d/`           | One fragment per change. Its `README.md` is the convention.                 |
 | `tests/test-*.sh`        | One suite per hook, plus `run-all.sh`.                                     |
 | `examples/jit-context/`  | Shipped example entries. They carry real frontmatter and must stay valid.  |
 | `.claude/jit-context/`   | This repo's own entries. Not shipped — dogfood.                            |
@@ -83,7 +86,9 @@ The detail arrives on the file itself. What holds everywhere:
 
 **A hook must never fail hard, and silence must not mean "nothing to say".** These two are the whole safety story: the scripts run in someone else's session, and the tool dimension can refuse a call. A rule that cannot be evaluated is not a rule that did not match.
 
-**No new runtime dependencies.** No `jq`, no Python, no Node.
+**No new runtime dependencies.** No `jq`, no Python, no Node — in **`scripts/`**, which is what ships and what runs in a stranger's session. `.github/` is not the runtime: `assemble_changelog.py` is Python and depends on `markdown-it-py`, and that is the same line `tooling.md` already draws between the hooks and `rebuild-tsv.sh`. If you find yourself reaching for a language outside bash/awk/perl for anything under `scripts/`, that is the rule and the answer is no.
+
+**Never edit `CHANGELOG.md`. Write a fragment.** `changelog.d/<issue>.<section>.md`, the entry exactly as it should read, naming its own issue in its body — `changelog.d/README.md` is the convention and `.github/scripts/assemble_changelog.py` folds them in at the tag. This is not a style preference: two PRs that share no other line still conflicted in that file, four times in one afternoon, and one of those merges would have produced two `### Added` headings under one version.
 
 **Every behaviour change gets a test first.** Write it, watch it fail, then fix. A test written after the fix asserts what the code happens to do.
 

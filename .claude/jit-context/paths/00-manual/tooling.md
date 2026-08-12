@@ -1,9 +1,9 @@
 ---
-title: These three fail loudly, and their exit codes carry meaning
-match: (^|/)scripts/(rebuild-tsv|jit-dry-run|jit-misses)\.sh$
+title: These four fail loudly, and their exit codes carry meaning
+match: (^|/)(scripts/(rebuild-tsv|jit-dry-run|jit-misses)\.sh|\.github/scripts/assemble_changelog\.py)$
 ---
 
-`rebuild-tsv.sh`, `jit-dry-run.sh` and `jit-misses.sh` are build and diagnostic tools. They are run deliberately, by a person or by CI, and never inside a stranger's session.
+`rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh` and `.github/scripts/assemble_changelog.py` are build, diagnostic and release tools. They are run deliberately, by a person or by CI, and never inside a stranger's session.
 
 **So `paths/00-manual/hooks.md` does not apply here, and following it would be the bug.** "Every failure path exits `0` with nothing injected" is the hook contract; obeying it in `rebuild-tsv.sh` produces a half-written index that nothing reports, which is the exact defect this plugin exists to prevent. Fail loudly instead: a tool that cannot do its job must say so, on stderr, with a non-zero status.
 
@@ -14,6 +14,13 @@ match: (^|/)scripts/(rebuild-tsv|jit-dry-run|jit-misses)\.sh$
 | `jit-dry-run.sh` | every pattern honourable, every index current, every `config.env` line honoured | at least one pattern refused, or a `00-manual/` entry is `STALE` — you did not rebuild | could not evaluate the tree at all. Never a pass. |
 | `jit-misses.sh` | findings, **or** the log was read and nothing recurs — the two are distinguished in the text, not the status | — | `SKIPPED`, with a named reason |
 | `rebuild-tsv.sh` | **every path, including a refused macro** — measured 2026-08-12, it has no non-zero exit at all | — | — |
+| `assemble_changelog.py` | assembled, or `--check` found nothing to refuse | a fragment or the request was refused — bad filename, unknown section, a body that does not name its own issue, a fragment the CommonMark guard rejects, an entry count that did not balance, or a `--version` disagreeing with `plugin.json` | could not evaluate: no `changelog.d/`, no `CHANGELOG.md`, no `[Unreleased]` heading, an unreadable `plugin.json`, nothing to assemble, **or `markdown-it-py` not importable** |
+
+**`assemble_changelog.py` is Python and that is not the runtime rule being broken.** The `bash`/`awk`/`perl` promise is about the hooks, which run in a stranger's session; this runs in CI and at a tag. It lives under `.github/` rather than `scripts/` so the separation is structural — nothing in `.github/` ships inside the plugin — and its exit codes were **swapped** on the way over from `claude-supertool`, whose script uses 1 for skipped and 2 for refused. A fifth tool here with inverted codes is exactly the trap this repository exists to describe.
+
+Its guard is a real CommonMark parser and there is deliberately **no text-scanning fallback**: three pattern-based scanners upstream were each bypassed within one audit. So a missing `markdown-it-py` is `2`, never `0` — "did not look" must never render as "looked and found nothing".
+
+`--version` is an argument *and* is verified against the manifest: reading it out of `plugin.json` would make the `CHANGELOG.md` heading a copy of that file, and `tests/test-version-sites.sh` compares exactly those two — the guard would then be asserting only that this script ran.
 
 A `WARN` row in `jit-dry-run.sh` never moves the exit code. If you add a check, decide which of the three it is before you write it.
 
@@ -36,6 +43,8 @@ bash tests/test-jit-dry-run.sh        # jit-dry-run.sh: flags, exit codes, STALE
 bash tests/test-jit-misses.sh         # jit-misses.sh: the three outcomes
 bash tests/test-invocation-macro.sh   # rebuild-tsv.sh: macro expansion, and refusal
 bash tests/test-frontmatter-quotes.sh # rebuild-tsv.sh: frontmatter parsing
+bash tests/test-assemble-changelog.sh # assemble_changelog.py: the guard, every refusal, the count
+bash tests/test-changelog-fragment-refs.sh # nothing names a fragment the next tag deletes
 bash tests/test-dogfood-entries.sh    # this repo's own rules, both directions
 bash tests/run-all.sh                 # non-zero on any failure
 ```

@@ -1,5 +1,6 @@
+(^|/)CHANGELOG\.md$	changelog.md
 (\.claude|examples)/jit-context/.*\.md$	entries.md
 (^|/)scripts/(.*-hook|common)\.sh$	hooks.md
 \.claude-plugin/plugin\.json$	release.md
 (^|/)tests/[^/]*\.sh$	tests.md
-(^|/)scripts/(rebuild-tsv|jit-dry-run|jit-misses)\.sh$	tooling.md
+(^|/)(scripts/(rebuild-tsv|jit-dry-run|jit-misses)\.sh|\.github/scripts/assemble_changelog\.py)$	tooling.md
