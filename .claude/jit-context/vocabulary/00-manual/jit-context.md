@@ -14,7 +14,7 @@ Three dimensions, one hook each. Knowledge attaches to whichever trigger answers
 
 Tools is the only dimension that can `block`. The other two only inject. Each entry fires at most once per session; the marker is keyed on the payload's `session_id` and lives in `.claude/jit-context/.discovery/state/`, and `session-start-hook.sh` clears this session's and ages out the rest. A payload with no `session_id` — a hand-run hook, every test suite here — keeps no marker and therefore never dedups.
 
-A match injects the entry's `title:` and `description:` — about 20 tokens — not its body. `inject: full` in the entry, or `JIT_CONTEXT_INJECT=full` in `config.env`, sends the whole thing; `rebuild-tsv.sh` counts that population at build time and `jit-dry-run.sh` names it per call. A refusing tools rule always injects its whole body.
+A match injects the entry body whole — `full` is the default, kept so an upgrade cannot silently take away knowledge a project already relies on. `JIT_CONTEXT_INJECT=summary` in `config.env`, or `inject: summary` in one entry, injects `title:` plus `description:` instead, about 20 tokens, and the agent reads the file if it wants the rest. `rebuild-tsv.sh` prices one match on the tree and names the entries with no `description:` yet; `jit-dry-run.sh` reports the bytes a sample call actually injected. A refusing tools rule always injects its whole body.
 
 Layers are scanned in order inside each dimension: `00-manual/` (hand-written), then `10-auto/`, `20-grouped/`, `30-crosscutting/` (generated). A project with no generator uses `00-manual/` alone.
 

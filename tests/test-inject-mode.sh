@@ -79,6 +79,16 @@ printf '%s\n' \
   "" \
   "WEIRD-BODY-MARKER" > "$V/weird.md"
 
+printf '%s\n' \
+  "---" \
+  "title: Opted in" \
+  "description: This entry asked to be summarised." \
+  "inject: summary" \
+  "keywords: optin" \
+  "---" \
+  "" \
+  "OPTIN-BODY-MARKER" > "$V/optin.md"
+
 LONG_DESC="LONGDESCSTART$(printf 'x%.0s' $(seq 1 2000))LONGDESCEND"
 printf '%s\n' \
   "---" \
@@ -95,6 +105,7 @@ printf '%s\t%s\n' \
   nodesc   nodesc.md \
   bare     bare.md \
   weird    weird.md \
+  optin    optin.md \
   longdesc longdesc.md > "$V/00-index.tsv"
 
 printf '%s\n' \
@@ -177,10 +188,22 @@ assert_not_contains() {
 }
 
 # =============================================
-# SECTION 1: the default is summary
+# SECTION 1: the default is full, and summary is the opt-in
 # =============================================
-echo "=== No config.env: a match injects the description, not the body ==="
+# The default is `full` for upgrade safety and for no other reason. A project that
+# installed this before the mode existed has entries that arrive whole and agents that
+# depend on it, and nobody opted into a silent downgrade to twenty tokens. Changing what
+# an existing tree injects, without that tree asking, is an absence produced by the tool.
+echo "=== No config.env: a match injects the whole body, as it always has ==="
 set_config ""
+OUT=$(run_prompt "what about the billing")
+assert_contains     "the entry is named"       "$OUT" "Vocabulary: billing.md"
+assert_contains     "the body arrives whole"   "$OUT" "BILLING-BODY-MARKER"
+assert_not_contains "and nothing tells the agent to go and read it" "$OUT" "Summary only"
+
+echo ""
+echo "=== The same entry, project opted in to summary ==="
+set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_prompt "what about the billing")
 assert_contains     "the entry is still named"        "$OUT" "Vocabulary: billing.md"
 assert_contains     "the author description arrives"  "$OUT" "How invoice totals are computed"
@@ -189,17 +212,19 @@ assert_not_contains "the body does NOT arrive"        "$OUT" "BILLING-BODY-MARKE
 assert_contains     "the agent is told where to read it" "$OUT" ".claude/jit-context/vocabulary/00-manual/billing.md"
 
 echo ""
-echo "=== The same entry, project set to full: the body arrives ==="
-set_config "JIT_CONTEXT_INJECT=full"
-OUT=$(run_prompt "what about the billing")
-assert_contains "the body arrives whole" "$OUT" "BILLING-BODY-MARKER"
+echo "=== An entry can opt in on its own, under the default ==="
+set_config ""
+OUT=$(run_prompt "the optin one and the billing")
+assert_contains     "an entry that says inject: summary is summarised" "$OUT" "Summary only"
+assert_not_contains "even though the project default is full"          "$OUT" "OPTIN-BODY-MARKER"
+assert_contains     "paired: its neighbour under the default still arrives whole" "$OUT" "BILLING-BODY-MARKER"
 
 # =============================================
 # SECTION 2: the per-entry override, both directions
 # =============================================
 echo ""
 echo "=== Project summary, entry says inject: full ==="
-set_config ""
+set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_prompt "billing and payments together")
 assert_contains     "the overriding entry arrives whole" "$OUT" "PAYMENTS-BODY-MARKER"
 assert_not_contains "its neighbour in the same match does not" "$OUT" "BILLING-BODY-MARKER"
@@ -217,7 +242,7 @@ assert_contains "both bodies arrive (2)" "$OUT" "PAYMENTS-BODY-MARKER"
 # =============================================
 echo ""
 echo "=== Frontmatter with no description: named, not injected ==="
-set_config ""
+set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_prompt "the nodesc thing and the billing")
 assert_contains     "the entry is named"                  "$OUT" "Vocabulary: nodesc.md"
 assert_not_contains "its body is NOT injected"            "$OUT" "NODESC-BODY-MARKER"
@@ -236,7 +261,7 @@ assert_contains "no description does not suppress a full entry" "$OUT" "NODESC-B
 # =============================================
 echo ""
 echo "=== No frontmatter: there is nothing to summarise, so the body is the entry ==="
-set_config ""
+set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_prompt "a bare entry and the billing")
 assert_contains     "the frontmatter-less body arrives" "$OUT" "BARE-BODY-MARKER"
 assert_not_contains "paired: the entry WITH frontmatter beside it does not" "$OUT" "BILLING-BODY-MARKER"
@@ -246,7 +271,7 @@ assert_not_contains "paired: the entry WITH frontmatter beside it does not" "$OU
 # =============================================
 echo ""
 echo "=== inject: gated in an entry -- unknown, so the project default applies ==="
-set_config ""
+set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_prompt "the weird one")
 assert_not_contains "the body does not arrive"     "$OUT" "WEIRD-BODY-MARKER"
 assert_contains     "the description does"         "$OUT" "Wants a mode that does not exist"
@@ -258,8 +283,10 @@ echo "=== JIT_CONTEXT_INJECT=gated in config.env -- refused like any other bad l
 set_config "JIT_CONTEXT_INJECT=gated"
 OUT=$(run_prompt "what about the billing")
 assert_contains     "the refusal is reported"   "$OUT" "were refused"
-assert_not_contains "and the default still applied" "$OUT" "BILLING-BODY-MARKER"
-assert_contains     "positive control: the entry still fired" "$OUT" "How invoice totals are computed"
+# The default is `full`, so an unknown value falling back to it is the SAFE direction:
+# a project that mistyped its setting keeps what it had rather than losing it.
+assert_contains     "and the default still applied" "$OUT" "BILLING-BODY-MARKER"
+assert_contains     "positive control: the entry still fired" "$OUT" "Vocabulary: billing.md"
 
 echo ""
 echo "=== JIT_CONTEXT_INJECT=full in config.env -- honoured, and NOT refused ==="
@@ -273,7 +300,7 @@ assert_contains     "and it takes effect"             "$OUT" "BILLING-BODY-MARKE
 # =============================================
 echo ""
 echo "=== A very long description is clipped ==="
-set_config ""
+set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_prompt "longdesc please")
 assert_contains     "the start of it arrives" "$OUT" "LONGDESCSTART"
 assert_not_contains "the end of it does not"  "$OUT" "LONGDESCEND"
@@ -285,7 +312,7 @@ assert_contains     "paired: a short description arrives whole" \
 # =============================================
 echo ""
 echo "=== Paths dimension ==="
-set_config ""
+set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_path "src/Commands/Deploy.php")
 assert_contains     "the description arrives" "$OUT" "Every command extends CommandBase"
 assert_not_contains "the body does not"       "$OUT" "COMMANDS-BODY-MARKER"
@@ -295,7 +322,7 @@ assert_contains "under full, the body does"   "$OUT" "COMMANDS-BODY-MARKER"
 
 echo ""
 echo "=== Tools dimension, a remind rule ==="
-set_config ""
+set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_tool "bin/phpunit tests/")
 assert_contains     "the description arrives" "$OUT" "Coverage runs take eight minutes"
 assert_not_contains "the body does not"       "$OUT" "PHPUNIT-BODY-MARKER"
@@ -312,7 +339,7 @@ assert_contains "under full, the body does"   "$OUT" "PHPUNIT-BODY-MARKER"
 # this repository exists to name.
 echo ""
 echo "=== A block rule injects its whole body even under summary ==="
-set_config ""
+set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_tool "git push origin main")
 assert_contains "the block reason is the whole entry" "$OUT" "GITPUSH-BODY-MARKER"
 assert_contains "and it is a block"                   "$OUT" '"decision":"block"'
@@ -357,7 +384,7 @@ fi
 # report the CHANGELOG points at as the answer to "nobody measures the drift".
 echo ""
 echo "=== inject: \"full\" is honoured, and counted ==="
-set_config ""
+set_config "JIT_CONTEXT_INJECT=summary"
 printf '%s\n' \
   "---" \
   "title: Quoted" \
@@ -385,6 +412,52 @@ printf '%s\t%s\n' \
   nodesc   nodesc.md \
   bare     bare.md \
   weird    weird.md \
+  optin    optin.md \
+  longdesc longdesc.md \
+  quoted   quoted.md > "$V/00-index.tsv"
+
+# =============================================
+# SECTION 9c: the exit condition is a number, not a slogan
+# =============================================
+# Default-`full` is a stage rather than a destination, and the risk it carries is issue
+# #1s own objection one level up: a setting nobody revisits stays at maximum by inertia.
+# What makes it reconsiderable is a measured figure for THIS tree, so the report has to
+# name what a match costs, what it would cost summarised, and what stands in the way.
+echo ""
+echo "=== rebuild-tsv reports what a match costs, and what blocks the flip ==="
+set_config ""
+REPORT=$(CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh" 2>&1 >/dev/null)
+assert_contains "it says which default is in force"   "$REPORT" "JIT_CONTEXT_INJECT=full"
+assert_contains "it prices one match, not the corpus" "$REPORT" "cost of ONE match, not a total"
+assert_contains "with a summarised figure beside it"  "$REPORT" "summarised"
+# nodesc.md and bare.md carry no usable description: -- that is the distance between this
+# tree and being able to flip, and it has to be named rather than counted in silence.
+assert_contains "it names the entries that block the flip" "$REPORT" "carry no description:"
+assert_contains "and names one of them"                    "$REPORT" "nodesc.md"
+# Paired, in the same report: an entry that CAN be summarised is not listed as blocking.
+assert_not_contains "and does not name one that can be summarised" "$REPORT" "  .claude/jit-context/vocabulary/00-manual/billing.md"
+
+# The other side of the same question: a tree with nothing in the way says so, because
+# "2 entries block this" and "nothing blocks this" must not read identically.
+CLEAN_DIR=$(mktemp -d)
+mkdir -p "$CLEAN_DIR/.claude/jit-context/vocabulary/00-manual"
+printf '%s\n' "---" "title: Clean" "description: Has one." "keywords: clean" "---" "" "body" \
+  > "$CLEAN_DIR/.claude/jit-context/vocabulary/00-manual/clean.md"
+CLEAN_REPORT=$(CLAUDE_PROJECT_DIR="$CLEAN_DIR" bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh" 2>&1 >/dev/null)
+assert_contains     "a tree with nothing in the way says the flip is available" \
+                    "$CLEAN_REPORT" "can move to summary"
+assert_not_contains "and does not also claim something blocks it" \
+                    "$CLEAN_REPORT" "carry no description:"
+rm -rf "$CLEAN_DIR"
+
+# rebuild-tsv.sh rewrote the fixture indexes again.
+printf '%s\t%s\n' \
+  billing  billing.md \
+  payments payments.md \
+  nodesc   nodesc.md \
+  bare     bare.md \
+  weird    weird.md \
+  optin    optin.md \
   longdesc longdesc.md \
   quoted   quoted.md > "$V/00-index.tsv"
 
@@ -404,6 +477,7 @@ printf '%s\t%s\n' \
 # Every assertion here runs once per awk on this machine, through a PATH shim.
 echo ""
 echo "=== A clipped description stays valid UTF-8 on every awk here ==="
+# The clip only happens on the summary path, so this section opts in explicitly.
 
 # 1 ASCII byte then 300 two-byte characters, so byte 400 -- the cap -- falls on the
 # SECOND byte of a character rather than between two. An even-length prefix would put
@@ -418,7 +492,7 @@ printf '%s\n' \
   "" \
   "MB-BODY-MARKER" > "$V/multibyte.md"
 printf 'multibyte\tmultibyte.md\n' >> "$V/00-index.tsv"
-set_config ""
+set_config "JIT_CONTEXT_INJECT=summary"
 
 ENGINE_BIN=$(mktemp -d)
 ENGINES=""

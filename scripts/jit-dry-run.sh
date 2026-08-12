@@ -259,8 +259,8 @@ TREE_INJECT="$(
   # `if`, not `case`. A `case` pattern ends in an unbalanced `)`, and inside $( ) the
   # bash on macOS reads that as closing the command substitution -- a syntax error at
   # parse time, so nothing in this file after it ran at all.
-  _v="${JIT_CONTEXT_INJECT:-summary}"
-  if [ "$_v" != summary ] && [ "$_v" != full ]; then _v=summary; fi
+  _v="${JIT_CONTEXT_INJECT:-full}"
+  if [ "$_v" != summary ] && [ "$_v" != full ]; then _v=full; fi
   printf '%s' "$_v"
 )"
 
@@ -631,10 +631,11 @@ check_index_current "$BASE/paths/00-manual" paths "paths/00-manual"
 # its whole body when it fires, whatever the mode says, because the call is already
 # stopped and there is no next turn to spend a cheaper answer in.
 WHOLE=0
+NODESC=0
 WHOLE_LINES=""
 list_whole() {
   # $1 layer dir, $2 label
-  local dir="$1" label="$2" md name inj eff why size
+  local dir="$1" label="$2" md name inj eff why size desc
   [ -d "$dir" ] || return 0
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -647,6 +648,10 @@ list_whole() {
     [ -L "$md" ] && continue
     [ "${JIT_SYMLINKS_ALL:-}" = "1" ] && continue
     inj="$(jit_frontmatter inject "$md" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    # Counted whatever the mode is: under `full` it is the distance to being able to flip,
+    # and under `summary` it is a set of entries a match can only name.
+    desc="$(jit_frontmatter description "$md")"
+    [ -n "$desc" ] || NODESC=$((NODESC + 1))
     why=""
     if [ "$(sed -n 1p "$md")" != "---" ]; then
       eff=full; why="no frontmatter, so there is nothing to summarise"
@@ -680,11 +685,25 @@ done
 unset _d
 echo ""
 echo "injection default for this tree: $TREE_INJECT"
-if [ "$WHOLE" -gt 0 ]; then
-  printf '%s' "$WHOLE_LINES"
-  [ "$WHOLE" -gt 10 ] && echo "         ... and $((WHOLE - 10)) more"
+if [ "$TREE_INJECT" = full ]; then
+  # Under the default, EVERY entry arrives whole, so listing them one per line says
+  # nothing a single sentence does not. What is worth naming here is the count that
+  # stands between this tree and being able to flip -- the sizes are rebuild-tsv.sh job,
+  # and printing them twice in two tools is how the two drift.
+  echo "every match on this tree injects the whole entry body."
+  if [ "$NODESC" -gt 0 ]; then
+    echo "$NODESC entr(ies) carry no description:, so summary mode could only NAME them."
+    echo "Run scripts/rebuild-tsv.sh in that tree for the per-match sizes and the names."
+  else
+    echo "Every entry carries a description:, so JIT_CONTEXT_INJECT=summary is available."
+  fi
+else
+  if [ "$WHOLE" -gt 0 ]; then
+    printf '%s' "$WHOLE_LINES"
+    [ "$WHOLE" -gt 10 ] && echo "         ... and $((WHOLE - 10)) more"
+  fi
+  echo "$WHOLE entr(ies) would arrive whole; every other match injects its title and description: only."
 fi
-echo "$WHOLE entr(ies) would arrive whole; every other match injects its title and description: only."
 
 echo ""
 # Two counts, not one: a substring row has no regex to compile, so folding it into the
@@ -769,6 +788,26 @@ json_quote() {
   }'
 }
 
+# The BYTES a hook actually injected -- measured off the hook own output, not arithmetic
+# over the corpus. This is the honest per-call number: a sample call has a frequency of
+# exactly one, so nothing has to be assumed about how often anything fires. rebuild-tsv.sh
+# carries the other half, what a match would cost summarised, and keeping the two apart is
+# what stops them drifting into disagreement.
+#
+# The length of the additionalContext / reason payload, which is what reaches the model,
+# rather than of the whole JSON envelope. A hook that said nothing reports 0.
+injected_bytes() {
+  printf '%s' "$1" | awk '
+    { s = s $0 }
+    END {
+      k = index(s, "\"additionalContext\":\"")
+      if (k > 0) { s = substr(s, k + 21); sub(/"}}$/, "", s); print length(s); exit }
+      k = index(s, "\"reason\":\"")
+      if (k > 0) { s = substr(s, k + 10); sub(/"}$/, "", s); print length(s); exit }
+      print 0
+    }'
+}
+
 report_hook() {
   # $1 hook script, $2 JSON payload, $3 project dir
   local out names verdict errf annotated nm fired summarised
@@ -837,7 +876,7 @@ report_hook() {
         annotated="$annotated$nm(summary and WHOLE BODY, $fired entries share this name) "
       fi
     done
-    printf '  %s%-20s %s\n' "$verdict" "$1" "${annotated% }"
+    printf '  %s%-20s %s[%s bytes injected]\n' "$verdict" "$1" "$annotated" "$(injected_bytes "$out")"
   fi
 }
 

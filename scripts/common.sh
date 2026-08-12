@@ -766,44 +766,60 @@ elif [ -f "$JIT_BASE/config.env" ]; then
 fi
 
 # --- What a match injects ----------------------------------------------------
-# Until 0.4.0 a match injected the entry BODY, whole, every time. The cost of that is
-# asymmetric and it is the asymmetry that is the defect, not the accuracy: a miss costs
-# nothing and a false positive costs the whole entry. The case on issue #1 is a 14.9 KB
-# reference arriving on the word `tag` in a conversation about YAML metadata -- a match
-# that was word-bounded, correctly evaluated, and 15,000 tokens wrong.
+# A match injects the entry BODY, whole. The cost of that is asymmetric and the asymmetry
+# is the defect, not the accuracy: a miss costs nothing and a false positive costs the
+# whole entry. The case on issue #1 is a 14.9 KB reference arriving on the word `tag` in
+# a conversation about YAML metadata -- a match that was word-bounded, correctly
+# evaluated, and 15,000 tokens wrong.
 #
-# So the default is now the entry title plus its author-written `description:`, roughly
-# 20 tokens, and the agent decides whether to read the file. Being wrong got cheap
-# instead of the matcher getting cleverer.
+# `summary` is the answer to that: the entry title plus its author-written
+# `description:`, roughly 20 tokens, and the agent decides whether to read the file.
+# Being wrong gets cheap instead of the matcher getting cleverer.
 #
-# WHO CHOOSES is the whole argument, and it is the part a later reader will get wrong.
-# Issue #1 rejects an `inject: full | summary` frontmatter flag, in its own body, and the
-# objection still stands as written:
+# It is NOT the default, and the reason is upgrade safety rather than doubt about the
+# trade. A project that installed this before the mode existed has entries that arrive
+# whole and agents that behave as though they will. Flipping that under them, on an
+# upgrade nobody read the notes for, takes away knowledge the project already relies on
+# and does it silently -- an absence produced by the tool, read as an absence in the
+# world, which is the one failure this repository exists to name. So `full` is what a
+# tree gets when it has said nothing, and `summary` is where a project goes once it has
+# looked at what a match costs and decided the trade is worth it.
+#
+# DEFAULT-FULL IS A STAGE, NOT A DESTINATION. The risk it carries is exactly issue #1s
+# own objection one level up: a setting nobody revisits stays at maximum by inertia, and
+# "we will move to summary later" becomes a sentence nobody ever acts on. The exit is
+# meant to be measurable, so rebuild-tsv.sh prints what one match costs on THIS tree --
+# largest, median, and what those same entries would cost summarised -- and names the
+# entries that carry no `description:` yet, which is the work between a tree and being
+# able to flip. When that count is zero and the numbers look worth it, flip it.
+#
+# WHO CHOOSES is the other half, and it is the part a later reader will get wrong. Issue
+# #1 rejects an `inject: full | summary` frontmatter flag, in its own body:
 #
 #     The value would be self-assessed by whoever writes the entry, and every author
 #     believes their own entry is the critical one. Within a month every entry is `full`
 #     and the flag has bought nothing.
 #
-# That objection is about the CHOOSER. Here the default is set by the PROJECT OWNER, in
-# config.env -- the person whose context window fills up -- and rebuild-tsv.sh counts the
-# `full` population at build time the way it already counts ambiguous keywords, so the
-# drift the objection predicts is a number somebody reads rather than a slow silence. A
-# flag nobody pays for goes to maximum; a flag the chooser pays for does not.
+# That objection is about the CHOOSER, and it still stands. The default here is set by
+# the PROJECT OWNER in config.env -- the person whose context window fills up -- not by
+# the author of an entry. The per-entry `inject:` override is still an author choice, and
+# it is deliberate: it overrides a default the project set, and rebuild-tsv.sh counts the
+# population at build time, so an author marking everything `full` is marking it against
+# a number somebody reads.
 #
 # If you are about to revert this as "the mode flag we already rejected": check who does
 # the choosing first.
-#
-# The per-entry `inject:` override remains an author choice, and that is deliberate too --
-# it is an override of a default the project set, visible in the build-time count, and an
-# author who marks everything `full` is now marking it against a budget somebody sees.
-JIT_INJECT="${JIT_CONTEXT_INJECT:-summary}"
+JIT_INJECT="${JIT_CONTEXT_INJECT:-full}"
 # The config.env path already refused an unknown value by line number. This clamp is for
 # every OTHER way the variable can arrive -- an exported environment variable from a
 # runner or a test -- where there is no line to name. Refusing to run would be the fail
 # hard this file forbids, and honouring an unknown word would be worse than either.
+#
+# It falls back to `full`, which is the SAFE direction for a fallback: a project whose
+# setting could not be honoured keeps what it had rather than quietly losing it.
 case "$JIT_INJECT" in
   summary|full) ;;
-  *) JIT_INJECT=summary ;;
+  *) JIT_INJECT=full ;;
 esac
 
 # Pipeline log: _log "step" duration_ms "message"  → [HH:MM:SS.mmm] step 42ms | message
@@ -1410,8 +1426,8 @@ function jit_config_notice(list, n) {
 # note -- where a new column would leave a stale committed index in every project that
 # has one, with session-start-hook.sh clearing markers and rebuilding nothing.
 #
-# It is also FASTER than what it replaces on the common path: in summary mode the read
-# stops at the closing `---`, so a large entry costs its frontmatter instead of its body.
+# Summary mode is also FASTER than reading the whole file: the read stops at the closing
+# `---`, so a large entry costs its frontmatter instead of its body.
 # Measured 2026-08-12 on macOS, awk version 20200816, a 31.6 KB entry matched by one
 # keyword, 60 invocations per arm and three interleaved rounds to cancel machine load:
 # 32.6 / 32.8 / 35.8 ms per invocation reading the whole file, against 29.1 / 28.0 / 30.3
