@@ -60,6 +60,26 @@ the user to do anything beyond opening the project.
   been what told two otherwise identical notice lines apart; withholding it without adding
   the dimension would have closed one hole by making the remaining line ambiguous.
 
+- **A tree with thousands of symbolic links disabled every rule, loudly.** The set of links
+  the hooks refuse travels to `awk` through the environment and was unbounded. Past `ARG_MAX`
+  — roughly 4000 attacker-named links — every `exec` from `common.sh` onward failed: the hook
+  emitted **nothing**, exited 0, printed `Argument list too long` to the session's stderr,
+  and a `block` rule that was present, indexed and honourable **did not block**. It failed
+  *open*, and it broke both of this project's standing contracts at once. An earlier record
+  described this as failing closed and silently; it was wrong on both counts.
+
+  The set is now capped in bytes — 8192, far above any honest tree, far below the smallest
+  environment limit on any leg of CI. Crossing that cap does not mean enumerating less and
+  carrying on, which is failing open with extra steps: it refuses **every row in the tree**
+  and says so, because a tree nobody can enumerate is a tree nobody can vouch for.
+  `jit-dry-run.sh` reaches the same verdict.
+
+  The same channel, one file over: `config.env`'s refusal list was unbounded too, and 30000
+  bad lines silenced the hooks identically. Found while fixing the above, not filed. The list
+  is capped; the **count is not**, and the notice says plainly that the rest are not listed —
+  a truncated report that also under-counted would be the defect this repository exists to
+  remove, wearing a fix as a disguise.
+
 - **`config.env` was executed as shell on every prompt and every tool call.** `common.sh`
   dot-sourced it, so a repository shipping a `.claude/jit-context/config.env` ran whatever
   was in it. Reproduced: a file containing `echo … >&2` printed, and one containing

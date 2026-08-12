@@ -353,6 +353,12 @@ there, or generate the layer. Directories *above* your project are yours rather 
 clone's and are not checked, so a project reached through a symlinked parent works
 normally.
 
+**A tree carrying an implausible number of symbolic links is refused whole.** The check
+above has to hold the links it found, and that has a size; past it, a repository could
+choose a number large enough to disable every rule including the ones guarding it. Above the
+budget no rule in that tree runs, and the hook says why. An honest tree records zero links
+and never comes near it.
+
 **An entry file name may not begin with a dot.** That is the one constraint on the name, and
 it exists because the symbolic-link check above is a glob-and-`lstat` sweep of the tree: a
 glob does not match a leading dot, so `.hidden.md` was invisible to it and a link named that

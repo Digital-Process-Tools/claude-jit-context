@@ -422,6 +422,88 @@ SWEPT="$(sweep_of "$P")"
 assert_not_contains "sweep: an honest tree records no link at all" "$SWEPT" "/tools"
 
 echo ""
+echo "=== S3f: a tree with more links than the set can carry (#36) ==="
+
+# JIT_SYMLINKS travels through the environment. It was unbounded, so past ARG_MAX every
+# exec from common.sh onward failed: the hook emitted NOTHING, exited 0, printed
+# "Argument list too long" to the session stderr, and a block rule that was present,
+# indexed and honourable did not block. Both of this repo standing contracts at once --
+# never fail hard, never write to a session stderr -- and it failed OPEN, not closed.
+#
+# Roughly 4000 attacker-named links did it on the audit host. Cheap for a hostile clone,
+# unreachable for an honest tree.
+#
+# Driven in both directions in one fixture: the same tree, the same block rule, with and
+# without the links.
+
+P="$(new_project s3f)"
+D="$P/.claude/jit-context/tools/00-manual"
+printf 'block body here\n' > "$D/good.md"
+printf 'Bash\tsectarget\tgood.md\tblock\t\t\n' > "$D/00-index.tsv"
+# A vocabulary row too, because the prompt hook reads only that dimension: with no row there
+# is nothing to refuse and the prompt hook would correctly say nothing, which is not what
+# this case is asking about.
+printf 'vocab body here\n' > "$P/.claude/jit-context/vocabulary/00-manual/vocab.md"
+printf 'sectarget\tvocab.md\n' > "$P/.claude/jit-context/vocabulary/00-manual/00-index.tsv"
+
+# Direction one: the honest tree. The block rule blocks.
+OUT="$(run_hook pre-tool-hook.sh "$P" "$TOOL_PAYLOAD")"
+assert_contains "s3f control: an honourable block rule blocks before the links exist" "$OUT" '"decision":"block"'
+
+# Now bury it. Names are padded so the byte budget is crossed with a few dozen links rather
+# than a few thousand -- the budget is on BYTES, which is the quantity ARG_MAX is about, and
+# 4000 short names and 40 long ones are the same problem.
+PAD="$(printf 'p%.0s' $(seq 1 190))"
+i=0
+while [ "$i" -lt 200 ]; do
+  i=$((i + 1))
+  ln -s /etc/hosts "$D/$PAD$i.md"
+done
+
+OUT="$(run_hook pre-tool-hook.sh "$P" "$TOOL_PAYLOAD")"
+RC=$?
+assert_not_contains "s3f: nothing is written to the session stderr" "$OUT" "Argument list too long"
+assert_contains "s3f: the hook still emits JSON rather than nothing at all" "$OUT" "hookEventName"
+assert_contains "s3f: and it refuses the tree rather than running unguarded" "$OUT" "too many symbolic links"
+assert_not_contains "s3f: a rule in a tree nobody can vouch for does not fire" "$OUT" "block body here"
+if [ "$RC" -eq 0 ]; then
+  PASS=$((PASS + 1)); echo "  PASS: s3f: the hook still exits 0"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: s3f: the hook exited $RC, expected 0"
+fi
+
+# The other two hooks reach common.sh the same way, so they fail the same way.
+OUT="$(run_hook pre-prompt-hook.sh "$P" "$PROMPT_PAYLOAD")"
+assert_not_contains "s3f: prompt hook writes nothing to stderr either" "$OUT" "Argument list too long"
+assert_contains "s3f: prompt hook reports the refused tree too" "$OUT" "too many symbolic links"
+OUT="$(run_hook pre-path-hook.sh "$P" "$PATH_PAYLOAD")"
+assert_not_contains "s3f: path hook writes nothing to stderr either" "$OUT" "Argument list too long"
+
+# Direction two, back again: remove the links and the same block rule blocks again. Without
+# this the suite would pass with the guard hardwired to refuse every tree it is ever shown.
+rm -f "$D/$PAD"*.md
+OUT="$(run_hook pre-tool-hook.sh "$P" "$TOOL_PAYLOAD")"
+assert_contains "s3f: with the links gone the block rule blocks again" "$OUT" '"decision":"block"'
+assert_not_contains "s3f: and nothing is refused any more" "$OUT" "too many symbolic links"
+
+# jit-dry-run.sh sweeps the tree it was pointed at, so it reaches the same wall and must
+# reach the same verdict rather than clearing the tree.
+i=0
+while [ "$i" -lt 200 ]; do
+  i=$((i + 1))
+  ln -s /etc/hosts "$D/$PAD$i.md"
+done
+OUT="$(bash "$SCRIPTS/jit-dry-run.sh" --base "$P/.claude/jit-context" --tool Bash --command "sectarget run" 2>&1)"
+RC=$?
+assert_contains "s3f: the linter refuses the tree too" "$OUT" "too many symbolic links"
+assert_not_contains "s3f: and does not print Argument list too long" "$OUT" "Argument list too long"
+if [ "$RC" -eq 1 ]; then
+  PASS=$((PASS + 1)); echo "  PASS: s3f: the linter exits 1"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: s3f: the linter exited $RC, expected 1"
+fi
+
+echo ""
 echo "=== jit-dry-run.sh reaches the same verdict ==="
 
 # The refusal notice the hooks inject tells the author to lint the tree with this script.

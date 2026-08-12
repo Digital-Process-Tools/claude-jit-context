@@ -38,6 +38,33 @@ JIT_BASE="${CLAUDE_PROJECT_DIR:-.}/.claude/jit-context"
 # before the program runs.
 export JIT_SYMLINKS=""
 
+# ...and the environment has a size. JIT_SYMLINKS was unbounded, so a tree with roughly 4000
+# attacker-named links pushed the environment past ARG_MAX and every exec from this file
+# onward failed with E2BIG. The hook then emitted NOTHING, exited 0, printed "Argument list
+# too long" to the session stderr, and a block rule that was present, indexed and honourable
+# did not block. It failed OPEN and it was loud about it -- both of this file standing
+# contracts broken at once, by a quantity the repository being cloned chooses.
+#
+# So the set is CAPPED, in bytes rather than in entries: bytes are the quantity ARG_MAX is
+# about, and 4000 short names and 40 long ones are the same problem. Crossing the cap is not
+# a reason to enumerate less and carry on -- that is failing open with extra steps. It sets
+# a sentinel that refuses EVERY row in the tree, because a tree nobody can enumerate is a
+# tree nobody can vouch for. The sweep stops there, which also bounds its own cost: the
+# accumulation is a string append per link and quadratic in the count.
+#
+# 8192 is far above any honest tree. An honest tree records ZERO links; the cases that
+# legitimately record a few are a project opened through a linked parent, which records two.
+# It is far below the smallest ARG_MAX on any leg of CI -- including Windows, where the
+# limit that bites is the 32767-character process environment block rather than ARG_MAX.
+#
+# A temp file was the other option and is worse here: it is a fork per hook invocation on a
+# path that must stay under 110 ms, it needs cleanup on every exit path, and it puts a
+# predictable new file next to a tree we have just decided is hostile -- reopening the class
+# of defect this whole sweep exists to close. A cap needs none of that and bounds the thing
+# that actually broke.
+JIT_SYMLINKS_MAX=8192
+export JIT_SYMLINKS_ALL=""
+
 # Populated shallow-to-deep, so a directory already in the set marks its children too --
 # a regular file inside a linked layer directory is not itself a link, and lstat on it
 # says nothing. Membership is a newline-delimited substring test, because macOS ships
@@ -51,6 +78,7 @@ JIT_NL="
 jit_scan_symlinks() {
   local base="$1" f parent found=0
   JIT_SYMLINKS="$JIT_NL"
+  JIT_SYMLINKS_ALL=""
   # `.claude/` is inside the repository too, and git carries it as a link like anything
   # else, so `.claude -> /elsewhere` reaches the same disclosure one level above anything
   # the glob below can see -- with a jit-context/ inside the target it needs nothing in the
@@ -81,6 +109,15 @@ jit_scan_symlinks() {
     if [ -L "$f" ]; then
       JIT_SYMLINKS="$JIT_SYMLINKS$f$JIT_NL"
       found=1
+      # See JIT_SYMLINKS_MAX above. Checked at the two places that grow the set, and the
+      # sweep RETURNS rather than continuing: a partial list is a list that clears rows it
+      # never looked at, which is the failure this is here to stop.
+      if [ "${#JIT_SYMLINKS}" -gt "$JIT_SYMLINKS_MAX" ]; then
+        JIT_SYMLINKS="$JIT_NL"
+        JIT_SYMLINKS_ALL=1
+        export JIT_SYMLINKS JIT_SYMLINKS_ALL
+        return 0
+      fi
       continue
     fi
     # The parent test is skipped entirely until a link has actually been seen, and on a
@@ -98,10 +135,21 @@ jit_scan_symlinks() {
     [ "$f" != "$base" ] || continue
     parent="${f%/*}"
     case "$JIT_SYMLINKS" in
-      *"$JIT_NL$parent$JIT_NL"*) JIT_SYMLINKS="$JIT_SYMLINKS$f$JIT_NL" ;;
+      *"$JIT_NL$parent$JIT_NL"*)
+        JIT_SYMLINKS="$JIT_SYMLINKS$f$JIT_NL"
+        # The second place the set grows. A linked layer directory can carry an unbounded
+        # number of ordinary files, every one of which is recorded here, so capping only the
+        # branch above would have left the same hole one indirection away.
+        if [ "${#JIT_SYMLINKS}" -gt "$JIT_SYMLINKS_MAX" ]; then
+          JIT_SYMLINKS="$JIT_NL"
+          JIT_SYMLINKS_ALL=1
+          export JIT_SYMLINKS JIT_SYMLINKS_ALL
+          return 0
+        fi
+        ;;
     esac
   done
-  export JIT_SYMLINKS
+  export JIT_SYMLINKS JIT_SYMLINKS_ALL
 }
 
 jit_scan_symlinks "$JIT_BASE"
@@ -180,8 +228,36 @@ _ts() { perl -MTime::HiRes -MPOSIX -e 'my $t=Time::HiRes::time(); printf("%s.%03
 # in string" -- raised before the program runs, so the hook printed nothing at all and
 # exited 0. A single refused line has no separator and hid that completely; two lines
 # silenced the whole hook. The channel for reporting a silent failure must not have one.
+#
+# And it is CAPPED, for the reason JIT_SYMLINKS is: config.env arrives with the repository,
+# so its length is chosen by the clone, and one refusal line per bad line was unbounded. A
+# config.env of 30000 unknown settings pushed the environment past ARG_MAX; every exec from
+# this file onward failed, the hook emitted nothing, exited 0, and printed "Argument list too
+# long" to the session stderr. Same shape as #36, one channel over, found while fixing it.
+#
+# The COUNT is not capped, only the list. A truncated list that also under-counted would be
+# this repo own defect class wearing a fix as a disguise: a report that reads as complete and
+# is not. The notice says how many were refused, lists what fits, and says plainly that the
+# rest are not there.
+JIT_CONFIG_REFUSED_MAX=4096
 export JIT_CONFIG_REFUSED=""
 export JIT_CONFIG_REFUSED_N=0
+
+# One appender, so there is one place the cap is applied. Two call sites grew this string
+# before and capping either alone would have left the other unbounded.
+JIT_CONFIG_REFUSED_CUT=0
+jit_config_refuse() {
+  # $1 line number, $2 reason
+  JIT_CONFIG_REFUSED_N=$((JIT_CONFIG_REFUSED_N + 1))
+  if [ "${#JIT_CONFIG_REFUSED}" -gt "$JIT_CONFIG_REFUSED_MAX" ]; then
+    if [ "$JIT_CONFIG_REFUSED_CUT" = 0 ]; then
+      JIT_CONFIG_REFUSED_CUT=1
+      JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED$JIT_NL- the remaining refused lines are not listed here; the count above is the whole total"
+    fi
+    return 0
+  fi
+  JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED${JIT_CONFIG_REFUSED:+$JIT_NL}- line $1: $2"
+}
 
 jit_load_config() {
   local file="$1" line key value reason q rest tail lineno=0
@@ -210,8 +286,7 @@ jit_load_config() {
       reason="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
     fi
     if [ -n "$reason" ]; then
-      JIT_CONFIG_REFUSED_N=$((JIT_CONFIG_REFUSED_N + 1))
-      JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED${JIT_CONFIG_REFUSED:+$'\n'}- line $lineno: $reason"
+      jit_config_refuse "$lineno" "$reason"
       continue
     fi
 
@@ -251,8 +326,7 @@ jit_load_config() {
         ;;
     esac
     if [ -n "$reason" ]; then
-      JIT_CONFIG_REFUSED_N=$((JIT_CONFIG_REFUSED_N + 1))
-      JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED${JIT_CONFIG_REFUSED:+$'\n'}- line $lineno: $reason"
+      jit_config_refuse "$lineno" "$reason"
       continue
     fi
     printf -v "$key" '%s' "$value"
@@ -600,6 +674,11 @@ function jit_log_name(f, layer, rown, why) {
 # The set built by jit_scan_symlinks() in the bash half, keyed by full path. Loaded once
 # per awk process, lazily, so a hook whose tree has no index pays nothing for it.
 function jit_symlinked(p,   n, i, a) {
+  # The sentinel first. When the bash sweep could not carry the set within its byte budget
+  # it enumerates NOTHING and says so here instead -- a tree nobody can enumerate is a tree
+  # nobody can vouch for, so every path in it answers yes. Any future caller of this
+  # function inherits that without having to know the sentinel exists.
+  if (ENVIRON["JIT_SYMLINKS_ALL"] == "1") return 1
   if (!jit_sym_init) {
     jit_sym_init = 1
     n = split(ENVIRON["JIT_SYMLINKS"], a, "\n")
@@ -636,7 +715,12 @@ function jit_bad_entry_file(f, dir) {
   # file name that works today. tests/test-security.sh pins both directions.
   if (substr(f, 1, 1) == ".") return "the entry file name begins with a dot, so rename it without one"
   if (dir != "") {
-    # The directory first: when the layer itself is a link, every row in it is unreadable
+    # The whole-tree sentinel first, and with its own reason: "its layer directory is a
+    # symbolic link" would be a specific claim about a specific path that nobody checked.
+    # Saying what actually happened is the point -- an author whose tree is refused for this
+    # has a different thing to fix from an author whose layer is a link.
+    if (ENVIRON["JIT_SYMLINKS_ALL"] == "1") return "this tree has too many symbolic links to check, so every row in it is refused"
+    # The directory next: when the layer itself is a link, every row in it is unreadable
     # for the same reason, and naming the file would point the author at the wrong thing.
     if (jit_symlinked(dir)) return "its layer directory is a symbolic link"
     if (jit_symlinked(dir "/" f)) return "the entry file is a symbolic link"

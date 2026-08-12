@@ -314,6 +314,46 @@ assert_contains "and so does the tool hook on a call that matched nothing" "$OUT
 rm -rf "$PROJ"
 
 echo ""
+echo "=== S1: a config.env with thousands of bad lines does not silence the hook (#36) ==="
+# JIT_CONFIG_REFUSED travels through the environment for the reason documented in common.sh,
+# and it was unbounded: one refused line per bad line, no cap. config.env arrives with the
+# repository, so its length is attacker-chosen -- and past ARG_MAX every exec from common.sh
+# onward fails, the hook emits nothing, exits 0, and prints "Argument list too long" to the
+# session stderr. Same failure as the symbolic-link set in #36, one channel over, unfiled.
+#
+# The count must stay TRUE even when the list is cut: a truncated list that also under-counts
+# would be this repo own defect class, a report that reads as complete and is not.
+PROJ=$(new_proj); BASE="$PROJ/.claude/jit-context"
+printf 'entry body P\n' > "$BASE/tools/00-manual/legit-p.md"
+printf 'Bash\tptarget\tlegit-p.md\tremind\t\t\n' > "$BASE/tools/00-manual/00-index.tsv"
+i=0
+: > "$BASE/config.env"
+while [ "$i" -lt 900 ]; do
+  i=$((i + 1))
+  printf 'BOGUS_SETTING_%d=1\n' "$i" >> "$BASE/config.env"
+done
+OUT=$(printf '{"tool_name":"Bash","tool_input":{"command":"ptarget now"}}' \
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPTS/pre-tool-hook.sh" 2>&1)
+assert_not_contains "nothing is written to the session stderr" "$OUT" "Argument list too long"
+assert_contains "the hook still speaks" "$OUT" "hookSpecificOutput"
+assert_contains "and still does its job" "$OUT" "entry body P"
+assert_contains "the TOTAL count is reported truthfully" "$OUT" "900 line(s)"
+assert_contains "and the list says it was cut rather than pretending to be complete" "$OUT" "not listed here"
+rm -rf "$PROJ"
+
+# Paired control: a short list is still reported in full and says nothing about truncation.
+PROJ=$(new_proj); BASE="$PROJ/.claude/jit-context"
+printf 'entry body Q\n' > "$BASE/tools/00-manual/legit-q.md"
+printf 'Bash\tqtarget\tlegit-q.md\tremind\t\t\n' > "$BASE/tools/00-manual/00-index.tsv"
+printf 'not an assignment\nBOGUS_ONE=1\n' > "$BASE/config.env"
+OUT=$(printf '{"tool_name":"Bash","tool_input":{"command":"qtarget now"}}' \
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPTS/pre-tool-hook.sh" 2>&1)
+assert_contains "a short list still names line 1" "$OUT" "line 1: not a KEY=VALUE assignment"
+assert_contains "and line 2" "$OUT" "line 2: unknown setting"
+assert_not_contains "and claims no truncation" "$OUT" "not listed here"
+rm -rf "$PROJ"
+
+echo ""
 echo "=== S1: a documented setting still takes effect (bare value) ==="
 # Driven in BOTH directions: vocab-by-path is off by default, so the same call must be
 # silent without the setting and must fire with it. Asserting only that the hook printed
