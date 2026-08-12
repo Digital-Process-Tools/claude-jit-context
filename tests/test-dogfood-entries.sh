@@ -73,10 +73,44 @@ assert_silent "a doc that is not an entry" "docs/contributing.md" "entries.md"
 assert_silent "the README"                 "README.md"            "entries.md"
 
 echo ""
-echo "=== hooks.md fires on a hook script, and only on one ==="
-assert_fires  "a hook script"          "scripts/pre-path-hook.sh" "hooks.md"
-assert_silent "a non-hook script"      "scripts/rebuild-tsv.sh"   "hooks.md"
+echo "=== hooks.md fires on code that runs in someone else session ==="
+assert_fires  "a hook script"          "scripts/pre-path-hook.sh"  "hooks.md"
+assert_fires  "the session-start hook" "scripts/session-start-hook.sh" "hooks.md"
+# common.sh is sourced by all four hooks, so every sentence in hooks.md applies to it
+# verbatim -- and it is where every containment fix in 0.3.0 landed. It carried no rule
+# at all until #42.
+assert_fires  "the shared library"     "scripts/common.sh"         "hooks.md"
+# The three tooling scripts must NOT get this entry. "Every failure path exits 0" is
+# actively wrong for rebuild-tsv.sh, and jit-dry-run.sh exits 1 and 2 on purpose. A false
+# rule fires more expensively than no rule, because it arrives with the same authority.
+assert_silent "the index writer"       "scripts/rebuild-tsv.sh"    "hooks.md"
+assert_silent "the linter"             "scripts/jit-dry-run.sh"    "hooks.md"
+assert_silent "the miss reporter"      "scripts/jit-misses.sh"     "hooks.md"
 assert_silent "a test for a hook"      "tests/test-pre-path-hook.sh" "hooks.md"
+# Same defect class as the scratchpad path above: an unanchored pattern matches the
+# fragment wherever it appears, so a directory ENDING in "scripts" claims the rule.
+assert_silent "a lookalike directory"  "myscripts/common.sh"       "hooks.md"
+
+echo ""
+echo "=== tooling.md fires on the three build and diagnostic scripts ==="
+assert_fires  "the index writer"       "scripts/rebuild-tsv.sh"    "tooling.md"
+assert_fires  "the linter"             "scripts/jit-dry-run.sh"    "tooling.md"
+assert_fires  "the miss reporter"      "scripts/jit-misses.sh"     "tooling.md"
+# The inverse of the split above: these run in someone else session and are governed by
+# hooks.md, so the tooling contract must not reach them.
+assert_silent "a hook script"          "scripts/pre-tool-hook.sh"  "tooling.md"
+assert_silent "the shared library"     "scripts/common.sh"         "tooling.md"
+assert_silent "a suite about a tool"   "tests/test-jit-dry-run.sh" "tooling.md"
+assert_silent "a lookalike directory"  "vendor/subscripts/jit-misses.sh" "tooling.md"
+
+echo ""
+echo "=== tests.md fires on a suite, and only on a suite ==="
+assert_fires  "a hook suite"           "tests/test-pre-path-hook.sh" "tests.md"
+assert_fires  "the runner"             "tests/run-all.sh"          "tests.md"
+assert_silent "a hook script"          "scripts/pre-path-hook.sh"  "tests.md"
+assert_silent "the shared library"     "scripts/common.sh"         "tests.md"
+assert_silent "a fixture below tests/" "tests/fixtures/tree/setup.sh" "tests.md"
+assert_silent "a lookalike directory"  "contests/entry.sh"         "tests.md"
 
 echo ""
 echo "=== release.md fires on the manifest only ==="
