@@ -15,8 +15,11 @@ JIT_BASE="${CLAUDE_PROJECT_DIR:-.}/.claude/jit-context"
 # one link, since the linked directory carries its own 00-index.tsv. git clone recreates
 # all of them, so cloning a repository is the whole attack.
 #
-# awk cannot lstat, and the architecture is one awk process per hook with no per-row
-# subprocess. So the lstat is paid ONCE per hook invocation, here, and never per row.
+# awk cannot lstat, and the architecture is at most a couple of awk processes per hook with
+# NO per-row subprocess -- pre-path-hook.sh runs its program a second time for a Bash
+# command whose tokens name real files (#85), and that is the only exception. So the lstat
+# is paid ONCE per hook invocation, here, in the shell that both passes inherit, and never
+# per row.
 #
 # It is paid with a glob and a [ -L ] test, both of which are shell BUILTINS -- this forks
 # nothing. Measured end to end on a 1008-entry tree, interleaved against the unpatched

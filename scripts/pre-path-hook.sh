@@ -1,7 +1,10 @@
 #!/bin/bash
 # claude-jit-context — Path-based PreToolUse hook
-# Single awk process: parses JSON, matches file path against TSV patterns, outputs JSON.
-# Supports Read/Edit/Write/Glob/Grep (file_path/path) AND Bash+supertool (command field).
+# One awk program: parses JSON, matches file path against TSV patterns, outputs JSON.
+# Supports Read/Edit/Write/Glob/Grep (file_path/path) AND Bash (command field).
+# The program runs TWICE for a Bash command whose tokens name real files -- once to extract
+# the tokens, once over the ones bash confirmed exist. See the candidate section below;
+# every other payload still costs exactly one awk process.
 
 SCRIPT_DIR="$(dirname "$0")"
 source "$SCRIPT_DIR/common.sh"
@@ -159,6 +162,16 @@ function jit_cand_tokens(c, out,   nt, tk, i, t, project, plen, k) {
       else if (substr(t, 1, plen + 1) == project "/") t = substr(t, plen + 2)
       else continue
     } else if (t ~ /^[A-Za-z]:/) continue
+    # `./scripts/x.sh` and `scripts/x.sh` are the same file, and a shell prints the first
+    # form whenever a completion or a `find .` produced the token. A rule anchored with ^
+    # matches only one of them, so the two forms are folded here rather than left to every
+    # author to spell twice. Ordered before the .. checks below, so that `./../x` is
+    # refused rather than normalised out of view. Loops because gsub does not rescan what
+    # it just produced: `a/././b` needs two passes and `a///b` needs two as well.
+    while (substr(t, 1, 2) == "./") t = substr(t, 3)
+    while (t ~ /\/\.\//) sub(/\/\.\//, "/", t)
+    while (t ~ /\/\//) sub(/\/\//, "/", t)
+    sub(/\/\.$/, "", t)
     if (t == "" || substr(t, 1, 1) == "/") continue
     if (t == "." || t == "..") continue
     if (t ~ /(^|\/)\.\.(\/|$)/) continue

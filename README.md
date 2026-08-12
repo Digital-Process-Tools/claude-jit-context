@@ -462,7 +462,7 @@ still fires the rules for `src/Billing/`.
 
 Existence on disk is what makes that safe to guess at. A word in a commit message, a branch name, a flag or a package name is not a file in your checkout, so it drags no entry into context; a command with no such token matches nothing at all. The verb is never read, so `grep pattern src/Billing/Totals.php` fires the rules for that file just as `vim` does — you are about to look at it either way.
 
-Three kinds of token are refused before anything on disk is consulted, and each one is a path that would resolve outside the project you opened: anything containing a `..` component, an absolute path that is not under the project directory, and any token whose name — or any directory on the way to it — is a symbolic link. A rule fires for the files your project contains, and for nothing else.
+Four kinds of token are refused before anything on disk is consulted, because each one can resolve outside the project you opened: anything containing a `..` component, an absolute path that is not under the project directory, anything containing a backslash — an escape character here, a path separator on Windows — and any token whose name, or any directory on the way to it, is a symbolic link. A rule fires for the files your project contains, and for nothing else.
 
 ## Rebuild after every edit
 
