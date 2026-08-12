@@ -147,6 +147,72 @@ assert_silent "a fragment"             "changelog.d/70.fixed.md"    "changelog.m
 assert_silent "a lookalike name"       "docs/CHANGELOG.md.tmpl"     "changelog.md"
 
 echo ""
+echo "=== every file under scripts/ is governed by some paths/ rule ==="
+# The class behind #83 rather than the instance. `hooks.md` matches the hooks and
+# `common.sh`; `tooling.md` names its tools by hand, one alternation per script. A file that
+# is neither matched nothing, and `scripts/jit-init.sh` shipped exactly like that: the
+# repository's own knowledge said nothing about the file its author was editing, and an
+# absence produced by the tool is unreadable from an absence in the world. Widening one
+# `match` fixed that file; only a red leg fixes the next one.
+#
+# COVERED MEANS ANY paths/ RULE FIRES, not a rule from a fixed set. "hooks.md or tooling.md"
+# would be the stronger assertion and it would freeze today's two-way split into the suite:
+# a script under a third contract would be red while being perfectly documented, and the
+# leg would then be asserting the shape of the tree rather than its coverage. The question
+# asked here is the one the defect was about -- does this repository say anything at all
+# when you open this file?
+#
+# The consequence is why #83's option 2, a catch-all entry matching `scripts/` broadly, was
+# NOT built alongside this: such an entry satisfies every assertion below by construction,
+# and this leg could never go red again. The test and the catch-all do not compose.
+#
+# Scope is `scripts/`: what ships inside the plugin and runs in a user's project.
+# `.github/scripts/` is CI, and `tooling.md` reaches it today only because
+# `assemble_changelog.py` is named there -- requiring a jit-context rule for every future
+# workflow helper is a bar nobody has agreed to.
+
+# Positive control for the reading below, and it earned its place on the first run: a
+# governed file is one whose dry-run line names a `.md`, NOT one whose line is non-empty.
+# jit-dry-run.sh prints the words "no rule fired" for a miss, precisely so a hook that
+# matched nothing cannot read as a hook that fired -- so the first draft of this section
+# tested for non-empty output and reported a deliberately uncovered script as covered.
+# That is the defect this whole suite is about, reproduced inside the fix for it.
+uncovered_probe=$(fired_for "docs/nothing-governs-this.txt")
+if grep -qE '[^[:space:]]+[.]md' <<<"$uncovered_probe"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: control -- an ungoverned path must name no rule"
+  echo "    got: $uncovered_probe"
+  echo "    every coverage assertion below is vacuous"
+else
+  PASS=$((PASS + 1)); echo "  PASS: control -- an ungoverned path names no rule"
+fi
+
+# Enumerated from the repository, not listed here: a list in this file is the same
+# enumeration the defect is about, one directory further away.
+#
+# `git ls-files`, not `find`: the question is what SHIPS in scripts/, and find also returns
+# a .DS_Store, an editor backup and a merge .orig, each of which would redden this section
+# for a reason that has nothing to do with rule coverage. The cost is that a brand-new
+# script is invisible here until it is staged, which is before CI sees it either.
+script_list=$(cd "$REPO" && git ls-files -- scripts | LC_ALL=C sort)
+if ! grep -q '^scripts/common[.]sh$' <<<"$script_list"; then
+  echo "  FAIL: could not enumerate scripts/ -- every coverage assertion below would be vacuous"
+  exit 1
+fi
+
+while IFS= read -r script; do
+  [ -n "$script" ] || continue
+  fired=$(fired_for "$script")
+  if grep -qE '[^[:space:]]+[.]md' <<<"$fired"; then
+    PASS=$((PASS + 1)); echo "  PASS: $script is governed by:$fired"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $script matches no rule in .claude/jit-context/paths/"
+    echo "    a new script starts uncovered, and an uncovered script reads exactly like one"
+    echo "    with nothing to say about it (#83). Widen a match in paths/00-manual/, or write"
+    echo "    the entry that states its contract, then rebuild: bash scripts/rebuild-tsv.sh"
+  fi
+done <<<"$script_list"
+
+echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))
 echo "  $PASS/$TOTAL passed, $FAIL failed"

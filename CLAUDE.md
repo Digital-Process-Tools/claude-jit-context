@@ -19,7 +19,7 @@ Most of what used to be written out here now lives in `.claude/jit-context/`, an
 | Entry                                       | Fires when                             | Carries                                                             |
 | ------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------- |
 | `paths/00-manual/hooks.md`                  | you open a `scripts/*-hook.sh` or `common.sh` | never fail hard, no new dependencies, test-first, both platforms |
-| `paths/00-manual/tooling.md`                | you open `rebuild-tsv.sh`, `jit-dry-run.sh` or `jit-misses.sh` | the opposite contract — fail loudly, what each exit code means, which suite covers it |
+| `paths/00-manual/tooling.md`                | you open `rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh`, `jit-init.sh` or `.github/scripts/assemble_changelog.py` | the opposite contract — fail loudly, what each exit code means, which suite covers it |
 | `paths/00-manual/tests.md`                  | you open anything in `tests/`          | a negative assertion needs a positive control; `$( )` drops NUL bytes |
 | `paths/00-manual/entries.md`                | you edit any `jit-context/*.md`         | the rebuild trap, keyword normalisation, how to prove an entry fires |
 | `paths/00-manual/release.md`                | you edit `.claude-plugin/plugin.json`  | the three version sites and the sweep that finds them                |
@@ -32,6 +32,8 @@ Two consequences worth knowing before you change anything here:
 **The `00-index.tsv` files are committed.** `session-start-hook.sh` clears `once` markers; it does not rebuild. A fresh clone with no index has silently dead entries, including the block rule. If you edit an entry's frontmatter, `bash scripts/rebuild-tsv.sh` and commit the index alongside it.
 
 **Adding a rule here is the honest test of the product.** If a rule belongs in this file rather than an entry, that is worth knowing — write down which dimension failed to hold it.
+
+**A new script under `scripts/` needs a `paths/` rule, and `tests/test-dogfood-entries.sh` fails until it has one.** The split above is enumerated — `hooks.md` matches the hooks and `common.sh`, `tooling.md` names its tools one alternation at a time — so a file that is neither used to match nothing at all, and silence there reads exactly like a file nobody has a rule about (#83). Widen a `match` or write the entry that states the new script's contract; either satisfies the leg.
 
 ## The first trap: an entry that was never indexed
 
