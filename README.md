@@ -183,6 +183,12 @@ marketplace. It seeds the project you are standing in; `--base DIR` seeds anothe
 refuses any path that is not a `<project>/.claude/jit-context`, because seeding anywhere
 else writes entries no hook will ever load.
 
+`--base` is resolved before anything is written, so every path it prints is the physical
+location of the files — a symbolic link above `.claude` is followed and reported at its
+target, and `..` is folded away. A link at or below `.claude` is refused rather than
+followed: the hooks will not read an entry through one, so seeding past it would leave a
+rule that can never fire.
+
 ## The three dimensions
 
 Knowledge attaches to one of three triggers. Pick by asking _when_ the reader needs it.
