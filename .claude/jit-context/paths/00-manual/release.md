@@ -1,5 +1,6 @@
 ---
 title: The version lives in three files
+description: plugin.json, the README badge and the CHANGELOG heading must agree, and the sweep that finds any site they forgot.
 match: \.claude-plugin/plugin\.json$
 ---
 

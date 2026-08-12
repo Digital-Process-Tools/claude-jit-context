@@ -1,5 +1,6 @@
 ---
 title: 00-index.tsv is generated — edit the markdown
+description: 00-index.tsv is generated from entry frontmatter; edit the markdown and run scripts/rebuild-tsv.sh instead.
 tool: Edit|Write
 match: ~(^|[^[:alnum:]_.-])00-index[.]tsv$
 mode: block

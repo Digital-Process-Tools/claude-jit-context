@@ -58,10 +58,11 @@ cat | LC_ALL=C awk \
   -v tools_dir="$JIT_BASE/tools/00-manual" \
   -v vocab_base="$JIT_BASE/vocabulary" \
   -v state_dir="$JIT_STATE_DIR" \
+  -v inject_default="$JIT_INJECT" \
   -v home="$HOME" \
   -v project="${CLAUDE_PROJECT_DIR:-.}" \
   -v log_tmp="$JIT_TMP" \
-  "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_JSON$JIT_AWK_FOLD"'
+  "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -336,10 +337,39 @@ END {
     # died inside END with no JSON on stdout at all. Not "blocks without its text": no
     # block. jit_read_body() now refuses both shapes before the read, off a set the bash
     # half sweeps, so what this paragraph claims is what the code does on every engine.
-    why = jit_read_body(tools_dir "/" r_file)
-    content = JIT_BODY
+    # jit_entry_load() applies those same two checks through jit_entry_why(), which is why
+    # this reader is safe on one-true-awk where the plain getline was not.
+    #
+    # jit_entry_load/jit_inject_text live in common.sh: what a match contributes is the
+    # title and the author-written description by default, and the whole body only when
+    # the project or the entry asks for it.
+    #
+    # A rule that can REFUSE the call reads its body whatever the mode says, and the
+    # three refusal messages below use that body and never the summary. The call has
+    # already been stopped, so there is no cheaper outcome left to buy -- and the pull
+    # step summary mode relies on is a SOFT rule an agent under momentum skips. A block
+    # reason that says "read the file to find out why" is an absence produced by the
+    # tool, which is the one failure this repository exists to name. The cost trade that
+    # justifies a summary needs a next turn to spend it in; a refusal has none.
+    #
+    # keepbody is read off the INDEX columns, before the file is opened, so a rule that
+    # cannot block never pays for a body it will not use.
+    keepbody = (index(r_modes, "block") > 0 || r_require != "" || r_forbid != "")
+    content = ""
+    body = ""
+    rpath = tools_dir "/" r_file
+    if (jit_entry_load(rpath, inject_default, keepbody, ent)) {
+      body = ent["body"]
+      content = jit_inject_text(ent, ".claude/jit-context/tools/00-manual/" r_file)
+    }
+    why = ent["why"]
     if (why != "") {
-      content = "(the text of this rule was not delivered: " why ")"
+      # BOTH, not one of the two. The substitute goes into content so that a `mode: block`
+      # rule still reaches the block below -- content == "" is the no-op path, and #77 is
+      # that an unhonourable rule must never become an allowed call -- and into body so
+      # that the require and forbid refusals say the same thing rather than nothing.
+      body = "(the text of this rule was not delivered: " why ")"
+      content = body
       n_refused++
       refused = jit_refuse_add(refused, jit_row_id("tools/00-manual", rown) r_kind ": " why)
       log_matches = log_matches sep "refused:" jit_log_name(r_file, "tools/00-manual", rown, why) "(" why ")"
@@ -382,10 +412,12 @@ END {
 
     if (content != "" && blocked == "") {
       header = "# JIT Context: " r_file " (matched: " r_match ")"
-      log_matches = log_matches sep "tool:" r_file "(" r_match ")"
+      log_matches = log_matches sep "tool:" r_file "(" r_match ")" \
+        (index(r_modes, "block") > 0 ? "[full:block]" : jit_inject_tag(ent))
       sep = ", "
 
-      if (index(r_modes, "block") > 0) { blocked = header "\n" content; break }
+      # body, not content: a block is a refusal, and a refusal is never a summary.
+      if (index(r_modes, "block") > 0) { blocked = header "\n" body; break }
 
       if (matched != "") matched = matched "\n---\n" header "\n" content
       else matched = header "\n" content
@@ -510,22 +542,25 @@ END {
       for (vfile in vmatch) {
         # Read first, mark only what was delivered -- see the same loop in
         # pre-prompt-hook.sh for why the old order marked entries nothing had injected.
-        why = jit_read_body(vocab_base "/" layer "/" vfile)
-        if (why != "") {
+        vc = ""
+        vpath = vocab_base "/" layer "/" vfile
+        if (jit_entry_load(vpath, inject_default, 0, vent)) {
+          vc = jit_inject_text(vent, ".claude/jit-context/vocabulary/" layer "/" vfile)
+        } else if (vent["why"] != "") {
+          why = vent["why"]
           n_refused++
           refused = jit_refuse_add(refused, jit_row_id("vocabulary/" layer, vmrow[vfile]) ": " why)
           log_matches = log_matches sep "refused:" jit_log_name(vfile, layer, vmrow[vfile], why) "(" why ")"
           sep = ", "
           continue
         }
-        vc = JIT_BODY
 
         if (vc != "") {
           shown[vfile] = 1
           jit_shown_mark(shown_file, vfile)
           vh = "# Vocabulary: " vfile " (matched: " vmatch[vfile] ")"
           if (layer ~ /00-manual/) vh = vh "\\n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
-          log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")"
+          log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent)
           sep = ", "
           if (matched != "") matched = matched "\n---\n" vh "\n" vc
           else matched = vh "\n" vc

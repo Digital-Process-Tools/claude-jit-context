@@ -50,8 +50,9 @@ jit_tmp_open
 cat | LC_ALL=C awk \
   -v vocab_base="$JIT_BASE/vocabulary" \
   -v state_dir="$JIT_STATE_DIR" \
+  -v inject_default="$JIT_INJECT" \
   -v log_tmp="$JIT_TMP" \
-  "$JIT_AWK_ENTRY$JIT_AWK_JSON$JIT_AWK_FOLD"'
+  "$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -227,26 +228,36 @@ END {
     close(lookup)
 
     for (vfile in vmatch) {
-      # Read the body BEFORE marking anything shown. A row whose entry file will not open
-      # was marked delivered anyway, which is exactly what a NUL-truncated row looks like
-      # to one-true-awk (#78), and a body the JSON channel cannot carry is refused rather
-      # than voiding every other entry in the same call (#77).
-      why = jit_read_body(vocab_base "/" layer "/" vfile)
-      if (why != "") {
+      # The entry is read BEFORE anything is marked shown. A row whose entry file will not
+      # open was marked delivered anyway, which is exactly what a NUL-truncated row looks
+      # like to one-true-awk (#78), and an entry the JSON channel cannot carry is refused
+      # rather than voiding every other entry in the same call (#77).
+      #
+      # jit_entry_load/jit_inject_text live in common.sh. What arrives here is the
+      # entry title and its author-written description by default, and the whole body
+      # only when the project or the entry asks for it -- see JIT_AWK_INJECT for why
+      # the choice belongs to the project owner and not to the entry author. The refusal
+      # reason comes back in vent["why"], and it carries the same guards the single body
+      # reader has always applied.
+      vc = ""
+      vpath = vocab_base "/" layer "/" vfile
+      if (jit_entry_load(vpath, inject_default, 0, vent)) {
+        vc = jit_inject_text(vent, ".claude/jit-context/vocabulary/" layer "/" vfile)
+      } else if (vent["why"] != "") {
+        why = vent["why"]
         n_refused++
         refused = jit_refuse_add(refused, jit_row_id("vocabulary/" layer, vmrow[vfile]) ": " why)
         log_matches = log_matches sep "refused:" jit_log_name(vfile, layer, vmrow[vfile], why) "(" why ")"
         sep = ", "
         continue
       }
-      vc = JIT_BODY
 
       if (vc != "") {
         shown[vfile] = 1
         jit_shown_mark(shown_file, vfile)
         vh = "# Vocabulary: " vfile " (matched: " vmatch[vfile] ")"
         if (layer ~ /00-manual/) vh = vh "\\n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
-        log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")"
+        log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent)
         sep = ", "
         if (matched != "") matched = matched "\n---\n" vh "\n" vc
         else matched = vh "\n" vc

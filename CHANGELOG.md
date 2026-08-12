@@ -658,6 +658,111 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   names the suite does not enumerate. A floor on the number of helpers actually driven
   fails loudly if extraction ever stops finding them, so the suite cannot go green on
   having tested nothing.
+### Changed
+
+- **A match now injects the entry title and its `description:`, not the entry body.**
+  Matching was never the defect; the cost of getting it wrong was. A miss costs nothing
+  and a false positive cost the whole entry, and one session about token tooling pulled a
+  14.9 KB tag-hierarchy reference — `tag_relation` table layout included — on the word
+  `tag`, in a conversation about YAML metadata. The match was word-bounded and correctly
+  evaluated. It was 15,000 tokens wrong. Four such hits in four turns cost roughly 19 KB,
+  and nothing noticed, because per-session dedup was working exactly as designed: it
+  prevents repetition, not irrelevance.
+
+  So being wrong got cheap instead of the matcher getting cleverer. A match now costs
+  roughly 20 tokens and the agent reads the file if it wants the rest. Default for every
+  project, no configuration required.
+
+  **This is not the `inject: full | summary` flag issue #1 rejected in its own body, and
+  the difference is the only reason it survives that objection.** The objection was:
+
+  > The value would be self-assessed by whoever writes the entry, and every author
+  > believes their own entry is the critical one. Within a month every entry is `full`
+  > and the flag has bought nothing.
+
+  That is an objection about the CHOOSER, and it is correct. The default now belongs to
+  the project owner in `config.env` — the person whose context window fills up — not to
+  the entry author. A flag nobody pays for goes to maximum; a flag the chooser pays for
+  does not. Anyone reading this later and about to revert it as "the mode flag we already
+  rejected": check who does the choosing first.
+
+  And the drift the objection predicts is now a number somebody reads rather than a slow
+  silence. `rebuild-tsv.sh` counts the `full` population at build time — how many, how
+  many bytes, and the worst offenders by size — beside the ambiguous-keyword report it
+  already prints. `jit-dry-run.sh` names the entries that would arrive whole for a sample
+  call, annotating each fired rule `(summary)` or `(WHOLE BODY)`, so the cost is visible
+  before it is paid rather than after.
+
+  **The loss, stated rather than buried.** The pull is a soft rule. An agent handed 20
+  tokens decides whether to read the rest, and under momentum it will sometimes skip one
+  it needed, where a forced body injection would have put the knowledge in front of it. At
+  a 750:1 cost ratio the trade looks right, and it is a trade and not a free win. It is
+  also measurable with no new machinery, which is the half issue #1 asked for and could
+  not have before this existed: reading an entry is a tool call, so a pull lands in
+  `hooks.log` in the path column like any other read. The `pre-path` log field was widened
+  from 80 to 200 characters for that reason — at 80, an absolute path to an entry under
+  any real project directory was cut before the part that identifies it, and the
+  measurement read as a pull that never happened.
+
+  **What does not become a summary.** A tools rule that refuses a call injects its whole
+  body, whatever the mode says. The call is already stopped, so there is no next turn in
+  which to spend a cheaper answer, and a block reason that says "read the file to find out
+  why" is an absence produced by the tool — the one failure this repository exists to
+  name. `block`, `require` and `forbid` all take that path, decided from the index columns
+  before the entry file is opened, so a rule that cannot refuse never pays for a body it
+  will not use.
+
+  **An entry with no `description:` is named and not injected.** Nothing is auto-derived.
+  A generated summary of a wrong entry is a confident wrong summary, and it removes the one
+  moment where the author would have noticed. What arrives instead says plainly that the
+  entry has no description and where to read it, and `hooks.log` marks the match
+  `[summary:no-description]` so the gap is countable. `rebuild-tsv.sh` counts those too.
+
+  **A file with no frontmatter at all still injects its body.** It has no `description:`,
+  and it has no `keywords:`, `match:` or `tool:` either — so `rebuild-tsv.sh` could not
+  have produced its index row, and its body is the entry. That is not a loophole an author
+  can live in: deleting the frontmatter to keep the whole body also unindexes the entry on
+  the next rebuild.
+
+  **No index schema change, and nothing to migrate.** The description is read out of the
+  entry file at fire time, which the hook already opened. A third TSV column would have
+  been public behaviour — every project with a committed index would have had a stale one,
+  and `session-start-hook.sh` clears markers without rebuilding. It would also have been
+  slower: in summary mode the read stops at the closing `---`, so a large entry costs its
+  frontmatter instead of its body. Measured on macOS, awk version 20200816, a 31.6 KB entry
+  matched by one keyword, 60 invocations per arm over three interleaved rounds: 32.6 / 32.8
+  / 35.8 ms per invocation reading the whole file against 29.1 / 28.0 / 30.3 stopping at
+  the frontmatter. Running `rebuild-tsv.sh` over this repository after adding `description:`
+  to every entry produced byte-identical index files.
+
+  **Dedup stays**, though issue #1 suggested a 20-token injection might make it
+  unnecessary. It is what makes the pull rate readable: an entry summarised once and then
+  read is a clean signal, one re-announced on every prompt is noise the agent learns to
+  skip. The refusal and `config.env` notices continue to ride the same marker deliberately.
+
+  The `full` count in `rebuild-tsv.sh` reads a wrapped YAML quote pair the way the hooks
+  do. Its first cut had its own frontmatter parser and did not, so `inject: "full"` — an
+  ordinary way to write it — arrived whole at runtime and was reported as a summary. A
+  budget that disagrees with the thing it is budgeting is worse than no budget.
+
+  `title:` and `description:` are clipped — 160 and 400 characters — and the clip is
+  visible in what is injected rather than being a silent truncation. Without a cap the
+  promise that a match is cheap is only a convention: 15 KB on one frontmatter line and
+  summary mode costs what full mode cost, silently. Nothing else about the value is
+  rewritten; `0.3.0` records what happens when this reader edits a value it does not
+  understand.
+
+- **`JIT_CONTEXT_INJECT` in `config.env`, and `inject:` in an entry.** `summary` (the
+  default) or `full`. Any other value is **refused and named** — in `hooks.log`, and once
+  per session in the injected context through the channel `config.env` refusals already
+  use — and the default stands. That includes `gated`, a third mode designed on issue #1
+  and deliberately not built: a small model asked whether an entry is relevant before its
+  body is spent. It is held pending the pull-rate data only the summary path can produce,
+  and a project that writes it today is told so rather than getting a mode nobody
+  implemented — or, worse, falling through to the expensive side. An unrecognised `inject:`
+  in an entry falls back to the project default and says so in what that entry injects,
+  without ever echoing the value back: it is free text from a file that arrived with the
+  repository.
 
 ## [0.3.1] — A session, and a red that means something
 

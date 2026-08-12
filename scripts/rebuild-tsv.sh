@@ -411,6 +411,78 @@ else
   echo "(none — every keyword in every entry was indexed)" >&2
 fi
 echo "" >&2
+# --- Injection budget: what would arrive whole -------------------------------
+# A match injects the entry title and its author-written `description:` by default, and
+# the whole body only when the project or the entry asks for it (issue #1). The objection
+# that killed the first version of that flag was that nobody would ever observe the drift:
+#
+#     Within a month every entry is `full` and the flag has bought nothing.
+#
+# That is true of a knob nobody measures, so this is the measurement. It runs at build
+# time beside the ambiguity report, for the same reason that one does: the cost is chosen
+# by an author and paid by a reader, and the only moment both are in the room is here.
+#
+# ONE awk over every entry in the tree, not one process per file. `inject:` and
+# `description:` are read with the same first-block rule jit_frontmatter() uses, and a
+# file whose first line is not `---` has no frontmatter the rebuild could have indexed,
+# so it is counted as arriving whole -- which is what the hooks do with it.
+echo "=== Entries that would arrive whole (inject: full) ===" >&2
+echo "A match injects the title and description: unless the project or the entry asks for the body." >&2
+echo "Project default: JIT_CONTEXT_INJECT=$JIT_INJECT" >&2
+echo "" >&2
+
+# A glob and not `find`: no fork, and no filename can be split on its own characters.
+INJ_LIST=()
+for md in "$JIT_BASE"/*/*/*.md; do
+  [ -f "$md" ] || continue
+  [ "$(basename "$md")" = "00-README.md" ] && continue
+  INJ_LIST[${#INJ_LIST[@]}]="$md"
+done
+
+if [ "${#INJ_LIST[@]}" -eq 0 ]; then
+  echo "(no entries)" >&2
+else
+  awk -v def="$JIT_INJECT" '
+function flush(   eff, i) {
+  if (fname == "") return
+  total++
+  eff = (inj == "summary" || inj == "full") ? inj : def
+  if (!fmok) eff = "full"
+  if (eff != "full") { if (!desc) nodesc++; return }
+  nfull++
+  bfull += bytes
+  # Insertion sort by size, largest first. The worst offenders are the whole point:
+  # "42 entries are full" is a number, and "one of them is 14.9 KB" is the argument.
+  for (i = nfull; i > 1 && size[i-1] < bytes; i--) { size[i] = size[i-1]; name[i] = name[i-1] }
+  size[i] = bytes; name[i] = fname
+}
+{ line = $0; sub(/\r$/, "", line) }
+FNR == 1 { flush(); fname = FILENAME; nfm = 0; inj = ""; desc = 0; bytes = 0; fmok = 0 }
+{ bytes += length($0) + 1 }
+FNR == 1 && line == "---" { nfm = 1; fmok = 1; next }
+nfm == 1 && line == "---" { nfm = 2; next }
+nfm == 1 && index(line, "description:") == 1 {
+  v = substr(line, 13); gsub(/[[:space:]]/, "", v); if (v != "") desc = 1; next
+}
+nfm == 1 && index(line, "inject:") == 1 {
+  inj = substr(line, 8); gsub(/[[:space:]]/, "", inj); inj = tolower(inj); next
+}
+END {
+  flush()
+  printf "%d of %d entr(ies) would arrive whole, %d byte(s) in total.\n", nfull, total, bfull
+  for (i = 1; i <= nfull && i <= 5; i++) printf "%8d  %s\n", size[i], name[i]
+  if (nfull > 5) printf "         ... and %d more\n", nfull - 5
+  if (nodesc > 0) {
+    printf "\n%d summary entr(ies) carry no description:, so a match can only NAME them.\n", nodesc
+    print "Nothing is auto-derived -- a generated summary of a wrong entry is a confident wrong summary."
+  }
+  print ""
+  print "A tools rule that REFUSES a call injects its whole body whatever the mode says:"
+  print "the call is already stopped, so there is no next turn to spend a cheaper answer in."
+}
+' "${INJ_LIST[@]}" >&2
+fi
+echo "" >&2
 # One line saying which of the three this run was. The REFUSED and FATAL lines above are
 # the detail, but they scroll past inside two reports; this is what is on screen when the
 # shell hands the prompt back, and it is the only place the number itself is spelled out.

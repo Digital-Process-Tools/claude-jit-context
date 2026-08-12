@@ -715,6 +715,27 @@ jit_load_config() {
       jit_config_refuse "$lineno" "$reason"
       continue
     fi
+    # A recognised setting whose VALUE is not one this code implements is refused too, and
+    # for the same reason the unknown-key branch above exists: a setting that reads as
+    # applied and is not is this repository own defect class. JIT_CONTEXT_INJECT decides
+    # what every match puts in the model context, so getting it silently wrong is not a
+    # cosmetic miss.
+    #
+    # `gated` is the value this matters most for. It was designed on issue #1 -- a small
+    # model asked whether the entry is relevant before the body is spent -- and
+    # deliberately NOT built, pending the pull-rate data only the summary path can produce.
+    # A project that writes it today is refused and told so, rather than getting a mode
+    # nobody implemented, or worse, getting `full` because an unrecognised value fell
+    # through to the expensive side.
+    if [ "$key" = JIT_CONTEXT_INJECT ]; then
+      case "$value" in
+        summary|full) ;;
+        *)
+          jit_config_refuse "$lineno" "not an injection mode (the modes are summary and full)"
+          continue
+          ;;
+      esac
+    fi
     printf -v "$key" '%s' "$value"
   done < "$file"
 }
@@ -743,6 +764,47 @@ elif [ -f "$JIT_BASE/config.env" ]; then
       "$(_ts)" "$JIT_CONFIG_REFUSED_N" "$JIT_CONFIG_REFUSED")"
   fi
 fi
+
+# --- What a match injects ----------------------------------------------------
+# Until 0.4.0 a match injected the entry BODY, whole, every time. The cost of that is
+# asymmetric and it is the asymmetry that is the defect, not the accuracy: a miss costs
+# nothing and a false positive costs the whole entry. The case on issue #1 is a 14.9 KB
+# reference arriving on the word `tag` in a conversation about YAML metadata -- a match
+# that was word-bounded, correctly evaluated, and 15,000 tokens wrong.
+#
+# So the default is now the entry title plus its author-written `description:`, roughly
+# 20 tokens, and the agent decides whether to read the file. Being wrong got cheap
+# instead of the matcher getting cleverer.
+#
+# WHO CHOOSES is the whole argument, and it is the part a later reader will get wrong.
+# Issue #1 rejects an `inject: full | summary` frontmatter flag, in its own body, and the
+# objection still stands as written:
+#
+#     The value would be self-assessed by whoever writes the entry, and every author
+#     believes their own entry is the critical one. Within a month every entry is `full`
+#     and the flag has bought nothing.
+#
+# That objection is about the CHOOSER. Here the default is set by the PROJECT OWNER, in
+# config.env -- the person whose context window fills up -- and rebuild-tsv.sh counts the
+# `full` population at build time the way it already counts ambiguous keywords, so the
+# drift the objection predicts is a number somebody reads rather than a slow silence. A
+# flag nobody pays for goes to maximum; a flag the chooser pays for does not.
+#
+# If you are about to revert this as "the mode flag we already rejected": check who does
+# the choosing first.
+#
+# The per-entry `inject:` override remains an author choice, and that is deliberate too --
+# it is an override of a default the project set, visible in the build-time count, and an
+# author who marks everything `full` is now marking it against a budget somebody sees.
+JIT_INJECT="${JIT_CONTEXT_INJECT:-summary}"
+# The config.env path already refused an unknown value by line number. This clamp is for
+# every OTHER way the variable can arrive -- an exported environment variable from a
+# runner or a test -- where there is no line to name. Refusing to run would be the fail
+# hard this file forbids, and honouring an unknown word would be worse than either.
+case "$JIT_INJECT" in
+  summary|full) ;;
+  *) JIT_INJECT=summary ;;
+esac
 
 # Pipeline log: _log "step" duration_ms "message"  → [HH:MM:SS.mmm] step 42ms | message
 _log() {
@@ -1231,6 +1293,13 @@ function jit_bad_bytes(s, what) {
 # It used to be indistinguishable from an EMPTY entry file: nothing injected, nothing
 # refused, and the shown-marker written anyway. That is the reading one-true-awk takes of
 # a NUL-bearing row, so this is where #78 is caught on the engine that hides the byte.
+# The pre-read half of the guard, shared by both readers of an entry file. Returns a
+# reason a getline must not be attempted at all, or "" when it may be.
+function jit_entry_why(path) {
+  if (substr(path, length(path), 1) == "/") return "the row names no entry file"
+  if (jit_nonfile(path)) return "the entry file is not a regular file"
+  return ""
+}
 function jit_read_body(path,   line, r, first) {
   JIT_BODY = ""
   # --- Before the read, because on one engine there is no after (#97) --------------
@@ -1253,8 +1322,13 @@ function jit_read_body(path,   line, r, first) {
   # every other unreadable body, so the caller substitutes text and carries on -- a block
   # rule whose entry is a directory still blocks. That is the jit_bad_pattern() posture, and
   # the whole of #97 is that a malformed thing was fatal to the program instead.
-  if (substr(path, length(path), 1) == "/") return "the row names no entry file"
-  if (jit_nonfile(path)) return "the entry file is not a regular file"
+  #
+  # The two pre-read checks live in jit_entry_why() because there are now TWO readers of an
+  # entry file, not one: this function, and jit_entry_load() in JIT_AWK_INJECT, which stops
+  # at the closing `---` when only a summary is injected. Two readers with the guard written
+  # out twice is exactly the fifth-site problem this comment opens with, so the guard is one
+  # function that both call.
+  if ((r = jit_entry_why(path)) != "") return r
   first = 1
   while ((r = (getline line < path)) > 0) {
     JIT_BODY = JIT_BODY (first ? "" : "\n") line
@@ -1322,6 +1396,196 @@ function jit_refusal_notice(list, n) {
 function jit_config_notice(list, n) {
   return "# JIT Context: " n " line(s) in .claude/jit-context/config.env were refused, so they did NOT take effect\n" list \
     "\nconfig.env is read as plain KEY=VALUE and is never executed. Only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* settings are read; anything else, shell included, is refused. If a refused line is not one you wrote, treat that file as hostile -- it arrived with the repository."
+}
+'
+
+# --- Shared entry reader: frontmatter, body, and what gets injected ----------
+# Prepended to all three hook programs. This is the ONE place an entry file is turned
+# into the text a match contributes, so the three hooks cannot drift into disagreeing
+# about what a `description:` or an `inject:` means.
+#
+# The description is read out of the FILE at fire time, not out of a third TSV column.
+# That was a judgement call and it is worth recording: the hook already opened the entry
+# to read its body, so this costs no schema change, no version bump and no migration
+# note -- where a new column would leave a stale committed index in every project that
+# has one, with session-start-hook.sh clearing markers and rebuilding nothing.
+#
+# It is also FASTER than what it replaces on the common path: in summary mode the read
+# stops at the closing `---`, so a large entry costs its frontmatter instead of its body.
+# Measured 2026-08-12 on macOS, awk version 20200816, a 31.6 KB entry matched by one
+# keyword, 60 invocations per arm and three interleaved rounds to cancel machine load:
+# 32.6 / 32.8 / 35.8 ms per invocation reading the whole file, against 29.1 / 28.0 / 30.3
+# stopping at the frontmatter. So the cheap answer to "where does the description come
+# from" is also the fast one, and the third TSV column -- which would have made every
+# committed index in every project stale -- buys nothing it does not also cost.
+#
+# A `description:` reaches the model context, so it is attacker-controlled text of the
+# same family as the file-name column (#35) and the mode column (#28) -- one file over.
+# It is NOT the same trust tier as those two, and the difference decides the treatment:
+# those reached the context with no rule matched and no entry file present, which made
+# them a prompt-injection channel that needed no trigger. This text comes out of an entry
+# whose row matched and whose file passed jit_bad_entry_file(), and until this change the
+# WHOLE of that file was injected verbatim. So the description is not new text in the
+# context; it is less of it.
+#
+# What is new is the promise that a match is CHEAP, and an uncapped description breaks
+# exactly that -- 15 KB on one frontmatter line and summary mode costs what full mode
+# costs, silently. So both fields are clipped, and the clip is visible in what is
+# injected rather than being a quiet truncation. No other rewriting: #19 is what happens
+# when this reader edits a value it does not understand.
+#
+# No apostrophes in this block. It is a single-quoted bash string and one would close it.
+# shellcheck disable=SC2034
+JIT_AWK_INJECT='
+function jit_clip(s, n,   i) {
+  sub(/\r$/, "", s)
+  sub(/[[:space:]]+$/, "", s)
+  if (length(s) <= n) return s
+  s = substr(s, 1, n)
+  # substr counts BYTES on one-true-awk and CHARACTERS on gawk, so on one of the two a
+  # cut at n can land inside a multibyte character and leave a lone continuation byte in
+  # what is injected. RFC 8259 says nothing about it, but a strict reader of the JSON is
+  # entitled to reject invalid UTF-8, which renders as the hook having said nothing at
+  # all -- the shape of #14 and #15, and unreachable on the engine CI runs on Linux.
+  #
+  # So the engine is PROBED rather than assumed: one two-byte character has length 1
+  # where substr is character-based and 2 where it is byte-based. Under gawk this whole
+  # branch is dead, and correctly so -- the cut there is already on a boundary.
+  if (length("é") > 1) {
+    # 0x80-0xBF is a continuation byte and 0xC0-0xFD introduces a sequence. On this
+    # engine sprintf("%c", k) is exactly that one byte, and index() is a byte search.
+    # At most three continuations plus the byte that introduces them: a UTF-8 sequence
+    # is four bytes at the most. A cut that landed on a boundary loses one whole
+    # character to this, which is a cosmetic price on a string already being truncated.
+    if (!jit_cont) {
+      for (i = 128; i <= 191; i++) jit_cont = jit_cont sprintf("%c", i)
+      for (i = 192; i <= 253; i++) jit_lead = jit_lead sprintf("%c", i)
+    }
+    i = 0
+    while (i < 3 && length(s) > 0 && index(jit_cont, substr(s, length(s), 1)) > 0) {
+      s = substr(s, 1, length(s) - 1)
+      i++
+    }
+    if (length(s) > 0 && index(jit_lead, substr(s, length(s), 1)) > 0) s = substr(s, 1, length(s) - 1)
+  }
+  return s " [clipped]"
+}
+# Fills e with title, desc, mode, body and two flags, and returns 1 when the file had
+# anything in it at all. An unreadable or empty entry returns 0 and the caller stays
+# silent, which is what it did before this existed.
+#
+# keepbody forces the body to be read whatever the mode says. Exactly one caller passes
+# it: a tools rule that can REFUSE the call. See pre-tool-hook.sh for why.
+function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, key, val, nread, r) {
+  e["body"] = ""; e["title"] = ""; e["desc"] = ""
+  e["mode"] = def; e["fm"] = 0; e["badmode"] = 0; e["read"] = 0; e["injseen"] = 0
+  # e["why"] is the SECOND half of the return value: 0 with a reason is a row that could
+  # not be honoured and must be refused out loud, 0 with no reason is an empty file and
+  # has always been silence. Callers branch on it, so it is reset on every call -- ent is
+  # reused across rows and a stale reason would refuse the next honest one.
+  #
+  # The guards are the ones jit_read_body() applies, reached through the single function
+  # that holds them (#78, #97): a file-name column that is empty or names a directory is a
+  # fatal i/o error inside END on one-true-awk, and the process carrying a block decision
+  # then dies with no JSON on stdout. That is true of this getline exactly as it was of
+  # that one, and this reader exists because summary mode stops at the closing ---.
+  e["why"] = jit_entry_why(path)
+  if (e["why"] != "") return 0
+  nfm = 0; want = 1; nread = 0
+  while ((r = (getline line < path)) > 0) {
+    nread++
+    e["read"] = 1
+    if (want) e["body"] = e["body"] (nread == 1 ? "" : "\n") line
+    ln = line
+    sub(/\r$/, "", ln)
+    if (ln == "---") {
+      # Frontmatter opens on the FIRST line and nowhere else. jit_frontmatter() in the
+      # bash half counts every `---` instead, which is fine for a file the rebuild
+      # indexed but would let a markdown horizontal rule halfway down a body open a
+      # block here -- and the entry would then read as having frontmatter, no
+      # description, and nothing to inject. Being stricter here can only err towards
+      # injecting the body, which is the direction that loses tokens rather than
+      # knowledge.
+      if (nfm == 0) {
+        if (nread != 1) continue
+        nfm = 1; e["fm"] = 1; continue
+      }
+      if (nfm == 1) {
+        nfm = 2
+        # Nothing past here is needed when only the summary is injected. This is the
+        # read that a third TSV column was supposed to save.
+        if (!keepbody && e["mode"] != "full") { e["body"] = ""; want = 0; break }
+        continue
+      }
+      continue
+    }
+    if (nfm != 1) continue
+    if (index(ln, ":") == 0) continue
+    key = substr(ln, 1, index(ln, ":") - 1)
+    if (key ~ /[^A-Za-z0-9_-]/) continue
+    val = substr(ln, index(ln, ":") + 1)
+    sub(/^[[:space:]]+/, "", val)
+    sub(/[[:space:]]+$/, "", val)
+    # The same wrapped-scalar rule jit_frontmatter() applies, and for the reason recorded
+    # there: only a quote pair wrapping the WHOLE value is YAML quoting. A quote anywhere
+    # else is data, and deleting it is #19.
+    if (val ~ /^"[^"]*"$/) val = substr(val, 2, length(val) - 2)
+    if (key == "title") { if (e["title"] == "") e["title"] = val }
+    else if (key == "description") { if (e["desc"] == "") e["desc"] = val }
+    else if (key == "inject" && !e["injseen"]) {
+      e["injseen"] = 1
+      gsub(/[[:space:]]/, "", val)
+      val = tolower(val)
+      if (val == "summary" || val == "full") e["mode"] = val
+      else if (val != "") e["badmode"] = 1
+    }
+  }
+  close(path)
+  # getline < 0 is "could not open", which a row naming a deleted or renamed entry
+  # produces, and it is indistinguishable from an EMPTY file unless it is asked. r is
+  # whatever the LAST getline returned, so a summary-mode break leaves it > 0 and this is
+  # only reached for a file that was read to the end -- which is the only place the answer
+  # could have changed anyway.
+  if (r < 0) { e["why"] = "the entry file could not be read"; return 0 }
+  # Only what will actually be injected is checked, which in full mode is the whole body
+  # and is therefore what jit_read_body() checked before this reader existed. Invalid
+  # UTF-8 in a part of the file summary mode never reads cannot reach the JSON channel,
+  # and refusing a row over bytes nothing emits would be a rule silently unenforced.
+  if (jit_bad_utf8(e["body"] e["title"] e["desc"])) {
+    e["why"] = "the entry file is not valid UTF-8"
+    return 0
+  }
+  # A file with NO frontmatter has no description to inject and no inject: to honour --
+  # and it also has no keywords:, no match: and no tool:, so rebuild-tsv.sh could not
+  # have produced its index row. It reached the index by hand, there is nothing to
+  # summarise, and its body is the entry. That is not a loophole an author can live in:
+  # deleting the frontmatter to keep the whole body also unindexes the entry on the next
+  # rebuild.
+  if (!e["fm"]) e["mode"] = "full"
+  return e["read"]
+}
+function jit_inject_text(e, rel,   out) {
+  if (e["mode"] == "full") return e["body"]
+  out = ""
+  if (e["title"] != "") out = jit_clip(e["title"], 160)
+  if (e["desc"] != "") out = out (out == "" ? "" : "\n") jit_clip(e["desc"], 400)
+  # Decided on issue #1 and worth restating where it is implemented: nothing is
+  # auto-derived here. A generated summary of a wrong entry is a confident wrong summary,
+  # and it removes the one moment where the author would have noticed. The absence is
+  # said out loud instead -- a silently downgraded entry is an absence produced by the
+  # tool, which is the failure this whole repository exists to name.
+  else out = out (out == "" ? "" : "\n") "[jit] There is no description: in this entry, so a match can only name it. Add one and the next match will say what it holds."
+  # The VALUE is never echoed back. It is free text from a file that arrived with the
+  # repository, and naming the field is enough for the author who wrote it.
+  if (e["badmode"]) out = out "\n[jit] The inject: value in this entry is not summary or full, so the project default applied."
+  return out "\n[jit] Summary only -- read " rel " for the entry."
+}
+# For the log, which a person reads. `full` and `summary` and `summary with nothing to
+# say` are three different outcomes and the middle one is the only cheap one.
+function jit_inject_tag(e) {
+  if (e["mode"] == "full") return "[full]"
+  if (e["desc"] == "") return "[summary:no-description]"
+  return "[summary]"
 }
 '
 

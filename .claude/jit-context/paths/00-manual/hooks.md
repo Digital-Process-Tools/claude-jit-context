@@ -1,5 +1,7 @@
 ---
 title: A hook may never fail hard
+description: The contract for the four hooks and common.sh - every failure path exits 0 injecting nothing, no new runtime dependency, test first, and the awk traps that differ between Linux, macOS and Git Bash.
+inject: full
 match: (^|/)scripts/(.*-hook|common)\.sh$
 ---
 

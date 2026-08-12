@@ -1,0 +1,419 @@
+#!/bin/bash
+# Tests for what a MATCH injects: the entry body, or its title and author-written
+# `description:` (issue #1).
+#
+# The defect this is about is not accuracy, it is cost. A 14.9 KB entry arriving on the
+# word `tag` is the whole case, and it does not depend on the match being wrong -- it
+# depends on being wrong being expensive. So the mode is a project setting with a
+# per-entry override, `summary` is the default, and every assertion below is paired: a
+# fixture that must arrive whole beside one that must not, in the same tree.
+#
+# Usage: bash tests/test-inject-mode.sh
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PROMPT_HOOK="$SCRIPT_DIR/scripts/pre-prompt-hook.sh"
+PATH_HOOK="$SCRIPT_DIR/scripts/pre-path-hook.sh"
+TOOL_HOOK="$SCRIPT_DIR/scripts/pre-tool-hook.sh"
+PASS=0
+FAIL=0
+
+TEST_DIR=$(mktemp -d)
+BASE="$TEST_DIR/.claude/jit-context"
+V="$BASE/vocabulary/00-manual"
+P="$BASE/paths/00-manual"
+T="$BASE/tools/00-manual"
+mkdir -p "$V" "$P" "$T"
+
+# --- Fixtures ----------------------------------------------------------------
+# Every body carries a marker string that appears NOWHERE in its frontmatter, so
+# "the body arrived" and "the summary arrived" can never be confused for each other.
+
+printf '%s\n' \
+  "---" \
+  "title: Billing amounts" \
+  "description: How invoice totals are computed and why the getter lies." \
+  "keywords: billing" \
+  "---" \
+  "" \
+  "BILLING-BODY-MARKER" > "$V/billing.md"
+
+printf '%s\n' \
+  "---" \
+  "title: Payments" \
+  "description: Which provider settles what." \
+  "inject: full" \
+  "keywords: payments" \
+  "---" \
+  "" \
+  "PAYMENTS-BODY-MARKER" > "$V/payments.md"
+
+# Frontmatter, but no description:. Decided on issue #1 and deliberately NOT
+# auto-generated: a generated summary of a wrong entry is a confident wrong summary.
+printf '%s\n' \
+  "---" \
+  "title: Undescribed" \
+  "keywords: nodesc" \
+  "---" \
+  "" \
+  "NODESC-BODY-MARKER" > "$V/nodesc.md"
+
+# No frontmatter at all. rebuild-tsv.sh could not have indexed this file -- it carries
+# no keywords: either -- so it exists only in a hand-written index, there is nothing to
+# summarise, and the body is the entry.
+printf '%s\n' "BARE-BODY-MARKER" > "$V/bare.md"
+
+# An inject: value that is neither summary nor full. `gated` is recorded on issue #1 and
+# deliberately not built, so it must behave as any other unknown value behaves.
+printf '%s\n' \
+  "---" \
+  "title: Gated hopeful" \
+  "description: Wants a mode that does not exist." \
+  "inject: gated" \
+  "keywords: weird" \
+  "---" \
+  "" \
+  "WEIRD-BODY-MARKER" > "$V/weird.md"
+
+LONG_DESC="LONGDESCSTART$(printf 'x%.0s' $(seq 1 2000))LONGDESCEND"
+printf '%s\n' \
+  "---" \
+  "title: Verbose" \
+  "description: $LONG_DESC" \
+  "keywords: longdesc" \
+  "---" \
+  "" \
+  "LONG-BODY-MARKER" > "$V/longdesc.md"
+
+printf '%s\t%s\n' \
+  billing  billing.md \
+  payments payments.md \
+  nodesc   nodesc.md \
+  bare     bare.md \
+  weird    weird.md \
+  longdesc longdesc.md > "$V/00-index.tsv"
+
+printf '%s\n' \
+  "---" \
+  "title: Command conventions" \
+  "description: Every command extends CommandBase." \
+  "match: Commands/" \
+  "---" \
+  "" \
+  "COMMANDS-BODY-MARKER" > "$P/commands.md"
+printf 'Commands/\tcommands.md\n' > "$P/00-index.tsv"
+
+printf '%s\n' \
+  "---" \
+  "title: Coverage is slow" \
+  "description: Coverage runs take eight minutes locally." \
+  "tool: Bash" \
+  "match: bin/phpunit" \
+  "---" \
+  "" \
+  "PHPUNIT-BODY-MARKER" > "$T/phpunit.md"
+
+printf '%s\n' \
+  "---" \
+  "title: Never push to main" \
+  "description: Open a merge request instead." \
+  "tool: Bash" \
+  "match: git push" \
+  "mode: block" \
+  "---" \
+  "" \
+  "GITPUSH-BODY-MARKER" > "$T/gitpush.md"
+
+printf '%s\n' \
+  "---" \
+  "title: Deploys are dry-run first" \
+  "description: The deploy script has no undo." \
+  "tool: Bash" \
+  "match: bin/deploy" \
+  "require: --dry-run" \
+  "---" \
+  "" \
+  "DEPLOY-BODY-MARKER" > "$T/deploy.md"
+
+printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+  Bash "bin/phpunit" phpunit.md remind ""          "" \
+  Bash "git push"    gitpush.md  block  ""          "" \
+  Bash "bin/deploy"  deploy.md   remind "--dry-run" "" > "$T/00-index.tsv"
+
+# --- Helpers -----------------------------------------------------------------
+
+set_config() {
+  if [ -z "${1:-}" ]; then rm -f "$BASE/config.env"; else printf '%s\n' "$1" > "$BASE/config.env"; fi
+}
+
+run_prompt() { printf '%s' "{\"prompt\":\"$1\"}" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PROMPT_HOOK" 2>/dev/null; }
+run_tool()   { printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$1\"}}" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2>/dev/null; }
+run_path()   { printf '%s' "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$1\"}}" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PATH_HOOK" 2>/dev/null; }
+
+assert_contains() {
+  local desc="$1" output="$2" expected="$3"
+  if printf '%s' "$output" | grep -qF "$expected"; then
+    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    expected to contain: $expected"
+    echo "    got: $(printf '%s' "$output" | head -c 300)"
+  fi
+}
+
+assert_not_contains() {
+  local desc="$1" output="$2" unexpected="$3"
+  if printf '%s' "$output" | grep -qF "$unexpected"; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    should NOT contain: $unexpected"
+    echo "    got: $(printf '%s' "$output" | head -c 300)"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  fi
+}
+
+# =============================================
+# SECTION 1: the default is summary
+# =============================================
+echo "=== No config.env: a match injects the description, not the body ==="
+set_config ""
+OUT=$(run_prompt "what about the billing")
+assert_contains     "the entry is still named"        "$OUT" "Vocabulary: billing.md"
+assert_contains     "the author description arrives"  "$OUT" "How invoice totals are computed"
+assert_contains     "the title arrives"               "$OUT" "Billing amounts"
+assert_not_contains "the body does NOT arrive"        "$OUT" "BILLING-BODY-MARKER"
+assert_contains     "the agent is told where to read it" "$OUT" ".claude/jit-context/vocabulary/00-manual/billing.md"
+
+echo ""
+echo "=== The same entry, project set to full: the body arrives ==="
+set_config "JIT_CONTEXT_INJECT=full"
+OUT=$(run_prompt "what about the billing")
+assert_contains "the body arrives whole" "$OUT" "BILLING-BODY-MARKER"
+
+# =============================================
+# SECTION 2: the per-entry override, both directions
+# =============================================
+echo ""
+echo "=== Project summary, entry says inject: full ==="
+set_config ""
+OUT=$(run_prompt "billing and payments together")
+assert_contains     "the overriding entry arrives whole" "$OUT" "PAYMENTS-BODY-MARKER"
+assert_not_contains "its neighbour in the same match does not" "$OUT" "BILLING-BODY-MARKER"
+assert_contains     "and the neighbour still has its description" "$OUT" "How invoice totals are computed"
+
+echo ""
+echo "=== Project full, entry says nothing: still full ==="
+set_config "JIT_CONTEXT_INJECT=full"
+OUT=$(run_prompt "billing and payments together")
+assert_contains "both bodies arrive" "$OUT" "BILLING-BODY-MARKER"
+assert_contains "both bodies arrive (2)" "$OUT" "PAYMENTS-BODY-MARKER"
+
+# =============================================
+# SECTION 3: an entry with no description:
+# =============================================
+echo ""
+echo "=== Frontmatter with no description: named, not injected ==="
+set_config ""
+OUT=$(run_prompt "the nodesc thing and the billing")
+assert_contains     "the entry is named"                  "$OUT" "Vocabulary: nodesc.md"
+assert_not_contains "its body is NOT injected"            "$OUT" "NODESC-BODY-MARKER"
+assert_contains     "the absence is stated, not hidden"   "$OUT" "no description:"
+assert_contains     "positive control: a described neighbour still says what it holds" \
+                    "$OUT" "How invoice totals are computed"
+
+echo ""
+echo "=== The same entry under full: the body arrives ==="
+set_config "JIT_CONTEXT_INJECT=full"
+OUT=$(run_prompt "the nodesc thing")
+assert_contains "no description does not suppress a full entry" "$OUT" "NODESC-BODY-MARKER"
+
+# =============================================
+# SECTION 4: a file with no frontmatter at all
+# =============================================
+echo ""
+echo "=== No frontmatter: there is nothing to summarise, so the body is the entry ==="
+set_config ""
+OUT=$(run_prompt "a bare entry and the billing")
+assert_contains     "the frontmatter-less body arrives" "$OUT" "BARE-BODY-MARKER"
+assert_not_contains "paired: the entry WITH frontmatter beside it does not" "$OUT" "BILLING-BODY-MARKER"
+
+# =============================================
+# SECTION 5: an unknown mode, from either side
+# =============================================
+echo ""
+echo "=== inject: gated in an entry -- unknown, so the project default applies ==="
+set_config ""
+OUT=$(run_prompt "the weird one")
+assert_not_contains "the body does not arrive"     "$OUT" "WEIRD-BODY-MARKER"
+assert_contains     "the description does"         "$OUT" "Wants a mode that does not exist"
+assert_contains     "and the unknown value is named, not silently dropped" "$OUT" "is not summary or full"
+assert_not_contains "the value itself is never echoed back" "$OUT" "gated"
+
+echo ""
+echo "=== JIT_CONTEXT_INJECT=gated in config.env -- refused like any other bad line ==="
+set_config "JIT_CONTEXT_INJECT=gated"
+OUT=$(run_prompt "what about the billing")
+assert_contains     "the refusal is reported"   "$OUT" "were refused"
+assert_not_contains "and the default still applied" "$OUT" "BILLING-BODY-MARKER"
+assert_contains     "positive control: the entry still fired" "$OUT" "How invoice totals are computed"
+
+echo ""
+echo "=== JIT_CONTEXT_INJECT=full in config.env -- honoured, and NOT refused ==="
+set_config "JIT_CONTEXT_INJECT=full"
+OUT=$(run_prompt "what about the billing")
+assert_not_contains "a valid value raises no refusal" "$OUT" "were refused"
+assert_contains     "and it takes effect"             "$OUT" "BILLING-BODY-MARKER"
+
+# =============================================
+# SECTION 6: a description cannot become a body
+# =============================================
+echo ""
+echo "=== A very long description is clipped ==="
+set_config ""
+OUT=$(run_prompt "longdesc please")
+assert_contains     "the start of it arrives" "$OUT" "LONGDESCSTART"
+assert_not_contains "the end of it does not"  "$OUT" "LONGDESCEND"
+assert_contains     "paired: a short description arrives whole" \
+                    "$(run_prompt "what about the billing")" "and why the getter lies."
+
+# =============================================
+# SECTION 7: paths and tools carry the same rule
+# =============================================
+echo ""
+echo "=== Paths dimension ==="
+set_config ""
+OUT=$(run_path "src/Commands/Deploy.php")
+assert_contains     "the description arrives" "$OUT" "Every command extends CommandBase"
+assert_not_contains "the body does not"       "$OUT" "COMMANDS-BODY-MARKER"
+set_config "JIT_CONTEXT_INJECT=full"
+OUT=$(run_path "src/Commands/Deploy.php")
+assert_contains "under full, the body does"   "$OUT" "COMMANDS-BODY-MARKER"
+
+echo ""
+echo "=== Tools dimension, a remind rule ==="
+set_config ""
+OUT=$(run_tool "bin/phpunit tests/")
+assert_contains     "the description arrives" "$OUT" "Coverage runs take eight minutes"
+assert_not_contains "the body does not"       "$OUT" "PHPUNIT-BODY-MARKER"
+set_config "JIT_CONTEXT_INJECT=full"
+OUT=$(run_tool "bin/phpunit tests/")
+assert_contains "under full, the body does"   "$OUT" "PHPUNIT-BODY-MARKER"
+
+# =============================================
+# SECTION 8: a refusal is never a summary
+# =============================================
+# The call has already been stopped. There is no cheaper path left to buy, and the pull
+# step is a soft rule an agent under momentum skips -- so a block reason that says "read
+# the file to find out why" is an absence produced by the tool, which is the one failure
+# this repository exists to name.
+echo ""
+echo "=== A block rule injects its whole body even under summary ==="
+set_config ""
+OUT=$(run_tool "git push origin main")
+assert_contains "the block reason is the whole entry" "$OUT" "GITPUSH-BODY-MARKER"
+assert_contains "and it is a block"                   "$OUT" '"decision":"block"'
+
+echo ""
+echo "=== A require: block injects its whole body even under summary ==="
+OUT=$(run_tool "bin/deploy production")
+assert_contains "the block reason is the whole entry" "$OUT" "DEPLOY-BODY-MARKER"
+assert_contains "and it names what was missing"       "$OUT" "Missing required"
+
+echo ""
+echo "=== Paired: the same rule NOT blocking is a summary ==="
+OUT=$(run_tool "bin/deploy production --dry-run")
+assert_contains     "the description arrives" "$OUT" "The deploy script has no undo"
+assert_not_contains "the body does not"       "$OUT" "DEPLOY-BODY-MARKER"
+
+# =============================================
+# SECTION 9: the pull is observable
+# =============================================
+# The one admitted loss in this design is that the pull step is soft. It is measurable
+# without any new machinery: reading the entry file is a tool call, and the path hook
+# logs the path of every tool call it sees.
+echo ""
+echo "=== A read of an entry file is recorded in hooks.log ==="
+set_config ""
+LOG="$BASE/.discovery/logs/hooks.log"
+rm -f "$LOG"
+run_path "$TEST_DIR/.claude/jit-context/vocabulary/00-manual/billing.md" >/dev/null
+if [ -f "$LOG" ]; then
+  assert_contains "the pull shows up in the log" "$(cat "$LOG")" "vocabulary/00-manual/billing.md"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: no hooks.log was written"
+fi
+
+# =============================================
+# SECTION 10: awk engine matrix -- a clipped multibyte description
+# =============================================
+# The clip is a substr, and substr counts BYTES on one-true-awk and CHARACTERS on gawk.
+# A cut that lands inside a multibyte character leaves a lone continuation byte behind.
+#
+# Driven, not reasoned. With the boundary fixup disabled, awk version 20200816 printed
+# NOTHING AT ALL for this prompt and still exited 0 -- the END block aborts on the byte,
+# which is issue #14 one function over -- while gawk printed the whole object correctly.
+# So the UTF-8 assertion below would have passed on the broken engine, on an empty file,
+# for the worst possible reason. The positive control beside it is what caught it, and
+# that is why the two are paired rather than the first one standing alone.
+#
+# Every assertion here runs once per awk on this machine, through a PATH shim.
+echo ""
+echo "=== A clipped description stays valid UTF-8 on every awk here ==="
+
+# 1 ASCII byte then 300 two-byte characters, so byte 400 -- the cap -- falls on the
+# SECOND byte of a character rather than between two. An even-length prefix would put
+# the cut on a boundary and the assertion would pass without testing anything.
+MB_DESC="M$(awk 'BEGIN{ for (i = 0; i < 300; i++) printf "é" }')"
+printf '%s\n' \
+  "---" \
+  "title: Multibyte" \
+  "description: $MB_DESC" \
+  "keywords: multibyte" \
+  "---" \
+  "" \
+  "MB-BODY-MARKER" > "$V/multibyte.md"
+printf 'multibyte\tmultibyte.md\n' >> "$V/00-index.tsv"
+set_config ""
+
+ENGINE_BIN=$(mktemp -d)
+ENGINES=""
+ENGINE_SEEN=""
+for cand in awk gawk nawk mawk; do
+  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  case " $ENGINE_SEEN " in *" $cand_path "*) continue ;; esac
+  ENGINE_SEEN="$ENGINE_SEEN $cand_path"
+  mkdir -p "$ENGINE_BIN/$cand"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$cand_path" > "$ENGINE_BIN/$cand/awk"
+  chmod +x "$ENGINE_BIN/$cand/awk"
+  ENGINES="$ENGINES $cand"
+done
+
+for eng in $ENGINES; do
+  OUTF=$(mktemp)
+  printf '%s' '{"prompt":"the multibyte one"}' \
+    | PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PROMPT_HOOK" > "$OUTF" 2>/dev/null
+  # Read from the FILE, never a $( ) capture: bash drops bytes a capture cannot carry,
+  # so an assertion on a shell variable can pass against output that is already broken.
+  if perl -0777 -ne 'my $x = $_; exit(utf8::decode($x) ? 0 : 1)' "$OUTF"; then
+    PASS=$((PASS + 1)); echo "  PASS: [$eng] the clipped description is valid UTF-8"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: [$eng] the clipped description is NOT valid UTF-8"
+  fi
+  # Paired: the assertion above passes trivially against a hook that injected nothing.
+  assert_contains "[$eng] positive control: something was actually injected" \
+                  "$(cat "$OUTF")" "Multibyte"
+  assert_not_contains "[$eng] and it was clipped, not delivered whole" \
+                  "$(cat "$OUTF")" "MB-BODY-MARKER"
+  rm -f "$OUTF"
+done
+rm -rf "$ENGINE_BIN"
+
+echo ""
+echo "========================"
+TOTAL=$((PASS + FAIL))
+echo "  $PASS/$TOTAL passed, $FAIL failed"
+echo "========================"
+
+rm -rf "$TEST_DIR"
+[ "$FAIL" -eq 0 ] && exit 0 || exit 1

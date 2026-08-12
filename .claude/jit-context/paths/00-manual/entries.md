@@ -1,5 +1,6 @@
 ---
 title: Rebuild the index or this edit does nothing
+description: Frontmatter edits are inert until scripts/rebuild-tsv.sh runs; how keywords are normalised, and how to prove an entry actually fires.
 match: (^|/)(\.claude|examples|templates)/jit-context/.*\.md$
 ---
 
@@ -12,6 +13,12 @@ bash scripts/rebuild-tsv.sh    # after every frontmatter edit, without exception
 ```
 
 Body edits need no rebuild — the body is read from the file at fire time. Frontmatter edits always do.
+
+## Write a `description:`, or a match can only name the entry
+
+A match injects the entry's `title:` and `description:` — roughly 20 tokens — and the agent reads the file if it wants the rest. An entry with no `description:` is named and **not injected**; nothing is auto-derived, because a generated summary of a wrong entry is a confident wrong summary.
+
+`inject: full` in an entry makes it arrive whole, and `JIT_CONTEXT_INJECT=full` in `config.env` does it for the project. Both are counted by `rebuild-tsv.sh` at build time and listed by `jit-dry-run.sh`, so the population is a number somebody reads. A `mode: block` tools rule injects its whole body whatever the mode says — the call is already stopped, so there is no next turn to spend a cheaper answer in.
 
 ## Authoring
 
