@@ -1,1 +1,2 @@
-Edit|Write	00-index.tsv	no-hand-editing-the-index.md	block		
+Edit|Write	~(^|[^[:alnum:]_.-])00-index[.]tsv$	no-hand-editing-the-index.md	block		
+Bash	~(>[[:space:]]*|(^|[;&|\n])[[:space:]]*tee[[:space:]][^;&|\n]*|(^|[;&|\n])[[:space:]]*(sed|perl)([[:space:]][^;&|\n]*)?[[:space:]]-[a-z]*i[^;&|\n]*)([^[:space:];&|<>\n]*[^[:alnum:]_.-])?00-index[.]tsv([^[:alnum:]_.-]|$)	no-shell-writes-to-the-index.md	block		

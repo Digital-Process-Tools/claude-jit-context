@@ -147,6 +147,106 @@ assert_silent "a fragment"             "changelog.d/70.fixed.md"    "changelog.m
 assert_silent "a lookalike name"       "docs/CHANGELOG.md.tmpl"     "changelog.md"
 
 echo ""
+echo "=== the tools dimension: a write to the generated index is refused, a read is not ==="
+# This repository's only `block` rule, and until #92 it had no assertion anywhere in
+# tests/: it could have stopped working outright and nothing would have gone red (#93).
+#
+# The REAL hook, not jit-dry-run.sh. The thing under test is a refusal, and only the hook
+# emits the {"decision":"block"} a session acts on; the dry-run reports which rule fired,
+# which is one inference short of the question -- and #92 is precisely a case where a rule
+# was present, matched something, and permitted the call anyway.
+#
+# Every "must not block" case is paired with a "must block" case differing in ONE token --
+# `sed -n` against `sed -i`, `00-index.tsv.bak` against `00-index.tsv`. A silence assertion
+# on its own passes in a tree the hook cannot even see, which is the vacuous result this
+# whole suite exists to refuse.
+HOOK="$REPO/scripts/pre-tool-hook.sh"
+EDIT_RULE="no-hand-editing-the-index.md"
+SHELL_RULE="no-shell-writes-to-the-index.md"
+IDX=".claude/jit-context/paths/00-manual/00-index.tsv"
+
+hook_verdict() {
+  printf '%s' "$1" | (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" 2>/dev/null)
+}
+# No double quote appears in any command below, so none needs JSON-escaping here. A helper
+# that pretended to escape would be a helper nobody checked.
+bash_payload() { printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1"; }
+file_payload() { printf '{"tool_name":"%s","tool_input":{"file_path":"%s"}}' "$1" "$2"; }
+
+assert_blocks() {
+  local desc="$1" payload="$2" rule="$3" out
+  out=$(hook_verdict "$payload")
+  if grep -qF '"decision":"block"' <<<"$out" && grep -qF "$rule" <<<"$out"; then
+    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    expected a block naming $rule"
+    echo "    got: ${out:0:200}"
+  fi
+}
+
+assert_allows() {
+  local desc="$1" payload="$2" out
+  out=$(hook_verdict "$payload")
+  if grep -qF '"decision":"block"' <<<"$out"; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    this call must NOT be blocked"
+    echo "    got: ${out:0:200}"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  fi
+}
+
+# Positive control for every assert_allows below. Without it a hook that cannot resolve
+# this tree -- wrong CLAUDE_PROJECT_DIR, missing index, a fatal awk error in row 1 --
+# reports no block for everything and the silence half of this section passes on emptiness.
+tool_probe=$(hook_verdict "$(file_payload Edit "$REPO/$IDX")")
+if ! grep -qF '"decision":"block"' <<<"$tool_probe"; then
+  echo "  FAIL: the tool hook cannot refuse anything in this repo's own tree"
+  echo "    got: ${tool_probe:0:200}"
+  echo "    every allow assertion below would be vacuous"
+  exit 1
+fi
+
+# --- Edit / Write: the subject is a path -------------------------------------
+assert_blocks "Edit on the paths index"   "$(file_payload Edit "$REPO/$IDX")"  "$EDIT_RULE"
+assert_blocks "Write on the tools index"  "$(file_payload Write ".claude/jit-context/tools/00-manual/00-index.tsv")" "$EDIT_RULE"
+assert_blocks "a relative bare index"     "$(file_payload Edit "00-index.tsv")" "$EDIT_RULE"
+# The over-fire half of #92: the rule named a filename FRAGMENT where it meant the
+# generated index, so a backup of it -- a file nothing generates and nobody may not edit --
+# was refused by a rule that has no business reaching it.
+assert_allows "a backup of the index"     "$(file_payload Edit "docs/00-index.tsv.bak")"
+assert_allows "a differently named tsv"   "$(file_payload Edit "docs/my00-index.tsv")"
+assert_allows "the index name in a dir"   "$(file_payload Edit "docs/00-index.tsv/notes.md")"
+
+# --- Bash: the subject is a command string ------------------------------------
+# The blindness #92 reports. The guard was anchored on the tool, so every one of these
+# rewrote the generated index with the hook running and saying nothing about it.
+assert_blocks "sed -i on the index"       "$(bash_payload "sed -i '' s/a/b/ $IDX")" "$SHELL_RULE"
+assert_blocks "sed -i with a backup suffix" "$(bash_payload "sed -i.bak s/a/b/ $IDX")"     "$SHELL_RULE"
+assert_blocks "perl -pi on the index"     "$(bash_payload "perl -pi -e s/a/b/ $IDX")"      "$SHELL_RULE"
+assert_blocks "a > redirect"              "$(bash_payload "echo x > $IDX")"                "$SHELL_RULE"
+assert_blocks "a >> redirect, no space"   "$(bash_payload "printf a >>$IDX")"              "$SHELL_RULE"
+assert_blocks "tee at the end of a pipe"  "$(bash_payload "cat foo | tee $IDX")"           "$SHELL_RULE"
+assert_blocks "a write after a chain op"  "$(bash_payload "cd /tmp && sed -i '' s/a/b/ $IDX")" "$SHELL_RULE"
+assert_blocks "the bare file name"        "$(bash_payload "sed -i '' s/a/b/ 00-index.tsv")"    "$SHELL_RULE"
+
+# The other direction, and the whole reason this rule is a regex over write FORMS rather
+# than over the file name: #76 and #79 are what a block anchored on a word costs. Each of
+# these names the index and each is a read or a mention.
+assert_allows "cat on the index"          "$(bash_payload "cat $IDX")"
+assert_allows "grep on the index"         "$(bash_payload "grep foo $IDX")"
+# Paired with "sed -i on the index" above: same command word, same path, one flag apart.
+assert_allows "sed reading, not writing"  "$(bash_payload "sed -n 1p $IDX")"
+assert_allows "merely mentioning it"      "$(bash_payload "echo see $IDX")"
+# Paired with "sed -i on the index": same write form, one suffix apart.
+assert_allows "a write to a .bak"         "$(bash_payload "sed -i '' s/a/b/ docs/00-index.tsv.bak")"
+assert_allows "a write to another tsv"    "$(bash_payload "echo x > docs/my00-index.tsv")"
+# The sanctioned writer. A guard that refuses the command its own text tells you to run
+# would be worse than the hole it closes.
+assert_allows "the rebuild script itself" "$(bash_payload "bash scripts/rebuild-tsv.sh")"
+
+echo ""
 echo "=== every file under scripts/ is governed by some paths/ rule ==="
 # The class behind #83 rather than the instance. `hooks.md` matches the hooks and
 # `common.sh`; `tooling.md` names its tools by hand, one alternation per script. A file that

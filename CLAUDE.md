@@ -24,7 +24,8 @@ Most of what used to be written out here now lives in `.claude/jit-context/`, an
 | `paths/00-manual/entries.md`                | you edit any `jit-context/*.md`         | the rebuild trap, keyword normalisation, how to prove an entry fires |
 | `paths/00-manual/release.md`                | you edit `.claude-plugin/plugin.json`  | the three version sites and the sweep that finds them                |
 | `paths/00-manual/changelog.md`              | you open `CHANGELOG.md`                | it is assembled, not edited — write a `changelog.d/` fragment instead |
-| `tools/00-manual/no-hand-editing-the-index.md` | you try to edit a `00-index.tsv`    | blocks it — the file is generated                                    |
+| `tools/00-manual/no-hand-editing-the-index.md` | you `Edit`/`Write` a path whose name is exactly `00-index.tsv` | blocks it — the file is generated             |
+| `tools/00-manual/no-shell-writes-to-the-index.md` | a `Bash` command redirects into, `tee`s into, or `sed -i`/`perl -i` over one | blocks those three write forms, and only those |
 | `vocabulary/00-manual/jit-context.md`       | someone names a hook or `rebuild-tsv`  | the dimension/hook/layer map                                         |
 
 Two consequences worth knowing before you change anything here:
