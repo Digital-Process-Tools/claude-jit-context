@@ -105,7 +105,11 @@ esac
 # is left over. What is left over does not exist yet, so it cannot contain a link — which
 # is the only reason folding it textually is sound.
 resolve_dir() {
-  # $1: an absolute path that need not exist. Prints its physical location.
+  # $1: an absolute path that need not exist. Prints its physical location. A value with
+  # no `/` in it at all is printed back unchanged, which is what the one caller wants:
+  # PROJECT is the empty string for `--base /.claude/jit-context`, and turning that into
+  # `/` would rebuild BASE as `//.claude/jit-context`, whose leading `//` POSIX leaves to
+  # the implementation. Do not call this with a relative path.
   local head="$1" tail="" phys out c
   while [ ! -d "$head" ]; do
     case "$head" in */*) ;; *) break ;; esac    # "C:" on Git Bash, or a bare word
