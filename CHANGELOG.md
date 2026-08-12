@@ -9,6 +9,46 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`pre-prompt-hook.sh` said it stripped accents; it called `tolower` and nothing else**
+  (#31). The comment above the normalisation read "Lowercase + strip accents (basic ASCII
+  transliteration)" and the line under it was a bare `tolower()`. It sat above the variable
+  that feeds the **log**, not the one that feeds the matcher, so it was wrong twice.
+
+  What the missing fold actually did is worse than a failure to match. The normaliser maps
+  every byte outside `[a-z0-9 -]` to a space, so an accent did not fail to match — it cut
+  the word in two. `détail` reached the lookup as the two fragments `d` and `tail`. The
+  same thing happened in `rebuild-tsv.sh`, which normalises a keyword the same way, so
+  `keywords: détail` was **indexed** as the row `d tail`. The two mangled spellings lined
+  up, which is why an accented keyword did match an accented prompt — by accident, and
+  only that one pairing out of four. `detail` never reached `détail` in either direction.
+
+  So the fold had to run on **both** sides, and this is the part worth stating plainly:
+  folding only the prompt — the obvious reading of the issue — would have fixed one pairing
+  and **broken the one that already worked**, silently, for every corpus already written in
+  French, German or Spanish. `rebuild-tsv.sh` now folds the keyword, `pre-prompt-hook.sh`
+  folds the prompt and `pre-tool-hook.sh` folds the path tokens it reads out of a command,
+  all through one table in `common.sh`. All four pairings match; a near miss still does not.
+
+  An index built before this change still carries the mangled row, and rebuilding is the
+  user's decision, not ours to require. So both hooks keep the **unfolded** subject as a
+  second lookup, built only when the fold changed something — an ASCII prompt pays one
+  string comparison and nothing else. A pre-fold row keeps firing until the index is
+  rebuilt, rather than going dead on upgrade with no error and no warning.
+
+  The substitution is `index()` and `substr()`, never `gsub()`. Measured on `awk` version
+  20200816: `gsub()` with a multibyte character as its pattern decodes the **subject**, so a
+  truncated UTF-8 sequence raised `towc: multibyte conversion failure` — the #14 abort,
+  reintroduced by the function written to finish #14's other half. The splice form does not
+  decode and returns a non-match instead. Scope is Latin-1 Supplement plus `æ`, `œ` and `ß`,
+  deliberately no further: folding past that is a much larger claim about languages nobody
+  here has measured.
+
+  `jit-misses.sh` already carried this table — it is where the worked example came from —
+  and deliberately does not source `common.sh`, so the copy stays. It is now the same
+  function, and `tests/test-jit-misses.sh` compares the two tables rather than trusting
+  them: a letter in one and not the other is a keyword indexed one way and reported
+  another.
+
 - **A hostile index could flood the refusal notice, and a truncated list must not read as
   complete** (#38). The `refused` string is built inside `awk` and never crosses an `exec`,
   so unlike the `config.env` cap in #36 there is no `ARG_MAX` and nothing fails — it simply

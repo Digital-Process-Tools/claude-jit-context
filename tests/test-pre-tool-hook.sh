@@ -355,6 +355,19 @@ for eng in $ENGINES; do
   OUT=$(run_hook_engine "$eng" '{"tool_name":"Bash","tool_input":{"command":"cat src/Détail/facade.php"}}')
   assert_empty "[$eng] non-ASCII path token with no keyword stays silent" "$OUT"
 
+  echo "=== [$eng] Latin-1 accents fold to ASCII (issue #31) ==="
+  # This hook reads the same vocabulary index as pre-prompt-hook.sh, so it has to normalise
+  # a path token the same way rebuild-tsv.sh normalises the keyword. Without the fold here,
+  # a folded index row is reachable from a prompt and dead from a file path.
+  printf 'detail%s\td-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"
+  echo "accent fold vocabulary body" > "$VOCAB_DIR/00-manual/d-$u.md"
+
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat src/Détail$u/a.php\"}}")
+  assert_contains "[$eng] an accented path token reaches an ASCII keyword" "$OUT" "accent fold vocabulary body"
+
+  OUT=$(run_hook_engine "$eng" "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat src/Dtail$u/a.php\"}}")
+  assert_empty "[$eng] folding does not make a near miss match" "$OUT"
+
   # The CamelCase split is the loop that aborted. It is the only thing that makes this
   # keyword visible, so the same token lowercased must produce silence -- a rule that fires
   # on everything looks like success from one side.

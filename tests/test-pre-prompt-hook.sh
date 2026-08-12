@@ -10,6 +10,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 HOOK="$SCRIPT_DIR/scripts/pre-prompt-hook.sh"
 SESSION_HOOK="$SCRIPT_DIR/scripts/session-start-hook.sh"
+REBUILD="$SCRIPT_DIR/scripts/rebuild-tsv.sh"
 PASS=0
 FAIL=0
 
@@ -359,6 +360,58 @@ for eng in $ENGINES; do
 
   OUT=$(run_hook_engine "$eng" "{\"prompt\":\"parlons de détailcamel$u\"}")
   assert_empty "[$eng] no case transition, no match" "$OUT"
+
+  echo "=== [$eng] Latin-1 accents fold to ASCII (issue #31) ==="
+  # Surviving the character is not the same as folding it. #14 stopped an accent aborting
+  # the END block; the accent still turned into a space, so `détail` and `detail` were
+  # different keywords while the comment above the normalisation claimed they were one.
+  printf 'detail%s\td-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"
+  printf 'facade%s\tfa-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"
+  # An index built BEFORE the fold carries the mangled spelling: rebuild-tsv.sh turned the
+  # keyword `légacy` into the row `l gacy`, which matched an accented prompt by accident.
+  # Folding the prompt alone would kill that row the moment the plugin is upgraded and the
+  # index is not rebuilt -- silently, which is this repo's worst failure shape.
+  printf 'l gacy%s\tlg-%s.md\n' "$u" "$u" >> "$VOCAB_DIR/00-manual/00-index.tsv"
+  echo "accent fold body" > "$VOCAB_DIR/00-manual/d-$u.md"
+  echo "cedilla fold body" > "$VOCAB_DIR/00-manual/fa-$u.md"
+  echo "legacy mangled body" > "$VOCAB_DIR/00-manual/lg-$u.md"
+
+  OUT=$(run_hook_engine "$eng" "{\"prompt\":\"le détail$u de la facture\"}")
+  assert_contains "[$eng] an accented prompt reaches an ASCII keyword" "$OUT" "accent fold body"
+
+  OUT=$(run_hook_engine "$eng" "{\"prompt\":\"la FAÇADE$u du batiment\"}")
+  assert_contains "[$eng] an accented capital folds too" "$OUT" "cedilla fold body"
+
+  # The other direction. A fold that fires on everything looks like success from one side:
+  # dropping the accent must not also drop the letter it sat on.
+  OUT=$(run_hook_engine "$eng" "{\"prompt\":\"le dtail$u de la facture\"}")
+  assert_empty "[$eng] folding does not make a near miss match" "$OUT"
+
+  OUT=$(run_hook_engine "$eng" "{\"prompt\":\"un légacy$u ancien\"}")
+  assert_contains "[$eng] a pre-fold index row still fires" "$OUT" "legacy mangled body"
+
+  echo "=== [$eng] an accented keyword is indexed folded (issue #31) ==="
+  # The keyword side, driven through rebuild-tsv.sh rather than a hand-written row: the
+  # index writer is what has to agree with the matcher, and folding only the prompt leaves
+  # `keywords: détail` indexed as `d tail` and unreachable from the prompt `detail`.
+  RB="$TEST_DIR/rebuild-$u"
+  mkdir -p "$RB/.claude/jit-context/vocabulary/00-manual"
+  printf -- '---\nkeywords: détail%s, FAÇADE%s\n---\naccented keyword body\n' "$u" "$u" \
+    > "$RB/.claude/jit-context/vocabulary/00-manual/kw-$u.md"
+  PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$RB" bash "$REBUILD" >/dev/null 2>&1
+  IDX=$(cat "$RB/.claude/jit-context/vocabulary/00-manual/00-index.tsv")
+  assert_contains "[$eng] an accented keyword indexes folded" "$IDX" "detail$u"
+  assert_contains "[$eng] and an accented capital keyword too" "$IDX" "facade$u"
+  assert_not_contains "[$eng] not as the fragment it used to be" "$IDX" "d tail$u"
+
+  run_rebuilt() {
+    echo "$1" | PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$RB" bash "$HOOK" 2>/dev/null
+  }
+  OUT=$(run_rebuilt "{\"prompt\":\"le detail$u sans accent\"}")
+  assert_contains "[$eng] an unaccented prompt reaches an accented keyword" "$OUT" "accented keyword body"
+
+  OUT=$(run_rebuilt "{\"prompt\":\"le dtail$u sans accent\"}")
+  assert_empty "[$eng] and a near miss still does not" "$OUT"
 
   echo "=== [$eng] control characters in an entry body (issue #15) ==="
   OUT=$(run_hook_engine "$eng" "{\"prompt\":\"a crlf$u question\"}")

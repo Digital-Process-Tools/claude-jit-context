@@ -14,7 +14,7 @@ cat | awk \
   -v vocab_base="$JIT_BASE/vocabulary" \
   -v state_dir="$JIT_STATE_DIR" \
   -v log_tmp="$JIT_TMP" \
-  "$JIT_AWK_ENTRY$JIT_AWK_JSON"'
+  "$JIT_AWK_ENTRY$JIT_AWK_JSON$JIT_AWK_FOLD"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -65,7 +65,10 @@ END {
 
   if (message == "") { print "{}"; exit }
 
-  # Lowercase + strip accents (basic ASCII transliteration)
+  # The log copy, and only the log copy. Lowercased so a miss report groups on the word
+  # rather than on its capitalisation; NOT folded, because the log is a record of what the
+  # user typed and jit-misses.sh folds it for itself when it reads this line. The matching
+  # subject is built further down and is folded there.
   msg = tolower(message)
 
   # Word-boundary match prep:
@@ -93,10 +96,26 @@ END {
     if (c != "" && p != "" && index("ABCDEFGHIJKLMNOPQRSTUVWXYZ", c) > 0 && index("abcdefghijklmnopqrstuvwxyz0123456789", p) > 0) cc = cc " " c
     else cc = cc c
   }
-  # 2. Pad, lowercase, strip non-alnum (keep hyphens) so kw lookup is space-bounded
-  padded = " " tolower(cc) " "
+  # 2. Pad, lowercase, fold Latin-1 accents, strip non-alnum (keep hyphens) so kw lookup
+  # is space-bounded. The fold is jit_fold_latin1() in common.sh and it runs before the
+  # strip on purpose: the strip maps the accent to a space, so `détail` reached the lookup
+  # as the two fragments `d` and `tail` and could never match the keyword `detail` (#31).
+  # rebuild-tsv.sh folds the keyword with the same table, or the two sides normalise to
+  # different spellings and the row is dead with nothing to show for it.
+  low = " " tolower(cc) " "
+  padded = jit_fold_latin1(low)
+  # An index built BEFORE the fold carries the mangled spelling -- the keyword `détail` as
+  # the row `d tail` -- and that row did match an accented prompt, by accident. Folding the
+  # prompt alone would take it out on upgrade, silently, for anyone who has not rebuilt.
+  # So the unfolded subject stays as a second lookup. It is built only when the fold
+  # changed something, which for an ASCII prompt is never: that case pays one comparison.
+  stale = (padded != low) ? low : ""
   gsub(/[^a-z0-9 -]/, " ", padded)
   gsub(/  +/, " ", padded)
+  if (stale != "") {
+    gsub(/[^a-z0-9 -]/, " ", stale)
+    gsub(/  +/, " ", stale)
+  }
 
   # --- Load shown set ---
   jit_shown_load(shown_file, shown)
@@ -135,7 +154,7 @@ END {
         }
         continue
       }
-      if (!(vfile in shown) && index(padded, " " kw " ") > 0) {
+      if (!(vfile in shown) && (index(padded, " " kw " ") > 0 || (stale != "" && index(stale, " " kw " ") > 0))) {
         if (vfile in vmatch) vmatch[vfile] = vmatch[vfile] "|" kw
         else vmatch[vfile] = kw
       }

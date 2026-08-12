@@ -240,6 +240,40 @@ COUNT=$(printf '%s\n' "$AFTER" | grep -c . || true)
 assert_status "the working dir still holds exactly one entry (itself)" "$COUNT" "1"
 
 # =============================================
+# SECTION: the fold table is duplicated, so assert it has not drifted
+# =============================================
+# jit-misses.sh deliberately does not source common.sh (its header says why: common.sh
+# mkdir -p's the log directory at load, and a reporting tool must not create the thing it
+# reports). So the Latin-1 fold table exists twice. Drift is not a cosmetic problem: the
+# index writer folds a keyword with common.sh's copy, and a letter present in one table
+# and missing from the other is a keyword that indexes one way and is reported another.
+# Compared as a character sequence, because the two copies are indented differently.
+fold_table() {
+  # Anchored on the first table entry, written as the two UTF-8 bytes of `á`: perl reads
+  # this file as bytes, and an unanchored .*? starts at the FIRST split() in the file --
+  # the stop-word list -- and reports that as the fold table.
+  perl -0777 -ne 'if (/split\(("\xc3\xa1 .*?),\s*(?:tr|_jit_fold_tr),\s*"\[ \]"\)/s) {
+      $t = $1; $t =~ s/\\\n\s*//g; $t =~ s/"//g; $t =~ s/\s+/ /g; $t =~ s/^ | $//g;
+      print $t;
+    }' "$1"
+}
+T_MISSES=$(fold_table "$MISSES")
+T_COMMON=$(fold_table "$SCRIPT_DIR/scripts/common.sh")
+# Positive control. Without it a regex that stops matching either file reports the two
+# empty strings as equal -- a green that means the assertion no longer reads anything.
+if [ -z "$T_MISSES" ] || [ -z "$T_COMMON" ]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: could not read a fold table out of both files -- the assertion is vacuous"
+  echo "    jit-misses.sh: ${#T_MISSES} chars, common.sh: ${#T_COMMON} chars"
+elif [ "$T_MISSES" = "$T_COMMON" ]; then
+  PASS=$((PASS + 1)); echo "  PASS: the two copies of the fold table agree"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the two copies of the fold table have drifted"
+  echo "    jit-misses.sh: $T_MISSES"
+  echo "    common.sh:     $T_COMMON"
+fi
+
+# =============================================
 # SECTION: awk engine matrix
 # =============================================
 # The report is one awk pass, and the two awks on a CI machine do not agree about
