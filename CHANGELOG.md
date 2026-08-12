@@ -7,6 +7,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **The three version sites are now asserted to agree.** `.claude-plugin/plugin.json`,
+  the README badge and the topmost released `## [x.y.z]` heading here were kept in step by
+  a hand sweep, and nothing failed when they drifted. A stale badge is the expensive
+  direction: it tells every reader the project is older than it is, silently, forever.
+  `tests/test-version-sites.sh` reads all three and requires the same string.
+
+  Preventive only — no behaviour changed, no hook was touched, and nothing a user installs
+  is different. The parse is `awk`, not `jq`, so each of the three extractions carries its
+  own guard: a site that yields nothing, or yields something that is not version-shaped,
+  fails by name rather than comparing equal to another empty match. Three parsers that all
+  return nothing agree with each other, so the parsers are themselves checked against a
+  synthetic pre-release first — including the badge, where shields.io doubles a literal
+  hyphen and a naive read truncates `0.4.0-rc.1` to `0.4.0` and reports drift that is not
+  there. It asserts three named sites and does not sweep the repository — `0.2.0` appears
+  in prose that is historically correct, and only a human can tell that from a stale badge.
+
 ## [0.3.0] — Containment
 
 This release treats `.claude/jit-context/` as what it actually is: a directory that
