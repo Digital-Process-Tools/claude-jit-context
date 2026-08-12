@@ -87,6 +87,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `jit_log_write()` since #27: a log directory removed after `common.sh` created it was loud
   in the same way. Both reordered.
 
+- **The structural guard could not tell a prohibition from an occurrence.** The scan added
+  with `tests/test-assertion-helpers.sh` matched the pipe shape anywhere in a suite,
+  including inside a `#` comment — so `tests/test-marker-degradation.sh` failed for a line
+  documenting the rule it obeys. A guard that punishes writing a rule down teaches people
+  not to write it down. Comment lines are skipped now, and a control fixture proves the
+  skip did not disarm the scan: a commented occurrence must not flag, a real one must.
+  Found when this branch rebased onto that one — neither PR could have seen it alone.
+
 ### Added
 
 - **`tests/test-assertion-helpers.sh` — the harness asserting about itself.** It extracts
