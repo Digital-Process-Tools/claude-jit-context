@@ -23,6 +23,8 @@ That `rebuild-tsv.sh` row is a gap, not a design. It reports a refused macro on 
 
 **`jit-misses.sh` does not source `common.sh`, on purpose.** `common.sh` `mkdir -p`s the log directory at load, and a reporting tool that creates the thing it reports is a tool whose own output cannot be trusted. Do not "fix" the missing `source` line. `rebuild-tsv.sh` and `jit-dry-run.sh` do source it — and a change you make *inside* `common.sh` is governed by `hooks.md`, not by this file.
 
+**`jit-misses.sh` reads a file the hooks wrote, so its `awk` is pinned to `LC_ALL=C` too.** The hooks truncate the prompt copy at 80 **bytes**, so an ordinary CJK or heavily accented prompt leaves a half-finished UTF-8 sequence at the end of a log line — no attacker, no malformed input. Reading that back aborted this tool with `illegal byte sequence` under one-true-awk and made gawk warn (#68, one hop downstream from the hooks). Failing loudly is this file's contract, and it still holds — a log this tool cannot read gets a named `SKIPPED` and exit 2. Choking on bytes the plugin wrote itself is not that. The fold table here is the byte-identical copy of `common.sh`'s, `index()`/`substr()` with no decode and both cases listed, so `C` costs it nothing.
+
 **No new runtime dependencies, same as the hooks.** `awk` and `perl` only. No `jq`, no Python, no Node. These ship inside the plugin and run on Linux, macOS and Windows (Git Bash); `find -delete` is not POSIX and GNU-only flags are not available.
 
 **`match` is an awk ERE.** `\s` `\d` `\w` compile to the bare letter and match nothing; `\b` is a backspace character. `rebuild-tsv.sh` writes the pattern and `jit-dry-run.sh` lints it, so both ends of that guard live here.

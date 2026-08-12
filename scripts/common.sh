@@ -321,16 +321,83 @@ if [ ! -d "$JIT_STATE_DIR" ] || [ ! -w "$JIT_STATE_DIR" ]; then JIT_STATE_DIR=""
 # path, and bash never re-derives either. What bash does here is CONTAIN what it was handed
 # -- the same posture as jit_bad_entry_file() -- because that channel is a file in /tmp named
 # after a pid, and a path arriving over it is not evidence of anything.
+# --- The boundary between the two regions of that channel ---------------------
+# Until #65 there was none. Line 1 was the log line and lines 2..N were the marks, and
+# every hook's log line ENDS with a field taken verbatim from the tool payload after
+# jit_unescape() -- so a JSON newline escape is a real newline by the time it is written,
+# and every byte the payload put after it was read back as a mark. A forged
+# `path<TAB>key` marks a `block` rule as already-shown and the rule silently does not
+# fire: indexed, matched, something to say, and no notice, no stderr, exit 0.
+#
+# What made it inert against Claude Code was the 80-byte truncation of that log field
+# against a 36-character session id -- an incidental constant, not a check. Raising it,
+# reordering a log field, or adding a payload-derived one turns it back on, and none of
+# those reads as a security change.
+#
+# THE BOUNDARY CHOSEN, and why it is this one rather than the two alternatives #65 names:
+#
+#   * The marks are written FIRST, then this sentinel, then the log line. Payload bytes
+#     therefore only ever appear AFTER the sentinel, and bash stops reading marks at the
+#     first one. A payload that spells the sentinel itself achieves nothing, because that
+#     copy is downstream of the real one. This is a STRUCTURAL boundary: it needs no
+#     secret, so it cannot be weakened by a shorter session id or a longer log field.
+#   * A count written by awk was rejected: with the log line still first, a payload
+#     newline puts forged text INSIDE the counted region, so bash honours the count and
+#     applies the forgery anyway.
+#   * A second temp file was rejected for its second mktemp fork per hook fire on a path
+#     budgeted at 30-110 ms. #62 argues for removing this channel altogether one day;
+#     nothing here makes that harder -- the sentinel is one line in one function.
+#
+# WHEN THE BOUNDARY ITSELF IS MALFORMED. jit_marks_read() sets JIT_MARKS_OK only on
+# seeing the sentinel, and jit_shown_apply() applies nothing without it. So a truncated
+# or absent sentinel costs the DEDUP -- an entry may be injected a second time -- and
+# never a rule. That is the direction this repo has always chosen: repeating an entry
+# costs tokens, suppressing one costs the rule.
+#
+# The sentinel carries no TAB, and every mark line has one by construction (`f "\t" k`),
+# so awk's own output can never be mistaken for it either.
+JIT_MARK_END='--jit-marks-end--'
+export JIT_MARK_END
+
+# Reads the marks region off the scratch channel, stopping at the sentinel, and leaves
+# the caller's stdin positioned on the log line that follows it. Nothing is applied here:
+# the caller reads its log fields from the same open file descriptor, and jit_shown_apply
+# runs afterwards with no stdin of its own.
+JIT_MARKS_IN=()
+JIT_MARKS_OK=0
+jit_marks_read() {
+  local line
+  JIT_MARKS_IN=()
+  JIT_MARKS_OK=0
+  while IFS= read -r line; do
+    if [ "$line" = "$JIT_MARK_END" ]; then JIT_MARKS_OK=1; return 0; fi
+    JIT_MARKS_IN[${#JIT_MARKS_IN[@]}]="$line"
+  done
+  return 0
+}
+
 jit_shown_apply() {
-  local f k name
+  local f k name entry
   [ -n "$JIT_STATE_DIR" ] || return 0
-  while IFS=$'\t' read -r f k; do
+  # No sentinel, no marks. See above: this costs dedup, never a rule.
+  [ "$JIT_MARKS_OK" = 1 ] || return 0
+  [ "${#JIT_MARKS_IN[@]}" -gt 0 ] || return 0
+  for entry in "${JIT_MARKS_IN[@]}"; do
+    f="${entry%%$'\t'*}"
+    k="${entry#*$'\t'}"
+    [ "$k" != "$entry" ] || continue
     [ -n "$f" ] && [ -n "$k" ] || continue
     name="${f#"$JIT_STATE_DIR"/}"
     # Unchanged means the path was not under the state directory at all.
     [ "$name" != "$f" ] || continue
     case "$name" in
       */*) continue ;;
+      # The backslash, for Windows, and it is the same reason jit_bad_entry_file() gives
+      # further down this file: on Git Bash the Win32 file API underneath treats it as a
+      # separator, so `..\..\x` traverses there while being an ordinary character here.
+      # That check did not come along when the write moved out of awk in #59, and the
+      # filter admitted a byte this repository's own code says must not pass (#65).
+      *\\*) continue ;;
       path-shown-*.txt | vocab-shown-*.txt) ;;
       *) continue ;;
     esac
@@ -851,6 +918,26 @@ JIT_AWK_ENTRY='
 function jit_row_id(layer, rown) {
   return layer " row " rown
 }
+# Every hook log line ends with a field lifted verbatim out of the tool payload, after
+# jit_unescape() -- so a JSON newline escape is a REAL newline by the time it is written.
+# Two things went wrong with that and only one of them was a security bug.
+#
+# The security half is #65: the marks share this channel, so payload text after a newline
+# was read back as a mark. The boundary in jit_shown_flush() is what actually closes that;
+# this is defence in depth, at the point the field is BUILT rather than at the point it is
+# parsed, so a future log line that forgets the boundary still cannot carry one.
+#
+# The reporting half needs no attacker at all. A multi-line prompt truncated its own log
+# line at the first newline, and jit-misses.sh reads that file -- so a two-line prompt was
+# recorded, and reported back to its author, as shorter than they typed it.
+#
+# A space, not a deletion: two words either side of a line break are two words.
+# gsub over the class, not index(): both bytes are ASCII and neither can be part of a
+# multibyte sequence, so there is no decode here to go wrong.
+function jit_log_text(s) {
+  gsub(/[\n\r]/, " ", s)
+  return s
+}
 # What the LOG may say about a refused row. hooks.log is a file on the disk of whoever
 # cloned the repository, read by a person, and the containment branch was writing the row
 # file-name column into it verbatim -- the one string jit_bad_entry_file() deliberately
@@ -1141,11 +1228,21 @@ function jit_shown_mark(file, key) {
   if (file == "") return
   JIT_MARKS = JIT_MARKS file "\t" key "\n"
 }
-# Called once, straight after the hook writes its log line to the same file, so the marks are
-# lines 2..N of a channel bash was already opening. A second temp file would be a second
-# create and unlink on a path budgeted at 30-110 ms.
+# Called once, BEFORE the hook writes its log line to the same file. The order is the whole
+# of the #65 fix and it is not cosmetic: the log line ends with a payload-derived field, so
+# anything written after it can be forged with a newline. Marks first, then a sentinel line,
+# then the log line -- payload bytes can only ever land downstream of the boundary. bash
+# stops at the first sentinel, so a payload that spells one out achieves nothing.
+#
+# The sentinel is written even when there is nothing to mark: its ABSENCE is what tells
+# jit_marks_read() the channel is malformed, so it has to be unconditional. In awk, `>`
+# truncates on the first write to a name and appends thereafter, so this may run first.
+#
+# A second temp file would be a second create and unlink on a path budgeted at 30-110 ms.
+#
+# No apostrophes in this block. It is a single-quoted bash string and one would close it.
 function jit_shown_flush(out) {
-  if (JIT_MARKS != "") printf "%s", JIT_MARKS > out
+  printf "%s%s\n", JIT_MARKS, ENVIRON["JIT_MARK_END"] > out
 }
 function jit_field(raw, a, b,   o, i) {
   if (a == "" || b == "" || a > b) return ""

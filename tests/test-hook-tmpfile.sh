@@ -337,6 +337,137 @@ LEFT="$(ls -A "$D_TMPDIR")"
 assert_eq "the hooks left nothing behind in TMPDIR" "$LEFT" "claude-jit-FOREIGN.tmp"
 
 echo ""
+echo "=== E: a tool payload cannot forge a mark line onto the scratch channel ==="
+# Issue #65. #59 moved the marker write out of awk and into the shell, over this same
+# scratch file: line 1 is the log line, lines 2..N are `path<TAB>key` marks, and NOTHING
+# separated the two regions. Every hook log line ends with a field taken verbatim from
+# the payload after jit_unescape(), so a JSON newline escape is a REAL newline by the
+# time it is written -- and everything after it was read as a mark.
+#
+# The consequence is the worst one this project has: a `block` rule that was indexed,
+# matched and had something to say is marked already-shown by the attacker and simply
+# does not fire. No notice, no stderr, exit 0.
+#
+# WHY THIS FIXTURE USES A RELATIVE CLAUDE_PROJECT_DIR. The forged line has to fit inside
+# the 80-byte truncation of the log field. That truncation is the ONLY reason the attack
+# does not work against Claude Code's 36-character session ids today -- it is an
+# incidental constant, not a check, and the whole point of #65 is that raising it or
+# reordering a log field turns the hole back on. A fixture built under $TMPDIR would
+# spend the 80 bytes on macOS's /var/folders path alone and go green having constructed
+# nothing. A relative project dir makes the forged line the same short length on every
+# platform, and that length is asserted below so it can never quietly stop fitting.
+#
+# The two positives that stop this being vacuous sit in the same fixture: the control
+# blocks on an ordinary payload, and the honest once-mode dedup still works -- a "fix"
+# that simply threw the mark channel away would pass the block assertion and fail that.
+E_ROOT="$TMP/forge"
+rm -rf "$E_ROOT"
+E_BASE="$E_ROOT/.claude/jit-context"
+mkdir -p "$E_BASE/paths/00-manual" "$E_BASE/paths/10-auto" "$E_BASE/paths/20-grouped" \
+         "$E_BASE/paths/30-crosscutting" "$E_BASE/tools/00-manual" "$E_BASE/vocabulary/00-manual"
+printf 'nomatchxx\tunused.md\n' > "$E_BASE/paths/00-manual/00-index.tsv"
+printf 'unused\n' > "$E_BASE/paths/00-manual/unused.md"
+: > "$E_BASE/paths/10-auto/00-index.tsv"
+: > "$E_BASE/paths/20-grouped/00-index.tsv"
+: > "$E_BASE/paths/30-crosscutting/00-index.tsv"
+printf 'Bash\t~gitpush\tb.md\tonce,block\t\t\n' > "$E_BASE/tools/00-manual/00-index.tsv"
+printf 'DO NOT PUSH\n' > "$E_BASE/tools/00-manual/b.md"
+: > "$E_BASE/vocabulary/00-manual/00-index.tsv"
+
+E_STATE='./.claude/jit-context/.discovery/state'
+E_FORGED="$E_STATE/vocab-shown-S.txt"$'\t'"rule:b.md"
+E_LEN=${#E_FORGED}
+# 78 and not 80: the payload prefixes `x` and the newline itself before this line starts.
+if [ "$E_LEN" -gt 78 ]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the forged mark is $E_LEN bytes and the log field truncates at 80."
+  echo "        Nothing below constructs the attack, so every result in E is vacuous."
+else
+  PASS=$((PASS + 1))
+  echo "  PASS: the forged mark is $E_LEN bytes, inside the 80-byte log field"
+fi
+
+# The forgery: a Read payload whose file_path carries a real newline followed by a mark
+# line naming the tool hook's shown-file and the block rule's key.
+(
+  cd "$E_ROOT" || exit 1
+  printf '{"session_id":"S","tool_name":"Read","tool_input":{"file_path":"x\\n%s"}}' "$E_FORGED" \
+    | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-path-hook.sh" > "$TMP/e-forge.out" 2> "$TMP/e-forge.err"
+)
+E_FORGE_RC=$?
+assert_rc0 "the forging call itself still exits 0" "$E_FORGE_RC"
+assert_eq "the forging call still answers on stdout" "$(cat "$TMP/e-forge.out")" "{}"
+assert_eq "the forging call says nothing on stderr" "$(cat "$TMP/e-forge.err")" ""
+
+E_MARKER="$E_ROOT/.claude/jit-context/.discovery/state/vocab-shown-S.txt"
+if [ -f "$E_MARKER" ]; then
+  assert_not_contains "no forged mark was written" "$(cat "$E_MARKER")" "rule:b.md"
+else
+  PASS=$((PASS + 1)); echo "  PASS: no forged mark was written (no marker file at all)"
+fi
+
+# The assertion with teeth: the block still fires in the session the forgery targeted.
+E_PUSH=$( cd "$E_ROOT" && printf '{"session_id":"S","tool_name":"Bash","tool_input":{"command":"gitpush now"}}' \
+  | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null )
+assert_contains "the block still fires in the session the forgery targeted" "$E_PUSH" '"decision":"block"'
+
+# Positive control, same fixture: an untouched session blocks on the ordinary payload.
+E_CTL=$( cd "$E_ROOT" && printf '{"session_id":"T","tool_name":"Bash","tool_input":{"command":"gitpush now"}}' \
+  | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null )
+assert_contains "control: an untouched session blocks on the same payload" "$E_CTL" '"decision":"block"'
+
+# And the mark channel still WORKS. Without this a fix that deleted the channel outright
+# would pass everything above: the rule is once-mode, so the second call in session T has
+# to find its own honest mark and stay quiet.
+E_AGAIN=$( cd "$E_ROOT" && printf '{"session_id":"T","tool_name":"Bash","tool_input":{"command":"gitpush now"}}' \
+  | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null )
+assert_eq "an honest mark is still written, so once-mode still dedups" "$E_AGAIN" "{}"
+
+echo ""
+echo "=== F: a marker name carrying a backslash is refused ==="
+# common.sh filtered the mark's file name on `*/*` only. A name containing a BACKSLASH
+# passed it and produced a file with that literal name on macOS. jit_bad_entry_file()
+# refuses the byte 550 lines away, with a comment explaining why: on Git Bash the Win32
+# file API underneath treats it as a separator, so `..\..\x` traverses there. That check
+# did not come along when the write moved out of awk in #59.
+#
+# NOT a demonstrated traversal -- no Git Bash runner was available -- so this asserts a
+# filter the repository's own code says must be closed, paired with a legitimate name in
+# the same call so it cannot pass by refusing everything.
+F_ROOT="$TMP/backslash"
+rm -rf "$F_ROOT"
+mkdir -p "$F_ROOT/.claude/jit-context/.discovery/state"
+F_OUT=$(
+  CLAUDE_PROJECT_DIR="$F_ROOT" . "$SCRIPTS/common.sh" >/dev/null 2>&1
+  # Read by jit_shown_apply(), which shellcheck cannot see through the `.` above.
+  # shellcheck disable=SC2034
+  JIT_MARKS_IN=(
+    "$JIT_STATE_DIR/vocab-shown-ok.txt"$'\t'"honest.md"
+    "$JIT_STATE_DIR/vocab-shown-..\\..\\..\\evil.txt"$'\t'"forged.md"
+  )
+  # shellcheck disable=SC2034
+  JIT_MARKS_OK=1
+  # </dev/null on purpose: jit_shown_apply reads its marks from the array, never from
+  # stdin, and a version that reached for stdin would hang this suite rather than fail it.
+  jit_shown_apply </dev/null
+  ls -A "$JIT_STATE_DIR"
+)
+assert_contains "the legitimate marker name is still written" "$F_OUT" "vocab-shown-ok.txt"
+assert_not_contains "the backslash-bearing name is refused" "$F_OUT" "evil"
+
+echo ""
+echo "=== G: a multi-line payload field does not truncate its own log line ==="
+# The reporting half of #65, same root cause: msg_short/fp_short/tt_short are written to
+# the log verbatim, so a newline inside one ended the log line early and jit-misses.sh
+# read a shorter prompt than the user sent. Stripped at the point the field is built.
+G_ROOT="$(new_project "g")"
+printf '{"prompt":"zorkword on line one\\nbeta on line two"}' \
+  | CLAUDE_PROJECT_DIR="$G_ROOT" bash "$SCRIPTS/pre-prompt-hook.sh" >/dev/null 2>&1
+G_LOG="$(cat "$(log_of "$G_ROOT")" 2>/dev/null)"
+assert_contains "the log line records the first line of the prompt" "$G_LOG" "zorkword on line one"
+assert_contains "and the second line, on the same log line" "$G_LOG" "beta on line two"
+
+echo ""
 echo "PASS: $PASS  FAIL: $FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
 [ "$SKIPPED_SECTIONS" -eq 0 ] || exit 2

@@ -388,6 +388,44 @@ for cand in awk gawk nawk mawk; do
   ENGINES="$ENGINES $cand"
 done
 
+# The caller locale for the byte-split assertion below. `C` is where that bug does not
+# reproduce, so a suite that inherited `C` would assert nothing; this picks a UTF-8 locale
+# when the machine has one and says which it got. See tests/test-pre-prompt-hook.sh.
+pick_utf8_locale() {
+  local c
+  for c in en_US.UTF-8 C.UTF-8 en_US.utf8 C.utf8; do
+    if [ "$(LC_ALL="$c" locale charmap 2>/dev/null)" = "UTF-8" ]; then
+      printf '%s' "$c"; return 0
+    fi
+  done
+  printf '%s' "${LC_ALL:-${LANG:-C}}"
+}
+UTF8_LOCALE="$(pick_utf8_locale)"
+# Whether what came back is ACTUALLY a UTF-8 locale. On a runner with no `locale` command
+# or no UTF-8 locale installed -- Git Bash is the case in mind -- the fallback is the
+# caller own, which is normally `C`, and `C` is precisely where the bug does not reproduce.
+# The assertions below would then still pass, and pass for the wrong reason: they could not
+# tell the fix from its absence. Said out loud rather than gone quietly green, on the
+# pattern section A of tests/test-hook-tmpfile.sh already uses for symbolic links.
+UTF8_LOCALE_REAL=no
+if [ "$(LC_ALL="$UTF8_LOCALE" locale charmap 2>/dev/null)" = "UTF-8" ]; then UTF8_LOCALE_REAL=yes; fi
+if [ "$UTF8_LOCALE_REAL" != yes ]; then
+  echo "  SKIP-NOTE: no UTF-8 locale on this machine ($UTF8_LOCALE). The malformed-byte"
+  echo "             assertions below run under a byte locale, where the defect does not"
+  echo "             reproduce -- they still assert the guarantee, they just cannot fail"
+  echo "             for it here."
+  if [ "${JIT_TESTS_REQUIRE_UTF8_LOCALE:-}" = 1 ]; then
+    FAIL=$((FAIL + 1))
+    echo ""
+    echo "  FAIL: A UTF-8 LOCALE WAS REQUIRED AND NOT OBTAINED."
+    echo "        JIT_TESTS_REQUIRE_UTF8_LOCALE=1 says this environment was configured to"
+    echo "        have one, so the note above is a broken configuration and not a platform"
+    echo "        without the capability. Failed rather than noted because run-all.sh"
+    echo "        renders a note green. Nothing here is a defect in the hooks."
+  fi
+fi
+echo "caller locale for the byte-split assertion: $UTF8_LOCALE"
+
 # An accented prompt is the fixture that broke the prompt hook itself under one-true-awk.
 ACCENT="$TMP/accent.log"
 cat > "$ACCENT" <<'LOG'
@@ -428,6 +466,29 @@ for eng in $ENGINES; do
   OUT=$(PATH="$ENGINE_BIN/$eng:$PATH" bash "$MISSES" --log "$NOPROMPT" 2>&1) && ST=0 || ST=$?
   assert_status "[$eng] no prompt records is still exit 2" "$ST" "2"
   assert_contains "[$eng] SKIPPED" "$OUT" "SKIPPED"
+
+  # A log line this tool did not write is one thing; a log line the HOOK wrote is another.
+  # pre-prompt-hook.sh truncates the prompt copy at 80 BYTES, so an ordinary CJK or heavily
+  # accented prompt puts a half-finished UTF-8 sequence at the end of the line -- no
+  # attacker, no malformed input, just a multibyte character straddling the cut. Reading
+  # that back aborted this tool with `illegal byte sequence` under one-true-awk and made
+  # gawk warn, which is #68 one hop downstream: the reader has to be as byte-oriented as
+  # the writer. The fixture is the exact byte sequence the hook produces -- 26 copies of
+  # U+65E5 is 78 bytes, so the 80-byte cut lands two bytes into the 27th.
+  SPLITLOG="$TMP/split-utf8.log"
+  {
+    printf '[10:00:01.001] pre-prompt 9ms | (none) [shown:1] << '
+    perl -e 'print "\346\227\245" x 26; print "\346\227"'
+    printf ' zorkmiss\n'
+    printf '[10:00:02.001] pre-prompt 9ms | (none) [shown:1] << zorkmiss again\n'
+  } > "$SPLITLOG"
+  OUT=$(PATH="$ENGINE_BIN/$eng:$PATH" LC_ALL="$UTF8_LOCALE" bash "$MISSES" --log "$SPLITLOG" --min 2 2>&1) && ST=0 || ST=$?
+  assert_status "[$eng] a byte-split UTF-8 log line still reports, exit 0" "$ST" "0"
+  # The positive control, in the same call: "no error appeared" is also true of a tool that
+  # aborted before reading anything, which is exactly the failure being pinned.
+  assert_token_row "[$eng] and the ASCII token beside the split sequence is still counted" "$OUT" "zorkmiss"
+  assert_not_contains "[$eng] and nothing about a byte sequence is printed" "$OUT" "illegal byte sequence"
+  assert_not_contains "[$eng] nor a multibyte warning" "$OUT" "multibyte"
 done
 rm -rf "$ENGINE_BIN"
 
