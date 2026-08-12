@@ -113,6 +113,35 @@ run_prompt() {
   printf '%s' "$PROMPT_PAYLOAD" | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-prompt-hook.sh" 2>&1
 }
 
+# --- Can this platform make a symbolic link at all? --------------------------
+# S4a-S4d are CONSTRUCTED with `ln -s`. On Git Bash the MSYS runtime copies the target
+# instead of linking it, and then every one of them passes for the wrong reason: hooks.log
+# becomes an ordinary copy inside the project, the hook appends to that, and "nothing was
+# appended to the victim file" is true because the victim was never in the path. Windows CI
+# reported 30/30 for this suite on 2026-08-12 while four of its sections tested nothing.
+#
+# Verified through the link, not with `[ -L ]` alone: content written to the target after
+# the link exists must be visible through it, which is the one thing a copy cannot do.
+# tests/test-symlink-entry.sh carries the full diagnosis.
+CAN_SYMLINK=no
+probe_symlinks() {
+  local d="$TMP/.symlink-probe"
+  rm -rf "$d" || return 1
+  mkdir -p "$d/target-dir" || return 1
+  printf 'probe\n' > "$d/target-file" || return 1
+  ln -sf "$d/target-file" "$d/link-file" 2>/dev/null
+  ln -sfn "$d/target-dir" "$d/link-dir" 2>/dev/null
+  printf 'late\n' > "$d/target-dir/late.txt" || return 1
+  [ -L "$d/link-file" ] || return 1
+  [ -L "$d/link-dir" ] || return 1
+  [ -f "$d/link-dir/late.txt" ] || return 1
+  CAN_SYMLINK=yes
+}
+probe_symlinks
+SKIPPED_SECTIONS=0
+echo "symlink support: $CAN_SYMLINK (files and directories, verified through the link)"
+echo ""
+
 echo "=== Positive control: the honest tree logs, so the negatives below mean something ==="
 
 P="$(new_hostile honest)"
@@ -131,66 +160,76 @@ else
 fi
 
 echo ""
-echo "=== S4a: hooks.log is a symlink to a file outside the project ==="
+if [ "$CAN_SYMLINK" != yes ]; then
+  SKIPPED_SECTIONS=4
+  echo "=== S4a-S4d SKIPPED: this platform did not create a symbolic link ==="
+  echo "    The log-path containment cases could not be constructed, so nothing about"
+  echo "    containment was tested here. On Git Bash 'ln -s' copies the target, which makes"
+  echo "    hooks.log an ordinary file INSIDE the project -- every 'nothing was written"
+  echo "    outside the tree' assertion then holds for a reason unrelated to the guard."
+  echo "    This is not a clean result for those four sections."
+else
+  echo "=== S4a: hooks.log is a symlink to a file outside the project ==="
 
-P="$(new_hostile s4a)"
-RCFILE="$(new_rc victim-a/.zshenv)"
-mkdir -p "$P/.claude/jit-context/.discovery/logs"
-ln -sf "$RCFILE" "$P/.claude/jit-context/.discovery/logs/hooks.log"
-OUT="$(run_prompt "$P")"; RC=$?
-assert_rc0 "linked hooks.log: hook still exits 0" "$RC"
-assert_contains "linked hooks.log: hook still injects its notice" "$OUT" "could not be evaluated"
-assert_contains "linked hooks.log: the victim file still exists and is readable" "$(cat "$RCFILE")" "$RC_MARKER"
-assert_not_contains "linked hooks.log: nothing was appended to the victim file" "$(cat "$RCFILE")" "pre-prompt"
-assert_not_contains "linked hooks.log: the row name did not reach the victim file" "$(cat "$RCFILE")" "CANARY-ROW"
+  P="$(new_hostile s4a)"
+  RCFILE="$(new_rc victim-a/.zshenv)"
+  mkdir -p "$P/.claude/jit-context/.discovery/logs"
+  ln -sf "$RCFILE" "$P/.claude/jit-context/.discovery/logs/hooks.log"
+  OUT="$(run_prompt "$P")"; RC=$?
+  assert_rc0 "linked hooks.log: hook still exits 0" "$RC"
+  assert_contains "linked hooks.log: hook still injects its notice" "$OUT" "could not be evaluated"
+  assert_contains "linked hooks.log: the victim file still exists and is readable" "$(cat "$RCFILE")" "$RC_MARKER"
+  assert_not_contains "linked hooks.log: nothing was appended to the victim file" "$(cat "$RCFILE")" "pre-prompt"
+  assert_not_contains "linked hooks.log: the row name did not reach the victim file" "$(cat "$RCFILE")" "CANARY-ROW"
 
-echo ""
-echo "=== S4b: .discovery/logs is a symlink to a directory outside the project ==="
+  echo ""
+  echo "=== S4b: .discovery/logs is a symlink to a directory outside the project ==="
 
-P="$(new_hostile s4b)"
-OUTDIR="$TMP/victim-b"; mkdir -p "$OUTDIR"
-mkdir -p "$P/.claude/jit-context/.discovery"
-ln -sfn "$OUTDIR" "$P/.claude/jit-context/.discovery/logs"
-OUT="$(run_prompt "$P")"; RC=$?
-assert_rc0 "linked logs dir: hook still exits 0" "$RC"
-assert_contains "linked logs dir: hook still injects its notice" "$OUT" "could not be evaluated"
-assert_no_file "linked logs dir: no log was created in the linked directory" "$OUTDIR/hooks.log"
+  P="$(new_hostile s4b)"
+  OUTDIR="$TMP/victim-b"; mkdir -p "$OUTDIR"
+  mkdir -p "$P/.claude/jit-context/.discovery"
+  ln -sfn "$OUTDIR" "$P/.claude/jit-context/.discovery/logs"
+  OUT="$(run_prompt "$P")"; RC=$?
+  assert_rc0 "linked logs dir: hook still exits 0" "$RC"
+  assert_contains "linked logs dir: hook still injects its notice" "$OUT" "could not be evaluated"
+  assert_no_file "linked logs dir: no log was created in the linked directory" "$OUTDIR/hooks.log"
 
-echo ""
-echo "=== S4c: .discovery is a symlink to a directory outside the project ==="
+  echo ""
+  echo "=== S4c: .discovery is a symlink to a directory outside the project ==="
 
-P="$(new_hostile s4c)"
-OUTDIR="$TMP/victim-c"; mkdir -p "$OUTDIR"
-ln -sfn "$OUTDIR" "$P/.claude/jit-context/.discovery"
-OUT="$(run_prompt "$P")"; RC=$?
-assert_rc0 "linked .discovery: hook still exits 0" "$RC"
-assert_contains "linked .discovery: hook still injects its notice" "$OUT" "could not be evaluated"
-assert_no_file "linked .discovery: no logs directory was created outside the tree" "$OUTDIR/logs"
+  P="$(new_hostile s4c)"
+  OUTDIR="$TMP/victim-c"; mkdir -p "$OUTDIR"
+  ln -sfn "$OUTDIR" "$P/.claude/jit-context/.discovery"
+  OUT="$(run_prompt "$P")"; RC=$?
+  assert_rc0 "linked .discovery: hook still exits 0" "$RC"
+  assert_contains "linked .discovery: hook still injects its notice" "$OUT" "could not be evaluated"
+  assert_no_file "linked .discovery: no logs directory was created outside the tree" "$OUTDIR/logs"
 
-echo ""
-echo "=== S4d: an ancestor of the log path is a symlink out of the tree ==="
+  echo ""
+  echo "=== S4d: an ancestor of the log path is a symlink out of the tree ==="
 
-# .claude/jit-context and .claude are refused for ENTRY reading by the S3 sweep, but the
-# log path is built by a different concatenation and was not covered by it.
-P="$TMP/s4d-jit"; rm -rf "$P"; mkdir -p "$P/.claude"
-OUTDIR="$TMP/victim-d1"; mkdir -p "$OUTDIR/vocabulary/00-manual"
-printf '%s\t%s\n' 'zzz' '../x-CANARY-ROW' > "$OUTDIR/vocabulary/00-manual/00-index.tsv"
-ln -sfn "$OUTDIR" "$P/.claude/jit-context"
-OUT="$(run_prompt "$P")"; RC=$?
-assert_rc0 "linked jit-context: hook still exits 0" "$RC"
-# Paired on this shape too, not only on S4a-c: without it, "no log outside the tree" is
-# equally satisfied by a hook that bailed out before reading anything.
-assert_contains "linked jit-context: hook still injects its notice" "$OUT" "could not be evaluated"
-assert_no_file "linked jit-context: no log was created outside the tree" "$OUTDIR/.discovery"
+  # .claude/jit-context and .claude are refused for ENTRY reading by the S3 sweep, but the
+  # log path is built by a different concatenation and was not covered by it.
+  P="$TMP/s4d-jit"; rm -rf "$P"; mkdir -p "$P/.claude"
+  OUTDIR="$TMP/victim-d1"; mkdir -p "$OUTDIR/vocabulary/00-manual"
+  printf '%s\t%s\n' 'zzz' '../x-CANARY-ROW' > "$OUTDIR/vocabulary/00-manual/00-index.tsv"
+  ln -sfn "$OUTDIR" "$P/.claude/jit-context"
+  OUT="$(run_prompt "$P")"; RC=$?
+  assert_rc0 "linked jit-context: hook still exits 0" "$RC"
+  # Paired on this shape too, not only on S4a-c: without it, "no log outside the tree" is
+  # equally satisfied by a hook that bailed out before reading anything.
+  assert_contains "linked jit-context: hook still injects its notice" "$OUT" "could not be evaluated"
+  assert_no_file "linked jit-context: no log was created outside the tree" "$OUTDIR/.discovery"
 
-P="$TMP/s4d-claude"; rm -rf "$P"; mkdir -p "$P"
-OUTDIR="$TMP/victim-d2"; mkdir -p "$OUTDIR/jit-context/vocabulary/00-manual"
-printf '%s\t%s\n' 'zzz' '../x-CANARY-ROW' > "$OUTDIR/jit-context/vocabulary/00-manual/00-index.tsv"
-ln -sfn "$OUTDIR" "$P/.claude"
-OUT="$(run_prompt "$P")"; RC=$?
-assert_rc0 "linked .claude: hook still exits 0" "$RC"
-assert_contains "linked .claude: hook still injects its notice" "$OUT" "could not be evaluated"
-assert_no_file "linked .claude: no log was created outside the tree" "$OUTDIR/jit-context/.discovery"
+  P="$TMP/s4d-claude"; rm -rf "$P"; mkdir -p "$P"
+  OUTDIR="$TMP/victim-d2"; mkdir -p "$OUTDIR/jit-context/vocabulary/00-manual"
+  printf '%s\t%s\n' 'zzz' '../x-CANARY-ROW' > "$OUTDIR/jit-context/vocabulary/00-manual/00-index.tsv"
+  ln -sfn "$OUTDIR" "$P/.claude"
+  OUT="$(run_prompt "$P")"; RC=$?
+  assert_rc0 "linked .claude: hook still exits 0" "$RC"
+  assert_contains "linked .claude: hook still injects its notice" "$OUT" "could not be evaluated"
+  assert_no_file "linked .claude: no log was created outside the tree" "$OUTDIR/jit-context/.discovery"
+fi
 
 echo ""
 echo "=== S4e: what the log is allowed to say about a refused row ==="
@@ -234,5 +273,16 @@ assert_contains "honest tree: the match is still logged by file name" "$LOG" "go
 assert_not_contains "honest tree: nothing is refused" "$LOG" "refused:"
 
 echo ""
-echo "$PASS passed, $FAIL failed"
-[ "$FAIL" -eq 0 ]
+if [ "$SKIPPED_SECTIONS" -gt 0 ]; then
+  echo "$PASS passed, $FAIL failed, $SKIPPED_SECTIONS section(s) SKIPPED (no symbolic links on this platform)"
+else
+  echo "$PASS passed, $FAIL failed"
+fi
+# A failure outranks a skip: a red assertion is a real answer, a skip is the absence of one.
+[ "$FAIL" -eq 0 ] || exit 1
+# 2 is this repo's "could not evaluate", the same code jit-dry-run.sh uses for a tree it
+# could not judge. run-all.sh keeps it apart from both a pass and a failure, because a
+# suite that reports success where it could not test anything is the defect this whole
+# repository exists to describe -- and this is the suite written to prove containment.
+[ "$SKIPPED_SECTIONS" -eq 0 ] || exit 2
+exit 0

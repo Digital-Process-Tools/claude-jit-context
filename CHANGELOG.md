@@ -176,6 +176,38 @@ the user to do anything beyond opening the project.
   neither index carries a mode column, and every other interpolation is a row position or a
   name that already passed the bare-name check.
 
+- **A containment suite that cannot build a symbolic link now says so instead of passing.**
+  Windows CI failed 28 assertions in `tests/test-symlink-entry.sh` while `ubuntu`, `macos`
+  and `shellcheck` were green. The cause was the fixtures, not the hooks: on Git Bash the
+  MSYS runtime does not create a symbolic link by default, it **copies the target**. `[ -L ]`
+  is then correctly false, the guard correctly stays quiet, the canary is correctly injected
+  from an ordinary file — and the suite asserts a refusal for a threat that platform never
+  built.
+
+  Settled from the job log rather than argued. A layer directory linked *before* its files
+  were written came back empty, while one linked *after* came back full: no symbolic link
+  can behave both ways, and a copy taken at `ln` time behaves exactly so.
+
+  Both suites now probe first, and the probe tests the property the fixtures depend on
+  rather than `[ -L ]` alone — content written to the target after the link exists must be
+  visible through it. The verdict is printed on every platform, every run. When it is `no`,
+  the containment cases are **skipped loudly and the suite exits 2**, and `run-all.sh` keeps
+  that apart from both a pass and a failure. A suite reporting success where it could not
+  test anything is the defect this project exists to describe, and it was sitting inside the
+  suite written to prove containment.
+
+  `tests/test-log-containment.sh` was the quieter half of the same problem: it reported
+  **30/30 on Windows while four of its sections tested nothing**, because a copied
+  `hooks.log` lives inside the project and "nothing was appended to the victim file" is then
+  true for a reason unrelated to the guard. Seventeen of those thirty assertions were
+  vacuous there. `tests/test-security.sh` builds no links and its green was always real.
+
+  This is a gap in what CI can *observe* on Windows, not a hole in the hooks — and it is
+  still a gap: with `core.symlinks=true` a Windows clone does carry the link, so the guard
+  matters there and is currently unexercised. Making it exercisable needs
+  `MSYS=winsymlinks:nativestrict` and the privilege to create links on the runner, which is
+  a workflow change rather than a code one.
+
 - **`tests/test-log-containment.sh`** — new suite. Every "nothing was written outside the
   tree" assertion is preceded by a positive control on the same shape, because that
   assertion passes when nothing happened at all: the honest tree must produce a log line,

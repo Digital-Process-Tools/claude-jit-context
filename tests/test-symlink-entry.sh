@@ -87,6 +87,72 @@ TOOL_PAYLOAD='{"tool_name":"Bash","tool_input":{"command":"sectarget run"}}'
 PATH_PAYLOAD='{"tool_name":"Edit","tool_input":{"file_path":"src/sectarget/a.txt"}}'
 PROMPT_PAYLOAD='{"prompt":"tell me about sectarget"}'
 
+# --- Can this platform make a symbolic link at all? --------------------------
+# Every containment case below is CONSTRUCTED with `ln -s`, so a platform that does not
+# make symbolic links does not build the attack -- and then the guard correctly stays
+# quiet, the canary is correctly injected from an ordinary file, and 28 assertions fail
+# while testing nothing at all. Git Bash is that platform: the MSYS runtime copies the
+# target instead of linking it unless MSYS=winsymlinks:nativestrict is set and the process
+# holds the privilege. Windows CI on 2026-08-12 failed exactly that way.
+#
+# The probe tests the property the fixtures depend on, not just `[ -L ]`: content written
+# to the target AFTER the link exists must be visible THROUGH it. That is the one thing a
+# copy can never do, and it is what settled the CI diagnosis -- a layer directory linked
+# before its files were written came back EMPTY, while one linked after came back full.
+# No symbolic link can behave both ways; a copy taken at `ln` time behaves exactly so.
+CAN_SYMLINK=no
+probe_symlinks() {
+  local d="$TMP/.symlink-probe"
+  rm -rf "$d" || return 1
+  mkdir -p "$d/target-dir" || return 1
+  printf 'probe\n' > "$d/target-file" || return 1
+  ln -sf "$d/target-file" "$d/link-file" 2>/dev/null
+  ln -sfn "$d/target-dir" "$d/link-dir" 2>/dev/null
+  # Written after BOTH links exist. A real link sees it. A copy cannot.
+  printf 'late\n' > "$d/target-dir/late.txt" || return 1
+  [ -L "$d/link-file" ] || return 1
+  [ -L "$d/link-dir" ] || return 1
+  [ -f "$d/link-dir/late.txt" ] || return 1
+  CAN_SYMLINK=yes
+}
+probe_symlinks
+echo "symlink support: $CAN_SYMLINK (files and directories, verified through the link)"
+echo ""
+
+echo "=== The harness can build and run a project at all ==="
+# This runs on every platform, before any link is needed. If it fails, the SKIPPED verdict
+# below means nothing: a suite that cannot construct a PROJECT would report "could not
+# construct the attack" for the wrong reason, and that is the same defect one level up.
+P="$(new_project harness)"
+D="$P/.claude/jit-context/tools/00-manual"
+printf 'harness body\n' > "$D/good.md"
+printf 'Bash\tsectarget\tgood.md\t\t\t\n' > "$D/00-index.tsv"
+OUT="$(run_hook pre-tool-hook.sh "$P" "$TOOL_PAYLOAD")"
+assert_contains "harness: an ordinary entry fires" "$OUT" "harness body"
+OUT="$(run_hook pre-tool-hook.sh "$P" '{"tool_name":"Bash","tool_input":{"command":"echo unrelated"}}')"
+assert_not_contains "harness: an unrelated command stays silent" "$OUT" "harness body"
+
+if [ "$CAN_SYMLINK" != yes ]; then
+  echo ""
+  echo "SKIPPED: this platform did not create a symbolic link, so the containment cases"
+  echo "         below could not be constructed. Nothing about containment was tested."
+  echo ""
+  echo "         'ln -s' produced something that is not a link -- on Git Bash it copies the"
+  echo "         target. A copy is not the attack: the hook reads an ordinary file, the"
+  echo "         [ -L ] guard is correctly false, and asserting a refusal here would be"
+  echo "         asserting it for a threat this platform failed to build."
+  echo ""
+  echo "         This is NOT a clean result for this suite, and it is not a defect in the"
+  echo "         hooks. To make these cases real on Windows, the runner needs"
+  echo "         MSYS=winsymlinks:nativestrict and the privilege to create symbolic links"
+  echo "         (Developer Mode), plus git config core.symlinks=true for a checkout."
+  echo ""
+  echo "$PASS passed, $FAIL failed, every containment case SKIPPED"
+  [ "$FAIL" -eq 0 ] || exit 1
+  exit 2
+fi
+
+echo ""
 echo "=== S3a: the entry FILE is a symlink out of the tree ==="
 
 P="$(new_project s3a-tool)"
