@@ -47,6 +47,7 @@ FAIL=0
 PLUGIN_JSON="$REPO/.claude-plugin/plugin.json"
 README="$REPO/README.md"
 CHANGELOG="$REPO/CHANGELOG.md"
+SECURITY="$REPO/SECURITY.md"
 
 # --- extraction: awk only, the same rule the hooks live under ----------------
 
@@ -90,6 +91,22 @@ extract_changelog_version() {
   awk '/^## \[[0-9]/ {
          match($0, /\[[^]]*\]/)
          print substr($0, RSTART + 1, RLENGTH - 2)
+         exit
+       }' "$1" 2>/dev/null
+}
+
+# | 0.3.x   | :white_check_mark: |  ->  0.3
+#
+# SECURITY.md is the fourth site, and it is not a version -- it is the supported MINOR, so
+# it is compared as `major.minor` and never as an exact string. It earned its place the
+# expensive way: it sat at `0.2.x` through the whole of 0.3.0, telling anyone reporting a
+# vulnerability that the release which shipped nine containment fixes was unsupported.
+# Take the first table row whose version cell opens on a digit; the `< 0.3` row below it
+# opens on `<` and is deliberately not matched.
+extract_security_minor() {
+  awk '/^\|[[:space:]]*[0-9]/ {
+         match($0, /[0-9]+\.[0-9]+/)
+         print substr($0, RSTART, RLENGTH)
          exit
        }' "$1" 2>/dev/null
 }
@@ -176,6 +193,22 @@ require_version "plugin.json"       "$PLUGIN_JSON" "$PLUGIN_V"
 require_version "README badge"      "$README"      "$README_V"
 require_version "CHANGELOG heading" "$CHANGELOG"   "$CHANGELOG_V"
 
+SECURITY_M=$(extract_security_minor "$SECURITY")
+if [ ! -f "$SECURITY" ]; then
+  echo "  FAIL: SECURITY.md supported minor -- no such file: $SECURITY"
+  FAIL=$((FAIL + 1))
+elif [ -z "$SECURITY_M" ]; then
+  echo "  FAIL: SECURITY.md supported minor -- no minor could be parsed out of $SECURITY"
+  echo "        this suite refuses to compare an empty match; fix the parse or the file"
+  FAIL=$((FAIL + 1))
+elif ! printf '%s\n' "$SECURITY_M" | awk '{ exit !($0 ~ /^[0-9]+\.[0-9]+$/) }'; then
+  echo "  FAIL: SECURITY.md supported minor -- parsed [$SECURITY_M], which is not a major.minor"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: SECURITY.md supported minor -- read $SECURITY_M"
+  PASS=$((PASS + 1))
+fi
+
 echo ""
 echo "=== the three agree ==="
 if [ "$FAIL" -ne "$FAIL_BEFORE_READ" ]; then
@@ -186,6 +219,18 @@ if [ "$FAIL" -ne "$FAIL_BEFORE_READ" ]; then
 else
   assert_same "README badge"      "$README_V"
   assert_same "CHANGELOG heading" "$CHANGELOG_V"
+
+  # major.minor, because SECURITY.md names a supported LINE and not a release. Comparing it
+  # as an exact string would fail on every patch release, which is how a check gets deleted.
+  PLUGIN_MINOR=$(printf '%s\n' "$PLUGIN_V" | awk '{ match($0, /^[0-9]+\.[0-9]+/); print substr($0, RSTART, RLENGTH) }')
+  if [ "$SECURITY_M" = "$PLUGIN_MINOR" ]; then
+    echo "  PASS: SECURITY.md supports $SECURITY_M.x, which is plugin.json's line"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: SECURITY.md supports $SECURITY_M.x, plugin.json is $PLUGIN_V"
+    echo "        a stale supported-versions table tells a reporter the current release is unsupported"
+    FAIL=$((FAIL + 1))
+  fi
 fi
 
 echo ""

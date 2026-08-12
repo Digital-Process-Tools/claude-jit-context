@@ -435,7 +435,7 @@ Consequences worth internalizing:
 
 Each entry fires **once per session**. Once injected it is marked shown and will not repeat — the knowledge is already in context.
 
-The marker is keyed on the `session_id` Claude Code puts in every hook payload, and the file lives beside the log at `.claude/jit-context/.discovery/state/`. Two sessions, two worktrees or two projects never share one. A payload that carries no session id — a hand-run hook, a script of your own — gets **no marker and no dedup**: an entry repeats rather than being suppressed against a guess at who is asking. The same symbolic-link rule as the log applies, and a checkout you cannot write to simply keeps no markers.
+The marker is keyed on the `session_id` Claude Code puts in every hook payload, and the file lives beside the log at `.claude/jit-context/.discovery/state/`. Two sessions, two worktrees or two projects never share one. A payload that carries no session id — a hand-run hook, a script of your own — gets **no marker and no dedup**: an entry repeats rather than being suppressed against a guess at who is asking. The **directory** gets the same symbolic-link refusal as the log — a linked `.claude`, `jit-context`, `.discovery` or `state` means no markers at all — and a checkout you cannot write to simply keeps no markers. The marker file itself is not tested: its name is the session id, which the runner generates, so a repository cannot arrive with a link already waiting at that name. That is a bound on reachability rather than a check, and it is written here rather than claimed otherwise.
 
 ## Layers
 
