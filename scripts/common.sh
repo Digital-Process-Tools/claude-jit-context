@@ -15,8 +15,11 @@ JIT_BASE="${CLAUDE_PROJECT_DIR:-.}/.claude/jit-context"
 # one link, since the linked directory carries its own 00-index.tsv. git clone recreates
 # all of them, so cloning a repository is the whole attack.
 #
-# awk cannot lstat, and the architecture is one awk process per hook with no per-row
-# subprocess. So the lstat is paid ONCE per hook invocation, here, and never per row.
+# awk cannot lstat, and the architecture is at most a couple of awk processes per hook with
+# NO per-row subprocess -- pre-path-hook.sh runs its program a second time for a Bash
+# command whose tokens name real files (#85), and that is the only exception. So the lstat
+# is paid ONCE per hook invocation, here, in the shell that both passes inherit, and never
+# per row.
 #
 # It is paid with a glob and a [ -L ] test, both of which are shell BUILTINS -- this forks
 # nothing. Measured end to end on a 1008-entry tree, interleaved against the unpatched
@@ -1334,9 +1337,15 @@ function jit_session_key(raw, fs, fe, n,   i, k) {
 # invocation, and forgets at exit. Every read and write of the set goes through the
 # functions below, so the empty case is handled in one place rather than at nine.
 function jit_shown_file(dir, kind, raw, fs, fe, n,   k) {
-  if (dir == "") return ""
-  k = jit_session_key(raw, fs, fe, n)
-  if (k == "") return ""
+  return jit_shown_path(dir, kind, jit_session_key(raw, fs, fe, n))
+}
+# The name, built from a key the caller already has. Split out because pre-path-hook.sh
+# runs a SECOND awk pass for its Bash path candidates -- the payload is parsed once, in
+# the first pass, and the second one is handed the key rather than the JSON. One format
+# string, so the two passes cannot drift into writing two different marker files for one
+# session, which would cost the dedup silently.
+function jit_shown_path(dir, kind, k) {
+  if (dir == "" || k == "") return ""
   return dir "/" kind "-shown-" k ".txt"
 }
 # No close(). getline itself is safe -- an unopenable path returns -1 and a path that opens

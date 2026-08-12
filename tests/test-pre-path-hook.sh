@@ -169,28 +169,232 @@ OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cd repo\n./supertoo
 assert_contains "php rule fires for a supertool call after a decoded newline" "$OUT" "php coding rules"
 
 echo ""
-echo "=== multi-line command with no supertool call stays silent ==="
-OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cd repo\ncat src/Billing/Module.class.php"}}')
-assert_empty "no rule fires without a supertool call" "$OUT"
+echo "=== multi-line command naming a file that is not there stays silent ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cd repo\ncat src/Billing/Absent.class.php"}}')
+assert_empty "no rule fires for a path that does not exist" "$OUT"
 
 # =============================================
-# SECTION 3: Bash non-supertool (should NOT match)
+# SECTION 3: Bash commands that are not supertool calls (issue #85)
 # =============================================
+# The path dimension used to collect nothing from a Bash payload unless the command
+# matched a supertool invocation, so `vim src/x.php` reached NO path rule while a Read of
+# the same file reached every one of them. A token is a path candidate now, and the gate
+# that makes guessing safe is that it names an EXISTING REGULAR FILE inside the project.
+#
+# Over-firing is not a defect here and is not asserted against: `grep foo src/x.php`
+# firing the php rule is correct -- the rule is about that file and the agent is about to
+# read it. No verb is inspected.
+#
+# EVERY silence assertion below is paired with a positive control built from the same
+# fixture, differing only in the property under test. A negative assertion passes when the
+# harness is broken, which is how three of these would otherwise have shipped green.
+
+REALDIR="$TEST_DIR/src/Billing"
+mkdir -p "$REALDIR/Components"
+: > "$REALDIR/Module.class.php"
+: > "$REALDIR/Components/ProjectForm.class.php"
+# A tree OUTSIDE the project holding a file whose NAME matches a path rule. Every
+# containment case below aims at this file: reached by traversal, by absolute path, or
+# through a link. If any of them injected, the rule fired for a file the project does not
+# contain.
+OUTSIDE=$(mktemp -d)
+OUTSIDE_NAME=$(basename "$OUTSIDE")
+: > "$OUTSIDE/Module.class.php"
 
 echo ""
-echo "=== Non-supertool Bash: git status ==="
+echo "=== Bash: a relative path that exists ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cat src/Billing/Module.class.php"}}')
+assert_contains "cat of an existing php file fires php-coding" "$OUT" "php coding rules"
+
+echo ""
+echo "=== Bash: an editor, an absolute path inside the project ==="
+OUT=$(run_hook "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"vim $TEST_DIR/src/Billing/Module.class.php\"}}")
+assert_contains "absolute path inside the project fires php-coding" "$OUT" "php coding rules"
+
+echo ""
+echo "=== Bash: several rules from one command ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"sed -i s/a/b/ src/Billing/Components/ProjectForm.class.php"}}')
+assert_contains "sed -i fires the component rule" "$OUT" "component pattern"
+assert_contains "sed -i fires php-coding too" "$OUT" "php coding rules"
+
+# `./x` and `x` are the same file and a shell prints both forms. The fixture rule is
+# anchored on `\.php`, which matches either, so this asserts against a pattern that can
+# tell them apart: `^src/` is the shape a project actually writes.
+echo ""
+echo "=== Bash: a ./ prefix is folded ==="
+printf '^src/Billing/\tanchored.md\n' >> "$PATHS_DIR/00-manual/00-index.tsv"
+echo "anchored rule" > "$PATHS_DIR/00-manual/anchored.md"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cat src/Billing/Module.class.php"}}')
+assert_contains "control: the bare form fires the anchored rule" "$OUT" "anchored rule"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cat ./src/Billing/Module.class.php"}}')
+assert_contains "the ./ form fires it too" "$OUT" "anchored rule"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cat src/./Billing//Module.class.php"}}')
+assert_contains "so does an interior /./ and a doubled slash" "$OUT" "anchored rule"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cat ./../src/Billing/Module.class.php"}}')
+assert_empty "folding happens BEFORE the .. check, not instead of it" "$OUT"
+
+echo ""
+echo "=== Bash: a quoted token ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cat '\''src/Billing/Module.class.php'\''"}}')
+assert_contains "a single-quoted path fires php-coding" "$OUT" "php coding rules"
+
+echo ""
+echo "=== Bash: a supertool call still works ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"./supertool '\''read:src/Billing/Module.class.php'\''"}}')
+assert_contains "the supertool extractor still fires" "$OUT" "php coding rules"
+
+echo ""
+echo "=== Bash: a path that does not exist (the existence gate) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cat src/Billing/Absent.class.php"}}')
+assert_empty "a token naming no file on disk is not a candidate" "$OUT"
+
+echo ""
+echo "=== Bash: no path tokens at all ==="
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"git status"}}')
 assert_empty "git status returns empty" "$OUT"
 
+# A DIRECTORY token decides where the existence check can live. macOS ships one-true-awk,
+# which raises a FATAL i/o error from getline on a directory -- stderr into the stranger
+# session, exit 2 -- so the check is `[ -f ] || [ -d ]` in bash and never a probe in awk.
+# The rule firing is what makes the stderr half non-vacuous: a hook that collected nothing
+# would trivially have opened no directory.
 echo ""
-echo "=== Non-supertool Bash: ls command ==="
-OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"ls -la src/Billing/"}}')
-assert_empty "ls returns empty" "$OUT"
+echo "=== Bash: a directory token fires, and quietly ==="
+ERRFILE=$(mktemp)
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"grep -r getAmount src/Billing/Components"}}' \
+  | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2>"$ERRFILE")
+RC=$?
+assert_contains "a directory candidate fires the component rule" "$OUT" "component pattern"
+if [ ! -s "$ERRFILE" ] && [ "$RC" = 0 ]; then
+  PASS=$((PASS + 1)); echo "  PASS: a directory token writes nothing to stderr and exits 0"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: a directory token wrote to stderr or exited non-zero"
+  echo "    rc=$RC stderr: $(head -c 200 "$ERRFILE")"
+fi
+rm -f "$ERRFILE"
+
+# --- Containment. Every case here aims at a file OUTSIDE the project whose path matches
+# the i18n rule, and names an in-project php file in the SAME command. So each assertion
+# has two halves that fail for opposite reasons: the php rule must fire -- proving the
+# extractor was alive in this very call, which a plain silence assertion cannot show and
+# which a reverted fix would fail -- and the i18n rule must not, which is the confinement.
+mkdir -p "$OUTSIDE/I18N"
+: > "$OUTSIDE/I18N/permissions.xml"
+INSIDE_ARG="src/Billing/Module.class.php"
+
+# $3 is the rule that must NOT have fired, and it is a DIFFERENT rule from the control, so
+# neither half can be satisfied by the other.
+assert_confined() {
+  local desc="$1" output="$2" forbidden="$3"
+  if ! grep -q "php coding rules" <<<"$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc -- the in-project control did not fire, so the check was vacuous"
+    echo "    got: ${output:0:200}"
+  elif grep -q "$forbidden" <<<"$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc -- a rule fired for a file outside the project"
+  else
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
+  fi
+}
 
 echo ""
-echo "=== Non-supertool Bash: cat a PHP file ==="
+echo "=== Bash: .. traversal out of the project ==="
+OUT=$(run_hook "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat ../$OUTSIDE_NAME/I18N/permissions.xml $INSIDE_ARG\"}}")
+assert_confined "a traversal candidate is refused" "$OUT" "i18n rules"
+
+echo ""
+echo "=== Bash: .. traversal that lands back inside ==="
+mkdir -p "$TEST_DIR/src/Billing/Resources/I18N"
+: > "$TEST_DIR/src/Billing/Resources/I18N/permissions.xml"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cat src/../src/Billing/Resources/I18N/permissions.xml src/Billing/Module.class.php"}}')
+assert_confined "a .. component is refused even when it resolves inside" "$OUT" "i18n rules"
+
+echo ""
+echo "=== Bash: an absolute path outside the project ==="
+OUT=$(run_hook "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"cat $OUTSIDE/I18N/permissions.xml $INSIDE_ARG\"}}")
+assert_confined "an absolute path outside the project is refused" "$OUT" "i18n rules"
+
+# The link is named after the rule it must not reach, because the rule a candidate matches
+# is decided by the TOKEN, not by what the token points at.
+echo ""
+echo "=== Bash: a linked DIRECTORY inside the project pointing out of it ==="
+ln -s "$OUTSIDE/I18N" "$TEST_DIR/I18N"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cat I18N/permissions.xml src/Billing/Module.class.php"}}')
+assert_confined "a link on the way to the candidate is refused" "$OUT" "i18n rules"
+
+# `[ -L x/ ]` FOLLOWS the link and is false for a link to a directory, so the trailing-slash
+# form is the one shape the leaf test cannot answer: only the component walk catches it.
+echo ""
+echo "=== Bash: the same link, named on its own with a trailing slash ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"ls -la I18N/ src/Billing/Module.class.php"}}')
+assert_confined "a linked directory is refused in its trailing-slash form" "$OUT" "i18n rules"
+
+echo ""
+echo "=== Bash: the LEAF itself is a link out of the project ==="
+printf 'leaf-secret\.xml\tleaf.md\n' >> "$PATHS_DIR/00-manual/00-index.tsv"
+echo "leaf rule" > "$PATHS_DIR/00-manual/leaf.md"
+ln -s "$OUTSIDE/I18N/permissions.xml" "$TEST_DIR/leaf-secret.xml"
+: > "$TEST_DIR/inside-leaf-secret.xml"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cat inside-leaf-secret.xml src/Billing/Module.class.php"}}')
+assert_contains "control: a real file of that name fires the leaf rule" "$OUT" "leaf rule"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cat leaf-secret.xml src/Billing/Module.class.php"}}')
+assert_confined "a linked leaf is refused" "$OUT" "leaf rule"
+
+echo ""
+echo "=== Bash: a real directory candidate still fires ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"ls -la src/Billing/Components"}}')
+assert_contains "control: a real directory candidate fires" "$OUT" "component pattern"
+
+# A FIFO opens for reading and BLOCKS until someone writes, so a candidate that is one
+# would stall the hook for the whole hook timeout. `[ -f ]` is false for a fifo, which is
+# why the gate is -f and not -e. Skipped where mkfifo is unavailable (Git Bash).
+echo ""
+echo "=== Bash: a fifo candidate neither fires nor blocks ==="
+if mkfifo "$TEST_DIR/Pipe.class.php" 2>/dev/null; then
+  OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"cat Pipe.class.php"}}' \
+    | CLAUDE_PROJECT_DIR="$TEST_DIR" perl -e 'alarm 15; exec("bash", $ARGV[0]) or exit 1' "$HOOK" 2>/dev/null) || true
+  assert_empty "a fifo is not a path candidate" "$OUT"
+  rm -f "$TEST_DIR/Pipe.class.php"
+else
+  echo "  SKIP: mkfifo unavailable on this platform"
+fi
+
+# The candidates travel from the first awk pass to bash on the scratch channel, so a
+# session that cannot get a scratch file has no channel and the feature degrades to what
+# the hook did before -- silently, and never to an error. TMPDIR names a directory that
+# does not exist, rather than an unwritable one, so the case holds when the suite runs as
+# root. The control is the same command with a working TMPDIR.
+echo ""
+echo "=== Bash: no scratch file means no candidates, and no noise ==="
+ERRFILE=$(mktemp)
+OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"cat src/Billing/Module.class.php"}}' \
+  | TMPDIR="$TEST_DIR/no-such-tmpdir" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2>"$ERRFILE")
+RC=$?
+assert_empty "an unavailable TMPDIR degrades to no candidates" "$OUT"
+if [ ! -s "$ERRFILE" ] && [ "$RC" = 0 ]; then
+  PASS=$((PASS + 1)); echo "  PASS: and it degrades quietly, exit 0"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: rc=$RC stderr: $(head -c 200 "$ERRFILE")"
+fi
+rm -f "$ERRFILE"
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cat src/Billing/Module.class.php"}}')
-assert_empty "cat returns empty (not supertool)" "$OUT"
+assert_contains "control: the same command with a usable TMPDIR fires" "$OUT" "php coding rules"
+
+# The constraint at pre-path-hook.sh: a Write payload body must NEVER be reassembled into
+# path candidates. It cannot be, because candidates are only collected when the payload
+# carries no file_path -- and the control below proves the fixture would have fired.
+echo ""
+echo "=== Write: a path named in the BODY is not a candidate ==="
+OUT=$(run_hook '{"tool_name":"Write","tool_input":{"file_path":"/project/notes.txt","content":"see src/Billing/Module.class.php for the rules"}}')
+if grep -q "php coding rules" <<<"$OUT"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: a Write body was reassembled into a path candidate"
+else
+  PASS=$((PASS + 1)); echo "  PASS: a Write body is not a path candidate"
+fi
+OUT=$(run_hook '{"tool_name":"Write","tool_input":{"file_path":"/project/src/Billing/Module.class.php","content":"body"}}')
+assert_contains "control: the same Write with a php file_path does fire" "$OUT" "php coding rules"
 
 # =============================================
 # SECTION 4: Edge cases
