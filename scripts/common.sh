@@ -201,8 +201,35 @@ unset _jit_p
 # The mkdir is what MATERIALISES a directory through a link, so it is gated too, not just
 # the append. `2>/dev/null` because a read-only or unwritable tree is a reason to say
 # nothing, never a reason to print to a session's stderr.
+#
+# AND IT IS GATED ON THE TREE EXISTING, which is #51. `mkdir -p "$LOG_DIR"` creates every
+# component on the way -- .claude, .claude/jit-context, .discovery -- so a hook running in
+# a project that has never heard of this plugin materialised the whole chain, and one
+# `git status` later the user has untracked files in a repository they did not change.
+# Only THIS repository's .gitignore covers that path. Reproduced 2026-08-12 in an empty
+# directory: `.claude/jit-context/.discovery/logs/hooks.log` and `.discovery/state`.
+#
+# The state mkdir below already carried `[ -d "$JIT_BASE" ]` and a comment saying a session
+# with no tree should not have one materialised under its cwd. That comment was FALSE, and
+# this line is why: the log ran first and created the very parent the state gate tested for.
+# One of the two gates was doing nothing, and it was not the one anybody would have guessed.
+#
+# So the plugin is now inert in a project that has not opted in: nothing is created, nothing
+# is logged, and the hooks still run, still match nothing, still exit 0. Opting in is making
+# the directory -- `scripts/jit-init.sh`, or `mkdir -p .claude/jit-context/vocabulary/00-manual`
+# -- and from that moment the log is written exactly as before. What is lost is the log in a
+# project with no entries, which could only ever have recorded `(none)` against rules that do
+# not exist; what is gained is that installing this plugin globally does not touch every
+# repository you open.
+#
+# Disabling rather than letting the append fail: without a directory every `>>` in the
+# session is an open() that fails, once per prompt and once per tool call, and a
+# one-shot process cannot remember that it already failed. One builtin test here instead.
+if [ ! -d "$JIT_BASE" ]; then JIT_LOG_DISABLED=1; fi
 if [ "$JIT_LOG_DISABLED" = 0 ]; then
-  mkdir -p "$LOG_DIR" 2>/dev/null
+  # `[ -d ]` first, for the reason the state mkdir has one: mkdir is a fork, this file runs
+  # before every hook, and after the first call of the session the directory is always there.
+  [ -d "$LOG_DIR" ] || mkdir -p "$LOG_DIR" 2>/dev/null
   # Checked after the mkdir as well: hooks.log may be a dangling link, which `mkdir -p`
   # on its parent neither creates nor disturbs.
   if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
@@ -261,6 +288,14 @@ unset _jit_p
 # forever, because a one-shot process cannot remember that it already failed. Both tests
 # below are shell builtins. Gated on JIT_BASE existing too: a session with no jit-context
 # tree at all should not have one materialised under its cwd.
+#
+# That sentence was false from the day it was written and is true now (#51). It described
+# this gate correctly and the gate did nothing, because the LOG's mkdir above ran first in
+# the same file and created $JIT_BASE -- so by the time execution reached here, the
+# directory being tested for had just been made by us. The log is gated on the same test
+# now. Check the thing, not the citation: this comment is a claim, and the test that holds
+# it up is tests/test-inert-without-tree.sh, which drives an empty project through all four
+# hooks and asserts `git status` is still clean.
 if [ -n "$JIT_STATE_DIR" ] && [ -d "$JIT_BASE" ] && [ ! -d "$JIT_STATE_DIR" ]; then
   if [ -d "$JIT_BASE/.discovery" ]; then
     if [ -w "$JIT_BASE/.discovery" ]; then mkdir -p "$JIT_STATE_DIR" 2>/dev/null; fi
@@ -1372,10 +1407,78 @@ function jit_unescape(s,   n, i, c, nx, o) {
 }
 '
 
-# Hook log with timing + matches: _log_hook "pre-tool (Bash)" 42 "tool:git-push.md(git push)"
+# --- The log LINE is bounded; the information in it is not (#64) --------------
+# Hook log with timing + matches:
+#   _log_hook "pre-tool (Bash)" 42 "tool:git-push.md(git push)" "[shown:1] << git push"
+#
+# The matches field is built inside awk by appending one item per matched or refused index
+# row, and nothing bounded it. Every row of a 400-row index that matches contributes a
+# name, a pattern and punctuation, so the line grew with the index -- measured on this
+# branch at 16 KB, 18 KB, 19 KB and 22 KB for the four hooks against a 400-row fixture,
+# once per prompt and once per tool call. The index is a committed file, so its length is
+# chosen by whoever wrote the repository, which is the same shape as #36 and #38.
+#
+# WHY THE OBVIOUS FIX IS WRONG, and it is worth reading before changing this. hooks.log is
+# not a debug convenience: #28 and #35 removed the index file-name column and the mode
+# column from MODEL context precisely because they are unvalidated text from a clone, and
+# this file -- on the disk of the person who wrote the tree, read by a person, never by a
+# model -- is where they still go. tests/test-security.sh asserts that relationship
+# directly, both hooks. Capping the INFORMATION would spend the tree author's only
+# debugging channel to save disk, which is not the resource under pressure.
+#
+# So the LINE is capped and the information is accounted for: what fits is written whole,
+# and the exact number of bytes that did not fit is stated. Not an item count -- an item
+# may itself contain ", ", so counting separators here would report a number that is
+# sometimes wrong, and a report that reads as complete and is not is this repository own
+# defect class. jit-dry-run.sh prints the whole tree on demand and the notice says so.
+#
+# WHY HERE and not at the 33 append sites in awk: this is the single writer, it is the
+# only place that sees the assembled line, and a future field added by a future hook is
+# bounded by it without anybody remembering to. What awk builds in memory is unchanged --
+# the resource #64 measured is the file on disk.
+#
+# THE TAIL IS A SEPARATE ARGUMENT and is not capped. `[shown:N] << <path or prompt>` is
+# already bounded to 80 bytes inside awk, and it is what jit-misses.sh parses; cutting the
+# line at a byte count would have taken it off exactly the lines that are hardest to read
+# without it. A cut that removed the field the downstream tool reads would be #50's lesson
+# reappearing in the tool that reports #50.
+#
+# LC_ALL=C so `${#s}` and `${s:0:n}` count BYTES. Without it bash counts characters in the
+# session locale, and a UTF-8 entry name would make a "2048" cap admit up to four times
+# that. `local` restores whatever the caller had on return.
+JIT_LOG_MATCHES_MAX=2048
 _log_hook() {
+  local LC_ALL=C
   local hook="$1"
   local ms="$2"
   local matches="${3:-(none)}"
-  jit_log_write "[$(_ts)] $hook ${ms}ms | $matches"
+  local tail="${4:-}"
+  local dropped head
+  if [ "${#matches}" -gt "$JIT_LOG_MATCHES_MAX" ]; then
+    head="${matches:0:$JIT_LOG_MATCHES_MAX}"
+    # Back up to the last `, ` inside what was kept, which is USUALLY the item separator and
+    # therefore usually leaves whole names in the line rather than half of one.
+    #
+    # Usually, not always, and the marker below is worded for the difference. `, ` is not a
+    # byte an item cannot carry: jit_bad_entry_file() refuses `/`, `\`, `.` and `..` and
+    # nothing else, so `a, b.md` is a legal bare entry file name, and a match pattern is
+    # free-form. A name like that straddling the cut backs up to its own internal comma and
+    # leaves `a, ` reading exactly like a complete item. Driven: 2000 bytes of filler then
+    # `AAAA, BBBB-....md` cuts to `..., AAAA, ` and drops 30 bytes.
+    #
+    # The COUNT is unaffected -- it is taken from what was actually kept, three lines down --
+    # so the line still accounts for every byte. What cannot be promised is that the last
+    # thing before the marker is whole, and a comment claiming otherwise would be the kind
+    # of confident sentence this repository keeps catching itself writing. Making it true
+    # would mean a separator no item can contain, which is a change at all 33 append sites
+    # inside awk rather than here.
+    case "$head" in *", "*) head="${head%, *}, " ;; esac
+    # AFTER the back-up, and that ordering is the whole point. Computed against the ceiling
+    # instead, the count omits the partial item the back-up just discarded -- so the line
+    # would under-report by up to one entry name while reading as exact. That is the defect
+    # class this cap exists to avoid, reintroduced by the line meant to avoid it.
+    dropped=$(( ${#matches} - ${#head} ))
+    matches="${head}[+$dropped bytes not listed here, and the item before this marker may be a fragment; this line is capped at ${JIT_LOG_MATCHES_MAX} bytes -- scripts/jit-dry-run.sh prints the whole tree]"
+  fi
+  jit_log_write "[$(_ts)] $hook ${ms}ms | $matches${tail:+ $tail}"
 }

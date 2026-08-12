@@ -11,6 +11,12 @@
 # directory at load, and a reporting tool that creates the thing it reports is a tool whose
 # own output cannot be trusted.
 #
+# Since #51 that mkdir is gated on `.claude/jit-context/` already existing, so it no longer
+# materialises a tree in a project that has none -- but it still creates `.discovery/logs/`
+# in every project that HAS one, which is every project this tool is ever pointed at. The
+# reason to keep the `source` line out is unchanged; only the size of what it would create
+# is smaller. Do not "fix" the missing source.
+#
 # Three outcomes, never two. An empty report that means "no repeated misses" and "the log
 # was not readable" identically is this repository own defect class, shipped inside the
 # tool that reports it:
