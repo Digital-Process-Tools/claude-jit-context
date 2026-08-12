@@ -24,6 +24,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   hyphen and a naive read truncates `0.4.0-rc.1` to `0.4.0` and reports drift that is not
   there. It asserts three named sites and does not sweep the repository — `0.2.0` appears
   in prose that is historically correct, and only a human can tell that from a stale badge.
+- **`jit-dry-run.sh` warns on a `paths` pattern that names a name rather than a place.** A
+  pattern carrying no `/`, no `^` and no `$` — `Billing`, `Makefile` — matches `src/Billing`,
+  `vendor/acme/Billing` and a scratchpad under `/tmp` alike, and nothing in it says which was
+  meant. The row is named as `WARN`, counted in the summary, and **the exit code does not
+  move**: `1` still means a pattern the matcher cannot honour, `2` still means the tree could
+  not be evaluated, and this pattern compiles and runs exactly as written. A heuristic that
+  turned an honest tree red on upgrade would be switched off, and would then protect nobody.
+
+  Scoped to `paths`. A `tools` pattern matches a command line, where `/` and `^` mean
+  something else and anchoring on a tree means nothing. A row already `REFUSED` is not also
+  warned about — a dead rule reported twice reads as two problems. A `^` or `$` inside a
+  bracket expression is not credited as an anchor: in `[^0-9]Billing` the caret negates a
+  class and in `Billing[$]` the dollar is a literal, and reading either as an anchor would
+  wave through exactly the pattern the check is for.
+
+  **What this does not catch, against the claim that asked for it.** The defect cited as the
+  motivating case, fixed by hand in 0.3.0 above, was `jit-context/.*\.md$` — which carries a
+  `/` and a `$` and passes this check clean. It is also structurally identical to
+  `scripts/.*-hook\.sh$`, which is correct as written. No test on the pattern text can
+  separate those two: the difference is how likely that directory name is to occur outside
+  your project, and that is not in the pattern. Run over every `paths` pattern this
+  repository ships — its own three and the one shipped example — the check warns on none of
+  them. It catches the narrower class it can actually see, and the release note says so
+  rather than borrowing credit for a bug it would have missed.
 
 ## [0.3.0] — Containment
 
