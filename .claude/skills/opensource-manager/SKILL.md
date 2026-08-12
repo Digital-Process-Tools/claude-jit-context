@@ -137,6 +137,30 @@ The definitions carry worktree setup, TDD, the index-rebuild rule and the report
 carries only what is true about **this** issue. That matters: **boilerplate is where unverified
 claims hide, because it is the part nobody proofreads.**
 
+### Run a fleet, not a queue
+
+**Up to five developers in parallel. That is the point of this loop, not an optimisation of it.**
+One agent at a time makes the maintainer the bottleneck, and the maintainer is the slowest part —
+every serialised issue waits on a human-speed review that could have happened concurrently.
+
+The cap is five, and the real limit is almost always lower: **how many file-disjoint areas the board
+actually offers right now.** Two agents in one file is reckless at any fleet size. Before launching,
+write down which files each brief will touch and check the intersections — a shared `common.sh` is
+the usual collision on this repo, because it is where every cross-hook helper lands.
+
+When the disjoint areas run out before five, say so rather than inventing a fifth lane. On a
+codebase of five shell scripts, three concurrent is often the honest ceiling, and **bundling two
+related issues into one brief is better than splitting one file across two agents** — `#14` and
+`#15` are both "hook encoding correctness" and belong to the same pair of hands.
+
+Stacking is the other lever when work genuinely collides: branch the second agent off the first's
+branch rather than off `main`. It costs a rebase per merge and keeps both moving. Do not stack more
+than two deep without a reason — three deep already meant two force-pushes and two retargets in one
+afternoon.
+
+Launch them in a single message so they run concurrently, and name every live worktree in every
+brief so each agent knows who else is out there.
+
 Every brief carries these:
 
 1. **Use supertool, as an instruction not a note.** Paste verbatim:
@@ -155,7 +179,10 @@ Every brief carries these:
    evidence attached, never as conclusions: **a confident, mechanical diagnosis from the orchestrator
    is the most dangerous input an agent receives.**
 4. **Demand TDD in that order — test, red, fix, green.** Require the failure output *before* the
-   implementation exists. The bar is "would this test still pass if the code did nothing?"
+   implementation exists. The bar is "would this test still pass if the code did nothing?" — and it
+   is checked on the way in, not taken on trust: see *Verify the red, not the green* under Reviewing.
+   Every "must not fire" case is paired with a "must fire" case in the same fixture, because a
+   silence assertion passes when the harness is broken.
 5. **Require the docs** — `README.md` for anything user-facing, `CHANGELOG.md` always.
 6. **Name the live worktrees**, so agents know about each other. Two agents in one file is reckless
    at any fleet size; the binding constraint is how many file-disjoint areas are open right now.
@@ -177,8 +204,40 @@ list is closed:
   fixtures is a question.
 - **Was the rule driven in both directions**, and **was `00-index.tsv` rebuilt**. The markdown is the
   source; the index is what the hook reads.
+- **Re-run the new suite against `main` with the fix absent.** One call: copy the new test file into
+  a clean checkout and run it. It must fail, and roughly as reported.
 
 Not on the list, and this is what creeps back: reading the load-bearing function line by line.
+
+### Verify the red, not the green
+
+The instinct is backwards, and it cost a whole day of reviews before anyone noticed. **Green is the
+claim that reproduces trivially. Red is the claim that proves the test is not vacuous.** A maintainer
+who re-runs the suite on the branch has learned almost nothing — of course it passes, the author ran
+it too. A maintainer who runs it against `main` has learned whether the test tests anything.
+
+Measured on three agents in one afternoon, all three reds honest — `26/37`, `18/34`, and
+`36/48 · 46/58 · 38/46` matching the reported figures to the assertion. That is the outcome to
+expect, which is exactly why the check is cheap: it is one call and it almost always passes, and the
+one time it does not is a test that asserts what the code happens to do.
+
+### A negative assertion needs a positive control
+
+**Red-green is necessary and insufficient.** An assertion that *X does not happen* passes when
+*nothing at all* happens — a broken harness, an unresolved tree, a hook that died before it spoke.
+Three separate instances of this in one day:
+
+- a dogfood suite whose first draft passed because it resolved the tree from the working directory,
+  so run from `tests/` every sample returned nothing and every `assert_silent` passed on that
+  emptiness
+- a `assert_no_raw_controls` helper that could not fail for `NUL`, because `$( )` silently drops NUL
+  bytes — and which also passed when the hook injected nothing at all
+- the product defect the whole repository is about, in the machinery written to report it
+
+So: **any suite with silence assertions carries a guard that fails loudly when the harness cannot see
+anything**, and every "must not fire" case is paired with a "must fire" case in the same fixture. If
+the guard is missing, the silence half is decoration and should be treated as untested rather than
+as passing.
 
 ## Merge gates
 
