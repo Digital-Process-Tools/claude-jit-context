@@ -9,6 +9,46 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Four of this repository's eight scripts, and all fourteen suites, now carry a rule.**
+  `paths` had exactly three entries, and `scripts/.*-hook\.sh$` matched the four hooks and
+  nothing else. So a contributor editing `scripts/common.sh` — sourced by all four hooks and
+  the file every containment fix in `0.3.0` landed in — got none of "never fail hard", "no
+  new runtime dependencies", "write the test first", or the awk traps. Found by a developer
+  agent that edited `jit-dry-run.sh` for a whole run while `hooks.md` never arrived (#42).
+
+  Widening the pattern to `scripts/.*\.sh$` was the wrong fix and is the more interesting
+  half of this. "Every failure path exits `0` with nothing injected" is *actively wrong* for
+  `rebuild-tsv.sh`, which should fail loudly, and `jit-dry-run.sh` exits `1` and `2` to mean
+  specific things. A false rule fires more expensively than no rule, because it arrives with
+  the same authority as a true one. So the split follows what is true of each file rather
+  than where it lives:
+
+  All three patterns are anchored `(^|/)`. Without it a directory merely *ending* in the
+  name — `myscripts/common.sh`, `contests/entry.sh` — claims the rule, which is the same
+  defect `entries.md` was already hardened against when a session scratchpad path
+  containing `claude-jit-context` matched every temporary `.md` file. The old
+  `scripts/.*-hook\.sh$` had it too.
+
+  - `paths/00-manual/hooks.md` now matches `(^|/)scripts/(.*-hook|common)\.sh$`. `common.sh` is
+    executed *by* the hooks, in a stranger's session, so every sentence already there applies
+    to it verbatim; the entry says which five scripts it governs and which three it does not.
+  - `paths/00-manual/tooling.md` — new. `rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh`:
+    fail loudly, what each exit code means, why `jit-misses.sh` deliberately does not source
+    `common.sh`, and which suite covers each. It also records that `rebuild-tsv.sh` has no
+    non-zero exit path at all today — a refused macro is reported on stderr and the script
+    still exits `0`, so CI cannot tell a clean rebuild from one that indexed a pattern the
+    hook will refuse. Named as a gap, not documented as a design.
+  - `paths/00-manual/tests.md` — new, matching `(^|/)tests/[^/]*\.sh$`. The two lessons that have
+    cost this repository the most and lived nowhere a test author would see them: a negative
+    assertion needs a positive control on the same shape, and `$( )` silently drops NUL bytes
+    so hook output must be written to a file and the file checked.
+
+  `tests/test-dogfood-entries.sh` drives all three in both directions — eighteen new
+  assertions, 10 → 28 in the suite, nine of them red before the entries and the anchors
+  existed. No script changed, and nothing a user of the plugin installs is different:
+  these are this repository's own dogfood entries.
+  `.github/workflows/` is still uncovered and is filed separately. The dogfood table in
+  `CLAUDE.md` is updated with the two new rows.
 - **The three version sites are now asserted to agree.** `.claude-plugin/plugin.json`,
   the README badge and the topmost released `## [x.y.z]` heading here were kept in step by
   a hand sweep, and nothing failed when they drifted. A stale badge is the expensive
