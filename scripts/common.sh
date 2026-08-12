@@ -117,9 +117,10 @@ JIT_NL="
 # Two sets out of one walk, and the name is narrower than the job: since #97 this also
 # records every path at ENTRY DEPTH that is not a regular file. Both answer the same
 # question -- what can bash see about this tree that awk cannot -- and both are consumed by
-# jit_bad_entry_file()/jit_read_body() through ENVIRON. It stayed one function because it is
-# one glob walk and one lstat per path; splitting it would double the floor cost to answer
-# two questions about the same stat.
+# jit_bad_entry_file()/jit_read_body() through ENVIRON. It stayed one function to share the
+# GLOB WALK, which is the expensive half and is issued twice per depth -- not to share a
+# stat: the second question needs its own `[ -f ]`, and that syscall is the 10 us per file
+# measured below. A second function would have paid for the walk twice to save nothing.
 jit_scan_symlinks() {
   local base="$1" f parent rel found=0
   JIT_SYMLINKS="$JIT_NL"

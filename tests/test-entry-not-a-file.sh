@@ -254,6 +254,41 @@ for eng in $ENGINES; do
   assert_not_contains "with nothing refused" "$OUT" "REFUSED"
 done
 
+# =============================================
+# SECTION 3 (#97): the wider net — a FIFO at an entry path
+# =============================================
+# The guard asks "is this a regular file", not "is this a directory", and four places in
+# the prose say so. A FIFO is the shape that makes the wider question worth asking: reading
+# one does not abort the hook, it BLOCKS it, forever, in a process contracted to answer
+# inside 110 ms.
+#
+# ASSERTED ON THE SET, not on a hook run, and that is deliberate. Driving the read
+# end-to-end would prove more — and if the guard ever regressed, the suite would HANG
+# instead of failing, on CI, with no output naming the leg. A test whose failure mode is a
+# timeout is a test nobody reads. So this asserts the one thing the directory legs above
+# cannot: that `[ -e ]` records a non-directory non-file too, which is the branch every
+# claim about FIFOs rests on.
+if command -v mkfifo >/dev/null 2>&1; then
+  FIFOROOT="$WORK/fifo"
+  mk_tree "$FIFOROOT" clean
+  FT="$FIFOROOT/.claude/jit-context/tools/00-manual"
+  if mkfifo "$FT/pipe.md" 2>/dev/null && [ -p "$FT/pipe.md" ]; then
+    echo ""
+    echo "=== the sweep records a FIFO at an entry path, not only a directory ==="
+    NF=$(CLAUDE_PROJECT_DIR="$FIFOROOT" bash -c '. "$0"/scripts/common.sh; printf "%s" "$JIT_NONFILES"' "$SCRIPT_DIR")
+    assert_contains "a FIFO at entry depth is in the non-file set" "$NF" "pipe.md"
+    # The control, and it is the assertion that stops the one above passing on a set that
+    # simply lists everything: the honest entry file beside it must NOT be in there.
+    assert_not_contains "and an ordinary entry file beside it is not" "$NF" "block.md"
+  else
+    echo ""
+    echo "SKIPPED: mkfifo did not produce a FIFO here, so the wider-net leg went untested."
+  fi
+else
+  echo ""
+  echo "SKIPPED: no mkfifo on this platform, so the wider-net leg went untested."
+fi
+
 echo ""
 echo "=== jit-dry-run: a reader that aborts is a third state, never a pass ==="
 # 2>/dev/null on the row-bytes awk turned a FATAL into an empty result set, and an empty
@@ -292,6 +327,43 @@ OUT=$(bash "$SCRIPT_DIR/scripts/jit-dry-run.sh" --base "$ACLEAN/.claude/jit-cont
 RC=$?
 assert_equals "and the same tree with a working awk exits 0" "$RC" "0"
 assert_not_contains "with nothing skipped" "$OUT" "SKIPPED"
+
+echo ""
+echo "=== jit-dry-run: a HOOK that writes to stderr is the same third state ==="
+# The other half of the 2>/dev/null fix, one phase over. Phase 2 discarded the hook's
+# stderr, so the process that died mid-decision reported as "no rule fired" — and that
+# reads as a rule with nothing to say. Produced here with an awk that does its job and
+# then says something: the tree is CLEAN and the rule still fires, so nothing but the
+# stderr channel can be what this leg is detecting.
+NOISY_BIN="$WORK/noisybin"
+mkdir -p "$NOISY_BIN"
+{
+  echo '#!/bin/sh'
+  printf '%s "$@"\n' "$REAL_AWK"
+  echo 'rc=$?'
+  echo 'echo "engine noise" >&2'
+  echo 'exit $rc'
+} > "$NOISY_BIN/awk"
+chmod +x "$NOISY_BIN/awk"
+OUT=$(PATH="$NOISY_BIN:$PATH" bash "$SCRIPT_DIR/scripts/jit-dry-run.sh" \
+  --base "$ACLEAN/.claude/jit-context" --tool Bash --command "git push origin main" 2>&1)
+RC=$?
+assert_contains "the sample call reports the hook that wrote to stderr" "$OUT" "SKIPPED pre-tool-hook.sh"
+assert_contains "and still shows what it did fire, because that is not the whole answer" "$OUT" "BLOCK"
+if [ "$RC" -eq 0 ]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: exit is non-zero when a hook wrote to stderr"
+  echo "    got exit 0"
+else
+  PASS=$((PASS + 1)); echo "  PASS: exit is non-zero when a hook wrote to stderr"
+fi
+
+# Control: the same clean tree and the same sample call with an ordinary awk.
+OUT=$(bash "$SCRIPT_DIR/scripts/jit-dry-run.sh" \
+  --base "$ACLEAN/.claude/jit-context" --tool Bash --command "git push origin main" 2>&1)
+RC=$?
+assert_equals "a quiet hook on a clean tree exits 0" "$RC" "0"
+assert_contains "and blocks" "$OUT" "BLOCK"
+assert_not_contains "with nothing reported skipped" "$OUT" "SKIPPED"
 
 echo ""
 echo "=========================================="
