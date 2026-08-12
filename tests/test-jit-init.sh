@@ -241,6 +241,54 @@ assert_prompt_fires "and the seeded one fires too"       "$P3" "how do I write a
 assert_prompt_silent "the seeded one does not shadow it" "$P3" "how are invoice totals computed"  "writing-rules.md"
 
 echo ""
+echo "=== a linked component is refused, not followed ==="
+# The receipt names a path inside the tree you asked for. If any component on the way to
+# it is a symbolic link, the write lands somewhere else and that receipt is false --
+# "seeded <project>/..." for a file that is not in the project. Refuse instead.
+LINK_PROBE="$TMP/link-probe"
+mkdir -p "$LINK_PROBE/target"
+if ln -s "$LINK_PROBE/target" "$LINK_PROBE/link" 2>/dev/null && [ -L "$LINK_PROBE/link" ]; then
+  for part in .claude .claude/jit-context .claude/jit-context/vocabulary \
+              .claude/jit-context/vocabulary/00-manual; do
+    OUT="$TMP/outside-$(echo "$part" | tr '/.' '__')"
+    PL="$TMP/pl-$(echo "$part" | tr '/.' '__')"
+    mkdir -p "$OUT" "$PL/$(dirname "$part")"
+    ln -s "$OUT" "$PL/$part"
+    bash "$INIT" --base "$PL/.claude/jit-context" > "$TMP/initlink.txt" 2>&1
+    LINK_RC=$?
+    if [ "$LINK_RC" -eq 2 ]; then
+      ok "a linked $part is refused (exit 2)"
+    else
+      bad "a linked $part is refused (exit 2)" "exit=$LINK_RC"
+      cat "$TMP/initlink.txt"
+    fi
+    # The refusal has to mean nothing was written, not that the write was reported oddly.
+    if [ -z "$(find "$OUT" -type f 2>/dev/null)" ]; then
+      ok "and nothing was written through it"
+    else
+      bad "and nothing was written through it" "files landed outside the named tree"
+      find "$OUT" -type f
+    fi
+  done
+  # Positive control on the same code path: the identical tree without the link seeds and
+  # exits 0, so the refusals above are about the link and not about the fixture.
+  PLOK="$TMP/pl-control"
+  mkdir -p "$PLOK/.claude/jit-context/vocabulary"
+  bash "$INIT" --base "$PLOK/.claude/jit-context" > "$TMP/initlinkok.txt" 2>&1
+  CTRL_RC=$?
+  if [ "$CTRL_RC" -eq 0 ] && [ -f "$PLOK/.claude/jit-context/$ENTRY_REL" ]; then
+    ok "the same tree with no link seeds normally"
+  else
+    bad "the same tree with no link seeds normally" "exit=$CTRL_RC"
+    cat "$TMP/initlinkok.txt"
+  fi
+else
+  echo "  SKIPPED: ln -s did not produce a symbolic link here, so the escape this section"
+  echo "           refuses cannot be constructed. Nothing in this section was tested."
+  echo "           On Git Bash that needs MSYS=winsymlinks:nativestrict."
+fi
+
+echo ""
 echo "=== a relative --base is resolved, not half-honoured ==="
 # The dangerous shape: mkdir/cp are happy with a relative path, but rebuild-tsv.sh
 # resolves JIT_BASE from $CLAUDE_PROJECT_DIR, so a project dir derived by stripping a

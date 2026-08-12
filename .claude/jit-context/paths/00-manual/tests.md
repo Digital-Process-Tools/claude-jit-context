@@ -41,4 +41,4 @@ bash tests/run-all.sh                                     # non-zero on any fail
 shellcheck -S warning scripts/*.sh tests/*.sh             # a CI leg of its own
 ```
 
-Fixtures build under `mktemp -d`, never in the repository tree — a suite that writes into the tree makes the next suite's result depend on the order they ran in. Clean up with a `trap`, not a line at the bottom: seven of the sixteen suites do, and the ones that do not leak a directory on every early exit.
+Fixtures build under `mktemp -d`, never in the repository tree — a suite that writes into the tree makes the next suite's result depend on the order they ran in. Clean up with a `trap`, not a line at the bottom: 12 of the 21 suites do — re-measured 2026-08-12 with `grep -l '^trap ' tests/test-*.sh | wc -l` — and the ones that do not leak a directory on every early exit. Re-measure rather than editing the number by hand; it was "seven of the sixteen" for long enough that both halves had drifted.

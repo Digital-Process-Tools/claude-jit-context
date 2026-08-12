@@ -17,9 +17,11 @@
 #                                                #   /.claude/jit-context
 #
 # Exit: 0 seeded, and the index rebuilt so the entry is live | 1 refused — the entry is
-#       already there and a copy you edited is not ours to replace | 2 could not
-#       evaluate: a bad argument, a --base that is not a project tree, an install with no
-#       template to copy, or a directory that could not be created.
+#       already there and a copy you edited is not ours to replace, or the rebuild did
+#       not complete and the entry is on disk and inert | 2 could not evaluate: a bad
+#       argument, a --base that is not a <project>/.claude/jit-context path, a symbolic
+#       link on the way in, an install with no template to copy, or a directory that
+#       could not be created.
 #
 # This is tooling, not a hook. It is run deliberately, by a person, and it fails loudly —
 # the opposite of scripts/*-hook.sh, which must never fail at all. See
@@ -91,13 +93,24 @@ fi
 
 # A linked component is refused rather than followed: the write would land outside the
 # tree you named, and "seeded <path>" would then be a receipt for a file somewhere else.
+# EVERY component on the way to the entry, not just the two nearest the project root — a
+# linked `vocabulary/` or `vocabulary/00-manual/` put the entry and its whole index outside
+# the tree while the receipt still named a path inside it, which is worse than the escape.
+# mkdir -p follows a link silently and cp writes through one, so neither of them can be
+# the check.
+LINKED=""
 for part in "$PROJECT/.claude" "$BASE"; do
-  if [ -L "$part" ]; then
-    echo "SKIPPED: $part is a symbolic link. Writing through it would put entries outside" >&2
-    echo "         the tree you named. Nothing was written." >&2
-    exit 2
-  fi
+  [ -L "$part" ] && LINKED="$part"
 done
+for dim in vocabulary paths tools; do
+  [ -L "$BASE/$dim" ] && LINKED="$BASE/$dim"
+  [ -L "$BASE/$dim/00-manual" ] && LINKED="$BASE/$dim/00-manual"
+done
+if [ -n "$LINKED" ]; then
+  echo "SKIPPED: $LINKED is a symbolic link. Writing through it would put entries outside" >&2
+  echo "         the tree you named. Nothing was written." >&2
+  exit 2
+fi
 
 # Refuse BEFORE creating anything, so a re-run against an edited copy is inert in every
 # respect rather than only in the copy.
@@ -106,6 +119,7 @@ if [ -e "$SEED" ] || [ -L "$SEED" ]; then
   echo "         $SEED" >&2
   echo "         A copy you edited is not ours to replace. Delete it first if you want the" >&2
   echo "         shipped text back, or leave it alone — it is your file now." >&2
+  echo "         Nothing was created and nothing was changed by this run." >&2
   exit 1
 fi
 
