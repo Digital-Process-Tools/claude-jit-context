@@ -53,6 +53,13 @@ What counts as the same miss
   a prompt that begins with / (a slash command is an instruction to the harness, not a
   question about the codebase) and one that begins with < (a harness-generated block).
 
+  A pasted link is removed whole before tokenising -- any run of non-space characters
+  containing :// -- and counted in the header. https://github.com/acme/thing/pull/54
+  is not the words `https`, `github`, `com` and `pull`; none of them was typed. Only
+  the scheme does this. A path (src/Billing/Totals.php) and a dotted file name
+  (common.sh) are ordinary tokens and still count, because a host name cannot be told
+  from a file name by shape -- only by a list of TLDs, and this tool keeps no lists.
+
   Only pre-prompt records are read. The tool and path dimensions produce far more
   (none) rows than the prompt hook does -- on the machine this was designed against,
   1,217 of 1,242 -- and none of them is a vocabulary gap.
@@ -199,11 +206,41 @@ function jit_fold_latin1(s,   i, p, out) {
   if (first == "/" || first == "<") { aside++; next }
   considered++
 
+  # A pasted link is a machine address, not prose. Left in, `https://github.com/org/
+  # repo/pull/54` becomes the tokens `https`, `github`, `com`, `pull`, `org` and `repo`,
+  # and three pastes of the SAME link outrank every word a person actually typed, so the
+  # headline advice becomes "write vocabulary/00-manual/com.md". None of those was ever
+  # a word in the prompt, which is why this is a tokeniser rule and not a stop-list: a
+  # stop-list hides `com` in this corpus and leaves `https` in whatever the next one is.
+  #
+  # The rule is exactly one thing: a whitespace-delimited run containing `://` is
+  # dropped whole. Deliberately NOT "a dot between two alphanumerics" -- `common.sh`,
+  # `tests.md` and `rebuild-tsv.sh` are that shape and are all words someone may want an
+  # entry for, and `github.com` cannot be told apart from `common.sh` by structure, only
+  # by a list of TLDs, which is the stop-list under another name. So a scheme-less host
+  # still tokenises; a link, which is what people actually paste, does not. Paths are
+  # untouched: `src/Billing/Totals.php` carries no scheme and still yields `billing` and
+  # `totals`, and the paths dimension already treats a token like that as meaningful.
+  #
+  # Split on "[ \t]+" and not " ": a one-character separator splits on newlines under
+  # one-true-awk and not under gawk, and this has to mean the same thing on both.
+  np = split(msg, part, "[ \t]+")
+  stripped = 0
+  kept = ""
+  for (u = 1; u <= np; u++) {
+    if (part[u] == "") continue
+    if (index(part[u], "://") > 0) { stripped++; continue }
+    kept = (kept == "" ? part[u] : kept " " part[u])
+  }
+  urls += stripped
+
   # The hook logs substr(msg, 1, 80), so an 80-character record may end mid-word. That
   # partial token would be its own miss forever -- it can never recur as a real word.
-  truncated = (length(msg) == 80)
+  # If the run that got cut was the link, it left with the cut, and dropping a further
+  # token would then discard a whole word nobody truncated.
+  truncated = (length(msg) == 80 && index(part[np], "://") == 0)
 
-  norm = tolower(msg)
+  norm = tolower(kept)
   # tolower() leaves a multibyte capital alone on one-true-awk, so the table carries both
   # cases and the fold runs after it.
   norm = jit_fold_latin1(norm)
@@ -254,6 +291,10 @@ END {
   printf "  %d line(s), %d prompt record(s), %d with no vocabulary match", lines, prompts, misses
   if (aside > 0) printf ", %d set aside (slash command or harness block)", aside
   if (headless > 0) printf ", %d with no message", headless
+  # Said out loud rather than dropped in silence, on the same principle as `set aside`:
+  # a prompt that was only a link now contributes no token at all, and a reader owed an
+  # explanation for a miss that produced nothing should not have to read the source.
+  if (urls > 0) printf ", %d link(s) stripped", urls
   printf "\n"
 
   # Rank: count desc, then token asc, so two runs over the same log print the same order.
