@@ -109,6 +109,11 @@ END {
   # prompt alone would take it out on upgrade, silently, for anyone who has not rebuilt.
   # So the unfolded subject stays as a second lookup. It is built only when the fold
   # changed something, which for an ASCII prompt is never: that case pays one comparison.
+  # A prompt that DOES carry an accent pays a second index() on every row, for the whole
+  # session and not just until the index is rebuilt -- the guard reads the prompt, which
+  # is the only side this process can see. Measured over a 1002-row index on awk 20200816:
+  # 34 ms for the ASCII prompt, 37 ms for the accented one. The second scan is a byte
+  # search over a prompt-sized string, not over the index.
   stale = (padded != low) ? low : ""
   gsub(/[^a-z0-9 -]/, " ", padded)
   gsub(/  +/, " ", padded)
@@ -155,8 +160,14 @@ END {
         continue
       }
       if (!(vfile in shown) && (index(padded, " " kw " ") > 0 || (stale != "" && index(stale, " " kw " ") > 0))) {
-        if (vfile in vmatch) vmatch[vfile] = vmatch[vfile] "|" kw
-        else vmatch[vfile] = kw
+        # Named once. Folding the keyword makes two spellings of it collide -- an author
+        # who writes `keywords: détail, detail` now gets two identical rows out of
+        # rebuild-tsv.sh, and the header read `(matched: detail|detail)`. That list is a
+        # receipt injected into the context window, so it must not double-count.
+        # index() on the delimited string, not an array: awk has no `in` for a substring.
+        if (vfile in vmatch) {
+          if (index("|" vmatch[vfile] "|", "|" kw "|") == 0) vmatch[vfile] = vmatch[vfile] "|" kw
+        } else vmatch[vfile] = kw
       }
     }
     close(lookup)

@@ -332,8 +332,11 @@ END {
           continue
         }
         if (!(vfile in shown) && (index(padded, " " kw " ") > 0 || (stale != "" && index(stale, " " kw " ") > 0))) {
-          if (vfile in vmatch) vmatch[vfile] = vmatch[vfile] "|" kw
-          else vmatch[vfile] = kw
+          # Named once -- see the same guard in pre-prompt-hook.sh. Folding the keyword
+          # makes two spellings of it collide, and the header read `(matched: x|x)`.
+          if (vfile in vmatch) {
+            if (index("|" vmatch[vfile] "|", "|" kw "|") == 0) vmatch[vfile] = vmatch[vfile] "|" kw
+          } else vmatch[vfile] = kw
         }
       }
       close(lookup)

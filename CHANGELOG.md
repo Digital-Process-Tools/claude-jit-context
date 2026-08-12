@@ -32,8 +32,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   An index built before this change still carries the mangled row, and rebuilding is the
   user's decision, not ours to require. So both hooks keep the **unfolded** subject as a
   second lookup, built only when the fold changed something — an ASCII prompt pays one
-  string comparison and nothing else. A pre-fold row keeps firing until the index is
-  rebuilt, rather than going dead on upgrade with no error and no warning.
+  string comparison and nothing else, and an accented one pays a second byte search per
+  row against a prompt-sized string. Over a 1002-row index on `awk` 20200816 that is 34 ms
+  against 37 ms. A pre-fold row keeps firing until the index is rebuilt, rather than going
+  dead on upgrade with no error and no warning.
+
+  Folding the keyword also makes two spellings of it collide: `keywords: détail, detail` is
+  now two identical rows, and the injected header read `(matched: detail|detail)`. That
+  list is a receipt spent from the context window, so both hooks name a keyword once.
 
   The substitution is `index()` and `substr()`, never `gsub()`. Measured on `awk` version
   20200816: `gsub()` with a multibyte character as its pattern decodes the **subject**, so a

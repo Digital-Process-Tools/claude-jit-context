@@ -413,6 +413,19 @@ for eng in $ENGINES; do
   OUT=$(run_rebuilt "{\"prompt\":\"le dtail$u sans accent\"}")
   assert_empty "[$eng] and a near miss still does not" "$OUT"
 
+  # Folding the keyword makes two spellings collide, and `keywords: détail, detail` is the
+  # pattern the README now tells an author they may write. rebuild-tsv.sh emits one row per
+  # keyword and does not dedup, so both rows carry the same word and the same file, and the
+  # injected header said `(matched: detail|detail)`. The entry is right and the receipt for
+  # it is not, in text that goes into the model's context.
+  printf -- '---\nkeywords: détail%s, detail%s\n---\ntwo spellings body\n' "$u" "$u" \
+    > "$RB/.claude/jit-context/vocabulary/00-manual/dup-$u.md"
+  rm -f "$RB/.claude/jit-context/vocabulary/00-manual/kw-$u.md"
+  PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$RB" bash "$REBUILD" >/dev/null 2>&1
+  OUT=$(run_rebuilt "{\"prompt\":\"le detail$u deux fois\"}")
+  assert_contains "[$eng] two spellings of one keyword still fire" "$OUT" "two spellings body"
+  assert_not_contains "[$eng] and are named once, not twice" "$OUT" "detail$u|detail$u"
+
   echo "=== [$eng] control characters in an entry body (issue #15) ==="
   OUT=$(run_hook_engine "$eng" "{\"prompt\":\"a crlf$u question\"}")
   assert_contains "[$eng] CRLF entry is injected" "$OUT" "CRLF body line one"
