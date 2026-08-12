@@ -921,6 +921,51 @@ function jit_bad_entry_file(f, dir) {
   }
   return ""
 }
+# --- The refusal list is bounded; the COUNT beside it is not (#38) ------------
+#
+# The sibling of the config.env cap, one channel over and a different failure. This string
+# is built INSIDE awk and never crosses an exec, so there is no ARG_MAX here and nothing
+# errors: it simply grows, one bullet per unhonourable row, and every byte lands in
+# additionalContext. 00-index.tsv is a committed file, so a clone chooses how many rows are
+# unhonourable -- and the cost is the session context window, which is the one resource this
+# plugin exists to spend carefully.
+#
+# BYTES, not rows, for two reasons. It is the guarantee that matters -- context is measured
+# in tokens, and a row cap only bounds tokens if every bullet is the same size -- and it is
+# the axis the config.env half already uses, so there is one idiom for one job rather than
+# two. In practice the two are close here: a bullet is a layer name, a row number and a
+# fixed reason string, never the pattern and never the file-name column (#28, #35), so it
+# is roughly 45 bytes and 4096 buys about ninety of them. That is far more than anyone
+# fixing a tree reads before running the linter the notice points them at.
+#
+# The cap is on the OUTPUT and on nothing else. Every row is still evaluated, every honest
+# rule after the cap still fires, and no hook exits differently. Stopping the scan would
+# turn a bounded notice into silently unenforced rules.
+#
+# The COUNT is uncapped, and the cut says so in words. A notice that quietly stopped at N
+# would tell the reader N rules were refused -- a false statement produced by a defence,
+# which is this repository own defect class wearing a fix as a disguise.
+#
+# POSITIONS SURVIVE TRUNCATION. Each bullet carries the row number its own call site
+# computed, so the numbers printed are true positions in the file and not indices into the
+# list that was kept. tests/test-security.sh S7 interleaves honest rows with refused ones so
+# that no refused row sits at position 1, and pins that "row 1" never appears.
+#
+# jit_refuse_cut is a program-scope variable on purpose: one awk process runs one hook, and
+# the cut line must be added once no matter which of the seven call sites overflows first.
+#
+# A THRESHOLD, not a hard ceiling: the length is checked before the append, so the list
+# settles at 4096 plus the bullet that crossed it plus the cut line. That is the config.env
+# half exactly. Cutting a bullet mid-string to hit a precise figure would print half a row
+# number, and a position that lies is the one outcome this whole notice exists to avoid.
+function jit_refuse_add(list, item) {
+  if (length(list) > 4096) {
+    if (jit_refuse_cut) return list
+    jit_refuse_cut = 1
+    return list "\n- the remaining refused rows are not listed here; the count above is the whole total"
+  }
+  return list (list == "" ? "- " : "\n- ") item
+}
 function jit_refusal_notice(list, n) {
   return "# JIT Context: " n " rule(s) could not be evaluated, so they did NOT run\n" list \
     "\nA pattern the matcher cannot honour is not a rule that did not match, and until now the two looked identical. Lint the tree that owns these rules:\n  bash scripts/jit-dry-run.sh --base <tree>/.claude/jit-context"

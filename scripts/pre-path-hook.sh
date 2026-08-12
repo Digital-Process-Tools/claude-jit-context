@@ -157,7 +157,7 @@ END {
       why = jit_bad_entry_file(rule_file, paths_base "/" layer)
       if (why != "") {
         n_refused++
-        refused = refused (refused == "" ? "- " : "\n- ") jit_row_id("paths/" layer, rown) ": " why
+        refused = jit_refuse_add(refused, jit_row_id("paths/" layer, rown) ": " why)
         log_matches = log_matches sep "refused:" jit_log_name(rule_file, layer, rown, why) "(" why ")"
         sep = ", "
         continue
@@ -185,7 +185,7 @@ END {
         # vocabulary/<layer>, both of which are called 00-manual, and the file name used to
         # tell those two apart. Withholding the name without adding the dimension would have
         # made one notice line ambiguous in exchange for closing the other hole.
-        refused = refused (refused == "" ? "- " : "\n- ") jit_row_id("paths/" layer, rown) ": " why
+        refused = jit_refuse_add(refused, jit_row_id("paths/" layer, rown) ": " why)
         log_matches = log_matches sep "refused:" rule_file "(" why ")"
         sep = ", "
         continue
@@ -237,7 +237,7 @@ END {
         why = jit_bad_entry_file(vocab_file, vocab_base "/" layer)
         if (why != "") {
           n_refused++
-          refused = refused (refused == "" ? "- " : "\n- ") jit_row_id("vocabulary/" layer, vrown) ": " why
+          refused = jit_refuse_add(refused, jit_row_id("vocabulary/" layer, vrown) ": " why)
           log_matches = log_matches sep "refused:" jit_log_name(vocab_file, layer, vrown, why) "(" why ")"
           sep = ", "
           continue

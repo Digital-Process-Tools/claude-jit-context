@@ -9,6 +9,44 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A hostile index could flood the refusal notice, and a truncated list must not read as
+  complete** (#38). The `refused` string is built inside `awk` and never crosses an `exec`,
+  so unlike the `config.env` cap in #36 there is no `ARG_MAX` and nothing fails — it simply
+  grows. One bullet per unhonourable row, every byte of it into `additionalContext`. Every
+  rule still behaved correctly and the notice was honest; what it cost was the session's
+  context window, which is the resource this plugin exists to spend carefully. A committed
+  `00-index.tsv` chooses how many rows are unhonourable, so the length was the clone's to
+  pick, not the user's.
+
+  The bound is on **bytes**, not rows, and it is 4096 — the axis and the number the
+  `config.env` half already uses, so there is one idiom for the job rather than two. It is
+  a threshold and not a hard ceiling, deliberately and identically to that half: the length
+  is checked before the append, so the list settles at 4096 plus the bullet that crossed it
+  plus the cut line. Truncating a bullet mid-word to hit an exact figure would print half a
+  row number, and a bound that costs one more line is cheaper than a position that lies.
+  Rows
+  and bytes are close together here only because a bullet never carries the pattern or the
+  file-name column (#28, #35): it is a layer name, a row number and a fixed reason, about
+  45 bytes, so the cap buys around ninety of them. Measured on a 400-row hostile fixture,
+  the injected payload went from 19,971 bytes to 4,818.
+
+  The **count is not capped**, and the cut says so in words — "the remaining refused rows
+  are not listed here; the count above is the whole total". A notice that quietly stopped
+  at N would tell the reader that N rules were refused: a false statement produced by a
+  defence, which is this repository's own defect class wearing a fix as a disguise.
+
+  The **positions survive truncation**. Each bullet carries the row number its own call
+  site computed, so what is printed is a true position in the file and not an index into
+  the list that was kept. `tests/test-security.sh` S7 interleaves honest rows with refused
+  ones so that no refused row sits at position 1, and pins that `row 1` never appears
+  alongside a positive that `row 2` does.
+
+  The cap is a bound on output and on nothing else. Every row is still evaluated and the
+  honest rule sitting after all 400 refused ones still fires — asserted, because a fix that
+  stopped scanning at the cap would turn a bounded notice into silently unenforced rules.
+  All seven refusal sites across the three hooks go through one appender, `jit_refuse_add()`
+  in `common.sh`; capping any one of them alone would have left the other six unbounded.
+
 - **The scratch file each hook hands to `awk` had a name anyone could work out, and `awk`
   truncated through a symbolic link at it** (#60). All three of `pre-path`, `pre-tool` and
   `pre-prompt` built it by concatenation — `/tmp/claude-path-log-$$.tmp`, and the same shape

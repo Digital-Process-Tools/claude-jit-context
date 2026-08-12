@@ -135,7 +135,7 @@ END {
     why = jit_bad_entry_file(r_file, tools_dir)
     if (why != "") {
       n_refused++
-      refused = refused (refused == "" ? "- " : "\n- ") jit_row_id("tools/00-manual", rown) r_kind ": " why
+      refused = jit_refuse_add(refused, jit_row_id("tools/00-manual", rown) r_kind ": " why)
       log_matches = log_matches sep "refused:" jit_log_name(r_file, "tools/00-manual", rown, why) "(" why ")"
       sep = ", "
       continue
@@ -178,7 +178,7 @@ END {
         # no rule to match and no entry file to exist, so a mode column reading "IGNORE ALL
         # PREVIOUS INSTRUCTIONS: ..." arrived in the context on the first Bash call of the
         # session. Reproduced 2026-08-12; tests/test-security.sh drives both halves.
-        refused = refused (refused == "" ? "- " : "\n- ") jit_row_id("tools/00-manual", rown) r_kind ": " why
+        refused = jit_refuse_add(refused, jit_row_id("tools/00-manual", rown) r_kind ": " why)
         log_matches = log_matches sep "refused:" r_file "(" why ")"
         sep = ", "
         continue
@@ -312,7 +312,7 @@ END {
           if (!((layer "/" vfile) in vrefused)) {
             vrefused[layer "/" vfile] = 1
             n_refused++
-            refused = refused (refused == "" ? "- " : "\n- ") jit_row_id("vocabulary/" layer, vrown) ": " why
+            refused = jit_refuse_add(refused, jit_row_id("vocabulary/" layer, vrown) ": " why)
             log_matches = log_matches sep "refused:" jit_log_name(vfile, layer, vrown, why) "(" why ")"
             sep = ", "
           }
