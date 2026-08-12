@@ -23,6 +23,11 @@ JIT_BASE="${CLAUDE_PROJECT_DIR:-.}/.claude/jit-context"
 # hook to cancel machine load: 31 ms before, 43 ms after. On a 5-entry tree the difference
 # did not clear the noise floor. A find fork costs the same walk plus a process.
 #
+# Re-measured 2026-08-12 after #34 added the dot-form globs, same tree, same interleave:
+# 40 ms for the seven-term loop at 0994dc0 against 48 ms for it here -- the walk is issued
+# twice per depth now, once for each form, and both halves lstat every hit. That is the
+# price of the sweep being able to see a file named after the thing that hides it.
+#
 # Every hook does its own sweep. Nothing is cached to a marker and nothing is carried
 # between hooks, because a cache is only as good as the run that filled it: a session
 # whose runner never fires SessionStart would have failed OPEN, and failing open is the
@@ -121,16 +126,22 @@ jit_scan_symlinks() {
       continue
     fi
     # The parent test is skipped entirely until a link has actually been seen, and on a
-    # tree with none it never runs at all. That guard is the whole cost story, and it is
-    # the reason the 12 ms above is 12 and not 70: measured in isolation on the same
-    # 1008-entry tree, the sweep cost 70 ms with this test running unconditionally and
-    # 12 ms with it guarded -- against a glob-and-lstat floor of 12 ms, so guarded it adds
-    # nothing measurable of its own. The cost was the pattern match, per file, against a
-    # set that is empty in every honest tree.
+    # tree with none it never runs at all. That guard is the whole cost story: measured in
+    # isolation on a 1008-entry tree, the sweep cost 70 ms with this test running
+    # unconditionally and 12 ms with it guarded -- against a glob-and-lstat floor of 12 ms,
+    # so guarded it adds nothing measurable of its own. The cost was the pattern match, per
+    # file, against a set that is empty in every honest tree.
     #
-    # The globs are issued shallow-to-deep as four separate batches, so every entry at one
-    # depth is recorded before any entry at the next is tested. Descendants can only follow
-    # an ancestor, and nothing is missed by not looking earlier.
+    # Those two figures are from before #34 widened the loop. Re-measured on the same shape
+    # of tree with the seven terms below, interleaved to cancel load: 10.7 ms for the old
+    # four-term loop against 18.4 ms for this one. The guard still costs nothing of its own
+    # -- the tree has no links, so this branch never runs -- and the floor itself moved,
+    # because the walk is now issued twice per depth.
+    #
+    # The globs are issued shallow-to-deep, both the plain and the dot form at each depth
+    # before either form at the next, so every entry at one depth is recorded before any
+    # entry at the next is tested. Descendants can only follow an ancestor, and nothing is
+    # missed by not looking earlier.
     [ "$found" = 1 ] || continue
     [ "$f" != "$base" ] || continue
     parent="${f%/*}"
@@ -163,11 +174,16 @@ jit_scan_symlinks "$JIT_BASE"
 # Reproduced with NO keyword match, NO rule fired and NO entry file present: the refusal
 # path alone writes a line, and the row's file-name column is the payload.
 #
-# jit_scan_symlinks() does not cover this. It globs with `*`, which does not match a
-# leading dot, so `.discovery` is invisible to it by construction -- and the log path is a
-# different concatenation from the entry path in any case. Four positions reach the same
-# write and all four are tested: hooks.log, logs/, .discovery/, and the two directories
-# above JIT_BASE that the entry sweep already refuses.
+# jit_scan_symlinks() does not cover this, and the reason changed with #34. It used to be
+# that the sweep globbed only with `*`, which does not match a leading dot, so `.discovery`
+# was invisible to it by construction; the sweep globs the dot forms now and does see it.
+# What still holds is the other half of that sentence, which was always the load-bearing
+# one: the log path is a DIFFERENT concatenation from the entry path. The sweep answers
+# "is this path a link", and nothing reads its answer on the way to the log -- so these
+# tests stay here rather than becoming a lookup into a set built for another purpose.
+#
+# Four positions reach the same write and all four are tested: hooks.log, logs/,
+# .discovery/, and the two directories above JIT_BASE that the entry sweep already refuses.
 #
 # On refusal, logging is DISABLED for the run and the hook carries on. A hook that cannot
 # log still has a job to do, and this file runs before every one of them -- exiting here
