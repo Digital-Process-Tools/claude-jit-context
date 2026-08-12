@@ -113,6 +113,20 @@ the user to do anything beyond opening the project.
   `scripts/jit-dry-run.sh` reaches the same verdict from the same shared `awk` function,
   against the tree named by `--base` rather than the session's own.
 
+- **`config.env` could itself be a symbolic link out of the tree, and was read.** Found by
+  review of the change above rather than filed: the log path was hardened and the file
+  beside it was not. `config.env` is a direct child of `.claude/jit-context/`, so the
+  symlink sweep already recorded it — the read just never consulted that set. `git clone`
+  carries the link, so a cloned repository chose a file outside the project to be read line
+  by line, and any `JIT_CONTEXT_*`, `DYNAMIC_RULES_*` or `DVSI_*` line that happened to be
+  in the target took effect. No line text ever left the parser, but the settings did.
+
+  Refused as a whole file, and **named** through the channel `config.env` refusals already
+  use — reported without a line number, because there is no line to point at and inventing
+  one would be worse than saying so plainly. Ignoring it in silence would have been this
+  repository's own defect class wearing a fix as a disguise: a setting that reads as applied
+  and is not. `jit-dry-run.sh` reaches the same verdict for the tree it was given.
+
 - **`jit-dry-run.sh --base <tree>` did not lint that tree's `config.env`.** `JIT_BASE`
   resolves from `$CLAUDE_PROJECT_DIR`, so the file it parsed was the session's and never
   the one being linted: a tree carrying `touch /tmp/nope` and `PATH=/evil` printed

@@ -104,6 +104,11 @@ new_rc() {
   printf '%s' "$f"
 }
 
+# Subject to the same known flake as tests/test-symlink-entry.sh, which carries the
+# measurement: under $( ) the hook inherits the command-substitution subshell as $PPID, and
+# a recycled pid brings a stale once-per-session marker with it. When that happens the hook
+# prints {} and the "hook still injects its notice" control below goes red. Re-run before
+# treating it as a finding.
 run_prompt() {
   printf '%s' "$PROMPT_PAYLOAD" | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-prompt-hook.sh" 2>&1
 }
@@ -173,6 +178,9 @@ printf '%s\t%s\n' 'zzz' '../x-CANARY-ROW' > "$OUTDIR/vocabulary/00-manual/00-ind
 ln -sfn "$OUTDIR" "$P/.claude/jit-context"
 OUT="$(run_prompt "$P")"; RC=$?
 assert_rc0 "linked jit-context: hook still exits 0" "$RC"
+# Paired on this shape too, not only on S4a-c: without it, "no log outside the tree" is
+# equally satisfied by a hook that bailed out before reading anything.
+assert_contains "linked jit-context: hook still injects its notice" "$OUT" "could not be evaluated"
 assert_no_file "linked jit-context: no log was created outside the tree" "$OUTDIR/.discovery"
 
 P="$TMP/s4d-claude"; rm -rf "$P"; mkdir -p "$P"
@@ -181,6 +189,7 @@ printf '%s\t%s\n' 'zzz' '../x-CANARY-ROW' > "$OUTDIR/jit-context/vocabulary/00-m
 ln -sfn "$OUTDIR" "$P/.claude"
 OUT="$(run_prompt "$P")"; RC=$?
 assert_rc0 "linked .claude: hook still exits 0" "$RC"
+assert_contains "linked .claude: hook still injects its notice" "$OUT" "could not be evaluated"
 assert_no_file "linked .claude: no log was created outside the tree" "$OUTDIR/jit-context/.discovery"
 
 echo ""

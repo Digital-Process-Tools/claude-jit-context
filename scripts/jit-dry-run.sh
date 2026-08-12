@@ -110,7 +110,13 @@ CONFIG_REFUSED=0
 #
 # Line NUMBER and reason only, never the line's text -- the same rule common.sh follows
 # for the same reason. This prints to a terminal that a person is reading.
-if [ -f "$BASE/config.env" ]; then
+if [ -L "$BASE/config.env" ]; then
+  # Same refusal common.sh reaches, for the same reason: git carries the link, so a clone
+  # chooses a file outside the project to be read. Whole-file, so no line number.
+  CONFIG_REFUSED=1
+  printf 'REFUSED  %-18s %-30s config.env is a symbolic link, so it is not read at all\n' "config.env" ""
+  printf '         %-18s %-30s the hooks refuse it too — replace the link with the file\n' "" ""
+elif [ -f "$BASE/config.env" ]; then
   CONFIG_LINES="$(
     # Both are reset, not just the one read back: jit_load_config() appends to the list
     # and increments the count, and common.sh has already run it once against the SESSION

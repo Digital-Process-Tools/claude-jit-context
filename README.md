@@ -336,8 +336,8 @@ a rule that read as enforced for as long as it existed, and a single malformed p
 (`~a[b` is a fatal awk error) that silenced every rule in its index at once.
 
 **Nothing on the way to an entry may be a symbolic link** — not the entry file, not its
-layer directory, not the dimension directory, and not `.claude/` or `.claude/jit-context/`
-themselves. All of them are refused through that same channel, named the same way. The
+layer directory, not the dimension directory, not `config.env`, and not `.claude/` or
+`.claude/jit-context/` themselves. All of them are refused through that same channel, named the same way. The
 hooks read every entry with the privileges of your session, and `.claude/` arrives with the
 repository: a link is a file outside the project being handed to the model by a directory
 the reader has not audited, and `git clone` recreates every one of those shapes. The check
@@ -506,7 +506,7 @@ It reads and prints. No file is written, no entry is created, no hook fires and 
 bash tests/run-all.sh
 ```
 
-COUNT-PLACEHOLDER assertions across SUITES-PLACEHOLDER suites, covering matching, normalization, modes, blocking, session-once behaviour, malformed input, the dry-run, the miss report, and what a hostile project directory can make the hooks read, write or say. Engine-sensitive assertions run once per `awk` on the machine. No dependencies beyond bash, `awk` and `perl`.
+476 assertions across twelve suites, covering matching, normalization, modes, blocking, session-once behaviour, malformed input, the dry-run, the miss report, and what a hostile project directory can make the hooks read, write or say. Engine-sensitive assertions run once per `awk` on the machine. No dependencies beyond bash, `awk` and `perl`.
 
 ## Why not `.claude/rules/`?
 

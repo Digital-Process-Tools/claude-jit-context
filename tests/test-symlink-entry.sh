@@ -64,6 +64,21 @@ new_project() {
   printf '%s' "$p"
 }
 
+# KNOWN FLAKE, filed separately, and it can redden any positive control below at random.
+#
+# The hooks key their once-per-session markers on /tmp/claude-*-shown-$PPID.txt, and the
+# refusal notice takes a sentinel in that same file. Every call here is wrapped in $( ),
+# so the hook is exec'd by the command-substitution SUBSHELL and $PPID is that subshell --
+# a fresh, short-lived, readily recycled pid, not this script. Measured: script pid 31660,
+# hook PPID 31661 under $( ), and 31660 when the same pipeline is redirected to a file.
+#
+# So a recycled subshell pid inherits a stale marker and the hook says {} -- and what goes
+# silent is the REFUSAL NOTICE, which is the security-relevant output. Nothing in a test
+# can clear that file first: the pid is not known until after the hook has run, and $$
+# inside a subshell still reports the parent. Clearing by wildcard would delete the state
+# of every other session on the machine, which is the same defect one level up.
+#
+# Left alone deliberately. The fix belongs in the marker path, not in a workaround here.
 run_hook() {
   printf '%s' "$3" | CLAUDE_PROJECT_DIR="$2" bash "$SCRIPTS/$1" 2>&1
 }
@@ -200,6 +215,46 @@ printf 'Bash\tsectarget\tgood.md\t\t\t\n' > "$D/00-index.tsv"
 OUT="$(run_hook pre-tool-hook.sh "$TMP/linked-parent/proj" "$TOOL_PAYLOAD")"
 assert_contains "a project reached through a linked parent still fires" "$OUT" "legit body"
 assert_not_contains "a project reached through a linked parent refuses nothing" "$OUT" "could not be evaluated"
+
+echo ""
+echo "=== S3d: config.env is a symlink out of the tree ==="
+
+# The same trust boundary one file over. config.env is a direct child of JIT_BASE, so
+# jit_scan_symlinks() already records it -- but jit_load_config() opened it by name and
+# never consulted that set. git carries the link, so a clone chooses a file outside the
+# project to be READ line by line, and a JIT_CONTEXT_* line that happens to be in the
+# target then applies. No line text leaks, but the count and the reasons do.
+#
+# Refused and NAMED, in the channel config.env refusals already use. Silently ignoring the
+# file would be the defect this repo exists to remove, wearing a fix as a disguise.
+
+# Driven on the EFFECT of a setting, not on the wording of a notice. JIT_CONTEXT_VOCAB_PATHS
+# is off by default and turns on the 01-paths.tsv vocabulary pass, so "the entry fires" and
+# "the entry stays silent" are the two directions of "was that file honoured".
+s3d_project() {
+  local p; p="$(new_project "$1")"
+  local d="$p/.claude/jit-context/vocabulary/00-manual"
+  printf 'vocab-by-path body\n' > "$d/good.md"
+  printf 'sectarget/\tgood.md\n' > "$d/01-paths.tsv"
+  : > "$p/.claude/jit-context/paths/00-manual/00-index.tsv"
+  printf '%s' "$p"
+}
+
+# Control FIRST, so the negative below is known to be testing something: an ordinary
+# config.env carrying that setting does turn the pass on.
+P="$(s3d_project s3d-ok)"
+printf 'JIT_CONTEXT_VOCAB_PATHS=1\n' > "$P/.claude/jit-context/config.env"
+OUT="$(run_hook pre-path-hook.sh "$P" "$PATH_PAYLOAD")"
+assert_contains "honest config.env: the setting takes effect" "$OUT" "vocab-by-path body"
+assert_not_contains "honest config.env: nothing is refused" "$OUT" "were refused"
+
+P="$(s3d_project s3d)"
+printf 'JIT_CONTEXT_VOCAB_PATHS=1\n' > "$TMP/outside/hostile.env"
+ln -sf "$TMP/outside/hostile.env" "$P/.claude/jit-context/config.env"
+OUT="$(run_hook pre-path-hook.sh "$P" "$PATH_PAYLOAD")"
+assert_not_contains "linked config.env: the setting does NOT take effect" "$OUT" "vocab-by-path body"
+assert_contains "linked config.env: the refusal is named" "$OUT" "config.env"
+assert_contains "linked config.env: and says it is a link" "$OUT" "symbolic link"
 
 echo ""
 echo "=== Negative control: an ordinary tree is untouched ==="

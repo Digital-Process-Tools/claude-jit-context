@@ -246,7 +246,24 @@ jit_load_config() {
   done < "$file"
 }
 
-if [ -f "$JIT_BASE/config.env" ]; then
+# config.env is the same trust boundary as the log, one file over. It is a direct child of
+# JIT_BASE -- so jit_scan_symlinks() already records it when it is a link -- but this read
+# opened it by name and consulted nothing. git carries the link, so a clone chose a file
+# OUTSIDE the project to be read line by line, and any JIT_CONTEXT_*, DYNAMIC_RULES_* or
+# DVSI_* line that happened to be in the target then took effect. No line text leaves this
+# function, but the settings do, and so does the shape of a file nobody meant to expose.
+#
+# Refused and NAMED, through the channel config.env refusals already use. Ignoring the file
+# in silence would be this repo's own defect class wearing a fix as a disguise: a setting
+# that reads as applied and is not.
+#
+# The whole file is one refusal, so it is reported without a line number -- there is no line
+# to point at, and inventing one would be worse than saying so plainly.
+if [ -L "$JIT_BASE/config.env" ]; then
+  JIT_CONFIG_REFUSED_N=1
+  JIT_CONFIG_REFUSED="- the file itself: config.env is a symbolic link, so it was not read"
+  jit_log_write "$(printf '[%s] config.env | refused: symbolic link' "$(_ts)")"
+elif [ -f "$JIT_BASE/config.env" ]; then
   jit_load_config "$JIT_BASE/config.env"
   if [ "$JIT_CONFIG_REFUSED_N" -gt 0 ]; then
     jit_log_write "$(printf '[%s] config.env | %d line(s) refused\n%s' \
