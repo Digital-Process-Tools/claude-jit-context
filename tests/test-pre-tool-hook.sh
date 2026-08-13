@@ -562,6 +562,109 @@ for eng in $ENGINES; do
   assert_blocked "[$eng] blockcmd without --needed is blocked" "$OUT"
   assert_contains "[$eng] block reason escapes control chars" "$OUT" 'blocked \\u0001 reason \\u000c text \\u001f here'
   assert_no_raw_controls "[$eng] block reason emits no raw control byte" "$eng" '{"tool_name":"Bash","tool_input":{"command":"blockcmd now"}}' 
+  echo "=== [$eng] a refused row is still reported on the block path (issue #103) ==="
+  # Two refusals reach n_refused by different routes, and only one of them survives being
+  # suppressed on a blocked call:
+  #
+  #   at LOAD -- an undefined escape in a `~match`. Counted on every call whose tool_name
+  #     the row names, whatever the command was, so a later call that is not blocked
+  #     counts it again and the notice is merely DEFERRED.
+  #   at MATCH -- a body jit_read_body() cannot deliver. Counted only on a command the row
+  #     actually matched, so when that command is also the one a block rule refuses, no
+  #     later call ever counts it again and the notice is DROPPED for the session.
+  #
+  # Both are driven here, in a tree of their own: a row refused at load is refused for
+  # every call, so leaving one in the shared fixture would put a refusal notice on top of
+  # every other assertion in this file.
+  #
+  # Inside the per-engine shim because the match-refused half is jit_read_body(), which is
+  # exactly where the engines diverged in #97.
+  R103_NOTICE='could not be evaluated, so they did NOT run'
+
+  r103_tree() {
+    local d="$1" kind="$2" t v tsv vtsv l
+    t="$d/.claude/jit-context/tools/00-manual"
+    v="$d/.claude/jit-context/vocabulary"
+    mkdir -p "$t" "$v/00-manual" "$v/10-auto" "$v/20-grouped" "$v/30-crosscutting"
+    for l in 00-manual 10-auto 20-grouped 30-crosscutting; do
+      vtsv="$v/$l/00-index.tsv"
+      : > "$vtsv"
+    done
+    tsv="$t/00-index.tsv"
+    : > "$tsv"
+    if [ "$kind" = dark ]; then
+      # Refused at load: `\s` is PCRE, awk compiles it to a bare `s`.
+      printf 'Bash\t~dark\\s+rule\tdk.md\tremind\t\t\n' >> "$tsv"
+      echo "dark rule body" > "$t/dk.md"
+      # Refused at match: gone.md is never created, so this row is counted on `blkcmd`
+      # and on nothing else -- and `blkcmd` is the command the row below blocks.
+      printf 'Bash\tblkcmd\tgone.md\tremind\t\t\n' >> "$tsv"
+    fi
+    printf 'Bash\tblkcmd\tblkr.md\tblock\t\t\n' >> "$tsv"
+    echo "blkr rule body" > "$t/blkr.md"
+  }
+
+  # Read from a FILE, never from $( ): a command substitution silently drops NUL bytes,
+  # and these assertions are about what actually reached stdout.
+  r103_run() {
+    printf '{"session_id":"%s","tool_name":"Bash","tool_input":{"command":"%s"}}\n' "$2" "$3" \
+      | PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$1" bash "$HOOK" > "$R103_OUT" 2>/dev/null
+  }
+  assert_file_contains() {
+    if LC_ALL=C grep -qF "$2" "$R103_OUT"; then
+      PASS=$((PASS + 1)); echo "  PASS: $1"
+    else
+      FAIL=$((FAIL + 1)); echo "  FAIL: $1"
+      echo "    expected to contain: $2"
+      echo "    got: $(LC_ALL=C tr -c '[:print:]' '?' < "$R103_OUT" | cut -c1-300)"
+    fi
+  }
+  assert_file_not_contains() {
+    if LC_ALL=C grep -qF "$2" "$R103_OUT"; then
+      FAIL=$((FAIL + 1)); echo "  FAIL: $1"
+      echo "    should NOT contain: $2"
+    else
+      PASS=$((PASS + 1)); echo "  PASS: $1"
+    fi
+  }
+
+  R103_OUT=$(mktemp)
+  R103_DARK=$(mktemp -d)
+  R103_CLEAN=$(mktemp -d)
+  r103_tree "$R103_DARK" dark
+  r103_tree "$R103_CLEAN" clean
+
+  # 1. The blocked call. The block reason itself is asserted in the same output as the
+  #    positive control: "the notice is there" is also true of a hook that never spoke,
+  #    and "the notice is missing" is true of one that died before the decision.
+  r103_run "$R103_DARK" "s103-$u" "blkcmd now"
+  assert_file_contains "[$eng] control: the block rule still blocks" '"decision":"block"'
+  assert_file_contains "[$eng] control: the block reason is its own text" "blkr rule body"
+  assert_file_contains "[$eng] a refused row is reported on the blocked call" "$R103_NOTICE"
+  assert_file_contains "[$eng] both refusals are counted on the blocked call" "2 rule(s)"
+
+  # 2. Same session, a call that is not blocked. The `break` at the block rule truncates
+  #    the row scan, so the list delivered above may be short -- which is why the blocked
+  #    call must NOT consume the once-per-session marker. The complete notice still lands.
+  r103_run "$R103_DARK" "s103-$u" "echo hello"
+  assert_file_contains "[$eng] the blocked call did not consume the once-marker" "$R103_NOTICE"
+  # One, not two: `echo hello` matches neither the block rule nor the row beside it, so
+  # the match-refused row is not counted here at all. That is the whole point of the
+  # assertion above -- it is the row this list is MISSING that had no other way out.
+  assert_file_contains "[$eng] and the deferred list is the load-refused row only" "1 rule(s)"
+
+  # 3. And that marker is real: the next clean call of the same session is silent.
+  r103_run "$R103_DARK" "s103-$u" "echo hello again"
+  assert_file_not_contains "[$eng] the notice is still once per session" "$R103_NOTICE"
+
+  # 4. The other direction, in the same shape of fixture: an honest tree gains no notice
+  #    from being blocked. A notice that appears whatever the tree says is not a report.
+  r103_run "$R103_CLEAN" "s103c-$u" "blkcmd now"
+  assert_file_contains "[$eng] control: the honest tree blocks too" '"decision":"block"'
+  assert_file_not_contains "[$eng] an honest tree gains no refusal notice when blocked" "$R103_NOTICE"
+
+  rm -rf "$R103_DARK" "$R103_CLEAN"
+  rm -f "$R103_OUT"
 done
 
 rm -rf "$ENGINE_BIN"

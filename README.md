@@ -393,6 +393,17 @@ things this replaces: a rule that read as enforced for as long as it existed, an
 malformed pattern (`~a[b` is a fatal awk error) that silenced every rule in its index at
 once.
 
+**A blocked call gets the notice too, after the block reason.** It used to be withheld
+there, to keep a block reason the only thing the model read. That cost more than it bought:
+a refused row whose entry file cannot be read is only counted on a command that row
+actually matched, so when that is the same command a `block` rule refuses, every call that
+would report it is blocked and the notice never arrives at all. The block itself is
+structural — the call is refused whatever is read afterwards — so the reason keeps its
+place at the top and the notice follows it. A blocked call does **not** spend the
+once-per-session budget: the row scan stops at the rule that blocked, so the list beside a
+block reason can be short, and the complete one still arrives on the next call that is not
+blocked.
+
 **The notice locates a refused row by position, never by its file name.** The index arrives
 with the repository, so that column is untrusted text, and the notice fires with no rule
 matched — quoting it back would be a channel into the model's context that needs no trigger.
