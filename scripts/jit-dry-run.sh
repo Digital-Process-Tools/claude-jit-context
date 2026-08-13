@@ -50,13 +50,30 @@ usage() {
   exit "${1:-0}"
 }
 
+# A known flag missing its value needs the same loud refusal an UNKNOWN flag already
+# got. `${2:-}` supplies an empty string and then `shift 2` FAILS -- there is nothing to
+# shift -- and under `set -uo pipefail` with no `-e` a failed shift is not fatal: $1
+# never advances and the loop below spins forever. Measured at e800067, all four of
+# --base --tool --command --prompt ran to exit 124 under `timeout 4`, while `--path`,
+# an unknown flag, exited 2 correctly. The loud path was already right; the quiet one
+# was the KNOWN flag.
+#
+# This script is the one the hooks own refusal notice sends authors to, so a hang here
+# is a dangling flag typed by an agent burning its entire timeout against no output.
+# #114, and paths/00-manual/tooling.md is the contract: fail loudly, stderr, non-zero.
+need_value() {
+  echo "SKIPPED: $1 needs a value" >&2
+  echo "         Run with --help for the accepted flags. Nothing was checked." >&2
+  exit 2
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
-    --base)    BASE="${2:-}"; shift 2 ;;
-    --tool)    SAMPLE_TOOL="${2:-}"; shift 2 ;;
-    --command) SAMPLE_COMMAND="${2:-}"; shift 2 ;;
-    --file)    SAMPLE_FILE="${2:-}"; shift 2 ;;
-    --prompt)  SAMPLE_PROMPT="${2:-}"; shift 2 ;;
+    --base)    [ $# -ge 2 ] || need_value "$1"; BASE="$2"; shift 2 ;;
+    --tool)    [ $# -ge 2 ] || need_value "$1"; SAMPLE_TOOL="$2"; shift 2 ;;
+    --command) [ $# -ge 2 ] || need_value "$1"; SAMPLE_COMMAND="$2"; shift 2 ;;
+    --file)    [ $# -ge 2 ] || need_value "$1"; SAMPLE_FILE="$2"; shift 2 ;;
+    --prompt)  [ $# -ge 2 ] || need_value "$1"; SAMPLE_PROMPT="$2"; shift 2 ;;
     -h|--help) usage 0 ;;
     *) echo "unknown argument: $1" >&2; usage 2 ;;
   esac
@@ -271,18 +288,49 @@ check_pattern() {
   # Patterns travel through the environment, never through awk -v: a -v assignment
   # processes escape sequences in its value, which would silently repair or mangle the
   # very backslash under test before the check ever sees it.
-  why="$(JIT_PAT="$pat" awk "$JIT_AWK_GUARD"'BEGIN { print jit_bad_pattern(ENVIRON["JIT_PAT"]) }')"
+  # LC_ALL=C on BOTH probes, because every awk in the hooks is pinned that way and an
+  # answer reached in another locale is an answer about a different matcher (#116). Two
+  # things came of the omission, and neither looked like a locale problem:
+  #
+  #   the structural probe  a pattern carrying a byte that is not valid UTF-8 -- which
+  #     includes every non-ASCII escape, since the guard reads BYTES -- made one-true-awk
+  #     abort with `towc: multibyte conversion failure` in a UTF-8 locale. That went to
+  #     this script's own stderr, landing in the middle of the report with no frame, and
+  #     $( ) captured an EMPTY verdict, so the row came out `rejected by the local awk`
+  #     with no reason at all.
+  #   the engine probe  the same row is accepted by one-true-awk under C and fatal under
+  #     UTF-8. The verdict printed was therefore about the reader's terminal settings and
+  #     not about the hook.
+  #
+  # Neither probe redirects its stderr. Silencing a probe is how #98 happened: a fatal
+  # became an empty result and the empty result read as a clean tree.
+  why="$(LC_ALL=C JIT_PAT="$pat" awk "$JIT_AWK_GUARD"'BEGIN { print jit_bad_pattern(ENVIRON["JIT_PAT"]) }')"
 
-  if JIT_PAT="$pat" awk 'BEGIN { if (match("", ENVIRON["JIT_PAT"])) x = 1 }' >/dev/null 2>&1; then
+  if LC_ALL=C JIT_PAT="$pat" awk 'BEGIN { if (match("", ENVIRON["JIT_PAT"])) x = 1 }' >/dev/null 2>&1; then
     engine="accepted"
+  elif [ -n "$why" ]; then
+    # The structural guard refuses this row at load, so the hook never hands it to
+    # match() and nothing below it in that index is lost. Saying otherwise was true of a
+    # DIFFERENT row -- see the branch below -- and an overstated warning on the common
+    # case teaches the reader to discount the branch where it is exact (#116).
+    engine="rejected by the local awk — refused before match() is reached, so no other row is lost"
   else
-    engine="FATAL — this row alone silences every rule in its index"
-    [ -z "$why" ] && why="rejected by the local awk"
+    # Nothing refuses this one first: it reaches match() in the hook, where awk aborts
+    # mid-scan, the END block never runs, and every rule in the index goes with it. A
+    # reversed interval such as a{3,1} is the shape that gets here -- the structural
+    # guard models no intervals.
+    engine="FATAL — nothing refuses this row first, so it alone silences every rule in its index"
+    why="rejected by the local awk"
   fi
 
   CHECKED=$((CHECKED + 1))
   if [ -n "$why" ]; then
     case "$why" in
+      # First, and it has to be: the general arm below matches this reason too, and a
+      # POSIX class is not the fix here -- there is no class to reach for. Matched on
+      # its tail rather than its head so this pattern carries no backslash of its own.
+      *"before a non-ASCII byte")
+        hint=" — drop the backslash; an accented or CJK character matches itself" ;;
       "undefined escape "*) hint=" — use a POSIX class such as [[:space:]], [0-9] or [A-Za-z0-9_]" ;;
     esac
     REFUSED=$((REFUSED + 1))

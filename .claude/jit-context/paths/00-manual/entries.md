@@ -33,7 +33,7 @@ So a missing `description:` costs nothing today and is what stops this tree flip
 
 ## `match` is an awk ERE, not PCRE
 
-`\s` `\d` `\w` compile to the bare letter and match **nothing**, while awk exits 0 — use `[[:space:]]`, `[0-9]`, `[A-Za-z0-9_]`. `\b` is not a word boundary but a backspace character, so it also matches nothing. `\n` is the one escape that survives, and rules need it: `^` anchors the whole command string rather than each line, so anchor on `(^|[;&|\n] *)`. Such a row is now refused at load and named in the injected context instead of reading as enforced.
+`\s` `\d` `\w` compile to the bare letter and match **nothing**, while awk exits 0 — use `[[:space:]]`, `[0-9]`, `[A-Za-z0-9_]`. `\b` is not a word boundary but a backspace character, so it also matches nothing. A backslash before a **non-ASCII** byte is refused too (#116) — the guard reads bytes under `LC_ALL=C`, where nothing above `0x7F` is in any character class, so `\é` walked past the ASCII test, dropped its backslash on both engines and made gawk warn into the session; drop the backslash and the character matches itself. `\n` is the one escape that survives, and rules need it: `^` anchors the whole command string rather than each line, so anchor on `(^|[;&|\n] *)`. Such a row is now refused at load and named in the injected context instead of reading as enforced.
 
 ## Do not hand-roll an invocation anchor
 

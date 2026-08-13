@@ -171,6 +171,55 @@ echo "=== every regex row gets an engine verdict as well as a structural one ===
 OUT=$(cd "$CLEAN" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" 2>&1) && ST=0 || ST=$?
 assert_contains "reports the live awk that evaluated it" "$OUT" "engine:"
 
+# --- #116: the linter's two probes run in the locale the HOOKS run in -----------------
+#
+# Both probes used to inherit the caller's locale while every awk in the hooks is pinned
+# LC_ALL=C, so this script answered a question about a different matcher than the one
+# that runs. Two consequences, one tree each. The row is the only refusable one in its
+# tree, so each verdict below belongs to it and to nothing else.
+#
+# The file name is held in a variable rather than written beside the redirect: this
+# repository's own tools rule blocks a shell write to the generated index by name, and it
+# reads the whole command string.
+MB=$(mktemp -d)
+INTERVAL=$(mktemp -d)
+make_tree "$MB"
+make_tree "$INTERVAL"
+MB_IDX="$MB/.claude/jit-context/tools/00-manual/00-index.tsv"
+INTERVAL_IDX="$INTERVAL/.claude/jit-context/tools/00-manual/00-index.tsv"
+printf 'Bash\t~\\\xc3\xa9x\tnonascii.md\tblock\t\t\n' >> "$MB_IDX"
+echo "nonascii body" > "$MB/.claude/jit-context/tools/00-manual/nonascii.md"
+printf 'Bash\t~a{3,1}\tinterval.md\tremind\t\t\n' >> "$INTERVAL_IDX"
+echo "interval body" > "$INTERVAL/.claude/jit-context/tools/00-manual/interval.md"
+
+echo ""
+echo "=== a non-ASCII escape is refused structurally, and leaks no probe output (#116) ==="
+OUT=$(cd "$ELSEWHERE" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --base "$MB/.claude/jit-context" 2>&1) && ST=0 || ST=$?
+assert_status "exit 1 for a row that cannot be honoured" "$ST" "1"
+assert_contains "names it as an undefined escape" "$OUT" "undefined escape"
+# The probe used to run in a UTF-8 locale and one-true-awk wrote this into the report,
+# between this script's own lines, with no frame and no explanation.
+assert_not_contains "no towc failure in the report" "$OUT" "towc"
+assert_not_contains "no multibyte conversion failure in the report" "$OUT" "multibyte conversion failure"
+# The claim the row does not support. jit_bad_pattern() refuses it BEFORE match() is
+# reached, so nothing downstream of it is lost -- the hook does not die.
+assert_not_contains "does not claim it silences the index" "$OUT" "silences every rule in its index"
+assert_contains "still prints an engine verdict for it" "$OUT" "engine:"
+
+echo ""
+echo "=== ...and the row that really does silence an index still says so (#116) ==="
+# The positive control for the sentence above: `a{3,1}` is a reversed interval. The
+# structural guard models no intervals, so it passes clean and the row reaches match()
+# in the hook, where it is fatal mid-scan and every rule below it is lost. Rejected by
+# awk 20200816 AND gawk 5.4.1 -- measured. Without this, "the scary sentence is gone"
+# would be indistinguishable from having deleted it.
+OUT=$(cd "$ELSEWHERE" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --base "$INTERVAL/.claude/jit-context" 2>&1) && ST=0 || ST=$?
+assert_status "exit 1 for a row awk itself rejects" "$ST" "1"
+assert_contains "keeps the FATAL verdict where it is true" "$OUT" "silences every rule in its index"
+assert_contains "and says the engine is what rejected it" "$OUT" "rejected by the local awk"
+
+rm -rf "$MB" "$INTERVAL"
+
 echo ""
 echo "=== config.env is linted for the tree named by --base, not the session ==="
 # JIT_BASE resolves from $CLAUDE_PROJECT_DIR in common.sh, so sourcing it parsed the

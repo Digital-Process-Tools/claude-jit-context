@@ -47,15 +47,33 @@ BASE="$PWD/.claude/jit-context"
 
 usage() {
   # The header block, to the first non-comment line. Read structurally rather than as a
-  # line range: jit-dry-run.sh pins '2,27p', and a line added above that range truncates
+  # line range: jit-dry-run.sh pins '2,31p', and a line added above that range truncates
   # its --help with nothing to say so.
   awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
   exit "${1:-0}"
 }
 
+# A known flag missing its value needs the same loud refusal an UNKNOWN flag already
+# got. `${2:-}` supplies an empty string and then `shift 2` FAILS -- there is nothing to
+# shift -- and under `set -uo pipefail` with no `-e` a failed shift is not fatal: $1
+# never advances and the loop below spins forever. Measured at e800067, `jit-init.sh
+# --base` ran to exit 124 under `timeout 5` having written zero bytes to either stream.
+#
+# That is the exact inverse of this tool contract (paths/00-manual/tooling.md): fail
+# loudly, on stderr, with a non-zero status. A hang says nothing at all, and the caller
+# is usually an agent that then burns its whole timeout against no output. #114.
+#
+# The check belongs here and not in a wrapper, because the failing `shift 2` is the
+# mechanism. jit-misses.sh has had need_value() since it was written; this is that.
+need_value() {
+  echo "SKIPPED: $1 needs a value" >&2
+  echo "         Run with --help for the accepted flags. Nothing was written." >&2
+  exit 2
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
-    --base)    BASE="${2:-}"; shift 2 ;;
+    --base)    [ $# -ge 2 ] || need_value "$1"; BASE="$2"; shift 2 ;;
     -h|--help) usage 0 ;;
     *) echo "unknown argument: $1" >&2; usage 2 ;;
   esac

@@ -453,6 +453,16 @@ nothing at all, while awk exits 0. Nothing about the rule looks wrong afterwards
 backspace character, so `\bgit\b` compiles to a pattern looking for literal backspaces
 rather than word boundaries. It matches nothing either way, and is refused the same way.
 
+**A backslash before an accented or CJK character is refused as well.** There is nothing
+to reach for instead: drop the backslash and the character matches itself. This one is
+worth stating because it used to be the quiet exception — the guard reads *bytes*, since
+`LC_ALL=C` is pinned on every `awk` in the plugin, and no byte above `0x7F` belongs to any
+character class under `C`, so the check that catches `\s` could not see `\é` at all. Both
+engines then dropped the backslash and matched the bare character, which is not what the
+author wrote; and on gawk — which is `awk` on most Linux boxes — the hook additionally
+wrote `regexp escape sequence … is not a known regexp operator` into the session while
+exiting 0.
+
 `\n` is the one escape that survives, and rules need it: `^` anchors the whole command
 string rather than each line, so a rule meant to catch a command on line three of a
 heredoc must anchor on `(^|[;&|\n] *)`.
