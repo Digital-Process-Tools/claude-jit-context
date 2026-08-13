@@ -254,6 +254,71 @@ assert_allows "a write to another tsv"    "$(bash_payload "echo x > docs/my00-in
 assert_allows "the rebuild script itself" "$(bash_payload "bash scripts/rebuild-tsv.sh")"
 
 echo ""
+echo "=== the vocabulary dimension: the one entry that explains this plugin ==="
+# The other half of #93. `vocabulary/00-manual/jit-context.md` fires today and had no
+# assertion anywhere in tests/: it could have stopped matching outright and every leg would
+# still be green. It is the entry that answers "what is pre-tool-hook", which is the first
+# question anyone touching this repository asks.
+#
+# The REAL prompt hook, and output to a file rather than $( ): a captured variable silently
+# drops NUL bytes, so an assertion can pass against output it never saw.
+PROMPT_HOOK="$REPO/scripts/pre-prompt-hook.sh"
+VOCAB_RULE="jit-context.md"
+PTMP="$(mktemp -d 2>/dev/null)" || PTMP=""
+if [ -z "$PTMP" ] || [ ! -d "$PTMP" ]; then
+  echo "  SKIPPED: mktemp -d produced no directory here, so this section was not tested."
+else
+  trap 'rm -rf "$PTMP"' EXIT
+
+  run_prompt() {
+    printf '{"prompt":"%s"}' "$1" > "$PTMP/payload.json"
+    CLAUDE_PROJECT_DIR="$REPO" bash "$PROMPT_HOOK" < "$PTMP/payload.json" \
+      > "$PTMP/prompt-out.txt" 2>/dev/null
+  }
+
+  assert_prompt_fires() {
+    run_prompt "$2"
+    if grep -qF -- "$VOCAB_RULE" "$PTMP/prompt-out.txt"; then
+      PASS=$((PASS + 1)); echo "  PASS: $1"
+    else
+      FAIL=$((FAIL + 1)); echo "  FAIL: $1"
+      echo "    expected $VOCAB_RULE for prompt: $2"
+    fi
+  }
+
+  assert_prompt_silent() {
+    run_prompt "$2"
+    if grep -qF -- "$VOCAB_RULE" "$PTMP/prompt-out.txt"; then
+      FAIL=$((FAIL + 1)); echo "  FAIL: $1"
+      echo "    $VOCAB_RULE must NOT fire for prompt: $2"
+    else
+      PASS=$((PASS + 1)); echo "  PASS: $1"
+    fi
+  }
+
+  # Positive control, first and loud. Without it every silence below passes in an
+  # environment where the prompt hook resolves no tree at all -- which is exactly how the
+  # first draft of this suite went green over nothing.
+  run_prompt "what does rebuild-tsv actually write"
+  if ! grep -qF -- "$VOCAB_RULE" "$PTMP/prompt-out.txt"; then
+    echo "  FAIL: the prompt hook fires nothing for this repo's own vocabulary entry --"
+    echo "        every silence assertion in this section would be vacuous. Stopping."
+    cat "$PTMP/prompt-out.txt"
+    exit 1
+  fi
+  PASS=$((PASS + 1)); echo "  PASS: it fires when someone names rebuild-tsv"
+
+  assert_prompt_fires  "naming a hook"        "what does pre-tool-hook decide"
+  assert_prompt_fires  "naming the plugin"    "how does jit-context pick an entry"
+  # Ordinary sentences in a session that happens to be in this repository. Each names a
+  # word the entry is about without naming anything the entry is keyed on, and an entry
+  # that fires on them is a standing tax on every prompt.
+  assert_prompt_silent "a git hook"           "add a pre-commit hook to this repo"
+  assert_prompt_silent "an unrelated index"   "the index is stale, rebuild it"
+  assert_prompt_silent "an unrelated context" "the context window is full"
+fi
+
+echo ""
 echo "=== every file under scripts/ is governed by some paths/ rule ==="
 # The class behind #83 rather than the instance. `hooks.md` matches the hooks and
 # `common.sh`; `tooling.md` names its tools by hand, one alternation per script. A file that

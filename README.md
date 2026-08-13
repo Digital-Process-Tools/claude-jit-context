@@ -189,6 +189,24 @@ target, and `..` is folded away. A link at or below `.claude` is refused rather 
 followed: the hooks will not read an entry through one, so seeding past it would leave a
 rule that can never fire.
 
+### Four worked entries, ready to copy
+
+`examples/jit-context/` carries five entries — one `paths/`, one `vocabulary/` and three
+`tools/`, one each for `remind`, `require` and `forbid` — in the exact layout the hooks
+read. Copy the tree into your project and rebuild:
+
+```bash
+cp -R examples/jit-context/. .claude/jit-context/
+bash scripts/rebuild-tsv.sh
+bash scripts/jit-dry-run.sh --base "$PWD/.claude/jit-context" --command "git push origin main"
+```
+
+They are samples with real frontmatter, so treat them as a starting point and not as
+rules about your project — but every one of them is driven in both directions by
+`tests/test-shipped-examples.sh`, on the same hooks your session runs. The `--base` there
+is absolute on purpose: a relative one is resolved against the dry-run's own working
+directory, which prints `SKIPPED` for every sample and still exits `0`.
+
 ## The three dimensions
 
 Knowledge attaches to one of three triggers. Pick by asking _when_ the reader needs it.
