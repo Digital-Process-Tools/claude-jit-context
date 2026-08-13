@@ -1,7 +1,7 @@
 ---
 title: How jit-context matching works
 description: The three dimensions, the TSV index between markdown and the hooks, and the layer order.
-keywords: jit-context, 00-index, rebuild-tsv, pre-path-hook, pre-prompt-hook, pre-tool-hook, session-start-hook, invocation macro, jit-dry-run
+keywords: jit-context, jit context, 00-index, rebuild-tsv, pre-path-hook, pre-prompt-hook, pre-tool-hook, session-start-hook, invocation macro, jit-dry-run
 ---
 
 Three dimensions, one hook each. Knowledge attaches to whichever trigger answers _when the reader needs it_.

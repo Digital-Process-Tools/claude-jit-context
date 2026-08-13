@@ -37,10 +37,20 @@ if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
 # stops belongs to the person who just wrote the dead rule. A flag only CI passes would
 # hand that person back the exit 0 that is the bug.
 #
-# The two ADVISORY reports below -- ambiguous keywords, and entries carrying no
-# `description:` -- never move the code. Those entries are indexed and fire correctly;
-# nothing about them is refused. Failing on them would make the documented default tree
-# exit non-zero and teach every author to ignore the status.
+# The ADVISORY reports below -- ambiguous keywords, entries carrying no `description:`,
+# and keywords the blacklist dropped -- never move the code. Failing on the first two
+# would make the documented default tree exit non-zero and teach every author to ignore
+# the status.
+#
+# The dropped keyword was the judgement call (#95), and it is advisory for a DIFFERENT
+# reason than the other two: unlike a `~@macro` typo, which has no legitimate reading,
+# skipping a generic word is the documented behaviour of `keywords:` -- the word is kept
+# in frontmatter for human searching and deliberately not indexed. Nothing is refused
+# either: no row was written, so no matcher rejects one, and calling that `1` would make
+# that code mean two different things. And the blacklist is project-configurable, so a
+# project that widens it would exit non-zero on every rebuild forever. What was actually
+# missing is the sentence, not the status: the drop is now named, with the entry file, in
+# the same report block as the ambiguity tally.
 JIT_RC=0
 # 2 outranks 1: an index that was not written is a worse claim than one that was.
 jit_rc() { [ "$1" -gt "$JIT_RC" ] && JIT_RC="$1"; return 0; }
@@ -140,6 +150,13 @@ VOCAB_KEYWORD_BLACKLIST="${JIT_CONTEXT_KEYWORD_BLACKLIST:-${DYNAMIC_RULES_KEYWOR
 # Projects that keep modules somewhere other than src/ override this in config.env.
 MODULE_PREFIX="${JIT_CONTEXT_MODULE_PREFIX:-${DYNAMIC_RULES_MODULE_PREFIX:-src/}}"
 
+# Every keyword the blacklist above skipped, as display lines, reported at the end of the
+# run. A drop used to be a bare `continue`: an author who wrote `keywords: file, invoice`
+# got a rule firing on `invoice` and never on `file`, from a build that reported success
+# (#95). Accumulated globally rather than printed inline so it lands in the report block
+# beside the ambiguity tally, where someone is already looking.
+JIT_DROPPED=""
+
 # --- Vocabulary: parse frontmatter from .md files ---
 build_vocab_tsv() {
   local dir="$1"
@@ -174,8 +191,14 @@ build_vocab_tsv() {
     # this line is about to be split on alone.
     kw_line=$(printf '%s\n' "$kw_line" | awk "$JIT_AWK_FOLD"'{ print jit_fold_latin1($0) }')
 
-    # Split on ", " and write each keyword → filename
-    echo "$kw_line" | tr ',' '\n' | while read -r kw; do
+    # Split on ", " and write each keyword → filename.
+    #
+    # A here-string, never `... | while`: the body appends to JIT_DROPPED, and a pipeline's
+    # last stage is a subshell whose variables die at the closing `done`. A dropped keyword
+    # would then be discarded by the very code written to stop discarding it silently.
+    local kw_split
+    kw_split=$(printf '%s\n' "$kw_line" | tr ',' '\n')
+    while IFS= read -r kw; do
       # Normalize IDENTICALLY to the matcher (pre-prompt-hook.sh): lowercase, then
       # map any char outside [a-z0-9 -] to a space, collapse, trim. A keyword authored
       # with dots/slashes ("docs.dp.tools", "security/dast") would otherwise be DEAD —
@@ -183,9 +206,15 @@ build_vocab_tsv() {
       kw=$(echo "$kw" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9 -]/ /g; s/  */ /g; s/^ *//; s/ *$//')
       [ -z "$kw" ] && continue
       # Skip overly generic single words — they collide with op flags and path tokens.
-      echo "$kw" | grep -Eq "$VOCAB_KEYWORD_BLACKLIST" && continue
+      # Skipped, and now SAID: the row is not written, so the entry never fires on this
+      # word, and the only place that can be reported is here (#95).
+      if printf '%s\n' "$kw" | grep -Eq "$VOCAB_KEYWORD_BLACKLIST"; then
+        JIT_DROPPED="$JIT_DROPPED    [$label] $filename: \"$kw\"
+"
+        continue
+      fi
       printf '%s\t%s\n' "$kw" "$filename"
-    done >> "$tsv"
+    done <<< "$kw_split" >> "$tsv"
   done
 
   COUNT=$(wc -l < "$tsv" | tr -d ' ')
@@ -362,6 +391,22 @@ for tsv in "$VOCAB_BASE"/*/00-index.tsv; do
   fi
 done
 [ "$HAS_AMBIG" = "0" ] && echo "(none — all keywords appear in ≤$THRESHOLD files)" >&2
+echo "" >&2
+
+# --- Dropped keywords: listed in frontmatter, not in the index (#95) ---
+# Advisory, like the tally above, and for the reasons argued at the top of this file. The
+# quiet line is worded so it cannot be confused with the ambiguity report's own "(none":
+# two sections whose empty states read alike is how a report that never ran passes for a
+# report that found nothing.
+echo "=== Keywords dropped by the blacklist (listed, not indexed) ===" >&2
+echo "These stay in \`keywords:\` frontmatter for human searching and are skipped at index time," >&2
+echo "so the entry never fires on them. Widen or narrow with JIT_CONTEXT_KEYWORD_BLACKLIST." >&2
+echo "" >&2
+if [ -n "$JIT_DROPPED" ]; then
+  printf '%s' "$JIT_DROPPED" >&2
+else
+  echo "(none — every keyword in every entry was indexed)" >&2
+fi
 echo "" >&2
 # One line saying which of the three this run was. The REFUSED and FATAL lines above are
 # the detail, but they scroll past inside two reports; this is what is on screen when the
