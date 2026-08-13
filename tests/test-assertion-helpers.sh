@@ -220,6 +220,17 @@ drive_declared() {
           fail "$suite: $fn declares an unusable output variable" "source: $src"
           return ;;
       esac
+      # The declared name is assigned inside the same subshell that counts the verdict,
+      # so a name this harness already uses there would corrupt its own bookkeeping and
+      # report a defect in a helper that has none -- which is #110 all over again, by a
+      # different route. Refuse it by name instead of discovering it as a false red.
+      case "$var" in
+        PASS|FAIL|funcs|fn|var|path)
+          fail "$suite: $fn declares an output variable this harness reserves" \
+               "source: $src -- rename the variable in the suite" \
+               "reserved: PASS FAIL funcs fn var path"
+          return ;;
+      esac
       ;;
     *) fail "$suite: $fn declares an unknown source" "source: $src"; return ;;
   esac
@@ -278,6 +289,7 @@ for suite in "$SUBJECTS"/test-*.sh; do
   declarations "$suite" > "$decls"
 
   declared=""
+  saw_none=0
   if [ ! -s "$decls" ]; then
     fail "$name: declares nothing" \
          "every suite carries at least one '# jit-drive:' line, so that a helper this" \
@@ -287,12 +299,17 @@ for suite in "$SUBJECTS"/test-*.sh; do
   fi
 
   while IFS= read -r decl; do
+    # Field-split the declaration, with globbing off: a reason is prose, and a `*` in it
+    # would otherwise be expanded against whatever happens to be in the directory.
+    set -f
     # shellcheck disable=SC2086
     set -- $decl
+    set +f
     if [ "${1:-}" = "none" ]; then
       shift
       [ "${1:-}" = "--" ] && shift
       reason="$*"
+      saw_none=1
       case "$reason" in
         ""|"--")
           fail "$name: 'jit-drive: none' carries no reason" \
@@ -319,7 +336,10 @@ for suite in "$SUBJECTS"/test-*.sh; do
   done < "$decls"
 
   # Helpers the suite defines and did not declare. Undecidable from here -- a helper may
-  # genuinely not be payload-shaped -- so this is reported, never guessed at.
+  # genuinely not be payload-shaped -- so this is reported, never guessed at. A `none`
+  # line already accounts for every remaining helper in its suite, in prose, in the list
+  # above; repeating them here would say the declaration was not heard.
+  [ "$saw_none" = 1 ] && continue
   while IFS= read -r h; do
     [ -n "$h" ] || continue
     case " $declared " in
@@ -415,7 +435,7 @@ fi
 
 # --- Self-test: the harness on a controlled tree ------------------------------------
 #
-# Three fixtures in one run, because each is the other control:
+# Four fixtures in one run, because each is the other control:
 #   test-file-reader.sh  a CORRECT helper in the documented file-reading shape. Before
 #                        #110 it was driven with the capture signature and reported as a
 #                        defect. It must come out green.
@@ -423,6 +443,8 @@ fi
 #                        come out red -- otherwise "no longer falsely flagged" is only
 #                        evidence that the harness evaluated nothing.
 #   test-undeclared.sh   a suite that declares nothing. It must be reported, not skipped.
+#   test-reserved.sh     a declaration naming an output variable this harness uses for
+#                        its own bookkeeping. It must be refused by name, not driven.
 if [ "$DEFAULT_MODE" = 1 ]; then
   echo ""
   echo "Self-test: the harness driven against a controlled tree"
@@ -469,6 +491,21 @@ if [ "$DEFAULT_MODE" = 1 ]; then
     echo '}'
   } > "$FIX/test-undeclared.sh"
 
+  # A declared output variable that collides with this harness own bookkeeping. Assigning
+  # it inside the verdict subshell would make a correct helper look broken -- #110 by a
+  # second route -- so it must be refused by name.
+  {
+    echo '#!/bin/bash'
+    echo '# jit-drive: assert_blocked blocked file:PASS'
+    echo 'PASS=0'
+    echo 'FAIL=0'
+    echo 'ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }'
+    echo 'bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; return 0; }'
+    echo 'assert_blocked() {'
+    echo '  if grep -qF -- '"'"'"decision":"block"'"'"' "$PASS"; then ok "$1"; else bad "$1"; fi'
+    echo '}'
+  } > "$FIX/test-reserved.sh"
+
   SELF="$WORK/self.out"
   bash "$0" --subjects "$FIX" > "$SELF" 2>&1
   SELF_RC=$?
@@ -497,10 +534,14 @@ if [ "$DEFAULT_MODE" = 1 ]; then
            "FAIL: test-undeclared.sh: declares nothing"
   self_has "its undriven helper is named in the third-outcome list" \
            "test-undeclared.sh: assert_contains"
+  self_has "an output variable this harness reserves is refused by name" \
+           "FAIL: test-reserved.sh: assert_blocked declares an output variable this harness reserves"
+  self_lacks "and is not driven into a false verdict instead" \
+             "test-reserved.sh: assert_blocked should report"
   if [ "$SELF_RC" -ne 0 ]; then
-    pass "self-test: the sub-run exits non-zero on its two planted defects"
+    pass "self-test: the sub-run exits non-zero on its three planted defects"
   else
-    fail "self-test: the sub-run exited 0 with two planted defects" "rc: $SELF_RC"
+    fail "self-test: the sub-run exited 0 with three planted defects" "rc: $SELF_RC"
   fi
 fi
 
