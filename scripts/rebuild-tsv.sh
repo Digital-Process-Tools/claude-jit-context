@@ -37,10 +37,13 @@ if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
 # stops belongs to the person who just wrote the dead rule. A flag only CI passes would
 # hand that person back the exit 0 that is the bug.
 #
-# The ADVISORY reports below -- ambiguous keywords, entries carrying no `description:`,
-# and keywords the blacklist dropped -- never move the code. Failing on the first two
-# would make the documented default tree exit non-zero and teach every author to ignore
-# the status.
+# The two ADVISORY reports below -- ambiguous keywords, and keywords the blacklist
+# dropped -- never move the code. Failing on ambiguity would make the documented default
+# tree exit non-zero and teach every author to ignore the status.
+#
+# This sentence used to name a third report, for entries carrying no `description:`. No
+# such check has ever existed here or in jit-dry-run.sh; it was a comment describing a
+# guard nobody wrote, which is the same defect as a guard that reports nothing (#95).
 #
 # The dropped keyword was the judgement call (#95), and it is advisory for a DIFFERENT
 # reason than the other two: unlike a `~@macro` typo, which has no legitimate reading,
