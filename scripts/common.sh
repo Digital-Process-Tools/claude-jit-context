@@ -1615,8 +1615,38 @@ function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, key, val,
   if (!e["fm"]) { e["mode"] = "full"; e["pin"] = 1 }
   return e["read"]
 }
+# The VALUE is never echoed back. It is free text from a file that arrived with the
+# repository, and naming the field is enough for the author who wrote it.
+function jit_badmode_note(e) {
+  if (!e["badmode"]) return ""
+  return "\n[jit] The inject: value in this entry is not summary or full, so the project default applied."
+}
+# That notice is appended in BOTH modes, and the early return below used to skip it (#118).
+# The contract published on issue #1 is that an unrecognised value "falls back to the
+# project default and says so in what that entry injects". The fallback half held
+# everywhere and the saying-so half held only under `summary` -- so on the path almost
+# every tree is on, `full` being the default and nobody having configured anything, a typo
+# by the author produced an entry that behaved exactly as if the line were never written.
+# That is the defect shape this repository exists to name, inside the feature meant to give
+# an author control: a value somebody typed, silently ignored, indistinguishable from a
+# correct configuration.
+#
+# Said on every fire rather than once per session, and that is a considered dose rather
+# than the cheap option. The notice rides the injection of the entry itself, which is
+# already deduped per session in the paths and vocabulary dimensions and by `once` in
+# tools -- so it can never be noisier than the entry it is attached to, and under `full` it
+# is 94 bytes against a whole body. A separate once-per-session channel would need
+# session state inside a function that has none, and would go quiet for exactly the
+# sessions that resume or compact, where the agent reading the injection is not the one
+# that read the notice. The refusal channels in the hooks report once per session because a
+# refused row is a standing fact about the index; this is a property of the text of one
+# entry, and it stops the moment somebody fixes the line.
+#
+# A refusal still never carries it: pre-tool-hook.sh builds a block reason from the body
+# and not from this, and an entry that can refuse reads its body whatever the mode says, so
+# a bad inject: changes nothing there to report.
 function jit_inject_text(e, rel,   out) {
-  if (e["mode"] == "full") return e["body"]
+  if (e["mode"] == "full") return e["body"] jit_badmode_note(e)
   out = ""
   if (e["title"] != "") out = jit_clip(e["title"], 160)
   if (e["desc"] != "") out = out (out == "" ? "" : "\n") jit_clip(e["desc"], 400)
@@ -1626,9 +1656,7 @@ function jit_inject_text(e, rel,   out) {
   # said out loud instead -- a silently downgraded entry is an absence produced by the
   # tool, which is the failure this whole repository exists to name.
   else out = out (out == "" ? "" : "\n") "[jit] There is no description: in this entry, so a match can only name it. Add one and the next match will say what it holds."
-  # The VALUE is never echoed back. It is free text from a file that arrived with the
-  # repository, and naming the field is enough for the author who wrote it.
-  if (e["badmode"]) out = out "\n[jit] The inject: value in this entry is not summary or full, so the project default applied."
+  out = out jit_badmode_note(e)
   return out "\n[jit] Summary only -- read " rel " for the entry."
 }
 # For the log, which a person reads. `full` and `summary` and `summary with nothing to
