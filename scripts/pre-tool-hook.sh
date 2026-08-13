@@ -335,10 +335,10 @@ END {
     # one, which concatenates to the layer directory -- made this getline a fatal i/o error
     # on one-true-awk, so the process carrying a block decision reached three lines below
     # died inside END with no JSON on stdout at all. Not "blocks without its text": no
-    # block. jit_read_body() now refuses both shapes before the read, off a set the bash
+    # block. jit_entry_why() now refuses both shapes before the read, off a set the bash
     # half sweeps, so what this paragraph claims is what the code does on every engine.
-    # jit_entry_load() applies those same two checks through jit_entry_why(), which is why
-    # this reader is safe on one-true-awk where the plain getline was not.
+    # It is the funnel BOTH entry readers call -- jit_read_body() and jit_entry_load() --
+    # which is why the summary-mode reader below is safe where a plain getline was not.
     #
     # jit_entry_load/jit_inject_text live in common.sh: what a match contributes is the
     # title and the author-written description by default, and the whole body only when

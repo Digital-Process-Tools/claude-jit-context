@@ -1300,30 +1300,37 @@ function jit_bad_bytes(s, what) {
   if (jit_bad_utf8(s)) return what " is not valid UTF-8"
   return ""
 }
-# The ONE reader of an entry body, so this check cannot be added at four sites and missed
-# at the fifth -- there are five, and they are in three different files. The body lands in
-# JIT_BODY rather than in the return value, because awk returns one scalar and the reason
-# is what every caller has to branch on.
+# The ONE FUNNEL every reader of an entry file passes through, so this check cannot be
+# added at four sites and missed at the fifth. It used to be jit_read_body() itself, back
+# when that was the only reader; issue #1 added a second, jit_entry_load(), which stops at
+# the closing --- when only a summary is injected, so the guard moved down here rather
+# than being written out twice. A THIRD reader that opens an entry file without calling
+# this reopens #97 on one-true-awk, silently and on an engine Linux CI does not run.
 #
-# getline < 0 is "could not open", which a row naming a deleted or renamed entry produces.
-# It used to be indistinguishable from an EMPTY entry file: nothing injected, nothing
-# refused, and the shown-marker written anyway. That is the reading one-true-awk takes of
-# a NUL-bearing row, so this is where #78 is caught on the engine that hides the byte.
-# The pre-read half of the guard, shared by both readers of an entry file. Returns a
-# reason a getline must not be attempted at all, or "" when it may be.
+# Returns a reason a getline must not be attempted at all, or "" when it may be. Both
+# shapes are committable index rows, and both are fatal rather than -1 on one-true-awk.
 function jit_entry_why(path) {
   if (substr(path, length(path), 1) == "/") return "the row names no entry file"
   if (jit_nonfile(path)) return "the entry file is not a regular file"
   return ""
 }
+# Reads a WHOLE entry file. One caller is left, jit-dry-run.sh, which is asking whether
+# the bytes can be delivered at all rather than what would be injected -- the hooks now go
+# through jit_entry_load(). The body lands in JIT_BODY rather than in the return value,
+# because awk returns one scalar and the reason is what every caller has to branch on.
+#
+# getline < 0 is "could not open", which a row naming a deleted or renamed entry produces.
+# It used to be indistinguishable from an EMPTY entry file: nothing injected, nothing
+# refused, and the shown-marker written anyway. That is the reading one-true-awk takes of
+# a NUL-bearing row, so this is where #78 is caught on the engine that hides the byte.
 function jit_read_body(path,   line, r, first) {
   JIT_BODY = ""
   # --- Before the read, because on one engine there is no after (#97) --------------
   #
   # Every caller builds this path as <layer dir> "/" <file-name column>, and two shapes of
-  # that concatenation name something `getline` must never open. Both are refused HERE, at
-  # the one funnel all five call sites pass through, rather than at each site: a guard a
-  # site can forget is a guard that protects four sites out of five.
+  # that concatenation name something `getline` must never open. Both are refused in
+  # jit_entry_why(), the funnel every entry read passes through, rather than at each site:
+  # a guard a site can forget is a guard that protects four sites out of five.
   #
   # A trailing slash is an EMPTY file-name column, which concatenates to the layer directory
   # itself. jit_bad_entry_file() lets that column through on purpose -- an empty column is a

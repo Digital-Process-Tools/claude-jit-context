@@ -2,9 +2,9 @@
 # Tests for #97 and #98 — an index row whose entry path is not a regular file.
 # Usage: bash tests/test-entry-not-a-file.sh
 #
-# #97. All five jit_read_body() call sites concatenate a layer directory with the index
-# file-name column and getline the result. awk cannot stat, so nothing established that
-# the result is a regular file. On one-true-awk — the awk macOS ships — getline on a
+# #97. Every entry read concatenates a layer directory with the index file-name column and
+# getlines the result -- five sites in the three hooks, plus jit-dry-run.sh. awk cannot
+# stat, so nothing established that the result is a regular file. On one-true-awk — the awk macOS ships — getline on a
 # DIRECTORY is a fatal i/o error raised inside END: the process dies, stdout carries no
 # JSON at all, and a `block` decision already reached is destroyed with it. Driven at
 # f63555e: awk version 20200816 died, GNU Awk 5.4.1 blocked correctly. That split is why
