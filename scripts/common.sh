@@ -1043,6 +1043,27 @@ function jit_bad_pattern(p,   i, n, c, nx, depth, inbr, brpos) {
       nx = substr(p, i + 1, 1)
       if (nx == "") return "trailing backslash"
       if (nx ~ /[[:alnum:]]/ && nx !~ /^[ntr]$/) return "undefined escape \\" nx
+      # A byte above ASCII, and the test above could never see it (#116). LC_ALL=C is
+      # pinned on every awk that reaches this function, so substr() returns one BYTE:
+      # the lead byte of an accented or CJK character. Measured on awk 20200816 and gawk
+      # 5.4.1 under C, that byte is in NO character class -- not [[:alnum:]], not
+      # [[:print:]], not [[:cntrl:]] -- so no class test can catch it, which is why this
+      # is a byte comparison. String comparison under C is strcmp, and both engines
+      # answer 1 for `"\303" > "\177"`.
+      #
+      # What such a row actually did is worth stating, because it is NOT "matched
+      # nothing": the escape is dropped and the pattern matches the BARE character, on
+      # both engines. So the row fires on text the author did not write a backslash for.
+      # Refusing it is the same trade the ASCII case above already makes -- the author is
+      # present and the fix is one character -- and it buys the half that has no
+      # workaround: gawk writes `regexp escape sequence ... is not a known regexp
+      # operator` into a stranger session stderr while the hook exits 0, and a refused
+      # row never reaches match() at all.
+      #
+      # The reason names the position instead of appending the byte. `"undefined escape
+      # \\" nx` would put a lone continuation byte into the injected notice, which is the
+      # class #77 and #78 were about: half a character on a channel that must carry it.
+      if (nx > "\177") return "undefined escape \\ before a non-ASCII byte"
       i++
       continue
     }

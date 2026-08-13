@@ -37,6 +37,14 @@ done
   printf 'Bash\t~(^|[;&|\\n] *)zork\tnewline-ok.md\tremind\t\t\n'
   printf 'Bash\t~quux)ping\tparen-literal.md\tremind\t\t\n'
   printf 'Bash\t~zap[[:alnum:]\tclass-fatal.md\tremind\t\t\n'
+  # #116. A backslash before a NON-ASCII byte. LC_ALL=C is pinned on the matcher, so the
+  # guard's substr() sees one byte -- the lead byte of an accented character is never
+  # [[:alnum:]], so this walked straight past the escape test and reached match().
+  printf 'Bash\t~\\\xc3\xa9x\tnonascii-escape.md\tblock\t\t\n'
+  # Its positive control, one row later: the SAME character with no backslash in front of
+  # it. Without this row, "the escaped one does not fire" is satisfied by a matcher that
+  # cannot handle the byte at all, and the assertion below would be about nothing.
+  printf 'Bash\t~\xc3\xa9y\tnonascii-literal.md\tremind\t\t\n'
 } > "$TOOLS_DIR/00-index.tsv"
 
 echo "dead escape rule body" > "$TOOLS_DIR/dead-escape.md"
@@ -45,6 +53,8 @@ echo "fatal rule body" > "$TOOLS_DIR/fatal.md"
 echo "newline anchored rule body" > "$TOOLS_DIR/newline-ok.md"
 echo "paren literal rule body" > "$TOOLS_DIR/paren-literal.md"
 echo "class fatal rule body" > "$TOOLS_DIR/class-fatal.md"
+echo "nonascii escape rule body" > "$TOOLS_DIR/nonascii-escape.md"
+echo "nonascii literal rule body" > "$TOOLS_DIR/nonascii-literal.md"
 
 {
   printf 'Billing/\tbilling.md\n'
@@ -56,6 +66,19 @@ echo "fatal path body" > "$PATHS_DIR/00-manual/path-fatal.md"
 echo "dead path body" > "$PATHS_DIR/00-manual/path-dead.md"
 
 run_tool() { echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2>/dev/null; }
+# The same call with stderr KEPT, written to a file. A hook that exits 0 having printed a
+# diagnostic into a stranger's session has still failed, and 2>/dev/null above cannot see
+# that -- which is how #116 lived under a green suite.
+STDERR_FILE="$TEST_DIR/hook-stderr.txt"
+run_tool_keep_stderr() {
+  # $1 payload, $2 optional directory to put first on PATH (an awk shim)
+  : > "$STDERR_FILE"
+  if [ -n "${2:-}" ]; then
+    echo "$1" | PATH="$2:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2>"$STDERR_FILE"
+  else
+    echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2>"$STDERR_FILE"
+  fi
+}
 run_path() { echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PATH_HOOK" 2>/dev/null; }
 
 # jit-drive: assert_contains contains capture
@@ -127,6 +150,64 @@ echo "=== a POSIX class does not close the bracket expression it sits in ==="
 OUT=$(run_tool '{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}')
 assert_contains "good rule survives the unterminated class" "$OUT" "good rule body"
 assert_contains "unterminated class is refused" "$OUT" "tools/00-manual row 6"
+
+echo ""
+echo "=== a backslash before a NON-ASCII byte is refused like an escaped letter (#116) ==="
+# The guard's escape test was `nx ~ /[[:alnum:]]/`. LC_ALL=C is pinned on the matcher, so
+# substr() returns one BYTE: 0xC3 is in no character class at all under C -- measured, it
+# is not alnum, not print and not cntrl -- so the test could never see it and the pattern
+# went to match().
+#
+# What it actually did there is NOT "matched nothing". Measured on awk 20200816 and gawk
+# 5.4.1: the escape is dropped and the pattern matches the BARE character, exactly as an
+# escaped q does. So the row fires on the character with no backslash while the author
+# wrote one, and on gawk the hook writes `regexp escape sequence ... is not a known
+# regexp operator` into the session's stderr on its way to exit 0.
+OUT=$(run_tool '{"tool_name":"Bash","tool_input":{"command":"run éx now"}}')
+assert_not_contains "an escaped non-ASCII byte does not block" "$OUT" "decision"
+assert_not_contains "and its body is not injected" "$OUT" "nonascii escape rule body"
+# Row and reason in ONE needle. Split into two, the reason half is satisfied by row 1's
+# `undefined escape \s`, which is in this notice whatever row 7 does.
+assert_contains "and it is NAMED, by row, with its reason" "$OUT" \
+  "tools/00-manual row 7 (a block rule): undefined escape"
+
+# The positive control, in the same fixture and on the same code path: the same character
+# with no backslash. If this row goes quiet too, the four assertions above are about a
+# matcher that cannot see the byte rather than about the guard.
+OUT=$(run_tool '{"tool_name":"Bash","tool_input":{"command":"run éy now"}}')
+assert_contains "the same character UNESCAPED still fires" "$OUT" "nonascii literal rule body"
+assert_not_contains "and is not refused" "$OUT" "tools/00-manual row 8"
+
+echo ""
+echo "=== and no engine writes into the session on the way to exit 0 (#116) ==="
+run_tool_keep_stderr '{"tool_name":"Bash","tool_input":{"command":"run éx now"}}' > /dev/null
+if [ -s "$STDERR_FILE" ]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: the hook wrote to stderr on the local awk"
+  echo "    $(head -2 "$STDERR_FILE")"
+else
+  PASS=$((PASS + 1)); echo "  PASS: the hook wrote nothing to stderr on the local awk"
+fi
+
+# The local awk decides which half of #116 this leg can see. one-true-awk drops the
+# escape in silence, so on a BSD/macOS runner the assertion above is green whatever the
+# guard does -- it is gawk that warns. Shim gawk in as `awk` when it is installed, and
+# say so out loud when it is not: a leg that could not look must never read as a leg that
+# looked and found nothing.
+if command -v gawk > /dev/null 2>&1; then
+  SHIM="$TEST_DIR/awkshim"
+  mkdir -p "$SHIM"
+  printf '#!/bin/sh\nexec gawk "$@"\n' > "$SHIM/awk"
+  chmod +x "$SHIM/awk"
+  run_tool_keep_stderr '{"tool_name":"Bash","tool_input":{"command":"run éx now"}}' "$SHIM" > /dev/null
+  if [ -s "$STDERR_FILE" ]; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: the hook wrote to stderr under gawk"
+    echo "    $(head -2 "$STDERR_FILE")"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: the hook wrote nothing to stderr under gawk"
+  fi
+else
+  echo "  (no gawk on this runner -- the gawk-only half of #116 was NOT checked here)"
+fi
 
 echo ""
 echo "=== path hook: same two failures ==="
