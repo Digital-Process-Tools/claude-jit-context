@@ -39,6 +39,7 @@ if ! grep -q "hooks.md" <<<"$harness_probe"; then
   exit 1
 fi
 
+# jit-drive: none -- every helper here runs a real hook from a path or a payload and captures it itself; none takes hook output as an argument
 assert_fires() {
   local desc="$1" path="$2" rule="$3" out
   out=$(fired_for "$path")

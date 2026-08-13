@@ -25,6 +25,8 @@ SCRIPTS="$SCRIPT_DIR/scripts"
 PASS=0
 FAIL=0
 
+# jit-drive: assert_contains contains capture
+# jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
   if grep -qF "$expected" <<<"$output"; then

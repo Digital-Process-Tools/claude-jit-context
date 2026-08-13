@@ -58,6 +58,8 @@ echo "dead path body" > "$PATHS_DIR/00-manual/path-dead.md"
 run_tool() { echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2>/dev/null; }
 run_path() { echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PATH_HOOK" 2>/dev/null; }
 
+# jit-drive: assert_contains contains capture
+# jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
   if grep -qF "$expected" <<<"$output"; then

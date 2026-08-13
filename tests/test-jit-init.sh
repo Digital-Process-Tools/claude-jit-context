@@ -46,6 +46,7 @@ run_prompt() {
   CLAUDE_PROJECT_DIR="$1" bash "$PROMPT_HOOK" < "$TMP/payload.json" > "$TMP/prompt-out.txt" 2>/dev/null
 }
 
+# jit-drive: none -- both helpers run the prompt hook themselves and assert against the file it wrote; neither takes output as an argument
 assert_prompt_fires() {
   # $1 desc, $2 project, $3 prompt, $4 needle
   run_prompt "$2" "$3"

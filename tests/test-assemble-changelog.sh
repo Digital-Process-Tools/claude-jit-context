@@ -44,6 +44,8 @@ if ! "$PY" -c "import markdown_it" 2>/dev/null; then
   exit 2
 fi
 
+# jit-drive: assert_contains contains capture
+# jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
   if grep -qF "$expected" <<<"$output"; then

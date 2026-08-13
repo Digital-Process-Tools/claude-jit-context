@@ -139,19 +139,22 @@ drive_prompt() {
 
 excerpt() { tr -d '\n' < "$OUT" | cut -c1-220; }
 
-# `expect_`, not `assert_`. tests/test-assertion-helpers.sh drives every suite's
-# `assert_contains`/`assert_not_contains`/`assert_blocked` by name, against the signature
-# those carry everywhere else in this tree: (description, CAPTURED OUTPUT, needle). The
-# four below take (description, needle) and read the file the hook wrote, so a shared name
-# would hand them the meta-suite's 1 MB payload as a needle and report the collision as a
-# defect in this file. They are also structurally outside what that suite tests for --
-# nothing here pipes into an early-exiting reader and nothing captures hook output into a
-# variable, which is the pair of hazards #56 and #78 are about.
+# The four below take (description, needle) and read the file the hook wrote, rather than
+# the (description, CAPTURED OUTPUT, needle) most helpers in this tree carry -- because
+# `$( )` silently drops NUL bytes (#78). The `jit-drive:` lines say exactly that, and
+# tests/test-assertion-helpers.sh drives them on that declared shape. They were renamed
+# to `expect_` when that harness still bound on the NAME and handed anything called
+# `assert_blocked` its 1 MB payload as a needle; the name no longer decides anything
+# (#110), and the declaration does.
 #
 # `--` before every needle. Half the strings this suite asserts on are command flags, and
 # `grep -qF "--no-coverage"` is grep parsing its own argument list: it exits 2 with a usage
 # message on stderr, which reads as "not found" and turns a block assertion red for a
 # reason that has nothing to do with the hook.
+# jit-drive: expect_out_has contains file:OUT
+# jit-drive: expect_out_lacks not_contains file:OUT
+# jit-drive: expect_blocked blocked file:OUT
+# jit-drive: expect_not_blocked not_blocked file:OUT
 expect_out_has() {
   # $1 desc, $2 needle
   if grep -qF -- "$2" "$OUT"; then ok "$1"; else

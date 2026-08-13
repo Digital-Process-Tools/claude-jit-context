@@ -136,6 +136,7 @@ require_version() {
   PASS=$((PASS + 1)); return 0
 }
 
+# jit-drive: none -- both helpers compare version strings, not hook output; there is no payload to make long
 assert_same() {
   site="$1"; value="$2"
   if [ "$value" = "$PLUGIN_V" ]; then

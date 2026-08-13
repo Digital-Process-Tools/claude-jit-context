@@ -16,6 +16,10 @@ MISSES="$SCRIPT_DIR/scripts/jit-misses.sh"
 PASS=0
 FAIL=0
 
+# jit-drive: assert_contains contains capture
+# jit-drive: assert_not_contains not_contains capture
+# jit-drive: assert_token_row token_row capture
+# jit-drive: assert_no_token_row no_token_row capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
   if grep -qF -- "$expected" <<<"$output"; then

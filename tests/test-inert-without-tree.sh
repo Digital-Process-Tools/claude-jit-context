@@ -39,6 +39,7 @@ TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/jit-inert-XXXXXX")" || {
 }
 trap 'chmod -R u+rwX "$TMPROOT" 2>/dev/null; rm -rf "$TMPROOT"' EXIT
 
+# jit-drive: assert_contains contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
   if grep -qF -- "$expected" <<<"$output"; then

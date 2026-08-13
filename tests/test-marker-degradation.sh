@@ -36,6 +36,7 @@ FAIL=0
 # match and closes the pipe under it, which makes the producer die of SIGPIPE and turns a
 # passing assertion into a red one at random (#56). `case` forks nothing and reads the
 # whole string.
+# jit-drive: assert_contains contains capture
 assert_contains() {
   local desc="$1" output="$2" needle="$3"
   case "$output" in

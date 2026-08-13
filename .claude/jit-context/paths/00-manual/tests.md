@@ -32,6 +32,19 @@ out=$(fired_for "$path"); grep -q X <<<"$out"   # not: fired_for "$path" | grep 
 
 `test-assertion-helpers.sh` drives every suite's real helpers with a 1 MB payload and fails on the shape structurally, so a reintroduction is caught rather than waiting for output to grow.
 
+**Every suite declares what that harness may drive, and a suite that declares nothing is red.** It used to bind on the helper's *name* — any `assert_blocked()` was called as `(description, captured-output)`. A helper written in the file-reading shape above takes a needle and a path instead, so it was handed the 1 MB payload as a needle and reported as broken when it was not: a false red in the suite whose job is to catch false greens (#110). Declare each drivable helper on its own comment line, above its definition:
+
+```bash
+# jit-drive: assert_contains contains capture          # (desc, OUTPUT, needle)
+# jit-drive: expect_blocked blocked file:OUT           # (desc, needle), reads "$OUT"
+# jit-drive: assert_has contains path-arg              # (desc, PATH, needle)
+# jit-drive: none -- every helper here runs the hook itself and takes no output argument
+```
+
+The semantic — `contains`, `not_contains`, `blocked`, `not_blocked`, `token_row`, `no_token_row` — is what the helper *means*, not what it is called; decoupling the two is the fix. Declaring the wrong one goes red, because the harness drives both directions and compares the verdict.
+
+The three outcomes are `covered`, `flagged` and `not evaluated`, and the third is printed in full at the end of every run: the suites that declared `none` with their stated reason, and every `assert_*`/`expect_*` function nobody declared. Neither list fails the run — whether a helper is payload-shaped is not decidable from outside it — but a silent skip is not on offer either. Read that block when you add a helper; if yours is in it and should not be, it is one line.
+
 **Engine-sensitive assertions run once per `awk` on the machine**, through a `PATH` shim that puts a one-line `exec` wrapper named `awk` ahead of `$PATH` for each of `awk gawk nawk mawk` that `command -v` finds, deduplicated by resolved path. The three `test-pre-*-hook.sh` suites and `test-jit-misses.sh` already build it. gawk and one-true-awk disagree on NUL transparency, on `split()` with a one-character separator, and on multibyte `substr`. Add such an assertion to that loop, not beside it.
 
 **CI is Linux, macOS and Windows (Git Bash).** A green local run is evidence about one leg. Nothing here may assume GNU tools, a `/tmp` that behaves, a POSIX absolute path literal, or a bash newer than the one macOS ships.

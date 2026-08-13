@@ -28,6 +28,8 @@ bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    
 
 # Here-string, never a pipe: `| grep -q` exits on the first match and the writer takes
 # SIGPIPE, which under pipefail reports the opposite of what was found (#56).
+# jit-drive: assert_contains contains capture
+# jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" out="$2" want="$3"
   if grep -qF -- "$want" <<<"$out"; then ok "$desc"
