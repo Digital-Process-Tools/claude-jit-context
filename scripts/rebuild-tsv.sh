@@ -58,6 +58,73 @@ JIT_RC=0
 # 2 outranks 1: an index that was not written is a worse claim than one that was.
 jit_rc() { [ "$1" -gt "$JIT_RC" ] && JIT_RC="$1"; return 0; }
 
+# --- What a report may say about a name that arrived with the clone (#113) -----
+# Every name printed by the four reports below is a directory entry under
+# `.claude/jit-context/`, and that tree arrives with the repository. common.sh argues the
+# same case for the HOOKS and answers it with jit_row_id(): a refused row is named by
+# POSITION, never by the text of its file-name column, because 250 bytes of English pass a
+# bare-name check intact (#35).
+#
+# The hooks answer is the wrong one here, and that was the judgement call. A hook runs in a
+# stranger session with no author present. This script is run by the person who just edited
+# the frontmatter -- CLAUDE.md says after every one, without exception -- and the file name
+# is the entire actionable content of all four reports. "vocabulary/00-manual row 7" sends
+# that person to count lines in a generated file. So the name is KEPT when it is a name,
+# and withheld only when it is not one:
+#
+#   [A-Za-z0-9] then [A-Za-z0-9._-]*, at most 64 bytes  ->  printed verbatim
+#   anything else                                       ->  the placeholder below
+#
+# That set is chosen for one property: no SPACE. A payload that reads as an instruction is
+# prose, and prose is words with spaces between them. No length cap separates the two --
+# `Run rm -rf ~` is twelve bytes -- so the cap is not what closes this and is only there to
+# keep a 4 KB name out of a report. The set also excludes the newline, which is the half
+# that was never a judgement call: a name carrying one forged a whole report line, in the
+# voice of the tool.
+#
+# The cost is real and accepted. An author whose entry is honestly called `my rule.md` sees
+# the placeholder instead, `ls` the layer named beside it, and the odd name is the one that
+# stands out. A worse report for a rare legitimate name, in exchange for a report that
+# cannot carry a payload at all.
+#
+# Withholding is a REPORT decision and nothing else. The row is still indexed under the
+# real name and the rule still fires; tests/test-report-names.sh pins that, because a fix
+# that stopped indexing the entry would satisfy every negative assertion for free.
+#
+# Two columns beside these names are NOT filtered, for reasons worth writing down:
+#   - the dropped-keyword report prints $kw, which is bounded by the BLACKLIST rather than
+#     by its character class: VOCAB_KEYWORD_BLACKLIST is anchored ^(...)$ on single words,
+#     so a keyword that reaches that report is one of a closed set and can never be a
+#     sentence. It is the class that makes it safe, not the [a-z0-9 -] normalisation.
+#   - the ambiguity report prints an arbitrary keyword and that bound does NOT hold there.
+#     Filed separately; changing it means changing what that report says, not how it says a
+#     name.
+# Exported for the awk half below, which reads it out of ENVIRON so the two cannot drift.
+export JIT_NAME_WITHHELD='<withheld: not a plain name>'
+
+jit_report_name() {
+  # C collation for the duration. Under a UTF-8 locale bash own [A-Za-z0-9] can admit
+  # accented letters and ${#s} counts characters; the whole point of the set is that it is
+  # a BYTE range. `local` restores the caller locale on return.
+  local LC_ALL=C
+  case "$1" in
+    ''|[!A-Za-z0-9]*|*[!A-Za-z0-9._-]*) printf '%s' "$JIT_NAME_WITHHELD"; return 0 ;;
+  esac
+  [ "${#1}" -gt 64 ] && { printf '%s' "$JIT_NAME_WITHHELD"; return 0; }
+  printf '%s' "$1"
+}
+
+# The same rule for the three reports that are built inside awk. Every invocation that
+# prepends this runs under LC_ALL=C, for the same byte-range reason as the bash half.
+# shellcheck disable=SC2034
+JIT_AWK_REPORT_NAME='
+function jit_report_name(s) {
+  if (s == "" || length(s) > 64) return ENVIRON["JIT_NAME_WITHHELD"]
+  if (s ~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/) return s
+  return ENVIRON["JIT_NAME_WITHHELD"]
+}
+'
+
 # Deliberately NOT `[ -d "$JIT_BASE" ]`, and the reason CHANGED under this line in #51.
 #
 # It used to be that common.sh mkdir -p'd "$JIT_BASE/.discovery/logs" at source time, so the
@@ -88,9 +155,24 @@ fi
 # the rule count read back OUT of that stale file -- a success, with a number, for an index
 # nobody rebuilt. The other dimensions are independent, so the run continues and the code
 # is raised once at the end.
+# DISP, not the path: the failing path runs through the layer directory, which is a name
+# the clone chose, and a clone can force this branch on purpose by shipping a DIRECTORY
+# called 00-index.tsv. Callers pass the already-withheld label plus the constant leaf, so
+# the reader still gets the two components that say which index this was (#113).
 truncate_index() {
-  if : > "$1" 2>/dev/null; then return 0; fi
-  echo "FATAL    $1: could not be written -- that index was NOT rebuilt and is now stale." >&2
+  local tsv="$1" disp="${2:-$1}" why=""
+  # `2>/dev/null` BEFORE the redirection it is meant to silence, and this was a real leak.
+  # Redirections are applied left to right, so `: > "$tsv" 2>/dev/null` set up the failing
+  # one while stderr was still the terminal: bash printed its own diagnostic, carrying the
+  # ABSOLUTE path -- layer directory included -- and the 2>/dev/null that follows silenced
+  # nothing. Measured against `00-index.tsv` shipped as a directory.
+  if : 2>/dev/null > "$tsv"; then return 0; fi
+  # bash own reason is gone with that message, so the one case a clone can construct on
+  # purpose is classified here instead. Everything else stays unattributed rather than
+  # guessed at.
+  [ -d "$tsv" ] && why=" -- there is a DIRECTORY at that path, not a file"
+  echo "FATAL    $disp: could not be written$why" >&2
+  echo "         -- that index was NOT rebuilt and is now stale." >&2
   jit_rc 2
   return 1
 }
@@ -105,7 +187,7 @@ build_tool_tsv() {
   T0=$(_ms)
 
   [ -d "$dir" ] || return
-  truncate_index "$tsv" || return
+  truncate_index "$tsv" "$label/${tsv##*/}" || return
 
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -127,7 +209,7 @@ build_tool_tsv() {
     # awk pattern and no hook learns a new vocabulary. jit_expand_match returns anything
     # that is not a macro unchanged, and names a macro it cannot honour on stderr while
     # writing the row through -- see common.sh for why the row is not dropped.
-    match=$(jit_expand_match "$match" tools "$label/$filename") || jit_rc 1
+    match=$(jit_expand_match "$match" tools "$label/$(jit_report_name "$filename")") || jit_rc 1
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$tool" "$match" "$filename" "${mode:-remind}" "$require" "$forbid" >> "$tsv"
   done
@@ -140,7 +222,7 @@ TOOLS_BASE="$JIT_BASE/tools"
 for dir in "$TOOLS_BASE"/*/; do
   [ -d "$dir" ] || continue
   dir="${dir%/}"
-  label="tools/$(basename "$dir")"
+  label="tools/$(jit_report_name "$(basename "$dir")")"
   build_tool_tsv "$dir" "$dir/00-index.tsv" "$label"
 done
 
@@ -172,7 +254,7 @@ build_vocab_tsv() {
     return
   fi
 
-  truncate_index "$tsv" || return
+  truncate_index "$tsv" "$label/${tsv##*/}" || return
 
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -212,7 +294,7 @@ build_vocab_tsv() {
       # Skipped, and now SAID: the row is not written, so the entry never fires on this
       # word, and the only place that can be reported is here (#95).
       if printf '%s\n' "$kw" | grep -Eq "$VOCAB_KEYWORD_BLACKLIST"; then
-        JIT_DROPPED="$JIT_DROPPED    [$label] $filename: \"$kw\"
+        JIT_DROPPED="$JIT_DROPPED    [$label] $(jit_report_name "$filename"): \"$kw\"
 "
         continue
       fi
@@ -228,7 +310,7 @@ VOCAB_BASE="$JIT_BASE/vocabulary"
 for dir in "$VOCAB_BASE"/*/; do
   [ -d "$dir" ] || continue
   dir="${dir%/}"
-  label=$(basename "$dir")
+  label=$(jit_report_name "$(basename "$dir")")
   build_vocab_tsv "$dir" "$dir/00-index.tsv" "$label"
 done
 
@@ -245,7 +327,7 @@ build_vocab_path_tsv() {
   T0=$(_ms)
 
   [ -d "$dir" ] || return
-  truncate_index "$tsv" || return
+  truncate_index "$tsv" "$label/${tsv##*/}" || return
 
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -279,7 +361,7 @@ build_vocab_path_tsv() {
 for dir in "$VOCAB_BASE"/*/; do
   [ -d "$dir" ] || continue
   dir="${dir%/}"
-  label="$(basename "$dir")/paths"
+  label="$(jit_report_name "$(basename "$dir")")/paths"
   build_vocab_path_tsv "$dir" "$dir/01-paths.tsv" "$label"
 done
 
@@ -292,7 +374,7 @@ build_path_tsv() {
   T0=$(_ms)
 
   [ -d "$dir" ] || return
-  truncate_index "$tsv" || return
+  truncate_index "$tsv" "$label/${tsv##*/}" || return
 
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -307,7 +389,7 @@ build_path_tsv() {
     # Paths carry no invocation macro -- their subject is a file path, not a command --
     # but the check runs here so that writing one is REFUSED and named rather than
     # indexed as a literal that can never match a path.
-    match_line=$(jit_expand_match "$match_line" paths "$label/$filename") || jit_rc 1
+    match_line=$(jit_expand_match "$match_line" paths "$label/$(jit_report_name "$filename")") || jit_rc 1
 
     printf '%s\t%s\n' "$match_line" "$filename" >> "$tsv"
   done
@@ -320,7 +402,7 @@ PATHS_BASE="$JIT_BASE/paths"
 for dir in "$PATHS_BASE"/*/; do
   [ -d "$dir" ] || continue
   dir="${dir%/}"
-  label="paths/$(basename "$dir")"
+  label="paths/$(jit_report_name "$(basename "$dir")")"
   build_path_tsv "$dir" "$dir/00-index.tsv" "$label"
 done
 
@@ -349,30 +431,35 @@ done
 report_bad_bytes() {
   local tsv="$1" label="$2" col="$3"
   [ -f "$tsv" ] || return 0
-  LC_ALL=C JIT_COL="$col" awk "$JIT_AWK_ENTRY"'
+  LC_ALL=C JIT_COL="$col" awk "$JIT_AWK_ENTRY$JIT_AWK_REPORT_NAME"'
     BEGIN { col = ENVIRON["JIT_COL"] + 0 }
     {
       why = jit_bad_bytes($0, "the index row")
       if (why == "") next
       n = split($0, f, "\t")
+      # The entry-file column is attacker-chosen text (#113), and this branch fires on a
+      # row nobody had to match. jit_report_name() is why a name carrying the bad byte
+      # itself cannot come back through the notice that reports the bad byte.
       printf "rebuild-tsv: %s row %d: %s -- the hooks will refuse this row%s\n", \
-        lbl, NR, why, (f[col] != "" && why ~ /UTF-8/ ? ", written from " f[col] : "")
+        lbl, NR, why, (f[col] != "" && why ~ /UTF-8/ ? ", written from " jit_report_name(f[col]) : "")
     }' lbl="$label" "$tsv" >&2
 }
 
 for dir in "$TOOLS_BASE"/*/; do
   [ -d "$dir" ] || continue
-  report_bad_bytes "${dir%/}/00-index.tsv" "tools/$(basename "${dir%/}")" 3
+  report_bad_bytes "${dir%/}/00-index.tsv" "tools/$(jit_report_name "$(basename "${dir%/}")")" 3
 done
 for dir in "$PATHS_BASE"/*/; do
   [ -d "$dir" ] || continue
-  report_bad_bytes "${dir%/}/00-index.tsv" "paths/$(basename "${dir%/}")" 2
+  report_bad_bytes "${dir%/}/00-index.tsv" "paths/$(jit_report_name "$(basename "${dir%/}")")" 2
 done
 for dir in "$VOCAB_BASE"/*/; do
   [ -d "$dir" ] || continue
-  report_bad_bytes "${dir%/}/00-index.tsv" "vocabulary/$(basename "${dir%/}")" 2
-  report_bad_bytes "${dir%/}/01-paths.tsv" "vocabulary/$(basename "${dir%/}")" 2
+  _jit_vlabel="vocabulary/$(jit_report_name "$(basename "${dir%/}")")"
+  report_bad_bytes "${dir%/}/00-index.tsv" "$_jit_vlabel" 2
+  report_bad_bytes "${dir%/}/01-paths.tsv" "$_jit_vlabel" 2
 done
+unset _jit_vlabel
 
 # --- Ambiguity report: kw appearing in >5 files (vocab only) ---
 THRESHOLD=5
@@ -383,9 +470,13 @@ echo "" >&2
 HAS_AMBIG=0
 for tsv in "$VOCAB_BASE"/*/00-index.tsv; do
   [ -f "$tsv" ] || continue
-  layer=$(basename "$(dirname "$tsv")")
-  out=$(awk -F'\t' -v layer="$layer" -v th="$THRESHOLD" '
-    {c[$1]++; files[$1]=(files[$1]==""?$2:files[$1]","$2)}
+  layer=$(jit_report_name "$(basename "$(dirname "$tsv")")")
+  # LC_ALL=C so jit_report_name() decides on BYTES, the same as the bash half. The file
+  # names here are the index column rebuild-tsv.sh just wrote from a basename, so they
+  # carry whatever the clone chose to call its entries (#113). A withheld one cannot be
+  # confused with the comma this list is joined on -- the comma is outside the kept set.
+  out=$(LC_ALL=C awk -F'\t' -v layer="$layer" -v th="$THRESHOLD" "$JIT_AWK_REPORT_NAME"'
+    {c[$1]++; f=jit_report_name($2); files[$1]=(files[$1]==""?f:files[$1]","f)}
     END{for(k in c) if(c[k]>th) printf "%4d\t[%s] %s\n\t  files: %s\n", c[k], layer, k, files[k]}
   ' "$tsv" | sort -rn)
   if [ -n "$out" ]; then
@@ -466,11 +557,15 @@ else
   # one-true-awk tries to decode that as a character range and aborts with "multibyte
   # conversion failure". It also makes length() count BYTES on both engines, which is
   # the unit the hooks clip in and the unit this report prints.
-  LC_ALL=C awk -v def="$JIT_INJECT" "$JIT_AWK_ENTRY$JIT_AWK_INJECT"'
+  LC_ALL=C awk -v def="$JIT_INJECT" "$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_REPORT_NAME"'
+# Every component this prints came off the .md glob three levels down, so all three are
+# names the clone chose (#113). Dimension and layer are kept when they are names, for the
+# same reason the file is: a withheld leaf beside a real directory is what tells the
+# reader which `ls` to run.
 function relpath(p,   n, a) {
   n = split(p, a, "/")
-  if (n < 3) return p
-  return ".claude/jit-context/" a[n-2] "/" a[n-1] "/" a[n]
+  if (n < 3) return jit_report_name(p)
+  return ".claude/jit-context/" jit_report_name(a[n-2]) "/" jit_report_name(a[n-1]) "/" jit_report_name(a[n])
 }
 # Largest first. Every parallel array moves together -- sorting the sizes and leaving the
 # names and the summarised figures behind would print one entry name beside another
