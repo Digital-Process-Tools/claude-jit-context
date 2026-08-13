@@ -279,7 +279,10 @@ Three rules that are not settings:
 - **A tools rule that *refuses* a call injects its whole body**, whatever the mode says. The call is already stopped; there is no next turn in which to spend a cheaper answer.
 - **An entry with no frontmatter at all injects its body**, in every mode. It has no `description:` — and no `keywords:` or `match:` either, so `rebuild-tsv.sh` could not have indexed it. Its body is the entry.
 
-Any other value — including `gated`, a third mode that is designed and deliberately **not built**, held until there is data on how often the pull step is actually taken — is **refused and named**, in `hooks.log` and once per session in context, and the default stands.
+Any other value — including `gated`, a third mode that is designed and deliberately **not built**, held until there is data on how often the pull step is actually taken — falls back to the default, which stands, and is **named** rather than silently ignored. The two settings say so through different channels, because they are different mistakes:
+
+- A bad `JIT_CONTEXT_INJECT` in `config.env` is a standing fact about the project, so it is refused and named in `hooks.log` and once per session in context.
+- A bad `inject:` in one entry is a property of that entry, so it is named inside what **that entry** injects, every time it fires and in either mode. It costs about 110 bytes, it rides an injection that is already deduped per session, and it stops the moment you fix the line. Under `full` this said nothing at all until #118 — a mistyped `inject:` produced an entry that behaved exactly as though the line were never written, on the path every unconfigured project is on.
 
 The loss `summary` buys with is real and worth stating: the pull is a soft rule, and an agent under momentum will sometimes skip an entry it needed. Whether that happens is measurable — reading an entry is a tool call, so it lands in `hooks.log` beside everything else.
 

@@ -311,6 +311,40 @@ assert_contains     "the description does"         "$OUT" "Wants a mode that doe
 assert_contains     "and the unknown value is named, not silently dropped" "$OUT" "is not summary or full"
 assert_not_contains "the value itself is never echoed back" "$OUT" "gated"
 
+# The same entry on the path almost every project is on. `full` is the default, so a tree
+# that has configured nothing is here -- and jit_inject_text() returned the body BEFORE the
+# notice was appended, so an author's typo produced an entry that behaved exactly as though
+# the line had never been written (#118). The fallback half of the contract held; the "and
+# says so" half did not, everywhere it mattered.
+#
+# `gated` is NOT asserted absent here, unlike the summary leg above: under full the whole
+# body arrives and the body carries the frontmatter, so the value is in the output as the
+# author's own text. What must never echo it is the notice, and the notice does not.
+echo ""
+echo "=== inject: gated under the project default, which is full and is configured by nobody ==="
+set_config ""
+OUT=$(run_prompt "the weird one")
+assert_contains "the body still arrives, so the fallback happened" "$OUT" "WEIRD-BODY-MARKER"
+assert_contains "and the unknown value is named under full too"    "$OUT" "is not summary or full"
+
+# Both directions, same tree: a good inject: must produce no notice at all. On its own that
+# assertion passes against a hook that injected nothing, so the body marker beside it is
+# what makes the silence mean something.
+echo ""
+echo "=== Paired: a recognised inject: value produces no notice ==="
+OUT=$(run_prompt "payments please")
+assert_contains     "positive control: the entry fired and arrived whole" "$OUT" "PAYMENTS-BODY-MARKER"
+assert_not_contains "and nothing was said about its inject: value"        "$OUT" "is not summary or full"
+
+# And explicitly configured full, not just defaulted into: `full` reaches the same return.
+echo ""
+echo "=== The same pair with JIT_CONTEXT_INJECT=full spelled out ==="
+set_config "JIT_CONTEXT_INJECT=full"
+OUT=$(run_prompt "the weird one and payments")
+assert_contains     "the mistyped entry is named"            "$OUT" "is not summary or full"
+assert_contains     "paired: its neighbour arrived too"      "$OUT" "PAYMENTS-BODY-MARKER"
+assert_contains     "and the mistyped entry still injected"  "$OUT" "WEIRD-BODY-MARKER"
+
 echo ""
 echo "=== JIT_CONTEXT_INJECT=gated in config.env -- refused like any other bad line ==="
 set_config "JIT_CONTEXT_INJECT=gated"

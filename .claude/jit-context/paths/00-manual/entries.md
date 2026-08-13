@@ -35,6 +35,18 @@ So a missing `description:` costs nothing today and is what stops this tree flip
 
 `\s` `\d` `\w` compile to the bare letter and match **nothing**, while awk exits 0 — use `[[:space:]]`, `[0-9]`, `[A-Za-z0-9_]`. `\b` is not a word boundary but a backspace character, so it also matches nothing. `\n` is the one escape that survives, and rules need it: `^` anchors the whole command string rather than each line, so anchor on `(^|[;&|\n] *)`. Such a row is now refused at load and named in the injected context instead of reading as enforced.
 
+### A `match` is accent-folded too, character classes included
+
+The Latin-1 fold that makes `détail` and `detail` one keyword (#31) runs on the **pattern** as well as the subject, and it is a literal substitution with no idea what a bracket expression is. `[éè]` therefore becomes `[ee]`, which is the accent-insensitivity you wanted. A **range** across the fold is not:
+
+```yaml
+match: ~[é-ü]      # becomes [e-u] — a third of the lowercase alphabet
+```
+
+Driven at this commit on a `mode: block` rule: `~[é-ü]` refused `git push origin main` on the `i` in `origin`, and refused `ls` as well (#115). Nothing is refused at load, because the row is a valid ERE both before and after folding — the pattern the author reads and the pattern the hook runs are simply not the same one.
+
+Leaving brackets unfolded would be worse, not better: the subject is folded, so `[éè]` would then match nothing at all — a rule that is loudly wrong turned into one that is silently dead, which is the trade this repository refuses everywhere else. So write the folded ASCII range you actually mean, and keep accented characters in a `match` to plain alternatives rather than range endpoints.
+
 ## Do not hand-roll an invocation anchor
 
 A tools rule that fires on a command rather than a word uses a macro, not a retyped anchor:
