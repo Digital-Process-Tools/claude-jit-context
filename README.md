@@ -510,9 +510,14 @@ blocked.
 **The notice locates a refused row by position, never by its file name.** The index arrives
 with the repository, so that column is untrusted text, and the notice fires with no rule
 matched — quoting it back would be a channel into the model's context that needs no trigger.
-The name you need in order to fix it is in `hooks.log` and in `jit-dry-run.sh`, which the
-notice points you at — and which prints that text framed as untrusted, so following the
-notice's own advice does not quietly undo what the notice withheld.
+The name you need in order to fix it is in `hooks.log`, which a person reads and no model
+does, and in `jit-dry-run.sh`, which the notice points you at. That linter prints a file
+name **only when the name is a plain name** — letters, digits, dot, dash and underscore, at
+most 64 bytes — and `<withheld: not a plain name>` when it is not, so following the notice's
+own advice does not quietly undo what the notice withheld. The row's `match` pattern is
+still printed verbatim, on its own line marked `untrusted>`: a linter that will not show you
+your own pattern has no reason to exist, and it is also how a row whose name was withheld
+stays identifiable. `rebuild-tsv.sh` uses the same rule for the same reason.
 
 **The list of refused rows is bounded, and the count beside it is not.** The index arrives
 with the repository, so the number of unhonourable rows in it is chosen by whoever wrote
