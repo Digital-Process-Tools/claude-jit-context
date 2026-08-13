@@ -2,8 +2,11 @@
 # Tests for pre-tool-hook.sh (TSV-based: tool rules + vocabulary matching)
 # Usage: bash tests/test-pre-tool-hook.sh
 #
-# NOTE: "once mode" cannot be reliably tested because each subprocess gets
-# a different $PPID. Once mode works in production where $PPID is stable.
+# `once` mode IS driven here, in the #112 section at the bottom. The note that used to sit
+# on this line -- that it could not be, because each subprocess gets a different $PPID --
+# stopped being true when the session marker moved off $PPID and onto the payload's
+# session_id (#17, #23). A payload that carries one gets a real marker file, so a suite can
+# spend a once-budget in one call and observe it gone in the next.
 
 set -euo pipefail
 
@@ -104,6 +107,40 @@ assert_blocked() {
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
     echo "    expected decision:block"
     echo "    got: ${output:0:200}"
+  fi
+}
+
+# Reads the subject out of a FILE named on the command line, so one pair covers hook
+# stdout, the session marker and hooks.log without a variable per subject. `$( )` drops
+# NUL bytes, which is why the subject is a path at all (#78) -- and grep is handed the
+# file directly rather than a pipe, so there is no reader to exit early and no SIGPIPE to
+# invert the verdict (#56).
+#
+# A missing path is an ABSENCE, not an error: the session marker does not exist until
+# something is marked, and "the blocked call marked nothing" is exactly the assertion that
+# has to hold before that file is there. Every not_contains below is therefore paired with
+# a contains on the same path.
+# jit-drive: assert_path_contains contains path-arg
+# jit-drive: assert_path_not_contains not_contains path-arg
+assert_path_contains() {
+  local desc="$1" path="$2" needle="$3"
+  if LC_ALL=C grep -qF -- "$needle" "$path" 2>/dev/null; then
+    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    expected $path to contain: $needle"
+    echo "    got: $(LC_ALL=C tr -c '[:print:]' '?' < "$path" 2>/dev/null | cut -c1-300)"
+  fi
+}
+
+assert_path_not_contains() {
+  local desc="$1" path="$2" needle="$3"
+  if LC_ALL=C grep -qF -- "$needle" "$path" 2>/dev/null; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    $path should NOT contain: $needle"
+    echo "    got: $(LC_ALL=C tr -c '[:print:]' '?' < "$path" 2>/dev/null | cut -c1-300)"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: $desc"
   fi
 }
 
@@ -668,6 +705,101 @@ for eng in $ENGINES; do
 
   rm -rf "$R103_DARK" "$R103_CLEAN"
   rm -f "$R103_OUT"
+
+  echo "=== [$eng] a blocked call burns nothing it never delivered (issue #112) ==="
+  # The vocabulary pass runs AFTER the rule loop has broken on a block, and the block path
+  # discards `matched`. Every entry it matched was marked shown anyway -- in the marker file
+  # pre-prompt-hook.sh reads too -- so the entry was spent for the session, in both
+  # dimensions, having been delivered to nobody. hooks.log then reported it as `[shown:N]`,
+  # which is exactly what a correct delivery looks like.
+  #
+  # The shape asserted here, of the three that were on the table:
+  #   the pass still RUNS -- a vocabulary row that cannot be evaluated is reported beside
+  #     the block reason, and on a command that is always blocked that is its only channel
+  #     (#103), so skipping the pass would re-create #103 one dimension over;
+  #   it delivers NOTHING beside the block reason -- #103 folded the refusal notices in and
+  #     deliberately left `matched` out, because an advisory entry has another channel and
+  #     a report about the tree has none. That line does not move here;
+  #   and therefore it marks nothing and logs nothing as shown.
+  #
+  # Four controls, because every assertion below passes for a wrong reason on its own:
+  #   * a session with no blocked call MUST inject -- "it still fires later" is true of a
+  #     harness that never fired anything at all;
+  #   * the second identical call in that session MUST be silent -- otherwise the dedup is
+  #     simply broken and the delivery after the block proves nothing;
+  #   * the marker MUST name the entry once it is delivered -- otherwise "the marker does
+  #     not name it" is true of a path this test spelled wrong;
+  #   * the control log line MUST carry the delivered token and MUST NOT carry `withheld[`
+  #     -- a marker that appears on every line marks nothing.
+  #
+  # Inside the per-engine loop: the pass turns on jit_entry_load(), which is where the two
+  # awks diverged in #97, and the block path is the one that had no JSON at all there.
+  t112_tree() {
+    local d="$1" t v l idx
+    idx=00-index.tsv
+    t="$d/.claude/jit-context/tools/00-manual"
+    v="$d/.claude/jit-context/vocabulary"
+    mkdir -p "$t" "$v/00-manual" "$v/10-auto" "$v/20-grouped" "$v/30-crosscutting"
+    for l in 10-auto 20-grouped 30-crosscutting; do : > "$v/$l/$idx"; done
+    printf 'billing\tbilling.md\n' > "$v/00-manual/$idx"
+    echo "billing vocabulary body" > "$v/00-manual/billing.md"
+    # The advisory row comes FIRST, so it is matched and marked before the row below ends
+    # the scan. Its match is the path, not the verb, so a later command that is not blocked
+    # still reaches it -- which is what makes the once-marker observable.
+    printf 'Bash\tsrc/Billing\tadv.md\tonce,remind\t\t\n' > "$t/$idx"
+    printf 'Bash\tblkcmd\tblkr.md\tblock\t\t\n' >> "$t/$idx"
+    echo "advisory rule body" > "$t/adv.md"
+    echo "blkr rule body" > "$t/blkr.md"
+  }
+  t112_run() {
+    printf '{"session_id":"%s","tool_name":"%s","tool_input":%s}\n' "$2" "$3" "$4" \
+      | PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$1" bash "$HOOK" > "$T112_OUT" 2>/dev/null
+  }
+
+  T112_OUT=$(mktemp)
+  T112_BLK=$(mktemp -d)
+  T112_CTL=$(mktemp -d)
+  t112_tree "$T112_BLK"
+  t112_tree "$T112_CTL"
+  T112_BLK_LOG="$T112_BLK/.claude/jit-context/.discovery/logs/hooks.log"
+  T112_CTL_LOG="$T112_CTL/.claude/jit-context/.discovery/logs/hooks.log"
+  T112_BLK_MARK="$T112_BLK/.claude/jit-context/.discovery/state/vocab-shown-s112b$u.txt"
+  T112_CTL_MARK="$T112_CTL/.claude/jit-context/.discovery/state/vocab-shown-s112c$u.txt"
+
+  # 1. The blocked call. Both dimensions match it and neither is delivered.
+  t112_run "$T112_BLK" "s112b$u" Bash '{"command":"blkcmd src/Billing/x.php"}'
+  assert_path_contains "[$eng] control: the block rule still blocks" "$T112_OUT" '"decision":"block"'
+  assert_path_contains "[$eng] control: the block reason is its own text" "$T112_OUT" "blkr rule body"
+  assert_path_not_contains "[$eng] the vocabulary body is not in the block reason" "$T112_OUT" "billing vocabulary body"
+  assert_path_not_contains "[$eng] the advisory rule body is not in the block reason" "$T112_OUT" "advisory rule body"
+  assert_path_not_contains "[$eng] the blocked call did not mark the vocabulary entry" "$T112_BLK_MARK" "billing.md"
+  assert_path_not_contains "[$eng] the blocked call did not mark the once rule" "$T112_BLK_MARK" "rule:adv.md"
+  assert_path_contains "[$eng] the log does not count an undelivered entry as shown" "$T112_BLK_LOG" "[shown:0]"
+  assert_path_contains "[$eng] the log names what was withheld instead" "$T112_BLK_LOG" "withheld["
+
+  # 2. Same session, a call the block rule does not match. Both entries are still there.
+  t112_run "$T112_BLK" "s112b$u" Bash '{"command":"cat src/Billing/x.php"}'
+  assert_path_contains "[$eng] the vocabulary entry survived the blocked call" "$T112_OUT" "billing vocabulary body"
+  assert_path_contains "[$eng] the once rule survived the blocked call" "$T112_OUT" "advisory rule body"
+  assert_path_contains "[$eng] control: NOW the marker names the vocabulary entry" "$T112_BLK_MARK" "billing.md"
+  assert_path_contains "[$eng] control: and the once rule" "$T112_BLK_MARK" "rule:adv.md"
+
+  # 3. The positive control, in a tree of its own: a session with no blocked call injects
+  #    on the first call and is silent on the second. Without this pair, everything above
+  #    is also true of a hook that injects nothing and marks nothing, ever.
+  t112_run "$T112_CTL" "s112c$u" Bash '{"command":"cat src/Billing/x.php"}'
+  assert_path_contains "[$eng] control: an unblocked session injects the vocabulary" "$T112_OUT" "billing vocabulary body"
+  assert_path_contains "[$eng] control: and the once rule" "$T112_OUT" "advisory rule body"
+  assert_path_contains "[$eng] control: the log names the delivered entry" "$T112_CTL_LOG" "00-manual:billing.md(billing)"
+  assert_path_not_contains "[$eng] control: nothing is withheld when nothing blocked" "$T112_CTL_LOG" "withheld["
+  assert_path_contains "[$eng] control: the marker names it" "$T112_CTL_MARK" "billing.md"
+
+  t112_run "$T112_CTL" "s112c$u" Bash '{"command":"cat src/Billing/x.php"}'
+  assert_path_not_contains "[$eng] control: the second identical call is deduped" "$T112_OUT" "billing vocabulary body"
+  assert_path_not_contains "[$eng] control: the once rule is deduped too" "$T112_OUT" "advisory rule body"
+
+  rm -rf "$T112_BLK" "$T112_CTL"
+  rm -f "$T112_OUT"
 done
 
 rm -rf "$ENGINE_BIN"

@@ -320,7 +320,10 @@ END {
     key = ""
     if (index(r_modes, "once") > 0) {
       key = "rule:" r_file
-      if (key in shown) continue
+      # `held` as well as `shown`: an advisory rule delivered earlier in THIS scan is not in
+      # `shown` yet -- its mark waits on the block decision below (#112) -- and without this
+      # a second row naming the same file would inject it twice in one call.
+      if ((key in shown) || (key in held)) continue
     }
 
     # Read rule .md. A body that cannot be delivered does NOT cancel the decision: mode,
@@ -374,9 +377,11 @@ END {
       refused = jit_refuse_add(refused, jit_row_id("tools/00-manual", rown) r_kind ": " why)
       log_matches = log_matches sep "refused:" jit_log_name(r_file, "tools/00-manual", rown, why) "(" why ")"
       sep = ", "
-    } else if (key != "") {
-      shown[key] = 1
-      jit_shown_mark(shown_file, key)
+      # A substitute is not the rule text, so it consumes no once-per-session budget. That
+      # was already true -- the branch below is what marked, and this one skipped it -- and
+      # emptying `key` here is how it stays true now that the mark has moved down to the
+      # three places the text is actually delivered.
+      key = ""
     }
 
     # Check require
@@ -389,7 +394,11 @@ END {
         if (index(fold_full, jit_fold_latin1(tolower(reqs[ri]))) == 0) {
           blocked = "BLOCKED: Missing required: " reqs[ri] ". " body
           log_matches = log_matches sep "tool:" r_file "(BLOCKED:" reqs[ri] ")"
-          sep = ", "; break
+          sep = ", "
+          # Delivered: the reason IS this rule body. So this one marks, where the advisory
+          # branch below only holds -- see the mark/hold split at the end of this loop.
+          if (key != "") { shown[key] = 1; jit_shown_mark(shown_file, key) }
+          break
         }
       }
       if (blocked != "") break
@@ -404,7 +413,10 @@ END {
         if (index(fold_full, jit_fold_latin1(tolower(forbs[fi]))) > 0) {
           blocked = "BLOCKED: Forbidden: " forbs[fi] ". " body
           log_matches = log_matches sep "tool:" r_file "(BLOCKED:" forbs[fi] ")"
-          sep = ", "; break
+          sep = ", "
+          # Delivered, same as the require refusal above.
+          if (key != "") { shown[key] = 1; jit_shown_mark(shown_file, key) }
+          break
         }
       }
       if (blocked != "") break
@@ -412,18 +424,41 @@ END {
 
     if (content != "" && blocked == "") {
       header = "# JIT Context: " r_file " (matched: " r_match ")"
-      log_matches = log_matches sep "tool:" r_file "(" r_match ")" \
-        (index(r_modes, "block") > 0 ? "[full:block]" : jit_inject_tag(ent))
-      sep = ", "
+      if (index(r_modes, "block") > 0) {
+        log_matches = log_matches sep "tool:" r_file "(" r_match ")[full:block]"
+        sep = ", "
+        if (key != "") { shown[key] = 1; jit_shown_mark(shown_file, key) }
+        # body, not content: a block is a refusal, and a refusal is never a summary.
+        blocked = header "\n" body
+        break
+      }
 
-      # body, not content: a block is a refusal, and a refusal is never a summary.
-      if (index(r_modes, "block") > 0) { blocked = header "\n" body; break }
+      # ADVISORY, and therefore provisional. A row further down this index may still block,
+      # and the block path below throws `matched` away -- so neither the once-marker nor the
+      # log token may be written yet. Both are held and committed after the loop, when the
+      # decision is known (#112).
+      log_adv = log_adv asep "tool:" r_file "(" r_match ")" jit_inject_tag(ent)
+      asep = ", "
+      if (key != "") { held[key] = 1; hold_n++ }
 
       if (matched != "") matched = matched "\n---\n" header "\n" content
       else matched = header "\n" content
     }
   }
   close(tools_tsv)
+
+  # The decision is known now. Either the advisory rules were delivered -- commit their
+  # marks and their log tokens -- or a later row blocked and they were not, in which case
+  # they are named as withheld and nothing about them is marked. A mark records an
+  # injection that happened (#78); this is that rule applied to the one branch that
+  # discards its own output.
+  if (hold_n > 0 && blocked == "") {
+    for (hk in held) { shown[hk] = 1; jit_shown_mark(shown_file, hk) }
+  }
+  if (log_adv != "") {
+    if (blocked == "") { log_matches = log_matches sep log_adv; sep = ", " }
+    else { withheld_log = log_adv; wsep = ", " }
+  }
 
   # --- Vocabulary matching ---
   # Bind vocab to WHERE the tool acts (target path), not WHAT the payload says.
@@ -556,6 +591,19 @@ END {
         }
 
         if (vc != "") {
+          # The pass RUNS on the block path -- the loads above are what turn a vocabulary row
+          # that cannot be evaluated into a refusal notice, and beside a persistently blocked
+          # command that notice has no other call to arrive on (#103). What it must not do is
+          # DELIVER: `matched` is discarded below, so an entry marked here would be spent for
+          # the whole session, in this dimension and in pre-prompt-hook.sh, having reached
+          # nobody. It stays unmarked and is named as withheld in the log instead (#112).
+          if (blocked != "") {
+            # Same token as a delivered one, tag included, so the two lists read alike and
+            # `withheld[` is the only thing that distinguishes them.
+            withheld_log = withheld_log wsep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent)
+            wsep = ", "
+            continue
+          }
           shown[vfile] = 1
           jit_shown_mark(shown_file, vfile)
           vh = "# Vocabulary: " vfile " (matched: " vmatch[vfile] ")"
@@ -632,6 +680,12 @@ END {
   # would end early with the rest read back as marker lines (#65). See common.sh.
   tt_short = substr(jit_log_text(tt), 1, 120)
   tool_log = jit_log_text(tool_name)
+  # Named, and named as NOT delivered. This half is what let the defect survive two audits:
+  # the blocked call logged `00-manual:billing.md(billing) [shown:1]`, which is exactly what
+  # a correct delivery looks like, so the one surface that could have shown the burn agreed
+  # with it. `withheld[...]` is only ever written on a call that discarded something, and
+  # the entries inside it are the ones the next call still gets (#112).
+  if (withheld_log != "") { log_matches = log_matches sep "withheld[" withheld_log "]"; sep = ", " }
   if (log_matches == "") log_matches = "(none)"
   # Empty means bash could not get a scratch file at all -- see jit_tmp_open() in
   # common.sh. Redirecting to "" is a FATAL awk error raised inside END, which would take
@@ -655,6 +709,13 @@ END {
     # folded in here. The rules a call happens to match are advisory and belong to the
     # branch below; a rule that could not be evaluated is a report to the author about
     # the tree itself, and it has no other channel (#103).
+    #
+    # #112 re-argued that line and left it where it is. What was wrong was not the choice
+    # of branch: it was that the discarded entries were MARKED on the way here, so an
+    # advisory entry with another channel had it taken away -- for this dimension and for
+    # pre-prompt-hook.sh, which reads the same marker file. "It has no other channel" is
+    # the whole test for what belongs in block_tail, and it only holds if the things that
+    # do have one still get to use it.
     blocked = jit_json_escape(blocked block_tail)
     printf "{\"decision\":\"block\",\"reason\":\"%s\"}", blocked
   } else if (matched != "") {
