@@ -525,7 +525,10 @@ call. When the bad bytes are in the **row** itself those are the decision inputs
 no verdict to preserve, and the row is refused like an unhonourable pattern — the call is
 not blocked, and the notice says a block rule is the one that went dark rather than leaving
 that to be guessed. `rebuild-tsv.sh` names such a row at build time, by entry file, so the
-first you hear of it is not a row number in someone's session.
+first you hear of it is not a row number in someone's session — unless the entry's file
+name is not a plain `[A-Za-z0-9._-]` name, in which case the report says so instead of
+printing it. Those reports are read by agents as often as by people, and a file name
+arrives with the repository.
 
 A row whose entry file cannot be opened at all — a stale index naming a file you deleted —
 is refused the same way instead of reading as a rule that matched nothing.
