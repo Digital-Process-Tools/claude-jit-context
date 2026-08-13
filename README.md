@@ -628,7 +628,7 @@ can never fire -- which reads exactly like a rule that fires and never matches.
 2 entr(ies), counted while indexing -- one per .md file that produced no row.
 ```
 
-That number is a count of files, not of bytes or tokens. A `paths/` entry with no `match:`, a `vocabulary/` entry with no `keywords:`, a `tools/` entry missing `tool:` or `match:`, and an entry whose every keyword was blacklisted are all the same thing from a session's point of view: a file you wrote, committed and can open, that nothing will ever load. It is advisory and exits `0` — a layer directory may legitimately hold a note that was never meant to be an entry, and this report tells you rather than telling you what to do about it.
+That number is a count of files, not of bytes or tokens. A `paths/` entry with no `match:`, a `vocabulary/` entry with no `keywords:`, a `tools/` entry missing `tool:` or `match:`, and an entry whose every keyword was blacklisted or normalised away are all the same thing from a session's point of view: a file you wrote, committed and can open, that nothing will ever load. It is advisory and exits `0` — a layer directory may legitimately hold a note that was never meant to be an entry, and this report tells you rather than telling you what to do about it.
 
 A keyword the reports print is your own text, so it is bounded the way file names are: an ordinary term — `billing`, `vat rate` — prints in full, and anything longer than a term is replaced by `<withheld: not a plain keyword>` with the entry files still listed beside it.
 

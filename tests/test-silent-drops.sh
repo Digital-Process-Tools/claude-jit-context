@@ -157,6 +157,12 @@ BB="$BROKEN/.claude/jit-context"
 printf -- '---\ntitle: t\n---\n\nbody\n'                > "$BB/paths/00-manual/nomatch.md"
 printf -- '---\ntitle: t\n---\n\nbody\n'                > "$BB/vocabulary/00-manual/nokw.md"
 printf -- '---\ntitle: t\nkeywords: file\n---\n\nbody\n' > "$BB/vocabulary/00-manual/allblack.md"
+# Two ways to reach "no row from a keywords: line", and they are NOT the same fix. These
+# terms are dropped by the emptiness check before the blacklist is ever consulted -- the
+# normaliser maps every byte outside [a-z0-9 -] to a space, and a term of punctuation
+# collapses to nothing. Reporting the blacklist here would send an author to widen a
+# pattern that never saw the word.
+printf -- '---\ntitle: t\nkeywords: !!!, ###\n---\n\nbody\n' > "$BB/vocabulary/00-manual/punct.md"
 printf -- '---\ntitle: t\nmatch: git push\n---\n\nbody\n' > "$BB/tools/00-manual/notool.md"
 
 whole_out=$(CLAUDE_PROJECT_DIR="$WHOLE"  bash "$REBUILD" 2>&1); whole_rc=$?
@@ -180,6 +186,9 @@ assert_not_contains "and names no entry"            "$whole_out" "good.md: no "
 assert_contains "a paths entry with no match:"      "$broken_out" "nomatch.md: no "
 assert_contains "a vocab entry with no keywords:"   "$broken_out" "nokw.md: no "
 assert_contains "a vocab entry whose keywords were all dropped" "$broken_out" "allblack.md: every "
+assert_contains "and it says the blacklist did it"    "$broken_out" "allblack.md: every keywords: term was dropped by the blacklist"
+assert_contains "a vocab entry whose keywords normalise to nothing" "$broken_out" "punct.md: every keywords: term normalised to nothing"
+assert_not_contains "and that one does not blame the blacklist" "$broken_out" "punct.md: every keywords: term was dropped by the blacklist"
 assert_contains "a tools entry with no tool:"       "$broken_out" "notool.md: no "
 assert_not_contains "and the tree is not called clean" "$broken_out" "$QUIET_IDX"
 # The entries that DID index are not listed. Without this the report could name every file
