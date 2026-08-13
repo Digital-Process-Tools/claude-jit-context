@@ -739,6 +739,12 @@ Timings and matches are appended to `.claude/jit-context/.discovery/logs/hooks.l
 
 `(none)` in the match column means nothing fired — useful for finding knowledge gaps. The bracket after a match says what it cost: `[summary]`, `[full]`, `[full:block]`, or `[summary:no-description]` for an entry that could only be named.
 
+**`withheld[…]` names a match that was not delivered.** A `block` decision is the whole of the call's output, so the advisory rules and vocabulary entries that also matched that command are discarded — and they are therefore *not* spent: the next call in the session still gets them. They are listed apart from the delivered ones, and the `[shown:N]` count excludes them, so a blocked call can no longer read as a delivery that happened:
+
+```
+[23:48:14.393] pre-tool (Bash) 31ms | tool:nopush.md(git push)[full:block], withheld[00-manual:billing.md(billing)[full]] [shown:0] << src/Billing/Totals.php
+```
+
 That same log is how you find out whether the pull step is being taken, which is the question that decides whether `summary` was worth it. Reading an entry is a tool call, so it appears in the path column with no extra instrumentation:
 
 ```
