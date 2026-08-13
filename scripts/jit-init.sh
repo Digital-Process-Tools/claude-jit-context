@@ -47,7 +47,7 @@ BASE="$PWD/.claude/jit-context"
 
 usage() {
   # The header block, to the first non-comment line. Read structurally rather than as a
-  # line range: jit-dry-run.sh pins '2,27p', and a line added above that range truncates
+  # line range: jit-dry-run.sh pins '2,31p', and a line added above that range truncates
   # its --help with nothing to say so.
   awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
   exit "${1:-0}"
