@@ -539,25 +539,56 @@ END {
   # unnoticed, showing "(none) [shown:0]" on the very command they were written for.
   # This is the only channel that reaches someone who can fix it. It costs nothing
   # while every pattern is honourable, and stops the moment the rule is corrected.
-  # Suppressed when the call is being blocked, and only marked shown once delivered.
-  if (n_refused > 0 && blocked == "" && !("jit-refused-rules" in shown)) {
-    shown["jit-refused-rules"] = 1
-    jit_shown_mark(shown_file, "jit-refused-rules")
+  #
+  # It is delivered on the BLOCK path too (#103), appended after the reason rather than
+  # prepended, and that reverses what the two comments here used to say. They claimed the
+  # suppression kept a block reason "the only thing the model reads". Two things were
+  # wrong with it:
+  #
+  #   The block is STRUCTURAL. `{"decision":"block"}` refuses the call whatever the model
+  #   then reads, so text after the reason cannot dilute a decision into failing open. It
+  #   is a tidiness preference, and it was buying the sentence four lines up.
+  #
+  #   And the suppression was not always a deferral. A row refused at LOAD -- an undefined
+  #   escape, a bad byte -- is counted on every call whose tool the row names, so a later
+  #   call that is not blocked does report it. A row refused at MATCH -- a body
+  #   jit_read_body() cannot deliver -- is counted only on a command that row matched, and
+  #   when that is the same command a block rule refuses, EVERY call that counts it is
+  #   blocked. Driven, not read: the notice never arrived for the rest of the session.
+  #
+  # The marker is deliberately NOT consumed on the block path. `break` at the block rule
+  # ends the row scan, so the list delivered beside a block reason is whatever was reached
+  # before the decision and may be short; consuming the marker there would hide the
+  # complete list from the next call. The cost is a repeat across consecutive blocked
+  # calls, which is the cheaper direction.
+  if (n_refused > 0 && !("jit-refused-rules" in shown)) {
     note = jit_refusal_notice(refused, n_refused)
-    matched = (matched == "") ? note : note "\n---\n" matched
+    if (blocked == "") {
+      shown["jit-refused-rules"] = 1
+      jit_shown_mark(shown_file, "jit-refused-rules")
+      matched = (matched == "") ? note : note "\n---\n" matched
+    } else {
+      block_tail = block_tail "\n---\n" note
+    }
   }
 
   # --- A refused config.env line is reported, once per session ---
   # Parsed in common.sh, reported here, for the same reason as a refused rule: the log is
-  # exactly where this would go unnoticed. Suppressed when the call is being blocked, so
-  # a block reason stays the only thing the model reads.
+  # exactly where this would go unnoticed. Delivered on the block path too, for the reason
+  # above.
+  #
+  # This one DOES consume its marker there, and the asymmetry is the truncation and
+  # nothing else: config.env is parsed whole in the bash half before awk starts, so the
+  # list beside a block reason is the complete list and there is nothing left to arrive
+  # later. The rule list is the one a `break` can cut short.
   config_refused = ENVIRON["JIT_CONFIG_REFUSED"]
   config_refused_n = ENVIRON["JIT_CONFIG_REFUSED_N"] + 0
-  if (config_refused_n > 0 && blocked == "" && !("jit-refused-config" in shown)) {
+  if (config_refused_n > 0 && !("jit-refused-config" in shown)) {
     shown["jit-refused-config"] = 1
     jit_shown_mark(shown_file, "jit-refused-config")
     cnote = jit_config_notice(config_refused, config_refused_n)
-    matched = (matched == "") ? cnote : cnote "\n---\n" matched
+    if (blocked == "") matched = (matched == "") ? cnote : cnote "\n---\n" matched
+    else block_tail = block_tail "\n---\n" cnote
   }
   # --- Write log info to temp file (bash reads it for timing) ---
   sc = 0; for (s in shown) sc++
@@ -585,7 +616,11 @@ END {
 
   # --- Output JSON ---
   if (blocked != "") {
-    blocked = jit_json_escape(blocked)
+    # block_tail is the refusal notices and NOTHING else: `matched` is deliberately not
+    # folded in here. The rules a call happens to match are advisory and belong to the
+    # branch below; a rule that could not be evaluated is a report to the author about
+    # the tree itself, and it has no other channel (#103).
+    blocked = jit_json_escape(blocked block_tail)
     printf "{\"decision\":\"block\",\"reason\":\"%s\"}", blocked
   } else if (matched != "") {
     matched = jit_json_escape(matched)
