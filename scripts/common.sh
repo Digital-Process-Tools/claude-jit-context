@@ -1614,7 +1614,7 @@ function jit_badmode_note(e) {
 # than the cheap option. The notice rides the injection of the entry itself, which is
 # already deduped per session in the paths and vocabulary dimensions and by `once` in
 # tools -- so it can never be noisier than the entry it is attached to, and under `full` it
-# is ~110 bytes against a whole body. A separate once-per-session channel would need
+# is 94 bytes against a whole body. A separate once-per-session channel would need
 # session state inside a function that has none, and would go quiet for exactly the
 # sessions that resume or compact, where the agent reading the injection is not the one
 # that read the notice. The refusal channels in the hooks report once per session because a
