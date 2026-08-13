@@ -1,5 +1,6 @@
 ---
 title: PHP conventions
+description: Strict types, constructor promotion, and where the shared base classes live.
 match: \.php$
 ---
 

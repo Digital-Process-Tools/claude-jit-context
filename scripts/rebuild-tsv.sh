@@ -411,6 +411,147 @@ else
   echo "(none — every keyword in every entry was indexed)" >&2
 fi
 echo "" >&2
+# --- What a match costs, and what summary mode would save --------------------
+# `full` is the default, so every match on a tree that has said nothing injects the whole
+# entry. That makes the old shape of this report -- "N of M entries would arrive whole" --
+# say "M of M" and mean nothing, so it reports something a reader can act on instead.
+#
+# Default-full is a STAGE. The risk it carries is issue #1s own objection one level up: a
+# setting nobody revisits stays at maximum by inertia. What makes it reconsiderable rather
+# than permanent is a number for THIS tree, and these are the three that are honestly
+# available here:
+#
+#   what one match costs now      the largest and the median entry, in bytes
+#   what it would cost summarised the same entries through the real injection reader
+#   what stands in the way        entries with no `description:` yet -- a match could
+#                                 only NAME those, so a tree cannot flip cleanly until
+#                                 that count is zero. This is the only actionable one.
+#
+# Deliberately NOT a corpus total. "Summary mode would save 2.4 MB on this tree" is
+# technically true and useless: nothing here is ever resident, so that quantity has never
+# been in a context window and never will be. The saving that actually happens is
+# per-match times how often each entry fires, and only the first factor is knowable here.
+# The second is in .discovery/logs/hooks.log, which is where the reader is sent for it.
+#
+# The sizes come from jit_entry_load()/jit_inject_text() in common.sh -- the SAME reader
+# the hooks use, not a second parser beside it. A budget computed by a different parser
+# from the thing it is budgeting drifts, and it already did once: an earlier cut of this
+# report had its own frontmatter parse and counted `inject: "full"` as unrecognised, so an
+# entry that arrived whole at runtime was reported as a summary.
+echo "=== What a match costs on this tree ===" >&2
+echo "Project default: JIT_CONTEXT_INJECT=$JIT_INJECT" >&2
+echo "" >&2
+
+# A glob and not `find`: no fork, and no filename can be split on its own characters.
+INJ_LIST=()
+for md in "$JIT_BASE"/*/*/*.md; do
+  [ -f "$md" ] || continue
+  [ "$(basename "$md")" = "00-README.md" ] && continue
+  INJ_LIST[${#INJ_LIST[@]}]="$md"
+done
+
+if [ "${#INJ_LIST[@]}" -eq 0 ]; then
+  echo "(no entries)" >&2
+else
+  # Everything happens in BEGIN over ARGV, and the files are never read as awk INPUT.
+  # jit_entry_load() opens each one itself with getline, so letting awk read them too
+  # would double every read; and taking the list through ARGV rather than through stdin
+  # means a file name can never be split on a character it happens to contain.
+  # JIT_AWK_ENTRY comes first because jit_entry_load() calls into it: the two pre-read
+  # guards through jit_entry_why(), and jit_bad_utf8() on what it read. Without it this
+  # awk aborts with "calling undefined function" -- loudly, which is this file contract,
+  # and the report is then silently absent rather than wrong.
+  # LC_ALL=C for the same reason every hook awk sets it: jit_utf8_init() builds a byte
+  # range out of sprintf("%c", 128) and sprintf("%c", 255), and under a UTF-8 locale
+  # one-true-awk tries to decode that as a character range and aborts with "multibyte
+  # conversion failure". It also makes length() count BYTES on both engines, which is
+  # the unit the hooks clip in and the unit this report prints.
+  LC_ALL=C awk -v def="$JIT_INJECT" "$JIT_AWK_ENTRY$JIT_AWK_INJECT"'
+function relpath(p,   n, a) {
+  n = split(p, a, "/")
+  if (n < 3) return p
+  return ".claude/jit-context/" a[n-2] "/" a[n-1] "/" a[n]
+}
+# Largest first. Every parallel array moves together -- sorting the sizes and leaving the
+# names and the summarised figures behind would print one entry name beside another
+# entry numbers, which is a report that is wrong in the way nobody checks.
+function isort(v, nm, sm, ef, n,   i, j, tv, tn, ts, te) {
+  for (i = 2; i <= n; i++) {
+    tv = v[i]; tn = nm[i]; ts = sm[i]; te = ef[i]; j = i - 1
+    while (j >= 1 && v[j] < tv) {
+      v[j+1] = v[j]; nm[j+1] = nm[j]; sm[j+1] = sm[j]; ef[j+1] = ef[j]; j--
+    }
+    v[j+1] = tv; nm[j+1] = tn; sm[j+1] = ts; ef[j+1] = te
+  }
+}
+BEGIN {
+  n = 0
+  for (ai = 1; ai < ARGC; ai++) {
+    path = ARGV[ai]
+    # keepbody = 1: the body is what full mode costs, so it has to be read even for an
+    # entry whose effective mode is summary.
+    if (!jit_entry_load(path, def, 1, e)) continue
+    n++
+    rel = relpath(path)
+    fullb[n] = length(e["body"])
+    eff[n] = e["mode"]
+    name[n] = rel
+    # The real renderer, with the mode forced, so the summarised figure is the string
+    # that would actually be injected rather than an estimate of it.
+    keep = e["mode"]
+    e["mode"] = "summary"
+    sumb[n] = length(jit_inject_text(e, rel))
+    e["mode"] = keep
+    if (eff[n] == "full") { nfull++; bfull += fullb[n] }
+    # An entry with no description: could only be summarised into its own name, so it is
+    # what stands between this tree and being able to flip.
+    #
+    # Unless it can never be summarised at all. An entry PINNED to full -- by its own
+    # `inject: full`, or by having no frontmatter for the rebuild to have indexed -- stays
+    # whole whatever the project sets, so naming it here would send an author to write a
+    # description that nothing will ever read. The two cases are indistinguishable from
+    # the mode alone when the default and the override agree, which is why jit_entry_load
+    # reports the pin separately.
+    if (e["desc"] == "" && !(e["pin"] && e["mode"] == "full")) { nodesc++; nd[nodesc] = rel }
+  }
+
+  if (n == 0) { print "(no entries)"; exit }
+
+  isort(fullb, name, sumb, eff, n)
+  mid = int((n + 1) / 2)
+
+  if (def == "full") {
+    print "Every match injects the whole entry. Per match, on this tree:"
+    print ""
+    printf "  largest %7d bytes  ->  %5d summarised   %s\n", fullb[1], sumb[1], name[1]
+    printf "  median  %7d bytes  ->  %5d summarised   %s\n", fullb[mid], sumb[mid], name[mid]
+    printf "\n%d entr(ies) indexed.\n", n
+  } else {
+    printf "%d of %d entr(ies) still arrive whole, %d byte(s) between them.\n", nfull, n, bfull
+    for (i = 1; i <= n && shown < 5; i++) if (eff[i] == "full") { printf "%8d  %s\n", fullb[i], name[i]; shown++ }
+    if (nfull > shown) printf "         ... and %d more\n", nfull - shown
+  }
+
+  if (nodesc > 0) {
+    printf "\n%d entr(ies) carry no description:, so a match could only NAME them.\n", nodesc
+    for (i = 1; i <= nodesc && i <= 10; i++) print "  " nd[i]
+    if (nodesc > 10) printf "  ... and %d more\n", nodesc - 10
+    print "Nothing is auto-derived -- a generated summary of a wrong entry is a confident"
+    print "wrong summary, and it removes the moment the author would have noticed."
+  } else if (def == "full") {
+    print "\nEvery entry carries a description:, so this tree can move to summary whenever"
+    print "you decide the trade is worth it: JIT_CONTEXT_INJECT=summary in config.env."
+  }
+
+  print ""
+  print "This is the cost of ONE match, not a total -- nothing here is ever resident, and"
+  print "how often each entry fires is in .discovery/logs/hooks.log, not in this tree."
+  print "A tools rule that REFUSES a call injects its whole body whatever the mode says:"
+  print "the call is already stopped, so there is no next turn to spend a cheaper answer in."
+}
+' "${INJ_LIST[@]}" >&2
+fi
+echo "" >&2
 # One line saying which of the three this run was. The REFUSED and FATAL lines above are
 # the detail, but they scroll past inside two reports; this is what is on screen when the
 # shell hands the prompt back, and it is the only place the number itself is spelled out.

@@ -1,5 +1,6 @@
 ---
 title: Rebuild the index or this edit does nothing
+description: Frontmatter edits are inert until scripts/rebuild-tsv.sh runs; how keywords are normalised, and how to prove an entry actually fires.
 match: (^|/)(\.claude|examples|templates)/jit-context/.*\.md$
 ---
 
@@ -12,6 +13,14 @@ bash scripts/rebuild-tsv.sh    # after every frontmatter edit, without exception
 ```
 
 Body edits need no rebuild — the body is read from the file at fire time. Frontmatter edits always do.
+
+## Write a `description:` anyway
+
+A match injects the whole body — `full` is the default, for upgrade safety: a tree that installed this before the mode existed must not silently lose knowledge its agents rely on.
+
+Under `JIT_CONTEXT_INJECT=summary`, or `inject: summary` in one entry, a match injects `title:` plus `description:` instead — roughly 20 tokens — and the agent reads the file if it wants the rest. An entry with no `description:` is then named and **not injected**; nothing is auto-derived, because a generated summary of a wrong entry is a confident wrong summary.
+
+So a missing `description:` costs nothing today and is what stops this tree flipping later. `rebuild-tsv.sh` prints what one match costs here, what it would cost summarised, and every entry still missing one. A `mode: block` tools rule injects its whole body whatever the mode says — the call is already stopped, so there is no next turn to spend a cheaper answer in.
 
 ## Authoring
 

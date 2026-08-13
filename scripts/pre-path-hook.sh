@@ -64,7 +64,7 @@ JIT_CAND_BEGIN='--jit-candidates--'
 # channel and prints NOTHING, because whether they are real files is a question awk must not
 # ask (a getline probe on a directory is a fatal i/o error on one-true-awk, which is the awk
 # macOS ships). bash answers it with builtins and runs the program again over the survivors.
-JIT_PATH_PROG=$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_JSON'
+JIT_PATH_PROG=$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -378,12 +378,20 @@ END {
       }
       if (!path_matched) continue
 
-      # The body is read BEFORE anything is marked shown. A row whose entry file will not
+      # The entry is read BEFORE anything is marked shown. A row whose entry file will not
       # open used to be marked anyway -- nothing injected, nothing refused, and the key
       # recorded as delivered, which is how a NUL-truncated row went missing in silence on
       # one-true-awk (#78). A mark now records an injection that happened.
-      why = jit_read_body(paths_base "/" layer "/" rule_file)
-      if (why != "") {
+      #
+      # jit_entry_load/jit_inject_text live in common.sh: the title and the
+      # author-written description by default, the whole body only when the project or
+      # the entry asks for it.
+      content = ""
+      rpath = paths_base "/" layer "/" rule_file
+      if (jit_entry_load(rpath, inject_default, 0, ent)) {
+        content = jit_inject_text(ent, ".claude/jit-context/paths/" layer "/" rule_file)
+      } else if (ent["why"] != "") {
+        why = ent["why"]
         n_refused++
         refused = jit_refuse_add(refused, jit_row_id("paths/" layer, rown) ": " why)
         # The name PASSED the bare-name check above, so it is what an author fixing this
@@ -392,13 +400,12 @@ END {
         sep = ", "
         continue
       }
-      content = JIT_BODY
 
       if (content != "") {
         shown[rule_file] = 1
         jit_shown_mark(shown_file, rule_file)
         header = "# JIT Context: " rule_file " (matched: " pattern ")"
-        log_matches = log_matches sep layer ":" rule_file "(" pattern ")"
+        log_matches = log_matches sep layer ":" rule_file "(" pattern ")" jit_inject_tag(ent)
         sep = ", "
         if (matched != "") matched = matched "\n---\n" header "\n" content
         else matched = header "\n" content
@@ -454,21 +461,24 @@ END {
         if (!vmatched) continue
 
         # Read first, mark only what was delivered. Same reason as the rule loop above.
-        why = jit_read_body(vocab_base "/" layer "/" vocab_file)
-        if (why != "") {
+        vcontent = ""
+        vfpath = vocab_base "/" layer "/" vocab_file
+        if (jit_entry_load(vfpath, inject_default, 0, vent)) {
+          vcontent = jit_inject_text(vent, ".claude/jit-context/vocabulary/" layer "/" vocab_file)
+        } else if (vent["why"] != "") {
+          why = vent["why"]
           n_refused++
           refused = jit_refuse_add(refused, jit_row_id("vocabulary/" layer, vrown) ": " why)
           log_matches = log_matches sep "refused:" jit_log_name(vocab_file, layer, vrown, why) "(" why ")"
           sep = ", "
           continue
         }
-        vcontent = JIT_BODY
 
         if (vcontent != "") {
           vshown[vocab_file] = 1
           jit_shown_mark(vocab_shown_file, vocab_file)
           vheader = "# Vocabulary: " vocab_file " (matched path: " vpattern ")"
-          log_matches = log_matches sep layer ":" vocab_file "(" vpattern ")"
+          log_matches = log_matches sep layer ":" vocab_file "(" vpattern ")" jit_inject_tag(vent)
           sep = ", "
           if (matched != "") matched = matched "\n---\n" vheader "\n" vcontent
           else matched = vheader "\n" vcontent
@@ -513,7 +523,15 @@ END {
   # jit_log_text() first, THEN the truncation. fp_short is payload text after
   # jit_unescape(), so a JSON newline escape is a real newline here; stripping after the
   # cut would leave the first 80 bytes still carrying one. See common.sh (#65).
-  fp_short = substr(jit_log_text(fp_short), 1, 80)
+  #
+  # 200, not 80. The one admitted loss in the summary design (issue #1) is that the pull
+  # step is soft: the agent is handed a description and decides whether to read the file.
+  # Whether it does is measurable with no new machinery, because reading an entry IS a
+  # tool call and this is the line that records it -- but at 80 characters an absolute
+  # path to `.claude/jit-context/vocabulary/00-manual/<entry>.md` under any real project
+  # directory was cut before the part that identifies it, and the measurement read as a
+  # pull that never happened.
+  fp_short = substr(jit_log_text(fp_short), 1, 200)
   if (log_matches == "") log_matches = "(none)"
   # Empty means bash could not get a scratch file at all -- see jit_tmp_open() in
   # common.sh. Redirecting to "" is a FATAL awk error raised inside END, which would take
@@ -547,6 +565,7 @@ jit_path_awk() {
     -v vocab_base="$JIT_BASE/vocabulary" \
     -v vocab_paths="$VOCAB_PATHS" \
     -v state_dir="$JIT_STATE_DIR" \
+    -v inject_default="$JIT_INJECT" \
     -v log_tmp="$JIT_TMP" \
     -v cand_mode="$1" \
     -v cand_begin="$JIT_CAND_BEGIN" \

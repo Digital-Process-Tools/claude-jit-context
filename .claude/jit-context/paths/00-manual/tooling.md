@@ -1,5 +1,6 @@
 ---
 title: These five fail loudly, and their exit codes carry meaning
+description: rebuild-tsv, jit-dry-run, jit-misses, jit-init and assemble_changelog are build tools, not hooks - they must fail loudly, their exit codes 0/1/2 each mean something, and the hook never-fail-hard contract does not apply.
 match: (^|/)(scripts/(rebuild-tsv|jit-dry-run|jit-misses|jit-init)\.sh|\.github/scripts/assemble_changelog\.py)$
 ---
 

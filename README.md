@@ -223,9 +223,77 @@ Tools answer _"what must happen around this action?"_ — required flags on a te
 
 The tool dimension is the only one that can **block**. The other two only inject.
 
+## What a match costs
+
+A match injects the entry body, whole. That is the default and it is what this has always done.
+
+It is also the thing worth thinking about, because the cost is asymmetric: a miss costs nothing, and a false positive costs the whole entry. One session about token tooling pulled a 14.9 KB tag-hierarchy reference on the word `tag`, in a conversation about YAML metadata. The match was correct on its own terms — the word was there — and it was 15,000 tokens wrong.
+
+**`summary` mode** is the answer to that. A match then injects the entry's **title and its `description:`** — roughly 20 tokens — and the agent reads the file if it wants the rest. Being wrong gets cheap, rather than the matcher getting cleverer:
+
+```
+# Vocabulary: tag-system-gotchas.md (matched: tag)
+Tag hierarchy
+How tags nest, and why tag_relation rows are written in pairs.
+[jit] Summary only -- read .claude/jit-context/vocabulary/00-manual/tag-system-gotchas.md for the entry.
+```
+
+```bash
+# .claude/jit-context/config.env
+JIT_CONTEXT_INJECT=summary
+```
+
+**It is not the default, and the reason is upgrade safety rather than doubt about the trade.** A project that installed this before the mode existed has entries that arrive whole and agents that behave as though they will. Flipping that under them, on an upgrade nobody read the notes for, takes away knowledge the project already relies on and does it silently — which is the exact failure this plugin exists to name, committed by the plugin. So `full` is what you get if you say nothing, and `summary` is where you go once you have looked at what a match costs on your tree and decided.
+
+That last part is meant to be a decision and not a slogan, so the numbers are printed for you. `rebuild-tsv.sh` prices one match on your own corpus:
+
+```
+=== What a match costs on this tree ===
+Project default: JIT_CONTEXT_INJECT=full
+
+Every match injects the whole entry. Per match, on this tree:
+
+  largest    6105 bytes  ->    311 summarised   .claude/jit-context/paths/00-manual/hooks.md
+  median     3718 bytes  ->    310 summarised   .claude/jit-context/paths/00-manual/tests.md
+
+7 entr(ies) indexed.
+
+Every entry carries a description:, so this tree can move to summary whenever
+you decide the trade is worth it: JIT_CONTEXT_INJECT=summary in config.env.
+```
+
+It prices **one match**, never a corpus total. Nothing here is ever resident, so "summary mode would save 2.4 MB" would be a true sentence about a quantity that has never been in a context window. How often each entry actually fires is in `hooks.log`, which is the only place that number exists.
+
+An entry with no `description:` cannot be summarised into anything but its own name, so those are named as the work between you and being able to flip. `jit-dry-run.sh` carries the other half — what a specific call cost, measured rather than estimated:
+
+```
+  pre-path-hook.sh     hooks.md(WHOLE BODY) [6245 bytes injected]
+  pre-path-hook.sh     hooks.md(summary) [385 bytes injected]
+```
+
+**The project chooses, not the entry's author.** The default lives in `config.env`, set by whoever pays for the context window; an individual entry overrides it with `inject: summary` or `inject: full`. That asymmetry is deliberate — an author who marks their own entry critical is marking it against a count somebody reads at build time.
+
+Three rules that are not settings:
+
+- **An entry with no `description:` is named and not injected**, under `summary`. Nothing is auto-derived — a generated summary of a wrong entry is a confident wrong summary, and it removes the moment you would have noticed. What you get instead is the entry's name and a line saying it has no description.
+- **A tools rule that *refuses* a call injects its whole body**, whatever the mode says. The call is already stopped; there is no next turn in which to spend a cheaper answer.
+- **An entry with no frontmatter at all injects its body**, in every mode. It has no `description:` — and no `keywords:` or `match:` either, so `rebuild-tsv.sh` could not have indexed it. Its body is the entry.
+
+Any other value — including `gated`, a third mode that is designed and deliberately **not built**, held until there is data on how often the pull step is actually taken — is **refused and named**, in `hooks.log` and once per session in context, and the default stands.
+
+The loss `summary` buys with is real and worth stating: the pull is a soft rule, and an agent under momentum will sometimes skip an entry it needed. Whether that happens is measurable — reading an entry is a tool call, so it lands in `hooks.log` beside everything else.
+
 ## Writing an entry
 
-Every entry is a markdown file with YAML frontmatter, in `00-manual/`. The frontmatter is the only structured part; the body is free-form and goes into context verbatim.
+Every entry is a markdown file with YAML frontmatter, in `00-manual/`. The frontmatter is the only structured part; the body is free-form and goes into context verbatim, unless the project has opted in to [`summary` mode](#what-a-match-costs).
+
+Two fields apply to every dimension:
+
+| Field         | Required | Meaning                                                                 |
+| ------------- | -------- | ----------------------------------------------------------------------- |
+| `title`       | no       | One line. Injected on a match under `summary`.                          |
+| `description` | **write one** | One line saying what the entry holds. It is what a match injects under `summary`, and what the agent decides on. Without it, a match can only name the entry — and `rebuild-tsv.sh` lists the entries that have none. |
+| `inject`      | no       | `summary` or `full`. Overrides the project default for this entry alone. |
 
 ### Vocabulary
 
@@ -248,6 +316,7 @@ the next read.
 ```markdown
 ---
 title: Command conventions
+description: Every command extends CommandBase and returns a typed value.
 match: Commands/
 ---
 
@@ -263,6 +332,7 @@ Return values are typed — never `void`, because callers assert on the result.
 ```markdown
 ---
 title: Always disable coverage locally
+description: Coverage runs take eight minutes locally and CI produces the report anyway.
 tool: Bash
 match: bin/phpunit
 mode: remind
@@ -282,9 +352,11 @@ Coverage runs take 8 minutes locally and are produced by CI anyway.
 
 | Mode     | Effect                                                  |
 | -------- | ------------------------------------------------------- |
-| `remind` | Injects the file body as additional context             |
-| `block`  | Rejects the tool call, returning the body as the reason |
+| `remind` | Injects the entry as additional context — the whole body, or its title and `description:` under `summary` |
+| `block`  | Rejects the tool call, returning the **whole body** as the reason, whatever the injection mode says |
 | `once`   | Fires at most once per session                          |
+
+`mode` and `inject` are different axes and it is worth not confusing them: `mode` decides *what the hook does* — remind, refuse, once — and `inject` decides *how much of the entry comes with it*.
 
 ### What a tool rule is tested against
 
@@ -597,7 +669,9 @@ Consequences worth internalizing:
 - A handful of generic single words — `file`, `files`, `name`, `count`, `output`, `input`, `branch`, `issue`, `documents`, `extension`, `detection` — are kept in `keywords:` for human searching and **not indexed**, because they fire on almost every prompt. `rebuild-tsv.sh` names each one it skipped, with the entry it came from, under `=== Keywords dropped by the blacklist (listed, not indexed) ===`; the list is a regular expression you can replace with `JIT_CONTEXT_KEYWORD_BLACKLIST`.
 - The fold happens when the index is **built** as well as when the prompt is matched, so an index generated by an older version carries the pre-fold spelling. Those rows keep firing — the unfolded prompt is checked too — but `bash scripts/rebuild-tsv.sh` is what makes an accented keyword reachable from an unaccented prompt.
 
-Each entry fires **once per session**. Once injected it is marked shown and will not repeat — the knowledge is already in context.
+Each entry fires **once per session**. Once injected it is marked shown and will not repeat — what it had to say is already in context, whether that was its description or its whole body.
+
+Dedup applies to both modes. Under `summary` a re-announcement would be cheap enough to be tempting, and it is still suppressed on purpose: an entry summarised once and then read is a clean signal for whether the pull step is being taken, and one re-announced on every prompt is noise the agent learns to skip. The refusal notices ride the same marker for the same reason.
 
 The marker is keyed on the `session_id` Claude Code puts in every hook payload, and the file lives beside the log at `.claude/jit-context/.discovery/state/`. Two sessions, two worktrees or two projects never share one. A payload that carries no session id — a hand-run hook, a script of your own — gets **no marker and no dedup**: an entry repeats rather than being suppressed against a guess at who is asking. The **directory** gets the same symbolic-link refusal as the log — a linked `.claude`, `jit-context`, `.discovery` or `state` means no markers at all — and a checkout you cannot write to simply keeps no markers. The marker **file** is tested too: nothing is appended to it if it is a symbolic link. That test lives in the shell rather than in `awk` — `awk` cannot `lstat`, so the append moved out of it — which is the same change that makes an unusable marker path a reason to skip dedup instead of a reason to lose the injection. A marker that cannot be read is still only a bound: the worst it can do is suppress an entry that should have been shown, and `SessionStart` clears whatever is sitting at this session's two names before the first prompt. Nothing a tool payload contains can write a marker: the marks and the log line share one scratch file, and a sentinel line between them means payload text always lands on the far side of the boundary — a `block` rule cannot be marked already-shown by the call it is about to refuse.
 
@@ -626,6 +700,13 @@ No generator ships with this plugin. The layers exist so that bulk-generated cov
 Optional, in `.claude/jit-context/config.env`:
 
 ```bash
+# What a match injects: the whole entry body (full, the default), or the entry
+# title and its description: (summary, roughly 20 tokens). Set by whoever pays
+# for the context window; an individual entry overrides it with `inject:`.
+# Any other value is refused and named — the default stands.
+# Run scripts/rebuild-tsv.sh to see what one match costs on your tree.
+JIT_CONTEXT_INJECT=full
+
 # Source-root prefix used when turning a vocabulary entry's "## Modules"
 # section into path triggers. Default: src/
 DYNAMIC_RULES_MODULE_PREFIX="src/"
@@ -642,7 +723,7 @@ DYNAMIC_RULES_VOCAB_PATHS=0
 
 **This file is read, not executed.** One `KEY=VALUE` per line; `#` comments and blank lines are ignored, surrounding quotes are stripped, and a leading `export` is accepted. Nothing inside a value is expanded — a `$`, a backtick or a `$(…)` is a literal character.
 
-Only settings named `JIT_CONTEXT_*`, `DYNAMIC_RULES_*` or `DVSI_*` are read. Any other line is **refused**, named in `hooks.log`, and reported once per session in the context the hooks inject — it is never dropped in silence. A `#` preceded by whitespace starts a trailing comment, exactly as it did when the file was sourced; one that is not is an ordinary character, so `^(a#b)$` keeps its hash.
+Only settings named `JIT_CONTEXT_*`, `DYNAMIC_RULES_*` or `DVSI_*` are read. Any other line is **refused**, named in `hooks.log`, and reported once per session in the context the hooks inject — it is never dropped in silence. A recognised setting given a value this code does not implement is refused the same way: `JIT_CONTEXT_INJECT=gated` names the line and leaves the default in force, rather than reading as a mode that applied. A `#` preceded by whitespace starts a trailing comment, exactly as it did when the file was sourced; one that is not is an ordinary character, so `^(a#b)$` keeps its hash.
 
 That narrowness is deliberate. `config.env` lives in the project, so it arrives with the repository. It was previously `.`-sourced on every prompt and every tool call, which made cloning a repo and opening it arbitrary code execution before you had read a line of the code. `PATH` is a valid shell identifier and the very next thing every hook does is run `awk`, so an allowlist of plain identifiers would not have closed it.
 
@@ -653,10 +734,16 @@ Every hook is a **single `awk` process**. Frontmatter is parsed at build time in
 Timings and matches are appended to `.claude/jit-context/.discovery/logs/hooks.log`:
 
 ```
-[23:48:14.393] pre-tool (Bash) 29ms | 10-auto/billing.md(billing) [shown:11] << src/Billing/Totals.php
+[23:48:14.393] pre-tool (Bash) 29ms | 10-auto:billing.md(billing)[full] [shown:11] << src/Billing/Totals.php
 ```
 
-`(none)` in the match column means nothing fired — useful for finding knowledge gaps.
+`(none)` in the match column means nothing fired — useful for finding knowledge gaps. The bracket after a match says what it cost: `[summary]`, `[full]`, `[full:block]`, or `[summary:no-description]` for an entry that could only be named.
+
+That same log is how you find out whether the pull step is being taken, which is the question that decides whether `summary` was worth it. Reading an entry is a tool call, so it appears in the path column with no extra instrumentation:
+
+```
+[23:48:15.902] pre-path 11ms | (none) << .claude/jit-context/vocabulary/00-manual/billing.md
+```
 
 **Nothing is written in a project that has no `.claude/jit-context/` directory.** The
 plugin installs globally and then runs in every repository you open, so it creates nothing

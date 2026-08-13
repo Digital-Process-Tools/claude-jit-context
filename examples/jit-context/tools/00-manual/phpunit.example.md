@@ -1,5 +1,6 @@
 ---
 title: Local test runs must skip coverage
+description: Coverage runs take eight minutes locally and CI produces the report anyway.
 tool: Bash
 match: ~(^|[;&|\n] *)([^;&|[:space:]]*/)?bin/phpunit($|[[:space:];&|])
 mode: remind

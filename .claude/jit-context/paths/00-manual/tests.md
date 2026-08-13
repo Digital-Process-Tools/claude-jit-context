@@ -1,5 +1,6 @@
 ---
 title: A green suite that tested nothing is the failure mode here
+description: How to make an assertion here non-vacuous - the harness guard that proves the suite can see its tree, pairing every silence with a match, and the awk engine matrix.
 match: (^|/)tests/[^/]*\.sh$
 ---
 

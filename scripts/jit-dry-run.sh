@@ -240,6 +240,30 @@ else
   printf 'ok       %-18s %-30s no config.env in this tree\n' "config.env" ""
 fi
 
+# The injection default OF THE TREE BEING LINTED, never this session. common.sh has
+# already parsed the session config.env into JIT_INJECT, and reporting that here would be
+# the linter taking its behaviour from somewhere other than --base -- the same mistake the
+# config.env block above exists to correct, one setting over.
+#
+# Subshell, and the variable is unset first: an exported JIT_CONTEXT_INJECT in this
+# session must not be read as a setting the linted tree carries.
+TREE_INJECT="$(
+  unset JIT_CONTEXT_INJECT
+  JIT_CONFIG_REFUSED=""
+  # Reset for jit_load_config() in common.sh, which shellcheck cannot see here.
+  # shellcheck disable=SC2034
+  JIT_CONFIG_REFUSED_N=0
+  if [ -f "$BASE/config.env" ] && [ ! -L "$BASE/config.env" ]; then
+    jit_load_config "$BASE/config.env"
+  fi
+  # `if`, not `case`. A `case` pattern ends in an unbalanced `)`, and inside $( ) the
+  # bash on macOS reads that as closing the command substitution -- a syntax error at
+  # parse time, so nothing in this file after it ran at all.
+  _v="${JIT_CONTEXT_INJECT:-full}"
+  if [ "$_v" != summary ] && [ "$_v" != full ]; then _v=full; fi
+  printf '%s' "$_v"
+)"
+
 check_pattern() {
   # $1 layer label, $2 rule file, $3 pattern
   local label="$1" file="$2" pat="$3" why engine hint=""
@@ -596,6 +620,95 @@ fi
 check_index_current "$BASE/tools/00-manual" tools "tools/00-manual"
 check_index_current "$BASE/paths/00-manual" paths "paths/00-manual"
 
+# --- What a match would cost ------------------------------------------------
+# A match injects the entry title and its author-written `description:` unless the project
+# or the entry asks for the body (issue #1). Which entries take the expensive path is the
+# one thing about this tree that nobody can see by reading it -- the default lives in
+# config.env and the override lives in an entry nobody opened -- so it is printed, the way
+# rebuild-tsv.sh prints the same population at build time.
+#
+# A tools entry that can refuse a call is listed too and for the honest reason: it injects
+# its whole body when it fires, whatever the mode says, because the call is already
+# stopped and there is no next turn to spend a cheaper answer in.
+WHOLE=0
+NODESC=0
+WHOLE_LINES=""
+list_whole() {
+  # $1 layer dir, $2 label
+  local dir="$1" label="$2" md name inj eff why size desc pin
+  [ -d "$dir" ] || return 0
+  for md in "$dir"/*.md; do
+    [ -f "$md" ] || continue
+    name="$(basename "$md")"
+    [ "$name" = "00-README.md" ] && continue
+    # An entry the hooks REFUSE costs nothing, so it belongs in the REFUSED rows above and
+    # not in a budget. Listing it in both reported one problem as two -- and a tree with
+    # 200 hostile links printed 200 lines of budget under the line saying the whole tree
+    # was refused, which is a report that argues with itself.
+    [ -L "$md" ] && continue
+    [ "${JIT_SYMLINKS_ALL:-}" = "1" ] && continue
+    inj="$(jit_frontmatter inject "$md" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    desc="$(jit_frontmatter description "$md")"
+    why=""
+    # `pin` mirrors jit_entry_load() in common.sh: the mode was decided by the ENTRY, not
+    # inherited from the project default. An entry pinned to full can never render as a
+    # summary, so a missing description: on one of those is not what stands between this
+    # tree and being able to flip -- naming it would send an author to write a line
+    # nothing will ever read.
+    pin=0
+    if [ "$(sed -n 1p "$md")" != "---" ]; then
+      eff=full; pin=1; why="no frontmatter, so there is nothing to summarise"
+    elif [ "$inj" = full ]; then
+      eff=full; pin=1; why="inject: full in this entry"
+    elif [ "$inj" = summary ]; then
+      eff=summary; pin=1
+    else
+      eff="$TREE_INJECT"
+      [ -n "$inj" ] && why="inject: value not recognised, so the project default applied"
+      [ -z "$why" ] && why="the project default"
+    fi
+    if [ -z "$desc" ] && [ "$pin$eff" != "1full" ]; then NODESC=$((NODESC + 1)); fi
+    if [ "$eff" = full ]; then
+      size="$(wc -c < "$md" | tr -d ' ')"
+      WHOLE=$((WHOLE + 1))
+      # Capped. This runs against user trees of any size, and a budget that scrolls its own
+      # total off the screen is not a budget. The COUNT is never capped -- a report that
+      # reads as complete and is not is this repository own defect class.
+      if [ "$WHOLE" -le 10 ]; then
+        WHOLE_LINES="$WHOLE_LINES$(printf 'whole    %-18s %-30s %s byte(s) -- %s' "$label" "$name" "$size" "$why")
+"
+      fi
+    fi
+  done
+}
+for _d in "$BASE"/tools/*/ "$BASE"/paths/*/ "$BASE"/vocabulary/*/; do
+  [ -d "$_d" ] || continue
+  _d="${_d%/}"
+  list_whole "$_d" "$(basename "$(dirname "$_d")")/$(basename "$_d")"
+done
+unset _d
+echo ""
+echo "injection default for this tree: $TREE_INJECT"
+if [ "$TREE_INJECT" = full ]; then
+  # Under the default, EVERY entry arrives whole, so listing them one per line says
+  # nothing a single sentence does not. What is worth naming here is the count that
+  # stands between this tree and being able to flip -- the sizes are rebuild-tsv.sh job,
+  # and printing them twice in two tools is how the two drift.
+  echo "every match on this tree injects the whole entry body."
+  if [ "$NODESC" -gt 0 ]; then
+    echo "$NODESC entr(ies) carry no description:, so summary mode could only NAME them."
+    echo "Run scripts/rebuild-tsv.sh in that tree for the per-match sizes and the names."
+  else
+    echo "Every entry carries a description:, so JIT_CONTEXT_INJECT=summary is available."
+  fi
+else
+  if [ "$WHOLE" -gt 0 ]; then
+    printf '%s' "$WHOLE_LINES"
+    [ "$WHOLE" -gt 10 ] && echo "         ... and $((WHOLE - 10)) more"
+  fi
+  echo "$WHOLE entr(ies) would arrive whole; every other match injects its title and description: only."
+fi
+
 echo ""
 # Two counts, not one: a substring row has no regex to compile, so folding it into the
 # checked total would report coverage the run does not have.
@@ -679,9 +792,29 @@ json_quote() {
   }'
 }
 
+# The BYTES a hook actually injected -- measured off the hook own output, not arithmetic
+# over the corpus. This is the honest per-call number: a sample call has a frequency of
+# exactly one, so nothing has to be assumed about how often anything fires. rebuild-tsv.sh
+# carries the other half, what a match would cost summarised, and keeping the two apart is
+# what stops them drifting into disagreement.
+#
+# The length of the additionalContext / reason payload, which is what reaches the model,
+# rather than of the whole JSON envelope. A hook that said nothing reports 0.
+injected_bytes() {
+  printf '%s' "$1" | awk '
+    { s = s $0 }
+    END {
+      k = index(s, "\"additionalContext\":\"")
+      if (k > 0) { s = substr(s, k + 21); sub(/"}}$/, "", s); print length(s); exit }
+      k = index(s, "\"reason\":\"")
+      if (k > 0) { s = substr(s, k + 10); sub(/"}$/, "", s); print length(s); exit }
+      print 0
+    }'
+}
+
 report_hook() {
   # $1 hook script, $2 JSON payload, $3 project dir
-  local out names verdict errf
+  local out names verdict errf annotated nm fired summarised
   # Phase 2 discarded stderr for the same reason phase 1 did, and lost the same thing with
   # it (#98): the hook that died mid-decision printed an awk diagnostic and no JSON, and
   # this read that as "no rule fired" -- which is indistinguishable from a rule that had
@@ -723,7 +856,31 @@ report_hook() {
   if [ -z "$names" ]; then
     printf '  %s%-20s no rule fired\n' "$verdict" "$1"
   else
-    printf '  %s%-20s %s\n' "$verdict" "$1" "$names"
+    # What each one COST, not just that it fired. A summary marks itself in the injected
+    # text -- "read <path> for the entry" -- so this reads the hook actual output rather
+    # than re-deriving the mode and risking a report that disagrees with the hook it is
+    # reporting on.
+    #
+    # Counted, not substring-tested. Two matched entries can share a basename across
+    # layers or dimensions -- the layers exist precisely to hold parallel entries -- and
+    # a bare `case "$out" in *"/$nm for the entry"*` would then label BOTH from whichever
+    # one happened to be a summary. The direction that mistake goes is the wrong one for
+    # a budget: it understates the cost. So the marker count is compared with how many
+    # times the name fired, and a genuinely mixed pair says so rather than guessing.
+    annotated=""
+    for nm in $names; do
+      case " $annotated" in *" $nm("*) continue ;; esac
+      fired=$(printf '%s\n' $names | grep -c -x -F "$nm")
+      summarised=$(printf '%s' "$out" | grep -o -F "/$nm for the entry" | grep -c .)
+      if [ "$summarised" -eq 0 ]; then
+        annotated="$annotated$nm(WHOLE BODY) "
+      elif [ "$summarised" -ge "$fired" ]; then
+        annotated="$annotated$nm(summary) "
+      else
+        annotated="$annotated$nm(summary and WHOLE BODY, $fired entries share this name) "
+      fi
+    done
+    printf '  %s%-20s %s[%s bytes injected]\n' "$verdict" "$1" "$annotated" "$(injected_bytes "$out")"
   fi
 }
 

@@ -1,5 +1,6 @@
 ---
 title: A shell write to 00-index.tsv is still a hand edit
+description: rebuild-tsv.sh is the only writer of 00-index.tsv; a redirect, tee or in-place sed at it is refused for the same reason a hand edit is.
 tool: Bash
 match: ~((^|[^-])>>?[[:space:]]*|(^|[;&|\n])[[:space:]]*tee[[:space:]][^;&|\n]*|(^|[;&|\n])[[:space:]]*(sed|perl)([[:space:]][^;&|\n]*)?[[:space:]](-[a-z]*i|--in-place)[^;&|\n]*)([^[:space:];&|<>\n]*[^[:alnum:]_.-])?00-index[.]tsv([^[:alnum:]_.-]|$)
 mode: block

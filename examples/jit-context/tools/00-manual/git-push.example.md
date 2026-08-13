@@ -1,5 +1,6 @@
 ---
 title: Create a merge request instead of pushing
+description: This project reviews through merge requests, so a direct push skips the checks everything else assumes.
 tool: Bash
 match: ~@invocation git push
 mode: remind
