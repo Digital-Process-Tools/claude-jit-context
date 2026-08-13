@@ -535,6 +535,14 @@ check_index_current() {
       END { exit(found ? 0 : 1) }
     ' "$dir/00-index.tsv" 2>/dev/null; then
       STALE=$((STALE + 1))
+      # No row position on this line, and unlike check_entry_file() that is deliberate.
+      # There is none to give -- this loop walks a *.md glob, not an index -- but the
+      # reason it is not missed is the REMEDY. A refused entry-file row has to be found
+      # and renamed one row at a time, so a withheld name there costs the author the work.
+      # A stale row is fixed by rebuilding the layer, which is the next line of this
+      # report and fixes every stale entry in it at once, named or not. The count is
+      # printed in the summary. Adding a glob ordinal would be a handle that changes when
+      # the directory does and that no other tool agrees with.
       disp="$(jit_report_name "$name")"
       printf 'STALE    %-18s %-30s frontmatter and index disagree — this rule is not the one running\n' "$label" "$disp"
       printf '         %-18s %-30s run scripts/rebuild-tsv.sh in that tree and commit the index\n' "" ""
@@ -934,7 +942,7 @@ injected_bytes() {
 
 report_hook() {
   # $1 hook script, $2 JSON payload, $3 project dir
-  local out names verdict errf annotated nm fired summarised
+  local out names verdict errf annotated nm nmd seen fired summarised
   # Phase 2 discarded stderr for the same reason phase 1 did, and lost the same thing with
   # it (#98): the hook that died mid-decision printed an awk diagnostic and no JSON, and
   # this read that as "no rule fired" -- which is indistinguishable from a rule that had
@@ -987,17 +995,37 @@ report_hook() {
     # one happened to be a summary. The direction that mistake goes is the wrong one for
     # a budget: it understates the cost. So the marker count is compared with how many
     # times the name fired, and a genuinely mixed pair says so rather than guessing.
+    #
+    # These names come from the HOOK's output rather than from an index row, and they are
+    # the same tree text every row above them carries -- a review of #124 found this half
+    # after the fifteen sites in phase 1, and the note printed at the top of this report
+    # claims to describe the whole of it. So the display name goes through
+    # jit_report_name() here as well. `grep -o -E '[^ ]+\.md'` bounds the field at a space
+    # and so cannot carry a whole sentence, but it carries everything up to the first one
+    # and a name needs no space to be 200 bytes of instruction.
+    #
+    # $nm stays the REAL name everywhere it is used to LOOK SOMETHING UP -- the summary
+    # marker count and the fired count both search the hook's own output for it, and
+    # searching for the placeholder would report every withheld entry as whole-body.
+    # Only $nmd is printed.
+    #
+    # The seen-list moved off $annotated for the same reason: two withheld names render
+    # identically, so a dedup test against the RENDERED string would collapse two distinct
+    # entries into one row and understate the budget.
     annotated=""
+    seen=" "
     for nm in $names; do
-      case " $annotated" in *" $nm("*) continue ;; esac
+      case "$seen" in *" $nm "*) continue ;; esac
+      seen="$seen$nm "
       fired=$(printf '%s\n' $names | grep -c -x -F "$nm")
       summarised=$(printf '%s' "$out" | grep -o -F "/$nm for the entry" | grep -c .)
+      nmd="$(jit_report_name "$nm")"
       if [ "$summarised" -eq 0 ]; then
-        annotated="$annotated$nm(WHOLE BODY) "
+        annotated="$annotated$nmd(WHOLE BODY) "
       elif [ "$summarised" -ge "$fired" ]; then
-        annotated="$annotated$nm(summary) "
+        annotated="$annotated$nmd(summary) "
       else
-        annotated="$annotated$nm(summary and WHOLE BODY, $fired entries share this name) "
+        annotated="$annotated$nmd(summary and WHOLE BODY, $fired entries share this name) "
       fi
     done
     printf '  %s%-20s %s[%s bytes injected]\n' "$verdict" "$1" "$annotated" "$(injected_bytes "$out")"

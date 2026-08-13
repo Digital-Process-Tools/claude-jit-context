@@ -550,14 +550,24 @@ R_ERR="$TMP/refusal.err"
 NORECORDS="$TMP/no-records.log"
 printf 'this file has lines but none of them is a hook record\n' > "$NORECORDS"
 
-# One case per refusal SHAPE in the script, because they are four independent sets of
-# writes and a fix applied to three of them looks identical to a fix applied to all four.
+# The awk END block carries three refusals, not one, and they are three separate sets of
+# print statements. This is the second reachable one: well-formed hook records, none of
+# them from pre-prompt. (The third, `lines == 0`, cannot be reached through the CLI --
+# `[ -s "$LOG" ]` refuses an empty file in bash first -- so driving it here would assert
+# nothing.)
+NOPROMPTS="$TMP/no-prompt-records.log"
+printf '[10:00:01.001] pre-tool (Bash) 9ms | (none) [shown:0] << git status\n' > "$NOPROMPTS"
+
+# One case per refusal SHAPE in the script, because they are independent sets of writes
+# and a fix applied to four of them looks identical to a fix applied to all six.
 #   --min with no value        need_value()
 #   --zzz                      the unknown-argument arm
 #   --min x                    the whole-number guard
 #   --log /nonexistent         skip()
-#   --log <no records>         the awk END block
-for c in "--min:" "--zzz:" "--min:x" "--log:/nonexistent/hooks.log" "--log:$NORECORDS"; do
+#   --log <no records>         the awk END block, shaped == 0
+#   --log <no pre-prompt>      the awk END block, prompts == 0
+for c in "--min:" "--zzz:" "--min:x" "--log:/nonexistent/hooks.log" "--log:$NORECORDS" \
+         "--log:$NOPROMPTS"; do
   cflag="${c%%:*}"; cval="${c#*:}"
   if [ -n "$cval" ]; then set -- "$cflag" "$cval"; else set -- "$cflag"; fi
   bash "$MISSES" "$@" > "$R_OUT" 2> "$R_ERR" && ST=0 || ST=$?

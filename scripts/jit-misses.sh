@@ -389,11 +389,18 @@ END {
 ' "$LOG")
 _JIT_MISSES_RC=$?
 
-# 2 is this script own "could not evaluate" and nothing else reaches it: both report
-# branches exit 0. Anything else is an awk that died, whose own diagnostic is already on
-# stderr -- that keeps stdout along with whatever partial report it managed, because a
-# partial report is still a report and the non-zero status is what says it is not a whole
-# one. Routing it to stderr instead would hide output the reader can still use.
+# 2 is this script own "could not evaluate", and an awk that DIED also exits 2 on both
+# gawk and one-true-awk. The fork does not try to tell those apart, and that is the right
+# side of it rather than an oversight: an awk that aborted mid-report emitted a partial
+# report, and a partial report on stdout reads as a complete one -- which is this
+# repository own defect class, arriving through the stream this change exists to fix. It
+# goes to stderr, where the engine diagnostic already is, and the status is 2, which is
+# what the header already promises a reader for a log that could not be evaluated. So the
+# two cases are conflated on purpose and land on the same honest answer.
+#
+# Any other non-zero is an awk that failed before producing anything worth calling a
+# report; it keeps stdout, because the status already says the run was not clean and
+# hiding the little it managed helps nobody.
 if [ "$_JIT_MISSES_RC" -eq 2 ]; then
   printf '%s\n' "$_JIT_MISSES_OUT" >&2
 else
