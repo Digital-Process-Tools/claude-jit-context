@@ -173,6 +173,13 @@ truncate_index() {
   [ -d "$tsv" ] && why=" -- there is a DIRECTORY at that path, not a file"
   echo "FATAL    $disp: could not be written$why" >&2
   echo "         -- that index was NOT rebuilt and is now stale." >&2
+  # DISP is dimension/layer/leaf, so the absolute path is gone with the withheld component.
+  # JIT_BASE gets it back for the ordinary failure -- a read-only tree, a full disk -- which
+  # is the common one and the one where the reader needs a path they can act on. It is the
+  # same string the no-entry-tree FATAL above already prints, and it comes from
+  # CLAUDE_PROJECT_DIR rather than from the clone, so it is not the column this change is
+  # about. `ls` under it finds a withheld name in one step.
+  echo "         -- under JIT_BASE=$JIT_BASE" >&2
   jit_rc 2
   return 1
 }
