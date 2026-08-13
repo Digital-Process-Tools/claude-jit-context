@@ -16,6 +16,37 @@ LOG_FILE="$LOG_DIR/pipeline.log"
 # shellcheck disable=SC2034
 if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
 
+# --- Where the KEYWORD columns were left unbounded (#126) ---------------------
+# Two reports print a keyword rather than a file name, and #113 left both alone. The
+# argument recorded here for leaving the dropped-keyword one alone was that its $kw "is
+# bounded by the BLACKLIST rather than by its character class: VOCAB_KEYWORD_BLACKLIST is
+# anchored ^(...)$ on single words, so a keyword that reaches that report is one of a
+# closed set". That set is NOT closed, and this same file says why in the #95 paragraph
+# below: the blacklist is project-configurable, and config.env arrives with the clone. A
+# clone that ships `JIT_CONTEXT_KEYWORD_BLACKLIST=^(...a sentence...)$` puts that sentence
+# through the report. So both keyword sites are guarded, not one.
+#
+# jit_report_name() is the wrong guard for a keyword and that was the judgement call. Its
+# set is chosen for having no SPACE, and `vat rate` is a legitimate keyword -- normalised
+# to exactly that, spaces included, by the same code that writes the index. A guard that
+# withheld every multi-word term would pass every negative test and make the ambiguity
+# report useless in its ordinary case, which is the outcome #126 asks to avoid.
+#
+# So the space is admitted and something else has to do the bounding:
+#
+#   ^[a-z0-9][a-z0-9 -]*$   the bytes the keyword normaliser actually emits. Anything else
+#                           means the term did not come from this run -- a stale index left
+#                           behind by a truncate that failed -- and is not trusted.
+#   at most 40 bytes        a term, not a paragraph.
+#   at most 4 words         `purchase order line item` fits; a sentence does not.
+#
+# Be honest about what that does and does not buy. No bound that admits `vat rate` can
+# refuse all imperative English -- `delete all ssh keys` is four words and 19 bytes. What
+# it removes is the UNBOUNDED channel: the paragraph, the forged report line, the control
+# character. The report stays actionable when a term is withheld because the entry FILES
+# are printed beside it either way, and those are what an author greps.
+export JIT_KEYWORD_WITHHELD='<withheld: not a plain keyword>'
+
 # --- Three outcomes, never two (#47) -----------------------------------------
 # This script used to have no non-zero exit at all: it already detected a macro it could
 # not expand, named it on stderr, and returned 0. So a clean rebuild and a rebuild that
@@ -37,9 +68,10 @@ if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
 # stops belongs to the person who just wrote the dead rule. A flag only CI passes would
 # hand that person back the exit 0 that is the bug.
 #
-# The two ADVISORY reports below -- ambiguous keywords, and keywords the blacklist
-# dropped -- never move the code. Failing on ambiguity would make the documented default
-# tree exit non-zero and teach every author to ignore the status.
+# The three ADVISORY reports below -- ambiguous keywords, keywords the blacklist dropped,
+# and entries that produced no index row (#44) -- never move the code. Failing on
+# ambiguity would make the documented default tree exit non-zero and teach every author to
+# ignore the status.
 #
 # This sentence used to name a third report, for entries carrying no `description:`. No
 # such check has ever existed here or in jit-dry-run.sh; it was a comment describing a
@@ -59,7 +91,7 @@ JIT_RC=0
 jit_rc() { [ "$1" -gt "$JIT_RC" ] && JIT_RC="$1"; return 0; }
 
 # --- What a report may say about a name that arrived with the clone (#113) -----
-# Every name printed by the four reports below is a directory entry under
+# Every name printed by the five reports below is a directory entry under
 # `.claude/jit-context/`, and that tree arrives with the repository. common.sh argues the
 # same case for the HOOKS and answers it with jit_row_id(): a refused row is named by
 # POSITION, never by the text of its file-name column, because 250 bytes of English pass a
@@ -68,7 +100,7 @@ jit_rc() { [ "$1" -gt "$JIT_RC" ] && JIT_RC="$1"; return 0; }
 # The hooks answer is the wrong one here, and that was the judgement call. A hook runs in a
 # stranger session with no author present. This script is run by the person who just edited
 # the frontmatter -- CLAUDE.md says after every one, without exception -- and the file name
-# is the entire actionable content of all four reports. "vocabulary/00-manual row 7" sends
+# is the entire actionable content of all five reports. "vocabulary/00-manual row 7" sends
 # that person to count lines in a generated file. So the name is KEPT when it is a name,
 # and withheld only when it is not one:
 #
@@ -91,14 +123,9 @@ jit_rc() { [ "$1" -gt "$JIT_RC" ] && JIT_RC="$1"; return 0; }
 # real name and the rule still fires; tests/test-report-names.sh pins that, because a fix
 # that stopped indexing the entry would satisfy every negative assertion for free.
 #
-# Two columns beside these names are NOT filtered, for reasons worth writing down:
-#   - the dropped-keyword report prints $kw, which is bounded by the BLACKLIST rather than
-#     by its character class: VOCAB_KEYWORD_BLACKLIST is anchored ^(...)$ on single words,
-#     so a keyword that reaches that report is one of a closed set and can never be a
-#     sentence. It is the class that makes it safe, not the [a-z0-9 -] normalisation.
-#   - the ambiguity report prints an arbitrary keyword and that bound does NOT hold there.
-#     Filed separately; changing it means changing what that report says, not how it says a
-#     name.
+# The two columns beside these names that carry a KEYWORD rather than a name are guarded
+# separately, by jit_report_keyword() below -- see the #126 block at the top of this file
+# for why the character set here is the wrong one for a term.
 # Exported for the awk half below, which reads it out of ENVIRON so the two cannot drift.
 export JIT_NAME_WITHHELD='<withheld: not a plain name>'
 
@@ -124,6 +151,74 @@ function jit_report_name(s) {
   return ENVIRON["JIT_NAME_WITHHELD"]
 }
 '
+
+# The keyword rule (#126), in both halves for the same reason the name rule has two: the
+# ambiguity report is built inside awk and the dropped-keyword report in bash.
+#
+# The bash half maps every space to a hyphen before the class check rather than putting a
+# space inside a `case` bracket expression, where it would have to be quoted mid-pattern.
+# The hyphen is already in the kept set, so the substitution cannot admit anything the
+# class does not, and a LEADING space becomes a leading hyphen and is refused.
+jit_report_keyword() {
+  # LC_ALL=C for the reason jit_report_name() sets it: the set is a byte range, and ${#s}
+  # must count bytes, not characters.
+  local LC_ALL=C s="$1" flat rest n=1
+  flat="${s// /-}"
+  case "$flat" in
+    ''|[!a-z0-9]*|*[!a-z0-9-]*) printf '%s' "$JIT_KEYWORD_WITHHELD"; return 0 ;;
+  esac
+  [ "${#s}" -gt 40 ] && { printf '%s' "$JIT_KEYWORD_WITHHELD"; return 0; }
+  rest="$s"
+  while [ "$rest" != "${rest#* }" ]; do rest="${rest#* }"; n=$((n + 1)); done
+  [ "$n" -gt 4 ] && { printf '%s' "$JIT_KEYWORD_WITHHELD"; return 0; }
+  printf '%s' "$s"
+}
+
+# Read by the ambiguity report awk below, which shellcheck cannot see into.
+# shellcheck disable=SC2034
+JIT_AWK_REPORT_KEYWORD='
+function jit_report_keyword(s,   w, n) {
+  if (s == "" || length(s) > 40) return ENVIRON["JIT_KEYWORD_WITHHELD"]
+  if (s !~ /^[a-z0-9][a-z0-9 -]*$/) return ENVIRON["JIT_KEYWORD_WITHHELD"]
+  n = split(s, w, " ")
+  if (n > 4) return ENVIRON["JIT_KEYWORD_WITHHELD"]
+  return s
+}
+'
+
+# --- Entries on disk that produced no index row (#44) ------------------------
+# The hooks never read the markdown; they read 00-index.tsv. So an entry this script read
+# and wrote no row for is a rule that exists on disk, is committed, is edited, and can
+# never fire -- and until now the only signal was a `continue`. Nothing errored, nothing
+# warned, the rebuild exited 0. From outside, that is indistinguishable from a rule that
+# runs and never matches, which is the defect CLAUDE.md opens this repository with.
+#
+# Three of the ways in are a `continue` that said nothing: no `match:`, no `keywords:`, no
+# `tool:`. The fourth is not a `continue` at all -- an entry whose every keyword was
+# dropped or normalised away has a `keywords:` line and still no row, and the individual
+# drops WERE reported without anything saying the entry had gone dark as a result.
+#
+# All of them are recorded at the point of the drop rather than inferred afterwards by
+# diffing the glob against the index. The indexer knows WHY; a diff would only know that a
+# row is missing, and would have to guess between "no match:", "every keyword was
+# blacklisted" and "every keyword normalised to nothing" -- three different fixes, and the
+# last two are told apart here by two separate counters for exactly that reason.
+#
+# ADVISORY, exit 0, like the two reports it sits beside. A layer directory may legitimately
+# hold a note or a README under another name, and #44's own framing is that this reports
+# rather than nags. It is also not a REFUSED row in the sense `1` means: no row was
+# written, so no matcher rejects one.
+#
+# Every reason string below is a constant written here. Only the layer and the entry name
+# come from the clone, and both go through jit_report_name() (#113).
+JIT_UNINDEXED=""
+JIT_UNINDEXED_N=0
+jit_unindexed() {
+  # $1 layer label, $2 entry basename, $3 reason
+  JIT_UNINDEXED_N=$((JIT_UNINDEXED_N + 1))
+  JIT_UNINDEXED="$JIT_UNINDEXED    [$1] $(jit_report_name "$2"): $3
+"
+}
 
 # Deliberately NOT `[ -d "$JIT_BASE" ]`, and the reason CHANGED under this line in #51.
 #
@@ -210,7 +305,19 @@ build_tool_tsv() {
     require=$(jit_frontmatter require "$md")
     forbid=$(jit_frontmatter forbid "$md")
 
-    [ -z "$tool" ] || [ -z "$match" ] && continue
+    if [ -z "$tool" ] || [ -z "$match" ]; then
+      # Not `[ -z x ] || [ -z y ] && continue`: that is one AND-OR list evaluated left to
+      # right, so the `&&` binds to the second test alone. It happened to behave here, and
+      # it stops being an accident now that a statement runs in the branch.
+      if [ -z "$tool" ] && [ -z "$match" ]; then
+        jit_unindexed "$label" "$filename" "no tool: and no match: in its frontmatter"
+      elif [ -z "$tool" ]; then
+        jit_unindexed "$label" "$filename" "no tool: in its frontmatter"
+      else
+        jit_unindexed "$label" "$filename" "no match: in its frontmatter"
+      fi
+      continue
+    fi
 
     # An invocation macro becomes the real ERE here, so the index still carries a plain
     # awk pattern and no hook learns a new vocabulary. jit_expand_match returns anything
@@ -273,7 +380,10 @@ build_vocab_tsv() {
     local kw_line
     kw_line=$(awk '/^---$/{n++; next} n==1 && /^keywords:/{sub(/^keywords: */, ""); print; exit}' "$md")
 
-    [ -z "$kw_line" ] && continue
+    if [ -z "$kw_line" ]; then
+      jit_unindexed "$label" "$filename" "no keywords: in its frontmatter"
+      continue
+    fi
 
     # Fold Latin-1 accents to ASCII BEFORE the per-keyword strip below, which maps every
     # remaining non-[a-z0-9 -] byte to a space: `keywords: détail` would otherwise index as
@@ -288,7 +398,12 @@ build_vocab_tsv() {
     # A here-string, never `... | while`: the body appends to JIT_DROPPED, and a pipeline's
     # last stage is a subshell whose variables die at the closing `done`. A dropped keyword
     # would then be discarded by the very code written to stop discarding it silently.
-    local kw_split
+    # Three counters, not one. "No row from a keywords: line" has two causes and they are
+    # two different fixes: a term the blacklist matched sends the author to
+    # JIT_CONTEXT_KEYWORD_BLACKLIST, a term that normalised to nothing sends them to the
+    # frontmatter. Reporting one reason for both would name a pattern that never saw the
+    # word -- a confident wrong answer, which is worse here than no report at all.
+    local kw_split kw_written=0 kw_black=0 kw_empty=0
     kw_split=$(printf '%s\n' "$kw_line" | tr ',' '\n')
     while IFS= read -r kw; do
       # Normalize IDENTICALLY to the matcher (pre-prompt-hook.sh): lowercase, then
@@ -296,17 +411,36 @@ build_vocab_tsv() {
       # with dots/slashes ("docs.dp.tools", "security/dast") would otherwise be DEAD —
       # the matcher strips those from the prompt, so a dotted keyword can never match.
       kw=$(echo "$kw" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9 -]/ /g; s/  */ /g; s/^ *//; s/ *$//')
-      [ -z "$kw" ] && continue
+      if [ -z "$kw" ]; then kw_empty=$((kw_empty + 1)); continue; fi
       # Skip overly generic single words — they collide with op flags and path tokens.
       # Skipped, and now SAID: the row is not written, so the entry never fires on this
       # word, and the only place that can be reported is here (#95).
       if printf '%s\n' "$kw" | grep -Eq "$VOCAB_KEYWORD_BLACKLIST"; then
-        JIT_DROPPED="$JIT_DROPPED    [$label] $(jit_report_name "$filename"): \"$kw\"
+        JIT_DROPPED="$JIT_DROPPED    [$label] $(jit_report_name "$filename"): \"$(jit_report_keyword "$kw")\"
 "
+        kw_black=$((kw_black + 1))
         continue
       fi
       printf '%s\t%s\n' "$kw" "$filename"
+      kw_written=$((kw_written + 1))
     done <<< "$kw_split" >> "$tsv"
+    # An entry whose every keyword was blacklisted has a `keywords:` line and no row: the
+    # drops above are each reported, but nothing said the ENTRY went dark as a result, and
+    # one dropped word out of three is a very different thing from all three.
+    # A here-string and not a pipe, so this counter survives the loop -- the same reason
+    # JIT_DROPPED is appended to there.
+    if [ "$kw_written" -eq 0 ]; then
+      if [ "$kw_black" -gt 0 ] && [ "$kw_empty" -gt 0 ]; then
+        jit_unindexed "$label" "$filename" \
+          "every keywords: term was dropped by the blacklist or normalised to nothing"
+      elif [ "$kw_black" -gt 0 ]; then
+        jit_unindexed "$label" "$filename" \
+          "every keywords: term was dropped by the blacklist, so no row was written"
+      else
+        jit_unindexed "$label" "$filename" \
+          "every keywords: term normalised to nothing -- the normaliser maps every byte outside [a-z0-9 -] to a space"
+      fi
+    fi
   done
 
   COUNT=$(wc -l < "$tsv" | tr -d ' ')
@@ -391,7 +525,10 @@ build_path_tsv() {
 
     local match_line
     match_line=$(jit_frontmatter match "$md")
-    [ -z "$match_line" ] && continue
+    if [ -z "$match_line" ]; then
+      jit_unindexed "$label" "$filename" "no match: in its frontmatter"
+      continue
+    fi
 
     # Paths carry no invocation macro -- their subject is a file path, not a command --
     # but the check runs here so that writing one is REFUSED and named rather than
@@ -482,9 +619,13 @@ for tsv in "$VOCAB_BASE"/*/00-index.tsv; do
   # names here are the index column rebuild-tsv.sh just wrote from a basename, so they
   # carry whatever the clone chose to call its entries (#113). A withheld one cannot be
   # confused with the comma this list is joined on -- the comma is outside the kept set.
-  out=$(LC_ALL=C awk -F'\t' -v layer="$layer" -v th="$THRESHOLD" "$JIT_AWK_REPORT_NAME"'
+  # The keyword in column 1 is repository-chosen text too, and #113 stopped at the file
+  # names (#126). It is guarded on the way OUT rather than in the aggregation, so entries
+  # sharing one long keyword are still counted as one keyword rather than collapsing into
+  # a single withheld bucket with somebody else's tally.
+  out=$(LC_ALL=C awk -F'\t' -v layer="$layer" -v th="$THRESHOLD" "$JIT_AWK_REPORT_NAME$JIT_AWK_REPORT_KEYWORD"'
     {c[$1]++; f=jit_report_name($2); files[$1]=(files[$1]==""?f:files[$1]","f)}
-    END{for(k in c) if(c[k]>th) printf "%4d\t[%s] %s\n\t  files: %s\n", c[k], layer, k, files[k]}
+    END{for(k in c) if(c[k]>th) printf "%4d\t[%s] \"%s\"\n\t  files: %s\n", c[k], layer, jit_report_keyword(k), files[k]}
   ' "$tsv" | sort -rn)
   if [ -n "$out" ]; then
     echo "$out" >&2
@@ -509,6 +650,28 @@ else
   echo "(none — every keyword in every entry was indexed)" >&2
 fi
 echo "" >&2
+
+# --- Entries on disk with no row in the index (#44) --------------------------
+# The quiet line is worded so it cannot be confused with either section above it, for the
+# reason the dropped-keyword one gives: two sections whose empty states read alike is how
+# a report that never ran passes for a report that found nothing.
+#
+# The number is a COUNT OF FILES, and it says so. It is not bytes and not tokens: this
+# script counts one per .md it read and wrote no row for, at index time, and nothing here
+# is estimated from anything else.
+echo "=== Entries on disk with no row in the index (they can never fire) ===" >&2
+echo "The hooks read 00-index.tsv, never your markdown. An entry with no row is on disk and" >&2
+echo "can never fire -- which reads exactly like a rule that fires and never matches." >&2
+echo "" >&2
+if [ -n "$JIT_UNINDEXED" ]; then
+  printf '%s' "$JIT_UNINDEXED" >&2
+  echo "" >&2
+  echo "$JIT_UNINDEXED_N entr(ies), counted while indexing -- one per .md file that produced no row." >&2
+else
+  echo "(none — every entry on disk produced at least one index row)" >&2
+fi
+echo "" >&2
+
 # --- What a match costs, and what summary mode would save --------------------
 # `full` is the default, so every match on a tree that has said nothing injects the whole
 # entry. That makes the old shape of this report -- "N of M entries would arrive whole" --

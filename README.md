@@ -618,6 +618,23 @@ The exit code says which of three things happened, so a script or a pre-commit h
 
 The ambiguity report is advisory and never moves the code — those entries are indexed and fire.
 
+It also names, every run, the entries it read and wrote **no row** for:
+
+```
+=== Entries on disk with no row in the index (they can never fire) ===
+The hooks read 00-index.tsv, never your markdown. An entry with no row is on disk and
+can never fire -- which reads exactly like a rule that fires and never matches.
+
+    [paths/00-manual] orphan.md: no match: in its frontmatter
+    [00-manual] legacy.md: every keywords: term was dropped by the blacklist, so no row was written
+
+2 entr(ies), counted while indexing -- one per .md file that produced no row.
+```
+
+That number is a count of files, not of bytes or tokens. A `paths/` entry with no `match:`, a `vocabulary/` entry with no `keywords:`, a `tools/` entry missing `tool:` or `match:`, and an entry whose every keyword was blacklisted or normalised away are all the same thing from a session's point of view: a file you wrote, committed and can open, that nothing will ever load. It is advisory and exits `0` — a layer directory may legitimately hold a note that was never meant to be an entry, and this report tells you rather than telling you what to do about it.
+
+A keyword the reports print is your own text, so it is bounded the way file names are: an ordinary term — `billing`, `vat rate` — prints in full, and anything longer than a term is replaced by `<withheld: not a plain keyword>` with the entry files still listed beside it.
+
 ### Verify an entry actually fires
 
 An entry that never fires looks exactly like work that was done.

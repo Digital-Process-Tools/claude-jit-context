@@ -15,8 +15,9 @@
 # is not a macro is returned unchanged and cannot produce it. That is why this is not a
 # --strict flag: the person whose `&&` chain stops is the person who just wrote the dead
 # rule, and a flag only CI passes would hand the interactive author back the exit 0 that
-# is the bug. The two ADVISORY reports -- ambiguous keywords, and entries with no
-# description: -- never move the code, and section E holds that line.
+# is the bug. The ADVISORY reports -- ambiguous keywords, keywords the blacklist dropped,
+# entries with no description:, and entries that produced no index row (#44) -- never move
+# the code, and section E holds that line.
 #
 # Every non-zero case here is paired with a clean tree that still exits 0 in the same
 # fixture. Without that pair, "always exit 1" would pass this suite.

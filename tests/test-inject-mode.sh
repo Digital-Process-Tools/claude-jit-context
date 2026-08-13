@@ -524,8 +524,16 @@ assert_not_contains "and does not name one that can be summarised" "$REPORT" "  
 # PINNED to full can never render as a summary, so its missing description: is not work
 # anybody has to do before flipping. Naming it would send an author to write a line that
 # nothing will ever read.
-assert_not_contains "nor an entry pinned to full by its own frontmatter" "$REPORT" "pinned.md"
-assert_not_contains "nor one with no frontmatter at all"                "$REPORT" "bare.md"
+# Scoped to the no-description LIST, the way the assertion above it already is. A bare
+# `pinned.md` needle is a claim about the whole of stderr, and stderr carries four other
+# reports -- bare.md legitimately appears in the "no row in the index" one added by #44,
+# since an entry with no frontmatter has no keywords: and therefore no row. An assertion
+# about one section must name that section's own line shape.
+assert_not_contains "nor an entry pinned to full by its own frontmatter" "$REPORT" "  .claude/jit-context/vocabulary/00-manual/pinned.md"
+assert_not_contains "nor one with no frontmatter at all"                "$REPORT" "  .claude/jit-context/vocabulary/00-manual/bare.md"
+# And the positive half of the same needle shape: nodesc.md IS in that list, indented,
+# under the full path. Without it the two above pass against a report that lists nothing.
+assert_contains "the blocking entry is listed in that same shape" "$REPORT" "  .claude/jit-context/vocabulary/00-manual/nodesc.md"
 
 # The other side of the same question: a tree with nothing in the way says so, because
 # "2 entries block this" and "nothing blocks this" must not read identically.
