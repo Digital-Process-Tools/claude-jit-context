@@ -457,7 +457,16 @@ else
   # jit_entry_load() opens each one itself with getline, so letting awk read them too
   # would double every read; and taking the list through ARGV rather than through stdin
   # means a file name can never be split on a character it happens to contain.
-  awk -v def="$JIT_INJECT" "$JIT_AWK_INJECT"'
+  # JIT_AWK_ENTRY comes first because jit_entry_load() calls into it: the two pre-read
+  # guards through jit_entry_why(), and jit_bad_utf8() on what it read. Without it this
+  # awk aborts with "calling undefined function" -- loudly, which is this file contract,
+  # and the report is then silently absent rather than wrong.
+  # LC_ALL=C for the same reason every hook awk sets it: jit_utf8_init() builds a byte
+  # range out of sprintf("%c", 128) and sprintf("%c", 255), and under a UTF-8 locale
+  # one-true-awk tries to decode that as a character range and aborts with "multibyte
+  # conversion failure". It also makes length() count BYTES on both engines, which is
+  # the unit the hooks clip in and the unit this report prints.
+  LC_ALL=C awk -v def="$JIT_INJECT" "$JIT_AWK_ENTRY$JIT_AWK_INJECT"'
 function relpath(p,   n, a) {
   n = split(p, a, "/")
   if (n < 3) return p

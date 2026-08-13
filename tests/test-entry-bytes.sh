@@ -317,7 +317,18 @@ PATH="$ENGINE_BIN/$ENG:$PATH" CLAUDE_PROJECT_DIR="$PROJ" LC_ALL=C \
   bash "$SCRIPTS/rebuild-tsv.sh" >/dev/null 2>"$ERR"
 assert_has   "the offending row is reported on stderr" "$ERR" "the hooks will refuse this row"
 assert_has   "named by the entry file, which is what an author can act on" "$ERR" "bad77f.md"
-assert_lacks "the honest entry beside it is not reported" "$ERR" "ok77f.md"
+# Against the REFUSAL half of stderr, not all of it. rebuild-tsv also prints the
+# injection budget (#1/#54), which names the largest, the median and every entry with no
+# description: -- so on a two-entry tree the honest one is named there, correctly and for
+# an unrelated reason. Asserting over the whole stream would read that as the refusal
+# report having widened, which is the opposite of what it says.
+ERR_REFUSE=$(mktemp)
+awk '/^=== What a match costs/ { exit } { print }' "$ERR" > "$ERR_REFUSE"
+assert_lacks "the honest entry beside it is not reported" "$ERR_REFUSE" "ok77f.md"
+# Positive control for the cut: the budget section is what was removed, and if that header
+# ever changes this says so instead of quietly asserting against an empty file.
+assert_has   "the cut kept the refusal report itself" "$ERR_REFUSE" "the hooks will refuse this row"
+rm -f "$ERR_REFUSE"
 # The positive control for the whole check: the same tree with the bad value removed says
 # nothing at all. Without it, every assertion above would pass against a script that
 # reported every row it wrote.
