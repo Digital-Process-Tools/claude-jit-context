@@ -38,6 +38,10 @@ bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; }
 seen() { LC_ALL=C perl -0777 -pe 's/([^\x20-\x7e])/sprintf("<%02X>",ord($1))/ge; $_ = substr($_, 0, 240)' "$1"; }
 
 # --- Assertions, every one of them over a file on disk ------------------------
+# jit-drive: assert_has contains path-arg
+# jit-drive: assert_lacks not_contains path-arg
+# jit-drive: assert_marker_has contains path-arg
+# jit-drive: assert_marker_lacks not_contains path-arg
 assert_injected() {
   if LC_ALL=C perl -0777 -ne 'exit(/additionalContext|"reason"/ ? 0 : 1)' "$2"; then
     ok "$1"

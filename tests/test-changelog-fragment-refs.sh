@@ -24,6 +24,7 @@
 #
 # Usage: bash tests/test-changelog-fragment-refs.sh
 
+# jit-drive: none -- this suite scans tracked files for a filename; it defines no assertion helper at all
 set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"

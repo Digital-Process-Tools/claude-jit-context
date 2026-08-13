@@ -61,6 +61,9 @@ run_hook() {
   echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2>/dev/null
 }
 
+# jit-drive: assert_contains contains capture
+# jit-drive: assert_not_contains not_contains capture
+# jit-drive: assert_blocked blocked capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
   if grep -q "$expected" <<<"$output"; then
