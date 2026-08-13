@@ -192,6 +192,12 @@ run_prompt() { printf '%s' "{\"prompt\":\"$1\"}" | CLAUDE_PROJECT_DIR="$TEST_DIR
 run_tool()   { printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$1\"}}" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2>/dev/null; }
 run_path()   { printf '%s' "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$1\"}}" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PATH_HOOK" 2>/dev/null; }
 
+# The two below take (description, CAPTURED OUTPUT, needle), the shape most helpers in this
+# tree carry. The `jit-drive:` lines are what puts them under `test-assertion-helpers.sh`'s
+# 1 MB payload -- a suite that declares nothing is a hard failure there (#110), and this
+# suite arrived from #54 one hour after that landed, which is how `main` went red.
+# jit-drive: assert_contains contains capture
+# jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
   if grep -qF "$expected" <<<"$output"; then
