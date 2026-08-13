@@ -328,6 +328,14 @@ END {
     # outright would turn an unhonourable rule into an allowed call, which is the one
     # direction this dimension may never fail in. The row is named in the notice either
     # way, and the substitute is ASCII, so the reason survives the JSON channel.
+    #
+    # That sentence was FALSE for one shape of unreadable body until #97, and false in the
+    # direction it exists to rule out. A file-name column naming a directory -- or an empty
+    # one, which concatenates to the layer directory -- made this getline a fatal i/o error
+    # on one-true-awk, so the process carrying a block decision reached three lines below
+    # died inside END with no JSON on stdout at all. Not "blocks without its text": no
+    # block. jit_read_body() now refuses both shapes before the read, off a set the bash
+    # half sweeps, so what this paragraph claims is what the code does on every engine.
     why = jit_read_body(tools_dir "/" r_file)
     content = JIT_BODY
     if (why != "") {

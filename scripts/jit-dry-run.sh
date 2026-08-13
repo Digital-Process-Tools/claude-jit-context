@@ -27,6 +27,8 @@
 #       A WARN row never moves the exit code — see check_paths_fragment below.
 #       An index in ANY dimension is a tree that could be evaluated, so a tree carrying
 #       only a vocabulary index is a 0 and never a 2.
+#       A SKIPPED row is a 1 as well: a reader that stopped partway checked an unknown
+#       number of rows, and that is not the same claim as finding nothing (#98).
 
 set -uo pipefail
 
@@ -44,7 +46,7 @@ usage() {
   # Through the end of the Exit: block, which is where --help says what a WARN row does
   # to the exit code. A line added above this shifts it and truncates silently, so
   # tests/test-jit-dry-run.sh asserts on the last sentence rather than on the range.
-  sed -n '2,29p' "$0"
+  sed -n '2,31p' "$0"
   exit "${1:-0}"
 }
 
@@ -150,6 +152,10 @@ print_untrusted() {
 
 REFUSED=0
 BYTES_REFUSED=0
+# The third state (#98). A row that was CHECKED and refused is a finding; a reader that
+# died partway through an index checked an unknown number of rows and found nothing, which
+# is not the same claim and must never be printed as one.
+SKIPPED_READS=0
 VOCAB_REFUSED=0
 VOCAB_KEYS=0
 VOCAB_FILES=0
@@ -520,16 +526,25 @@ done
 # before this program is reached, exactly as it does in the hooks, so on that engine the
 # row reports as the shorter name it became -- and the body of that shorter name will not
 # open, which is the reading this reports instead.
+# THREE STATES, NOT TWO (#98). The awk below is captured with its stderr discarded, which
+# keeps engine noise out of a report meant for a human -- and until #98 that was the whole
+# of it, so a FATAL became an empty result set, and an empty result set here reads as a
+# clean index. Worse, awk aborts AT the offending record, so every row after it went
+# unreported too: a bad-UTF-8 row was named when it was alone and vanished when a row that
+# killed the reader preceded it, under "0 refused" and exit 0.
+#
+# So the run is captured into a variable first and its STATUS is read. Not the stderr text:
+# whether an engine says anything, and in what words, is exactly the thing that differs
+# between one-true-awk, gawk and whatever Git Bash ships, while a non-zero exit is the one
+# signal all of them agree on.
+#
+# What the fault WAS is deliberately not guessed at. The rows this abort was found on are
+# refused by name now, so anything still reaching here is a shape nobody has seen; naming
+# it would be inventing a diagnosis for it.
 check_row_bytes() {
   # $1 layer label, $2 index file, $3 layer directory, $4 dimension
-  local label="$1" rown why file
-  while IFS=$(printf '\t') read -r rown why file; do
-    [ -n "$rown" ] || continue
-    BYTES_REFUSED=$((BYTES_REFUSED + 1))
-    printf 'REFUSED  %-18s %-30s %s\n' "$label" "${file:-row $rown}" "$why"
-    printf '         %-18s %-30s the hooks refuse this row and name it as "%s row %s"\n' "" "" "$label" "$rown"
-  done <<EOF
-$(LC_ALL=C JIT_DIR="$3" JIT_DIM="$4" awk "$JIT_AWK_ENTRY"'
+  local label="$1" rown why file rows rc
+  rows=$(LC_ALL=C JIT_DIR="$3" JIT_DIM="$4" awk "$JIT_AWK_ENTRY"'
   BEGIN { dir = ENVIRON["JIT_DIR"]; col = (ENVIRON["JIT_DIM"] == "tools") ? 3 : 2 }
   {
     why = jit_bad_bytes($0, "the index row")
@@ -540,6 +555,19 @@ $(LC_ALL=C JIT_DIR="$3" JIT_DIM="$4" awk "$JIT_AWK_ENTRY"'
     why = jit_read_body(dir "/" f[col])
     if (why != "") printf "%d\t%s\t%s\n", NR, why, f[col]
   }' "$2" 2>/dev/null)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    SKIPPED_READS=$((SKIPPED_READS + 1))
+    printf 'SKIPPED  %-18s %-30s the row reader exited %s over this index\n' "$label" "00-index.tsv" "$rc"
+    printf '         %-18s %-30s awk stops AT the record it failed on, so an unknown number of rows below it were never checked\n' "" ""
+  fi
+  while IFS=$(printf '\t') read -r rown why file; do
+    [ -n "$rown" ] || continue
+    BYTES_REFUSED=$((BYTES_REFUSED + 1))
+    printf 'REFUSED  %-18s %-30s %s\n' "$label" "${file:-row $rown}" "$why"
+    printf '         %-18s %-30s the hooks refuse this row and name it as "%s row %s"\n' "" "" "$label" "$rown"
+  done <<EOF
+$rows
 EOF
 }
 
@@ -611,6 +639,10 @@ if [ "$IDX_TOOLS" -eq 0 ] && [ "$IDX_PATHS" -eq 0 ]; then
   echo "There is no tools or paths index in this tree, so the vocabulary sweep is the whole run."
   echo "That is a complete result for a vocabulary-only tree, not a skipped one."
 fi
+if [ "$SKIPPED_READS" -gt 0 ]; then
+  echo "$SKIPPED_READS read(s) could not be completed. Those are SKIPPED rows above, not clean ones."
+  echo "Something in this tree stopped a reader partway. What it did not reach is unknown, so this run is not a verdict on the whole tree."
+fi
 if [ "$CONFIG_REFUSED" -gt 0 ]; then
   echo "$CONFIG_REFUSED config.env line(s) refused. They are settings that do not apply."
   echo "If a refused line is not one you wrote, treat that file as hostile — it arrived with the repository."
@@ -649,8 +681,32 @@ json_quote() {
 
 report_hook() {
   # $1 hook script, $2 JSON payload, $3 project dir
-  local out names verdict
-  out="$(printf '%s' "$2" | CLAUDE_PROJECT_DIR="$3" bash "$SCRIPT_DIR/$1" 2>/dev/null)"
+  local out names verdict errf
+  # Phase 2 discarded stderr for the same reason phase 1 did, and lost the same thing with
+  # it (#98): the hook that died mid-decision printed an awk diagnostic and no JSON, and
+  # this read that as "no rule fired" -- which is indistinguishable from a rule that had
+  # nothing to say, and telling those two apart is the entire subject of this repository.
+  #
+  # A hook is contracted to say NOTHING into the session on any failure path, so on an
+  # honest tree this file is empty on every engine. Anything in it is a hook that broke its
+  # first contract, and it is reported whether or not a rule also fired: a diagnostic beside
+  # a firing rule still means some other row went unevaluated.
+  errf="$(mktemp "${TMPDIR:-/tmp}/claude-jit-dry-XXXXXXXX" 2>/dev/null)" || errf=""
+  if [ -n "$errf" ]; then
+    out="$(printf '%s' "$2" | CLAUDE_PROJECT_DIR="$3" bash "$SCRIPT_DIR/$1" 2>"$errf")"
+    if [ -s "$errf" ]; then
+      SKIPPED_READS=$((SKIPPED_READS + 1))
+      printf '  SKIPPED %-19s the hook wrote to stderr — it did not evaluate this call cleanly\n' "$1"
+      printf '          %-19s what it fired below, if anything, is not the whole answer\n' ""
+    fi
+    rm -f "$errf"
+  else
+    # No temp file, so the question cannot be asked. Saying so is cheaper than the wrong
+    # half of it: this is the linter, and a linter that quietly checks less is #98 again.
+    printf '  SKIPPED %-19s no temp file available, so this hook stderr was not checked\n' "$1"
+    SKIPPED_READS=$((SKIPPED_READS + 1))
+    out="$(printf '%s' "$2" | CLAUDE_PROJECT_DIR="$3" bash "$SCRIPT_DIR/$1" 2>/dev/null)"
+  fi
   # Anchored on .md, because the refusal notice this same hook injects is headed
   # "# JIT Context: N rule(s) could not be evaluated" — an unanchored read picks up N
   # and prints it as a rule that fired, which is a non-match reading as a match.
@@ -705,6 +761,11 @@ if [ -n "$SAMPLE_TOOL$SAMPLE_COMMAND$SAMPLE_FILE$SAMPLE_PROMPT" ]; then
   esac
 fi
 
+# SKIPPED_READS is in this list and it is the point of #98: CI consumes this exit code
+# (#47), and a tree the linter could not evaluate must not be reported to CI as a tree with
+# nothing wrong with it. It is a 1 rather than the 2 above, deliberately -- a 2 means
+# NOTHING was checked, and something was.
 [ "$REFUSED" -eq 0 ] && [ "$VOCAB_REFUSED" -eq 0 ] && [ "$STALE" -eq 0 ] \
-  && [ "$CONFIG_REFUSED" -eq 0 ] && [ "$BYTES_REFUSED" -eq 0 ] || exit 1
+  && [ "$CONFIG_REFUSED" -eq 0 ] && [ "$BYTES_REFUSED" -eq 0 ] \
+  && [ "$SKIPPED_READS" -eq 0 ] || exit 1
 exit 0
