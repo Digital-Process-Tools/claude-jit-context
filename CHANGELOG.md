@@ -5,6 +5,113 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] — A rule that disarmed itself after one refusal, and reports that named files nobody could open
+
+### Changed
+
+- **`jit_report_name()` is one bash function again, and the drift test now points at the pair that can still drift** (#131). #129 moved the canonical copy into `scripts/common.sh` and deliberately left `rebuild-tsv.sh`'s #113 copy in place, because that file was owned by another lane at the time. That lane has cleared, so the copy is gone; `rebuild-tsv.sh` sources `common.sh`, and every bash call site there is now that one definition. No report changes: the same names print and the same names are withheld, driven both ways through the tool.
+
+  The judgement call was `tests/test-dry-run-names.sh`. It compared the two bash copies, and it already anticipated the deletion by printing a NOT EVALUATED block rather than silently passing — but an assertion whose subject is permanently gone is a dead test, not a skip, and keeping it as a tripwire would have left a block that can only ever report that it did not run. It was retargeted instead of deleted, because deleting it would have thrown away the wrong thing: `rebuild-tsv.sh` builds three of its reports inside `awk`, `awk` cannot source a bash file, and `JIT_AWK_REPORT_NAME` restates the same character set in another language. Of the two pairs, the one that was pinned was the one that was about to stop existing. The same eleven boundary cases now drive the bash rule against the awk one, and the two positive controls — a plain name prints, a name carrying a space is withheld — moved out of the conditional, so a failed extraction can no longer take them down with it.
+
+  Filed as changed rather than fixed: nothing a user could observe was broken, and `removed` would read as a removed feature.
+
+- **The name guard in `rebuild-tsv.sh` is now pinned at its call sites, not only at its definition** (#144). The drift test in `tests/test-dry-run-names.sh` extracts the `awk` half of `jit_report_name()` and evaluates it against the bash half, which proves the two definitions agree and cannot see a print site that stopped calling either one. Both #113 and #124 were exactly that failure: the guard existed and a report printed the raw column beside it.
+
+  Enumerated, `rebuild-tsv.sh` has eight report print sites, seven of which carry text the clone chose, and all seven are routed through the guard today — so there was no live defect to fix. Two of the seven were reachable by no fixture, which was established by mutation rather than by reading: `jit_expand_match()`'s `REFUSED <layer>/<entry>` label, and `report_bad_bytes()`'s `written from <entry>`. Each was made to print its column raw and the whole suite still passed. `tests/test-report-names.sh` now drives both end to end through the real script — a hostile entry name withheld, an ordinary one printed verbatim, in the same report and the same run — and both mutations are red against it.
+
+  The unindexed-entries report was covered only by an entry whose name contains a newline, which Windows refuses to create, so on that leg the site had no subject at all; a name carrying spaces now drives it everywhere. The bad-bytes fixture runs under `LC_ALL=C`, because that is the only reading in which a non-UTF-8 `match:` survives as far as the index, and once per `awk` on the machine, because the report is one of the three built inside `awk`. If an engine drops the row anyway the section says so in the NOT EVALUATED block instead of passing quietly.
+
+  Filed as changed rather than fixed: no behaviour moved, and the extraction test stays — a call site that stops calling the guard and a guard that starts answering differently are two different defects, and neither test can fail on the other one.
+
+- **Every fixed-width report row in `jit-dry-run.sh` is now enumerated and counted, not sampled** (#154). `tests/test-dry-run-names.sh` covered that file site by site, which meant a print site added after the test was written was outside it by default — and #147's `ADVISORY inject:` row was exactly that: its guard was real, driven, and asserted only inside #147's own section.
+
+  The enumeration is over an *idiom*, not a meaning. Unlike `rebuild-tsv.sh`, this file has no single report family: it prints from `REFUSED`, `WARN`, `ADVISORY`, `STALE`, `SKIPPED`, `ok` and `whole` branches, and a list of "the lines that name an entry" would be a list somebody wrote down, with the next site outside it for the same reason the last one was. So the subject is every `printf` whose format carries the two fixed-width columns — the shape a new verdict row cannot avoid, because the columns would not otherwise line up. There are 29 of them, and both columns of all 29 must come from a closed set: empty, this tool's own literal words, or `jit_report_name()`'s answer. The two indirections that set leans on are pinned beside it — every `disp=` in the file, and every place a layer label is built.
+
+  **No routing defect was found.** All 29 sites were already correct, which was the more likely of the two outcomes the issue described. What was missing is the check that says so, and a check that can see nothing must not read as a check that found nothing wrong: the count is asserted against a floor, and the extractor is driven against a synthetic file carrying one raw site, so "no violations" is known to be a verdict rather than a silence. Widening one column by a byte drops the count to 0 and fails loudly instead of sweeping clean.
+
+  Three rows the name battery had never reached are now driven end to end as well, each with a hostile entry name paired against an ordinary one in the same report: the `inject:` advisory (#147), the bare-match advisory (#136), and the `tools` `ok` row. Measured rather than assumed, by instrumenting every one of the 29 sites and running the whole suite: all three were already *executed* by `tests/test-jit-dry-run.sh`, which is the suite for what the linter says — but that is a different question from what it may say about a **name**, and only `config.env`'s two symlink-refusal rows, whose columns are literals, are executed by nothing. The `tools` `ok` row prints the index **tool** column, and the withholding half of that column was driven nowhere at all.
+
+  The two checks are blind to different things, which is why both are here: the static one cannot see the `tool` column, because whether a free-text `%s` carries tree text is not a question a parser can answer, and the end-to-end one cannot see a site no fixture reaches.
+
+### Fixed
+
+- **A mistyped `inject:` no longer logs as a deliberate `full`** (#130). An `inject:` value that is neither `summary` nor `full` falls back to the project default and says so in what the entry injects — but that notice is context, and context ends with the session. `hooks.log` is the durable record, and it wrote the same `[full]` for an entry that asked for `full` and one that fell back into it, so the one instrument that could count "these entries have a typo nobody noticed" was reading a column saying the typo had not happened.
+
+  The mode column now carries a `:badmode` suffix on whichever outcome was reached: `[full:badmode]`, `[summary:badmode]`, `[summary:no-description:badmode]`. A suffix rather than a fourth tag, because the two facts are orthogonal — which mode was rendered, and whether that mode was asked for — and a project on `JIT_CONTEXT_INJECT=summary` was blind in exactly the same way through `[summary]`, which is the half the issue did not name.
+
+  A reader grepping the literal `[full]` no longer sees these rows. That is the point: that reader is counting deliberate `full` entries, and these are not any of them.
+
+  `jit-misses.sh` deliberately gains no tally. Its subject is vocabulary demand measured from `(none)` prompt records, and a log-derived count of mistyped entries could only ever count the ones that **fired** — a report that reads as complete and is not, which is the defect class this repository exists to name. The tree is the complete source, and the tool that reads it is `jit-dry-run.sh`.
+
+- **A `block` rule written with a bare `match` is now named as advisory against chained commands, instead of reading as enforced** (#136). `pre-tool-hook.sh` tests a bare, non-`~` `match` against the command truncated at the first `;`, `&`, `|`, `"` or ` --`. That truncation is deliberate — it is what keeps a substring rule off the tail of a quoted commit message — and it is unchanged: widening what a bare match sees would change the meaning of every rule in every installed project. What was wrong is that nothing said so.
+
+  A row reading `match: rm -rf` with `mode: block` stops `rm -rf /tmp/x` and lets `git status && rm -rf /tmp/x` through. Both payloads were driven against the hook. From the author's side those two outcomes are indistinguishable from a rule that holds and was not tripped, which is this repository's own defect class.
+
+  `scripts/jit-dry-run.sh` now prints an `ADVISORY` row for every tools row that can refuse a call — `block` in the mode column, or a non-empty `require` or `forbid`, the same predicate the hook itself uses — and matches on a bare substring. The row names the cut and the anchor that fixes it, and a tail line carries the count for a tree too large to read inline. It does **not** move the exit code: the rule is narrower than it reads, not broken, and `#47` has CI consuming that code. A `~`-anchored row and a bare `remind` row are both silent — a notice that fires on every row tells its author which rows are fine, which is nothing.
+
+  `README.md` states the rule outright in "What a tool rule is tested against": a `block` rule that is not `~`-anchored is advisory against a chained command, and a bare `match` is fine for a reminder and not for a refusal.
+
+- **`mode: once, block` no longer disarms itself after the first refusal** (#139). A rule written `once, block` refused the first matching call of a session and permitted every one after it — someone who wrote "never push to main without asking" got that honoured once, and the second `git push` of the day went through with no notice and nothing in `hooks.log` that read as a lapse.
+
+  The block branch marked the once-key as spent, and the next call left the row before it ever reached a decision. Both halves were right for the mode `once` was built for: an injection is knowledge the agent now has, so repeating it is waste. A refusal is not knowledge — it is a decision, and a decision that expires was never enforced.
+
+  `once` now bounds the *injection* and nothing else. The entry text still arrives at most once per session; the call is refused every time. The same applies to a `once` rule carrying `require` or `forbid`, which had the identical shape: the requirement stopped being checked once the advisory half had been delivered.
+
+- **A `block` row whose entry file name cannot be used now refuses the call rather than permitting it** (#140). The containment guard drops an index row whose file column carries a `/` or a `\`, names a dotfile, or points at a symbolic link — that guard is right and is unchanged. What was wrong is what happened next when the dropped row said `block`: the row was skipped before its tool and match columns were ever read, so the call went through, and the only trace was a refusal notice delivered once per session.
+
+  The column the guard distrusts is the one that names the *body*. `mode`, `require` and `forbid` all come off the row and are intact, which is the same reasoning that already governs an entry file the hook cannot read: a body nobody can deliver leaves the decision standing. So the row is still reported as refused and by position, its file is still never opened, and the reason carries `(the text of this rule was not delivered: …)` in place of the body — but the call is stopped. An advisory row with the same bad name is unchanged: the notice, and nothing else.
+
+  This closes the last hole in the `README.md` promise that a `block` rule produces "never a permitted call", which #135 made true for the empty and text-less cases.
+
+  `scripts/jit-dry-run.sh` reported a call it had just watched be refused as `BLOCK  pre-tool-hook.sh  no rule fired`, which is the confusion that tool exists to prevent, printed by the tool. Two shapes of refusal carry no entry name for it to read: the new one above, and a `require`/`forbid` refusal, which has never emitted an entry-name header and was reported the same wrong way long before this change. Both are now named for what they are.
+
+  One consequence worth knowing rather than discovering: a tree whose layer directory is a symbolic link, or which carries more links than the hook can enumerate, refuses every row in it — so a `block` rule in such a tree now refuses the calls it matches, with the substitute reason, instead of quietly going advisory.
+
+- **A long `match:` column no longer defeats `summary` mode** (#146). `pre-tool-hook.sh` built one header — `# JIT Context: <entry> (matched: <pattern>)` — and used it on two surfaces: the refusal reason and the ordinary advisory injection. Under `inject: summary` the body is on a budget of 160 bytes of title and 400 of description, and the header sat outside it, quoting both index columns whole. Driven: a 60,000-byte regex `match:` column on a summary entry, matching `git push origin main`, produced 60,223 bytes of ordinary advisory context; a 60,000-byte entry-file column produced 60,539 with no entry file present at all. Both are clipped now, and both mark the cut `[clipped]` — the pattern at 160 bytes, the file name at 255, which is `NAME_MAX` and so never bites a column naming a file that could exist.
+
+  The bound follows the BODY, not the mode. It applies wherever what arrives under that header is something other than the whole entry — a summary, or the two-line substitute for an entry file that could not be read, which is delivered in *every* mode and was the shape a mode-only gate left unbounded under the shipped default. The header is echoed whole in exactly the two places that deliver the entry beneath it: a `full` entry that was read, and a refusal.
+
+  **A refusal still carries its header whole**, which is the decision #141 reached and this change deliberately does not revisit: a block reason has no next turn in which to spend a cheaper answer, so bounding its header is a defence walked around by moving one line down the same entry. `tests/test-inject-mode.sh` drives summary, `full`, the unreadable-entry substitute under the default, and the refusal, all in one tree, so no half of that can be undone silently.
+
+- **`jit-dry-run.sh` now names an entry whose `inject:` value it did not recognise** (#147). The reason was built on every run and could reach stdout on none: it travelled only through the whole-body budget list, and a row joins that list only when its *effective* mode is `full` — so under the default `full` the branch that prints the list is never taken, and under `summary` a mistyped row resolves to `summary` and never joins it. Both defaults were driven; on both, the report said nothing about the typo. It is now an `ADVISORY` row naming the entry file, the mode that actually applied and the value as read, with a tail count.
+
+  Advisory, and the exit code does not move: the row is indexed, the rule fires, and the project default did apply — the same class as the `WARN` and `ADVISORY` rows already there, and #47 has CI consuming this status.
+
+  #130 fixed the durable half of this by writing `[full:badmode]` rather than `[full]` into `hooks.log`. A log only carries entries that **fired**, so a typo on a rule that has never matched anything left no trace anywhere; `jit-dry-run.sh` reads every entry in the tree, which is why the tail says so rather than repeating the count.
+
+- **A vocabulary layer now names its dimension in every report `rebuild-tsv.sh` prints** (#150). `00-manual/` is the ordinary layer name in each of the three dimensions, and three of the eight sites that build a layer label left the dimension off. So the FATAL line for an index that could not be written, the unindexed-entry report, the dropped-keyword report and the ambiguity tally all named a vocabulary layer as a bare `[00-manual]`, while the paths equivalent read `[paths/00-manual]` — two same-named layers in different dimensions were indistinguishable in exactly the reports someone reads when an entry did not get indexed. They now read `[vocabulary/00-manual]`, and the paths and tools labels are unchanged.
+
+  No containment change: the layer name still goes through `jit_report_name()`, so nothing a clone chose escapes. `tests/test-report-names.sh` drives both dimensions in one fixture under layer names that collide across them, and separately refuses any layer label in `rebuild-tsv.sh` built without a dimension in front of it — bash has no arity check, so a required parameter would not have made the omission impossible, only differently silent.
+
+- **The vocabulary path index is reported under the path it actually has** (#153). The vocabulary loop writes two indexes out of one layer directory, and the second was labelled `vocabulary/<layer>/paths` — a name for *which* index of that layer, sitting in the position a path component occupies. So a failure to write it read `FATAL    vocabulary/00-manual/paths/01-paths.tsv: could not be written`, and a reader who went looking for `vocabulary/00-manual/paths/` found that it has never existed. It now reads `vocabulary/00-manual/01-paths.tsv`.
+
+  #150 saw this and left it, on the grounds that the suffix was the only thing separating the layer's two indexes in the one-line build summary, which prints no leaf. It was not: those two lines already end in different nouns — `N keywords` against `N path mappings`. That summary now names the leaf instead, so it reads `vocabulary/00-manual/01-paths.tsv: 1 path mappings` — a real path, and a stricter answer than the suffix was, because it says which file rather than which category of file. The label itself is now a directory at all eight sites that build one, as it already was in every other dimension, and both consumers append the leaf themselves.
+
+  `tests/test-report-names.sh` asserts both lines, and separately that every `vocabulary/...` path anywhere in the report resolves to something under the fixture's base — which is the property, rather than one line's wording.
+
+- **A summary no longer deletes whitespace the entry author quoted** (#156). `jit_clip()`
+  is documented as doing one thing — cut a `title:` or `description:` at its cap and mark
+  the cut, with "No other rewriting" and #19 cited as the cost of a reader editing a value
+  it does not understand. It also trimmed a trailing carriage return and trailing
+  whitespace off *every* value, including ones nowhere near the cap.
+
+  Only a **quoted** frontmatter value reaches it with trailing whitespace at all — the
+  frontmatter reader strips it off the raw line, and a wrapping quote pair is the one way
+  an author says keep it — so the trim deleted precisely what somebody had asked to keep.
+
+  The trim now runs on the string that was actually cut, which is where it belongs and
+  where it never ran before: a cut landing in a run of spaces used to emit
+  `word    [clipped]`, whitespace that was not the author's, sitting exactly where the cut
+  was. Two visible consequences, both in `inject: summary` output: a quoted value with
+  trailing whitespace now arrives with it, and an over-cap value ends `word [clipped]`
+  with one space instead of however many the cut happened to land in. A trailing CR is now
+  escaped by the JSON writer rather than dropped, which was already its job.
+
+  One edge is worth stating rather than discovering: the cap is measured on the value as
+  written, so a quoted value that is over budget *only* by its trailing whitespace is now
+  cut and marked `[clipped]` where it used to be silently trimmed and returned unmarked.
+  That is the same rule applied to the same value, not a second exception.
+
 ## [0.3.4] — A match no longer costs the whole entry, and a rule with nothing to say still enforces
 
 ### Added
