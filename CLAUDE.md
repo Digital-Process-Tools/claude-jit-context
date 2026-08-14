@@ -30,6 +30,8 @@ Most of what used to be written out here now lives in `.claude/jit-context/`, an
 
 Two consequences worth knowing before you change anything here:
 
+**The dogfood hooks are the installed plugin's, not this checkout's.** `.claude/settings.json` used to register the four hooks from `$CLAUDE_PROJECT_DIR/scripts/`; it registers `enabledPlugins` now, and `claude-jit-context@dpt-plugins` serves them from its own cache. `JIT_BASE` still resolves against `$CLAUDE_PROJECT_DIR`, so **the entries firing at you are this tree's** — what is no longer this tree's is the *code* reading them. Edit `scripts/pre-tool-hook.sh` and your own session keeps running the plugin's copy, silently, which is this repository's defect class pointed at its own contributors. Drive script changes through `tests/` and `jit-dry-run.sh`, never by watching your session behave.
+
 **The `00-index.tsv` files are committed.** `session-start-hook.sh` clears `once` markers; it does not rebuild. A fresh clone with no index has silently dead entries, including the block rule. If you edit an entry's frontmatter, `bash scripts/rebuild-tsv.sh` and commit the index alongside it.
 
 **Adding a rule here is the honest test of the product.** If a rule belongs in this file rather than an entry, that is worth knowing — write down which dimension failed to hold it.
