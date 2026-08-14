@@ -595,8 +595,9 @@ rm -rf "$BYTETREE" "$BYTEBIN"
 # injected_bytes() documents itself as "the BYTES a hook actually injected", and the
 # README quotes that column as the cost argument the whole plugin rests on. awk length()
 # counts CHARACTERS on gawk in a multibyte locale and BYTES on one-true-awk, so one
-# accented entry reported 101 under `C` and 93 under gawk + en_US.UTF-8 -- understated by
-# up to 4x on CJK, in the one report whose entire purpose is what a rule costs.
+# accented entry reported 101 under `C` and 93 under gawk + en_US.UTF-8 -- and the factor
+# is the UTF-8 encoding length, so 3x on ordinary CJK and 4x on emoji, in the one report
+# whose entire purpose is what a rule costs.
 #
 # Driven once per awk on this machine AND in both locales, because the defect lives in
 # exactly one of those four cells: a run pinned to `C`, or on one-true-awk alone, is green

@@ -1070,8 +1070,10 @@ json_quote() {
 # LC_ALL=C, and it is what makes the word BYTES above true (#163). awk length() counts
 # CHARACTERS on gawk under a multibyte locale and BYTES on one-true-awk, so this reported
 # 101 for an accented entry under `C` and 93 for the same call under gawk + en_US.UTF-8 --
-# gawk on a UTF-8 desktop being the ordinary Linux and CI combination, and the shortfall
-# reaching 4x on CJK, in the one column the README's cost argument is read out of.
+# gawk on a UTF-8 desktop being the ordinary Linux and CI combination. The factor is the
+# UTF-8 encoding length: 2x on accented Latin, 3x on ordinary CJK, 4x on emoji -- measured
+# on a 10-byte fixture of two CJK ideographs and one emoji, which gawk under `en_US.UTF-8`
+# reports as 3. It lands in the one column the README's cost argument is read out of.
 #
 # The WHOLE call is pinned rather than the one length(), because nothing else in this
 # program wants characters. index() and the substr() beside it are self-consistent in
