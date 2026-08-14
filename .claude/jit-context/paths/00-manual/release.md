@@ -10,12 +10,19 @@ Bumping the version here is one of three edits. The other two:
 - `CHANGELOG.md` — a new section, **assembled, not hand-written**:
 
 ```bash
-python3 .github/scripts/assemble_changelog.py --version 0.4.0 --title "Section title"
+python3 .oss/assemble_changelog.py --version 0.4.0 --changelog CHANGELOG.md --dir changelog.d
 ```
 
-Bump this file **first**: the assembler takes `--version` as an argument and verifies it against `plugin.json`, refusing on disagreement. It folds every `changelog.d/<issue>.<section>.md` fragment into the new section, merges into the `###` headings the existing `[Unreleased]` body already carries rather than opening a second one, leaves an empty `[Unreleased]` behind, re-parses the assembled file to prove it gained no heading, link ref or raw HTML the run did not write, and deletes the fragments. `changelog.d/README.md` is the convention; the exit codes are at the top of the script, and they are `jit-dry-run.sh`'s — 0 ok, 1 refused, 2 could not evaluate.
+It folds every `changelog.d/<issue>.<section>.md` fragment into the new section, merges into the `###` headings the existing `[Unreleased]` body already carries rather than opening a second one, leaves an empty `[Unreleased]` behind, re-parses the assembled file to prove it gained no heading, link ref or raw HTML the run did not write, advances the `[Unreleased]` link ref and writes one for the new version, and deletes the fragments. `changelog.d/README.md` is the convention.
 
-It needs `markdown-it-py` (`python3 -m pip install markdown-it-py`). It is Python and it is not the runtime: nothing under `.github/` ships inside the plugin.
+**Two things this assembler does not do, and the second is why you bump `plugin.json` first anyway:**
+
+- The heading is `## [0.4.0] - YYYY-MM-DD`. There is no `--title`. The titled headings above `0.3.5` are what the old fork wrote; nothing adds one now.
+- **It does not check `--version` against `plugin.json`.** The fork refused on disagreement; this one takes your word. `tests/test-version-sites.sh` is the only thing comparing the sites, so run it before the tag, not after.
+
+**Its exit codes are not `jit-dry-run.sh`'s.** `0` ok, **`1` skipped**, **`2` refused** — the inverse of every tool under `scripts/`. `paths/00-manual/vendored-oss.md` is the subject; the file itself is scaffold-owned and an edit to it is lost at the next `/oss:scaffold --apply`.
+
+It needs `markdown-it-py` (`python3 -m pip install markdown-it-py`), and it is not the runtime: nothing under `.oss/` ships inside the plugin.
 
 Sweep for the **outgoing** value before finishing, with no path filter:
 
@@ -32,7 +39,7 @@ A version that was never tagged is still unreleased: amend its CHANGELOG entry r
 ## Cutting the release, in order
 
 ```bash
-python3 .github/scripts/assemble_changelog.py --version 0.2.0 --title "..."  # 0. after the bumps
+python3 .oss/assemble_changelog.py --version 0.2.0 --changelog CHANGELOG.md --dir changelog.d  # 0. after the bumps
 ./supertool 'gh-branch:main'          # 1. green, and green on THIS commit
 git tag -a v0.2.0 -m "..." && git push origin v0.2.0
 gh release create v0.2.0 --title "..." --notes "..."

@@ -109,10 +109,17 @@ assert_fires  "the index writer"       "scripts/rebuild-tsv.sh"    "tooling.md"
 assert_fires  "the project seeder"     "scripts/jit-init.sh"       "tooling.md"
 assert_fires  "the linter"             "scripts/jit-dry-run.sh"    "tooling.md"
 assert_fires  "the miss reporter"      "scripts/jit-misses.sh"     "tooling.md"
-# Same contract, same reason: it is run at a tag by a person, never in a stranger's
-# session, so it fails loudly with exit codes that mean distinct things (#66).
-assert_fires  "the changelog assembler" ".github/scripts/assemble_changelog.py" "tooling.md"
-assert_silent "a lookalike outside .github"  "scripts/assemble_changelog.py" "tooling.md"
+# The changelog assembler used to be here, at `.github/scripts/assemble_changelog.py`,
+# under the same contract (#66). It is now `.oss/assemble_changelog.py`, vendored from
+# the oss plugin, and `tooling.md`'s exit-code table is the INVERSE of what it does --
+# so it must not fire, and `vendored-oss.md` covers it instead.
+assert_silent "the vendored assembler" ".oss/assemble_changelog.py" "tooling.md"
+assert_fires  "the vendored assembler" ".oss/assemble_changelog.py" "vendored-oss.md"
+assert_fires  "the owned workflow"     ".github/workflows/oss-changelog.yml" "vendored-oss.md"
+# The scaffold owns files directly under .oss/ and nothing below it, and no other
+# workflow: a rule saying "an edit here is lost" must not reach a file it is false of.
+assert_silent "a nested path under .oss"  ".oss/vendor/lib/thing.py" "vendored-oss.md"
+assert_silent "our own tests workflow" ".github/workflows/tests.yml" "vendored-oss.md"
 # The inverse of the split above: these run in someone else session and are governed by
 # hooks.md, so the tooling contract must not reach them.
 assert_silent "a hook script"          "scripts/pre-tool-hook.sh"  "tooling.md"
@@ -340,9 +347,11 @@ echo "=== every file under scripts/ is governed by some paths/ rule ==="
 # and this leg could never go red again. The test and the catch-all do not compose.
 #
 # Scope is `scripts/`: what ships inside the plugin and runs in a user's project.
-# `.github/scripts/` is CI, and `tooling.md` reaches it today only because
-# `assemble_changelog.py` is named there -- requiring a jit-context rule for every future
-# workflow helper is a bar nobody has agreed to.
+# `.github/scripts/` is CI and is deliberately NOT swept -- requiring a jit-context rule
+# for every future workflow helper is a bar nobody has agreed to. `tooling.md` used to
+# reach one file there, `assemble_changelog.py`; that file is gone, replaced by the
+# vendored `.oss/` copy, so the directory is now outside every rule and outside this
+# sweep, which is the state it was always meant to be in.
 
 # Positive control for the reading below, and it earned its place on the first run: a
 # governed file is one whose dry-run line names a `.md`, NOT one whose line is non-empty.

@@ -7,8 +7,12 @@ match: (^|/)CHANGELOG\.md$
 **`CHANGELOG.md` is assembled, not edited.** Add `changelog.d/<issue>.<section>.md` instead, where `<section>` is one of `added`, `changed`, `deprecated`, `removed`, `fixed`, `security`. The content is the entry exactly as it should read under that heading, and **it must name its own issue** — `(#65)`, or a link whose URL ends in the number. The release deletes the filename, which is the only other place the number lives.
 
 ```bash
-python3 .github/scripts/assemble_changelog.py --check   # validates every fragment, writes nothing
+python3 .oss/assemble_changelog.py --check   # validates every fragment, writes nothing
 ```
+
+**The assembler is vendored, not ours.** `.oss/assemble_changelog.py` arrives from the `oss` plugin and `/oss:scaffold --apply` rewrites it in full on every run, so an edit there is lost at the next update — file upstream instead. It replaced a fork of the same lineage that lived at `.github/scripts/`, and **its exit codes are the other way round**: `0` ok, `1` skipped, `2` refused. The fork used `1` for refused and `2` for could-not-evaluate. Anything reading its status by number is reading the opposite of what it used to.
+
+Two things the fork did that this one does not, both now the maintainer's to carry: it took a `--title` (headings are `## [x.y.z] - YYYY-MM-DD` now, not `## [x.y.z] — Title`), and it refused a `--version` disagreeing with `plugin.json`.
 
 Why: measured 2026-08-12, four hand-resolutions of this file in one afternoon. The conflicts are structural — two changes to different files still collide, because both describe themselves in the same twenty lines here. One of them, left to an automatic union, would have emitted two `### Added` headings under a single `[Unreleased]`.
 
