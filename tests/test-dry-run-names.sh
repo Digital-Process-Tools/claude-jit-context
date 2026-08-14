@@ -322,31 +322,34 @@ assert_has "and it says so where that name would have been" \
 # from the budget would understate what the call cost, which is the wrong direction.
 assert_has "the byte cost of the call is still reported" "$P2OUT" "bytes injected]"
 
-# --- One policy, and nothing but this asserts it -----------------------------------------
-# jit_report_name() now lives in common.sh, and rebuild-tsv.sh still carries the copy #113
-# landed -- it sources common.sh first, so its own definition wins there. Two definitions
-# of one policy is the shape this repository keeps finding in itself, and common.sh and
-# tooling.md both CLAIM the two are pinned to each other. Nothing pinned them until this
-# block: a review of #124 found that sentence asserting a test that did not exist.
+# --- One policy, two languages, and nothing but this asserts it --------------------------
+# This block pinned rebuild-tsv.sh's BASH copy of jit_report_name() to common.sh's while
+# both existed. #131 deleted that copy, so that pair has one member and comparing it to
+# itself is decoration. What it does NOT remove is the drift this block exists to catch:
+# rebuild-tsv.sh builds three of its reports inside awk, awk cannot source common.sh, and
+# so JIT_AWK_REPORT_NAME is a second implementation of the same policy in another language
+# that cannot be deduplicated away. Nothing drove it against the bash rule before #131 --
+# the extraction here only ever read the bash function -- so of the two pairs, the one that
+# was pinned was the one that was about to stop existing.
 #
-# Driven behaviourally rather than by diffing the text, because the answer is what matters
-# and a comment reflow is not a defect. The rebuild-tsv.sh copy is extracted and evaluated
-# rather than sourced: sourcing that script runs a build.
+# Driven behaviourally rather than by diffing the text: the answer is what matters and a
+# comment reflow is not a defect. The awk half is extracted and evaluated rather than
+# sourced, because sourcing rebuild-tsv.sh runs a build.
 echo ""
-echo "=== the two copies of jit_report_name() answer the same way ==="
+echo "=== the bash and awk halves of jit_report_name() answer the same way ==="
 
 # CLAUDE_PROJECT_DIR at the throwaway tree: common.sh resolves JIT_BASE from it and would
 # otherwise answer about whatever directory this suite happens to run from.
 export CLAUDE_PROJECT_DIR="$PROJ"
-COPY="$WORK/rebuild-copy.sh"
-awk '/^jit_report_name\(\) \{$/ { inf = 1 } inf { print } inf && /^\}$/ { exit }' \
-  "$SCRIPT_DIR/scripts/rebuild-tsv.sh" > "$COPY"
-if [ ! -s "$COPY" ]; then
-  # Not a silent skip. If rebuild-tsv.sh's copy has been deleted -- which is the intended
-  # end state -- this block has nothing to compare and says so, rather than passing.
-  NOT_EVALUATED="$NOT_EVALUATED
-  - jit_report_name() was not found in scripts/rebuild-tsv.sh: if that copy was deleted,
-    delete this block and the sentence in common.sh that names it"
+AWKDEF=$(awk "/^JIT_AWK_REPORT_NAME='\$/ { inf = 1; next } inf && /^'\$/ { exit } inf" \
+  "$SCRIPT_DIR/scripts/rebuild-tsv.sh")
+if [ -z "$AWKDEF" ]; then
+  # A FAILURE, not a skip. Unlike the deleted bash copy this one has no intended end state
+  # in which it is absent: rebuild-tsv.sh cannot print those three reports without it. So an
+  # empty extraction means the file changed shape and this assertion quietly stopped having
+  # a subject, which is the outcome the block exists to make loud.
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: JIT_AWK_REPORT_NAME was not found in scripts/rebuild-tsv.sh"
 else
   # Every boundary of the policy, plus the two shapes that are the whole point of it.
   DRIFT=0
@@ -356,37 +359,41 @@ else
               "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
               "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; do
     A=$(. "$SCRIPT_DIR/scripts/common.sh" >/dev/null 2>&1; jit_report_name "$CASE")
-    # The second source is the extracted copy, written into $WORK a few lines up. Nothing
-    # constant to point shellcheck at, and the whole point is that the file is generated.
-    # shellcheck source=/dev/null
-    B=$(. "$SCRIPT_DIR/scripts/common.sh" >/dev/null 2>&1; . "$COPY"; jit_report_name "$CASE")
+    # LC_ALL=C for the same reason both halves set it: the character set is a BYTE range,
+    # and `café.md` is only refused if the awk regex reads bytes. JIT_NAME_WITHHELD is
+    # exported by common.sh and read back out of ENVIRON by the awk half, which is exactly
+    # how rebuild-tsv.sh calls it.
+    B=$(. "$SCRIPT_DIR/scripts/common.sh" >/dev/null 2>&1
+        LC_ALL=C JIT_CASE="$CASE" awk "$AWKDEF"'BEGIN { printf "%s", jit_report_name(ENVIRON["JIT_CASE"]) }')
     DRIVEN=$((DRIVEN + 1))
     if [ "$A" != "$B" ]; then
       DRIFT=$((DRIFT + 1))
-      echo "    drift on [$CASE]: common.sh said [$A], rebuild-tsv.sh said [$B]"
+      echo "    drift on [$CASE]: common.sh said [$A], the awk half said [$B]"
     fi
   done
   if [ "$DRIFT" -eq 0 ] && [ "$DRIVEN" -eq 11 ]; then
-    PASS=$((PASS + 1)); echo "  PASS: both copies agree on all $DRIVEN cases"
+    PASS=$((PASS + 1)); echo "  PASS: both halves agree on all $DRIVEN cases"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: the two copies disagree ($DRIFT of $DRIVEN cases)"
+    FAIL=$((FAIL + 1)); echo "  FAIL: the two halves disagree ($DRIFT of $DRIVEN cases)"
   fi
+fi
 
-  # The positive control the loop above cannot give: two functions that both returned the
-  # placeholder for everything would agree on all eleven cases. So the common.sh copy is
-  # driven for the two answers the policy exists to produce.
-  KEPT=$(. "$SCRIPT_DIR/scripts/common.sh" >/dev/null 2>&1; jit_report_name "ordinary.md")
-  HELD=$(. "$SCRIPT_DIR/scripts/common.sh" >/dev/null 2>&1; jit_report_name "my rule.md")
-  if [ "$KEPT" = "ordinary.md" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: a plain name is returned unchanged"
-  else
-    FAIL=$((FAIL + 1)); echo "  FAIL: a plain name is returned unchanged (got [$KEPT])"
-  fi
-  if [ "$HELD" = "<withheld: not a plain name>" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: a name carrying a space is withheld"
-  else
-    FAIL=$((FAIL + 1)); echo "  FAIL: a name carrying a space is withheld (got [$HELD])"
-  fi
+# The positive control the loop above cannot give: two implementations that both returned
+# the placeholder for everything would agree on all eleven cases. So common.sh -- now the
+# only bash definition, and the one rebuild-tsv.sh gets by sourcing it -- is driven for the
+# two answers the policy exists to produce. Outside the `if` above on purpose: its subject
+# is not the extraction, and it must still run when that one fails.
+KEPT=$(. "$SCRIPT_DIR/scripts/common.sh" >/dev/null 2>&1; jit_report_name "ordinary.md")
+HELD=$(. "$SCRIPT_DIR/scripts/common.sh" >/dev/null 2>&1; jit_report_name "my rule.md")
+if [ "$KEPT" = "ordinary.md" ]; then
+  PASS=$((PASS + 1)); echo "  PASS: a plain name is returned unchanged"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: a plain name is returned unchanged (got [$KEPT])"
+fi
+if [ "$HELD" = "<withheld: not a plain name>" ]; then
+  PASS=$((PASS + 1)); echo "  PASS: a name carrying a space is withheld"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: a name carrying a space is withheld (got [$HELD])"
 fi
 
 echo ""

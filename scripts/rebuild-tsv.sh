@@ -90,59 +90,37 @@ JIT_RC=0
 # 2 outranks 1: an index that was not written is a worse claim than one that was.
 jit_rc() { [ "$1" -gt "$JIT_RC" ] && JIT_RC="$1"; return 0; }
 
-# --- What a report may say about a name that arrived with the clone (#113) -----
+# --- What a report may say about a name that arrived with the clone (#113, #131) ----
 # Every name printed by the five reports below is a directory entry under
-# `.claude/jit-context/`, and that tree arrives with the repository. common.sh argues the
-# same case for the HOOKS and answers it with jit_row_id(): a refused row is named by
-# POSITION, never by the text of its file-name column, because 250 bytes of English pass a
-# bare-name check intact (#35).
-#
-# The hooks answer is the wrong one here, and that was the judgement call. A hook runs in a
-# stranger session with no author present. This script is run by the person who just edited
-# the frontmatter -- CLAUDE.md says after every one, without exception -- and the file name
-# is the entire actionable content of all five reports. "vocabulary/00-manual row 7" sends
-# that person to count lines in a generated file. So the name is KEPT when it is a name,
-# and withheld only when it is not one:
+# `.claude/jit-context/`, and that tree arrives with the repository. The policy for what
+# may be printed of one -- kept when it is a NAME, withheld when it is prose -- and the
+# argument for why a maintainer tool answers that differently from a hook both live in
+# common.sh, beside jit_report_name():
 #
 #   [A-Za-z0-9] then [A-Za-z0-9._-]*, at most 64 bytes  ->  printed verbatim
-#   anything else                                       ->  the placeholder below
+#   anything else                                       ->  the placeholder
 #
-# That set is chosen for one property: no SPACE. A payload that reads as an instruction is
-# prose, and prose is words with spaces between them. No length cap separates the two --
-# `Run rm -rf ~` is twelve bytes -- so the cap is not what closes this and is only there to
-# keep a 4 KB name out of a report. The set also excludes the newline, which is the half
-# that was never a judgement call: a name carrying one forged a whole report line, in the
-# voice of the tool.
+# #113 needed it here first and this file carried its own copy of the function until #131.
+# It is gone: common.sh is sourced at the top of this file, so every bash call site below
+# is that one definition. Two answers to one question drift, and the drift is invisible
+# until a name printed by one tool is withheld by the other.
 #
-# The cost is real and accepted. An author whose entry is honestly called `my rule.md` sees
-# the placeholder instead, `ls` the layer named beside it, and the odd name is the one that
-# stands out. A worse report for a rare legitimate name, in exchange for a report that
-# cannot carry a payload at all.
-#
-# Withholding is a REPORT decision and nothing else. The row is still indexed under the
-# real name and the rule still fires; tests/test-report-names.sh pins that, because a fix
-# that stopped indexing the entry would satisfy every negative assertion for free.
+# What is still decided HERE is the awk half, and it is not a copy that can be deleted:
+# three of the reports below are built inside awk, awk cannot source a bash file, and so
+# the same policy is written a second time in another language just below.
+# tests/test-dry-run-names.sh drives that pair against each other on every boundary of the
+# set, which is the drift this file can still have.
 #
 # The two columns beside these names that carry a KEYWORD rather than a name are guarded
 # separately, by jit_report_keyword() below -- see the #126 block at the top of this file
 # for why the character set here is the wrong one for a term.
-# Exported for the awk half below, which reads it out of ENVIRON so the two cannot drift.
-export JIT_NAME_WITHHELD='<withheld: not a plain name>'
-
-jit_report_name() {
-  # C collation for the duration. Under a UTF-8 locale bash own [A-Za-z0-9] can admit
-  # accented letters and ${#s} counts characters; the whole point of the set is that it is
-  # a BYTE range. `local` restores the caller locale on return.
-  local LC_ALL=C
-  case "$1" in
-    ''|[!A-Za-z0-9]*|*[!A-Za-z0-9._-]*) printf '%s' "$JIT_NAME_WITHHELD"; return 0 ;;
-  esac
-  [ "${#1}" -gt 64 ] && { printf '%s' "$JIT_NAME_WITHHELD"; return 0; }
-  printf '%s' "$1"
-}
+#
+# JIT_NAME_WITHHELD is exported by common.sh, and the awk half reads it out of ENVIRON, so
+# the placeholder cannot drift from the bash one either.
 
 # The same rule for the three reports that are built inside awk. Every invocation that
-# prepends this runs under LC_ALL=C, for the same byte-range reason as the bash half.
+# prepends this runs under LC_ALL=C, for the same byte-range reason as the bash half in
+# common.sh.
 # shellcheck disable=SC2034
 JIT_AWK_REPORT_NAME='
 function jit_report_name(s) {
