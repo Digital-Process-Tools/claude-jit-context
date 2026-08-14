@@ -335,6 +335,12 @@ assert_has "the byte cost of the call is still reported" "$P2OUT" "bytes injecte
 # Driven behaviourally rather than by diffing the text: the answer is what matters and a
 # comment reflow is not a defect. The awk half is extracted and evaluated rather than
 # sourced, because sourcing rebuild-tsv.sh runs a build.
+#
+# What extraction cannot see is a CALL SITE that stopped calling the guard -- both #113 and
+# #124 were exactly that, a guard that existed beside a print site that did not use it. So
+# this block is half a pair, and the other half is in tests/test-report-names.sh: hostile
+# entry names through the real rebuild-tsv.sh, asserting each of its reports withholds them
+# (#144). Deleting either one leaves a drift the other cannot fail on.
 echo ""
 echo "=== the bash and awk halves of jit_report_name() answer the same way ==="
 
