@@ -1011,15 +1011,27 @@ report_hook() {
   # A hook that matched nothing must not read as a hook that fired. That confusion is
   # the whole defect this script exists for; do not reintroduce it in its own output.
   #
-  # And its inverse, which #140 made reachable: a `block` row whose file column is not a
-  # usable name now refuses the call, and its header names the row by POSITION rather than
-  # by a file. There is no `.md` for the read above to find, so an empty $names beside a
-  # block verdict printed `BLOCK  ...  no rule fired` -- a refusal reported as a silence,
-  # in the one tool whose job is telling those apart. The name is deliberately not
-  # recovered here: it is withheld from the hook output on purpose, and the REFUSED rows
-  # printed further up carry the row position and the reason already.
+  # And its inverse, which reads exactly as badly: a refusal reported as a silence, in the
+  # one tool whose job is telling those apart. TWO shapes of block carry no entry name at
+  # all, and this branch used to print `no rule fired` for both of them.
+  #
+  #   a require/forbid refusal, which has always been nameless -- those two branches build
+  #     their reason as `BLOCKED: ...` and never emit the `# JIT Context: <name>` header
+  #     the read above is looking for. Pre-existing, and found by a review of the line
+  #     below rather than by the change that added it;
+  #   a `block` row whose file column is not a usable name (#140), whose header names the
+  #     row by POSITION because the name is withheld from the hook output on purpose.
+  #
+  # They are told apart on the reason itself, and each says only what is true of its own
+  # case: the first names no row because there is none to name, the second points at the
+  # REFUSED rows above, which carry the position and the reason already. Collapsing the
+  # two into one sentence would put a specific, checkable and false claim on the honest
+  # tree -- which is the failure this whole script exists to report, committed by it.
   if [ -z "$names" ]; then
     case "$out" in
+      *'"reason":"BLOCKED: '*)
+        printf '  %s%-20s the call is refused by a require/forbid rule, which reports no entry name\n' \
+          "$verdict" "$1" ;;
       *'"decision":"block"'*)
         printf '  %s%-20s the call is refused by a row whose entry file has no usable name — see REFUSED above\n' \
           "$verdict" "$1" ;;
