@@ -359,6 +359,8 @@ Coverage runs take 8 minutes locally and are produced by CI anyway.
 | `block`  | Rejects the tool call, returning the **whole body** as the reason, whatever the injection mode says |
 | `once`   | Fires at most once per session                          |
 
+**A `block` rule refuses whether or not its text can be delivered.** Whether the call is stopped is decided by the index row; the entry file decides only what the reason *says*. So an entry that is unreadable, or empty, or missing under a row that still names it, produces a refusal carrying `(the text of this rule was not delivered: …)` in place of the body — never a permitted call. A refusal with a poor reason is still a refusal; a silent allow is not.
+
 `mode` and `inject` are different axes and it is worth not confusing them: `mode` decides *what the hook does* — remind, refuse, once — and `inject` decides *how much of the entry comes with it*.
 
 ### What a tool rule is tested against

@@ -182,6 +182,25 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
   Bash "bin/deploy"  deploy.md   remind "--dry-run" "" \
   Bash "bin/fetch"   fetch.md    remind ""          "--insecure" > "$T/00-index.tsv"
 
+# A block rule whose entry file carries no frontmatter and no text (#135). rebuild-tsv.sh
+# cannot have produced this pair itself -- a file with no frontmatter has no tool: and no
+# match: -- so it is a row written by hand, or one whose file was truncated after it was
+# indexed. 00-index.tsv is committed and the markdown is read at fire time, so the two
+# drifting apart is a state this tree already knows about.
+printf '\n' > "$T/emptyblock.md"
+# The same shape one dimension over: a `remind` row whose file has no text. This one must
+# stay SILENT. A rule that refuses everything and a rule that refuses nothing both look
+# like success from one side.
+printf '\n' > "$T/emptyadv.md"
+
+# Through a variable rather than the literal path, and that is not obfuscation: this
+# repo's own tools/ rule refuses a shell redirect naming the generated index, so a payload
+# carrying one cannot be typed by an agent editing this file at all.
+IDX_TOOLS="$T/00-index.tsv"
+printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+  Bash "git shove" emptyblock.md block  "" "" \
+  Bash "git nudge" emptyadv.md   remind "" "" >> "$IDX_TOOLS"
+
 # --- Helpers -----------------------------------------------------------------
 
 set_config() {
@@ -217,6 +236,33 @@ assert_not_contains() {
     echo "    got: ${output:0:300}"
   else
     PASS=$((PASS + 1)); echo "  PASS: $desc"
+  fi
+}
+
+# jit-drive: assert_blocked blocked capture
+assert_blocked() {
+  local desc="$1" output="$2"
+  if grep -qF '"decision":"block"' <<<"$output"; then
+    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    expected a block payload"
+    echo "    got: ${output:0:300}"
+  fi
+}
+
+# Exact equality with `{}`, not "no block appeared": the second is also true of a hook that
+# printed nothing at all, and of one that injected an advisory reminder instead. Silence
+# here is a specific payload, so it is asserted as one.
+# jit-drive: assert_silent not_blocked capture
+assert_silent() {
+  local desc="$1" output="$2"
+  if [ "$output" = "{}" ]; then
+    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    expected: {}"
+    echo "    got: ${output:0:300}"
   fi
 }
 
@@ -437,6 +483,49 @@ echo "=== Paired: the same forbid rule NOT blocking is a summary ==="
 OUT=$(run_tool "bin/fetch https://example.invalid")
 assert_contains     "the description arrives" "$OUT" "The fetch helper refuses --insecure"
 assert_not_contains "the body does not"       "$OUT" "FETCH-BODY-MARKER"
+
+# =============================================
+# SECTION 8b: a block rule with nothing to say still refuses (#135)
+# =============================================
+# The block branch used to sit inside `if (content != "" && blocked == "")`, so a rule
+# whose entry file had no deliverable text was never reached and THE CALL WAS PERMITTED --
+# exit 0, `{}`, nothing on stderr, indistinguishable from a rule that did not match.
+#
+# Driven under BOTH modes deliberately, and that pairing is why this was filed high rather
+# than as a curiosity: under `summary` jit_inject_text() is never empty, so `content` was
+# non-empty and the identical tree DID refuse. A block rule whose enforcement turns on an
+# unrelated cost setting is the shape this repository exists to name.
+echo ""
+echo "=== A block rule whose entry has no text refuses anyway, under summary ==="
+set_config "JIT_CONTEXT_INJECT=summary"
+OUT=$(run_tool "git shove origin main")
+assert_blocked  "the call is refused" "$OUT"
+assert_contains "and the reason says the text is missing rather than being blank" \
+                "$OUT" "was not delivered"
+
+echo ""
+echo "=== The same tree under full -- the mode may not decide whether a rule enforces ==="
+set_config "JIT_CONTEXT_INJECT=full"
+OUT=$(run_tool "git shove origin main")
+assert_blocked  "the call is refused here too"    "$OUT"
+assert_contains "with the same substitute reason" "$OUT" "was not delivered"
+
+# The other direction, same fixture: a NON-blocking row whose file has no text must inject
+# nothing and permit. Without the pair below, everything above is also true of a hook that
+# refuses on sight.
+echo ""
+echo "=== Paired: a remind rule with no text stays silent and permits ==="
+OUT=$(run_tool "git nudge origin main")
+assert_silent "an advisory rule with nothing to say injects nothing" "$OUT"
+
+# ...and the positive control for that silence, which is the only thing that makes it mean
+# anything: the same row, the same command, with text in the file. The body is read at fire
+# time, so this needs no rebuild. If this leg fails, the silence above proved only that the
+# harness was pointed at nothing.
+printf 'NUDGE-BODY-MARKER\n' > "$T/emptyadv.md"
+OUT=$(run_tool "git nudge origin main")
+assert_contains "control: the same row fires once its file has text" "$OUT" "NUDGE-BODY-MARKER"
+printf '\n' > "$T/emptyadv.md"
 
 # =============================================
 # SECTION 9: the pull is observable

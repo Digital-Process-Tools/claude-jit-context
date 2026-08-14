@@ -384,6 +384,34 @@ END {
       key = ""
     }
 
+    # A rule that can REFUSE must reach its decision on the strength of its INDEX ROW, and
+    # never on whether its file had text in it (#135). `why` above covers a file that could
+    # not be read; this covers one that read fine and said nothing -- a file with no
+    # frontmatter and no text, or one truncated after it was indexed. rebuild-tsv.sh cannot
+    # have produced that pair itself, since a file with no frontmatter carries no tool: and
+    # no match:, so the row is hand-written or the file drifted out from under a committed
+    # index. Either way the index says `block` and the markdown has nothing to say.
+    #
+    # Without this the three refusals below read an empty `body`: the block branch was
+    # guarded on `content != ""` and was never reached at all -- exit 0, {}, THE CALL
+    # PERMITTED, indistinguishable from a rule that did not match -- while require and
+    # forbid refused with a reason ending in a bare space.
+    #
+    # `body` only, deliberately NOT `content`. content == "" is what keeps an advisory rule
+    # with nothing to say silent, and filling it here would start injecting this sentence
+    # at authors whose entry never refuses anything -- a behaviour change nobody asked for.
+    #
+    # The same wording as the `why` substitute, because from the side that reads it this is
+    # the same fact: the text of this rule did not arrive. And `key` is emptied for the
+    # reason recorded above -- a substitute is not the rule text, so it may not spend a
+    # once-per-session budget. That matters most here: a `once,block` row that marked
+    # itself shown on a refusal carrying none of its text would be skipped on the next
+    # call, and the second `git push` of the session would go through.
+    if (keepbody && body == "") {
+      body = "(the text of this rule was not delivered: the entry file has no text)"
+      key = ""
+    }
+
     # Check require
     if (r_require != "") {
       nr = split(r_require, reqs, "|")
@@ -422,17 +450,27 @@ END {
       if (blocked != "") break
     }
 
-    if (content != "" && blocked == "") {
-      header = "# JIT Context: " r_file " (matched: " r_match ")"
-      if (index(r_modes, "block") > 0) {
-        log_matches = log_matches sep "tool:" r_file "(" r_match ")[full:block]"
-        sep = ", "
-        if (key != "") { shown[key] = 1; jit_shown_mark(shown_file, key) }
-        # body, not content: a block is a refusal, and a refusal is never a summary.
-        blocked = header "\n" body
-        break
-      }
+    header = "# JIT Context: " r_file " (matched: " r_match ")"
 
+    # OUTSIDE the content guard below, and that is the whole of #135. `mode: block` comes
+    # off the index row, so whether this rule refuses is settled before the file is opened;
+    # `content` is about what there is to SAY. Sitting inside that guard turned an entry
+    # with no deliverable text into an allowed call -- the one direction this dimension may
+    # never fail in, and it read exactly like a rule that did not match. require and forbid
+    # were already outside it, for the same reason.
+    #
+    # `body` can no longer be empty here: it is the entry text, the substitute for a body
+    # that could not be read, or the substitute for a file with nothing in it.
+    if (index(r_modes, "block") > 0 && blocked == "") {
+      log_matches = log_matches sep "tool:" r_file "(" r_match ")[full:block]"
+      sep = ", "
+      if (key != "") { shown[key] = 1; jit_shown_mark(shown_file, key) }
+      # body, not content: a block is a refusal, and a refusal is never a summary.
+      blocked = header "\n" body
+      break
+    }
+
+    if (content != "" && blocked == "") {
       # ADVISORY, and therefore provisional. A row further down this index may still block,
       # and the block path below throws `matched` away -- so neither the once-marker nor the
       # log token may be written yet. Both are held and committed after the loop, when the
