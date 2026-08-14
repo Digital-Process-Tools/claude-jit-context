@@ -224,6 +224,10 @@ WARNED=0
 # things: WARNED is about a paths pattern that fires too widely, this is about a tools rule
 # that refuses too narrowly. One counter would print one of those sentences over both.
 ADVISED=0
+# A third exit-code-neutral counter, and apart from ADVISED for the same reason ADVISED is
+# apart from WARNED: its tail sentence is about an entry whose `inject:` was mistyped, not
+# about a rule that matches too narrowly, and one counter would print one of those over both.
+BADMODE=0
 CHECKED=0
 LISTED=0
 # An index that was OPENED, in ANY dimension. It decides one question and only one: could
@@ -865,7 +869,43 @@ list_whole() {
       eff=summary; pin=1
     else
       eff="$TREE_INJECT"
-      [ -n "$inj" ] && why="inject: value not recognised, so the project default applied"
+      if [ -n "$inj" ]; then
+        why="inject: value not recognised, so the project default applied"
+        # #147: that $why can never reach stdout, on either default, and printing it here
+        # is the whole fix. It is carried to the reader only through WHOLE_LINES, and a row
+        # enters WHOLE_LINES only when its EFFECTIVE mode is full -- so under the `full`
+        # default the branch that prints WHOLE_LINES is not taken at all, and under
+        # `summary` a mistyped row resolves to summary and never enters it. The reason was
+        # built on every run and displayed on none, which is this repository's own defect
+        # class inside the tool written to report it: `jit-dry-run.sh` is what the hooks'
+        # own refusal notice sends an author to when they ask why a rule is not doing what
+        # they wrote, and on the path every unconfigured project is on it answered by
+        # omission. #130 fixed the durable half -- hooks.log writes `[full:badmode]` rather
+        # than `[full]` -- but a log only carries entries that FIRED, and an entry with a
+        # mistyped `inject:` that never matched leaves no line there at all.
+        #
+        # ADVISORY, not WARN and not REFUSED, and it does not move the exit code: the row
+        # is indexed, the rule fires, and the project default did apply. That is exactly
+        # the class paths/00-manual/tooling.md draws around WARN and ADVISORY, and #47 has
+        # CI consuming this code -- failing every project carrying one typo is a breaking
+        # change nobody filed. The verdict word is the existing `ADVISORY` rather than a
+        # sixth one, because the column layout is fixed-width and a new word is precisely
+        # how #134 got broken.
+        #
+        # The VALUE is tree text: `.claude/jit-context/` arrives with the clone, so it goes
+        # through the one name policy (#124, #113, #35) rather than being echoed raw. It is
+        # the normalised value -- lowercased with whitespace removed, which is what the
+        # comparison above used -- so the row says so. It is printed at the END of its line
+        # for the same reason the pattern rows print their pattern last: nothing this tool
+        # says in its own voice follows attacker-chosen text on the same line.
+        BADMODE=$((BADMODE + 1))
+        printf 'ADVISORY %-18s %-30s inject: value not recognised, so the project default applied\n' \
+          "$label" "$(jit_report_name "$name")"
+        # Continuation carries no name, like check_bare_truncation's: a claim split across
+        # two rows would otherwise be read with a rule file name in the middle of it (#52).
+        printf '         %-18s %-30s it arrives as %s -- spell it inject: full or inject: summary; value read: %s\n' \
+          "" "" "$eff" "$(jit_report_name "$inj")"
+      fi
       [ -z "$why" ] && why="the project default"
     fi
     if [ -z "$desc" ] && [ "$pin$eff" != "1full" ]; then NODESC=$((NODESC + 1)); fi
@@ -945,6 +985,18 @@ if [ "$ADVISED" -gt 0 ]; then
   echo "$ADVISED tool rule(s) that can refuse a call match on a bare substring, not a ~ regex."
   echo "Those rules do not hold against a chained command: a bare match is tested against the command only up to the first ; & | \" or \" --\"."
   printf '%s\n' 'That is advisory and does not change the exit code. Anchor with ~(^|[;&|\n] *)... if the rule was meant to be enforced.'
+fi
+if [ "$BADMODE" -gt 0 ]; then
+  # A tail for the same reason the two above have one -- the inline rows scroll off a tree
+  # of any size -- and it earns its line by saying one thing the rows cannot: where else
+  # this fact is written down, and why that other place is not enough. #130 made hooks.log
+  # carry a `:badmode` suffix, which is the durable record and the first place an author
+  # looks; it only ever holds entries that FIRED, so a typo on a rule that has never matched
+  # anything is invisible there and visible here. A tally that only re-counted the rows
+  # above would be noise, and this repository has enough of those.
+  echo "$BADMODE entr(ies) name an inject: value that is neither full nor summary."
+  echo "Each took the project default instead. hooks.log marks that :badmode when the entry fires — this reads every entry, fired or not."
+  echo "That is advisory and does not change the exit code. Spell the value inject: full or inject: summary."
 fi
 if [ "$BYTES_REFUSED" -gt 0 ]; then
   echo "$BYTES_REFUSED row(s) carry bytes the hook channel cannot deliver, or name a body it cannot read."
