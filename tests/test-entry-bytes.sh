@@ -51,8 +51,14 @@ assert_injected() {
   fi
 }
 
+# An EMPTY file decodes as valid UTF-8, so emptiness is refused first and by name. That is
+# not hypothetical: #164's first CI run had a driver produce nothing at all under mawk, and
+# this assertion passed on it while the byte-exact one beside it failed -- a control that
+# certifies silence is the defect class this suite exists to refuse.
 assert_utf8() {
-  if LC_ALL=C perl -0777 -ne 'exit(utf8::decode($_) ? 0 : 1)' "$2"; then
+  if [ ! -s "$2" ]; then
+    bad "$1 -- the file is EMPTY, which decodes as valid UTF-8 and proves nothing"
+  elif LC_ALL=C perl -0777 -ne 'exit(utf8::decode($_) ? 0 : 1)' "$2"; then
     ok "$1"
   else
     bad "$1 -- stdout is not valid UTF-8, so a strict JSON reader rejects the whole object"
@@ -147,6 +153,17 @@ fi
 
 OUT=$(mktemp)
 EXP=$(mktemp)
+CLIPERR=$(mktemp)
+
+# A driver that failed to start writes nothing to stdout and everything to stderr, and
+# every assertion downstream then reads an empty file. This is the assertion that names it.
+assert_silent() {   # label file
+  if [ ! -s "$2" ]; then ok "$1"; else
+    bad "$1"
+    echo "    the awk program wrote to stderr, so nothing below it was measured:"
+    echo "    $(seen "$2")"
+  fi
+}
 run_hook() {   # engine hook-script project payload
   printf %s "$4" | PATH="$ENGINE_BIN/$1:$PATH" CLAUDE_PROJECT_DIR="$3" bash "$SCRIPTS/$2" > "$OUT" 2>/dev/null
 }
@@ -443,17 +460,28 @@ rm -rf "$PROJ"
 # No consumer can reach it -- pre-tool-hook.sh, pre-prompt-hook.sh, pre-path-hook.sh and
 # rebuild-tsv.sh all pin LC_ALL=C -- so a hook-level drive CANNOT go red here, whatever
 # locale it is given. The property is claimed by the function, so the function is what is
-# driven: jit_clip() straight out of $JIT_AWK_INJECT, no hook in the path.
+# driven: jit_clip() out of the awk program the hooks compose, with no hook in the path.
 # The program is BEGIN-only, so awk never processes an operand and ARGV[1] is read as the
 # string it is: a fixture value containing an = is data here, not a variable assignment.
-clip164() {   # locale value cap  -> bytes into $OUT
+#
+# The FOUR fragments are concatenated, exactly as pre-path-hook.sh:67 composes them, and
+# $JIT_AWK_INJECT alone would be wrong. It is a fragment: jit_entry_load() in it calls
+# jit_bad_utf8() and jit_entry_why(), which live in $JIT_AWK_ENTRY. one-true-awk and gawk
+# only notice an undefined function when one is CALLED, so a program that never reaches
+# those call sites runs anyway -- mawk refuses it at PARSE time and the whole program
+# produces nothing. That is what reddened 13 assertions on the ubuntu-latest leg of #164's
+# first CI run, where mawk is the default awk, and none of it was a statement about
+# jit_clip(). stderr is kept rather than discarded for the same reason: it held the
+# sentence that explained all 13, and it was going to /dev/null.
+clip164() {   # locale value cap  -> bytes into $OUT, diagnostics into $CLIPERR
+  : > "$CLIPERR"
   (
     export CLAUDE_PROJECT_DIR="$SCRIPT_DIR"   # read by common.sh, which is sourced next
     # shellcheck source=/dev/null
     . "$SCRIPTS/common.sh"
     PATH="$ENGINE_BIN/$ENG:$PATH" LC_ALL="$1" \
-      awk "$JIT_AWK_INJECT"'BEGIN { printf "%s", jit_clip(ARGV[1], ARGV[2] + 0) }' "$2" "$3"
-  ) > "$OUT" 2>/dev/null
+      awk "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON"'BEGIN { printf "%s", jit_clip(ARGV[1], ARGV[2] + 0) }' "$2" "$3"
+  ) > "$OUT" 2>"$CLIPERR"
 }
 
 # jit_clip() as source text, for the one check that has to hold where 164b cannot run.
@@ -473,10 +501,19 @@ src164() {
 echo ""
 echo "=== 164a [$ENG]: under C the trim is the six ASCII whitespace bytes, and only those ==="
 # The positive control for the whole section, and the regression guard on the fix: an
-# escape class written wrong degrades quietly. one-true-awk maps an escape it does not know
-# in an ERE to the bare letter, so a bounded class naming an escape this engine lacks would
-# start trimming a trailing "v" or "f" off values instead. Both directions, same fixture
-# shape. Nothing here reads a NUL, and no value ends in whitespace, so $( ) is safe.
+# escape class written wrong degrades quietly: an awk that does not know an escape drops
+# the backslash and matches the bare letter, so a bounded class naming one the engine lacks
+# would start trimming a trailing "v" or "f" off values with nothing said anywhere. Both
+# directions, same fixture shape, and this is the reason it runs per ENGINE rather than
+# once. Nothing here reads a NUL, and no value ends in whitespace, so $( ) is safe.
+#
+# Before any of it, the control that was missing when this went red on CI: did the driver
+# RUN? A value under the cap comes back unchanged and the awk program says nothing on
+# stderr. Without this, an awk that refused to start reads as thirteen separate failures
+# about whitespace.
+clip164 C "under the cap" 99
+assert_bytes  "the driver reaches jit_clip at all" "under the cap"
+assert_silent "and the awk program loaded with no diagnostics" "$CLIPERR"
 for B164 in '\011' '\012' '\013' '\014' '\015' '\040'; do
   clip164 C "$(printf 'aaaaaaaa%b%bZTAIL' "$B164" "$B164")" 10
   assert_bytes "the cut is tidied when it lands on byte $B164" "aaaaaaaa [clipped]"
@@ -535,7 +572,7 @@ assert_lacks "and it names no POSIX character class" "$OUT" "[[:"
 
 done
 
-rm -f "$OUT" "$EXP"
+rm -f "$OUT" "$EXP" "$CLIPERR"
 rm -rf "$ENGINE_BIN"
 
 echo ""

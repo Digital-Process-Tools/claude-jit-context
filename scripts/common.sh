@@ -1537,14 +1537,15 @@ function jit_clip(s, n,   i) {
   #
   # Every caller pins LC_ALL=C, so no session could reach it. That is exactly the reason
   # not to leave it: the function would be describing a property it no longer held, kept
-  # alive by four pins in four files that nothing forces anyone to keep. These six bytes
-  # ARE [[:space:]] under C, on both engines -- so this changes nothing #157 established
-  # and removes the dependence on the caller. \t \n \v \f \r are the escape sequences
-  # POSIX defines for an awk ERE, which is why they are safe to spell out here. Naming one
-  # an engine did NOT know would be the quiet failure: both one-true-awk and gawk drop the
-  # backslash and match the bare letter -- gawk warns on stderr, which every hook here
-  # discards -- so the trim would start eating a trailing "v" off values and nothing would
-  # say so. tests/test-entry-bytes.sh 164a drives that in both directions.
+  # alive by four pins in four files that nothing forces anyone to keep. Measured under C on
+  # one-true-awk, gawk and mawk: these six bytes ARE [[:space:]] on all three, byte for
+  # byte -- so this changes nothing #157 established and removes the dependence on the
+  # caller. \t \n \v \f \r are the escape sequences POSIX defines for an awk ERE, and all
+  # three honour them. Naming one an engine did NOT know would be the quiet failure: an awk
+  # that does not recognise an escape drops the backslash and matches the bare letter, so
+  # the trim would start eating a trailing "v" off values and nothing would say so -- gawk
+  # warns on stderr, which every hook here discards. tests/test-entry-bytes.sh 164a drives
+  # that in both directions, per engine.
   sub(/\r$/, "", s)
   sub(/[ \t\n\v\f\r]+$/, "", s)
   return s " [clipped]"
