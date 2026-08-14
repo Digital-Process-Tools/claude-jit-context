@@ -609,6 +609,14 @@ END {
       # distinction #135 drew for the refusal substitute seventy lines up, and the shape a
       # truncated or half-written entry actually leaves behind.
       #
+      # And `content`, which under `full` is the WHOLE FILE -- frontmatter included, since
+      # nothing strips it in that mode. So an entry whose frontmatter is all it has still
+      # takes the exemption, and that is correct rather than a second hole: its author can
+      # put 60,000 bytes one line below the closing `---` and have them delivered. Driven:
+      # 60,164 bytes through that header against 60,166 through that body, on one tree.
+      # The test here is not "is this entry worth much", it is "is there a body channel
+      # open beside the header" -- and for every file this branch reaches, there is.
+      #
       # BOTH columns, not just the pattern. They are different kinds of text -- one is
       # written by the rule author, the other names a file -- and the second one is exactly
       # how that substitute path is reached, so clipping the pattern alone moves the 60 KB
