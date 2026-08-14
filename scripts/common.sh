@@ -1992,9 +1992,20 @@ _log_hook() {
 #
 # It lives HERE, and not in the tool that needed it first, for the reason this repo keeps
 # rediscovering: two answers to one question drift, and the drift is invisible until a name
-# printed by one tool is withheld by the other. rebuild-tsv.sh still carries the copy #113
-# landed and sources this file, so its copy wins there; tests/test-report-names.sh pins the
-# two to the same behaviour until that copy is deleted.
+# printed by one tool is withheld by the other. Both tools source this file.
+#
+# The test that pins a second bash definition to this one is tests/test-dry-run-names.sh,
+# which extracts any `jit_report_name() {` still living in rebuild-tsv.sh and drives both
+# through every boundary of the set. This sentence used to name tests/test-report-names.sh
+# instead, which pins what the rebuild REPORTS and has never compared two definitions --
+# the same citation-without-a-check that #124 found here in the first place. The extraction
+# says so out loud when it finds nothing rather than passing, so it does not go quiet when
+# that copy is deleted.
+#
+# One transliteration is unavoidable and stays whatever happens to the bash copy:
+# rebuild-tsv.sh builds three of its reports inside awk, awk cannot source a bash function,
+# and JIT_AWK_REPORT_NAME carries the same rule a second time in awk. Nothing compares
+# those two, so a change to the character set here has to be made there by hand.
 #
 # Exported for the awk half in rebuild-tsv.sh, which reads it out of ENVIRON.
 export JIT_NAME_WITHHELD='<withheld: not a plain name>'

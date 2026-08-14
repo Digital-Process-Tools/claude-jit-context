@@ -1010,8 +1010,22 @@ report_hook() {
   esac
   # A hook that matched nothing must not read as a hook that fired. That confusion is
   # the whole defect this script exists for; do not reintroduce it in its own output.
+  #
+  # And its inverse, which #140 made reachable: a `block` row whose file column is not a
+  # usable name now refuses the call, and its header names the row by POSITION rather than
+  # by a file. There is no `.md` for the read above to find, so an empty $names beside a
+  # block verdict printed `BLOCK  ...  no rule fired` -- a refusal reported as a silence,
+  # in the one tool whose job is telling those apart. The name is deliberately not
+  # recovered here: it is withheld from the hook output on purpose, and the REFUSED rows
+  # printed further up carry the row position and the reason already.
   if [ -z "$names" ]; then
-    printf '  %s%-20s no rule fired\n' "$verdict" "$1"
+    case "$out" in
+      *'"decision":"block"'*)
+        printf '  %s%-20s the call is refused by a row whose entry file has no usable name — see REFUSED above\n' \
+          "$verdict" "$1" ;;
+      *)
+        printf '  %s%-20s no rule fired\n' "$verdict" "$1" ;;
+    esac
   else
     # What each one COST, not just that it fired. A summary marks itself in the injected
     # text -- "read <path> for the entry" -- so this reads the hook actual output rather

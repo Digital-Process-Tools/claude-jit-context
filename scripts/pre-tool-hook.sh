@@ -210,6 +210,12 @@ END {
     # "this was a block rule and it did not run" is worth saying; the raw column is not.
     r_kind = (index(r_modes, "block") > 0) ? " (a block rule)" : ""
 
+    # Can this row refuse a call at all? Read off the INDEX columns and nothing else, so
+    # it is settled before the entry file is named, let alone opened. Three later decisions
+    # turn on it: whether `once` may suppress the row (#139), whether an unreadable file
+    # name still costs the call (#140), and whether the body is worth reading at all.
+    can_refuse = (index(r_modes, "block") > 0 || r_require != "" || r_forbid != "")
+
     # The row itself. The match column is echoed back in the (matched: ...) header and the
     # require and forbid columns are echoed in a block reason, so a byte the JSON string
     # cannot carry reaches stdout from the index alone, with no entry file involved (#77).
@@ -234,14 +240,43 @@ END {
       continue
     }
 
-    why = jit_bad_entry_file(r_file, tools_dir)
-    if (why != "") {
+    file_why = jit_bad_entry_file(r_file, tools_dir)
+    if (file_why != "") {
       n_refused++
-      refused = jit_refuse_add(refused, jit_row_id("tools/00-manual", rown) r_kind ": " why)
-      log_matches = log_matches sep "refused:" jit_log_name(r_file, "tools/00-manual", rown, why) "(" why ")"
+      refused = jit_refuse_add(refused, jit_row_id("tools/00-manual", rown) r_kind ": " file_why)
+      log_matches = log_matches sep "refused:" jit_log_name(r_file, "tools/00-manual", rown, file_why) "(" file_why ")"
       sep = ", "
-      continue
+      # NOT an unconditional `continue` any more (#140). This branch fires when the file
+      # column cannot be turned into a path -- a separator in it, a leading dot, an entry
+      # or a layer that is a symbolic link. The column it distrusts is the one that names
+      # the BODY, and #77 already settled what that costs: mode, require and forbid come
+      # off the row, so a body nobody can deliver leaves the decision intact. A row saying
+      # `block` was becoming advisory because its file name was malformed, and the call
+      # went through with a notice in place of a refusal.
+      #
+      # The other two refusal sites in this loop are deliberately NOT like this, and the
+      # difference is which column went dark. jit_bad_bytes() above distrusts the whole
+      # row, decision inputs included; jit_bad_pattern() below distrusts the match column,
+      # so whether the rule even applies is unknown. Here every decision input is intact
+      # and only the pointer to the text is not.
+      #
+      # This grants no new reach to a hostile index: a row that wanted to refuse a call
+      # could always do it by naming a legitimate file. The containment guard exists to
+      # stop the hook READING outside its layer, and nothing below reads this file.
+      #
+      # An advisory row still leaves here, so a bad name costs it the notice and nothing
+      # more -- unchanged, and the half a widening would have got wrong.
+      if (!can_refuse) continue
     }
+
+    # What the log line and the block header may call this row now that it can reach them.
+    # jit_log_name() is the rule the refusal notice already applies: a name that failed the
+    # bare-name check is 250 bytes of attacker text and is replaced by the position, while
+    # a name that passed is what an author fixing a symlinked entry actually needs. The
+    # header is MODEL-facing, so it takes the position for every refusal reason, not just
+    # that one -- the same posture as the notice above (#35).
+    r_logname = (file_why != "") ? jit_log_name(r_file, "tools/00-manual", rown, file_why) : r_file
+    r_header_name = (file_why != "") ? jit_row_id("tools/00-manual", rown) : r_file
 
     # tool may name several tools, pipe-separated: `tool: Edit|Write|Read`.
     # Exact-match each alternative — never substring, or `Read` would match `ReadFile`.
@@ -318,12 +353,34 @@ END {
     # used to consume its own once-per-session budget, so the next call skipped the row
     # entirely and the rule was silently gone for the session.
     key = ""
+    hushed = 0
     if (index(r_modes, "once") > 0) {
       key = "rule:" r_file
       # `held` as well as `shown`: an advisory rule delivered earlier in THIS scan is not in
       # `shown` yet -- its mark waits on the block decision below (#112) -- and without this
       # a second row naming the same file would inject it twice in one call.
-      if ((key in shown) || (key in held)) continue
+      if ((key in shown) || (key in held)) {
+        # `hushed`, not `continue`, for a row that can refuse (#139). `once` was leaving
+        # this loop before the row reached its decision, so `mode: once, block` refused
+        # the first matching call of a session and permitted every one after it -- no
+        # notice, and a log line indistinguishable from a rule that had nothing to say.
+        #
+        # An injection is knowledge the agent now has, so repeating it is waste and that
+        # is what `once` is for. A refusal is not knowledge, it is a decision, and a
+        # decision that expires was never enforced. So `once` keeps its exact meaning for
+        # the advisory half -- the body is injected at most once per session -- and buys
+        # no silence at all on the refusal half.
+        #
+        # This is the same reasoning the #135 substitute path already applied one branch
+        # down, where it empties `key` so a refusal carrying none of its text cannot spend
+        # the budget. That closed the case where the body was missing; this closes the
+        # case where the body was fine and the budget was already gone.
+        #
+        # The cost is one entry read per call for a `once` row that can refuse, which is
+        # a read it was already paying on the call that refused.
+        if (!can_refuse) continue
+        hushed = 1
+      }
     }
 
     # Read rule .md. A body that cannot be delivered does NOT cancel the decision: mode,
@@ -357,15 +414,29 @@ END {
     #
     # keepbody is read off the INDEX columns, before the file is opened, so a rule that
     # cannot block never pays for a body it will not use.
-    keepbody = (index(r_modes, "block") > 0 || r_require != "" || r_forbid != "")
+    keepbody = can_refuse
     content = ""
     body = ""
-    rpath = tools_dir "/" r_file
-    if (jit_entry_load(rpath, inject_default, keepbody, ent)) {
-      body = ent["body"]
-      content = jit_inject_text(ent, ".claude/jit-context/tools/00-manual/" r_file)
+    why = ""
+    if (file_why != "") {
+      # The row survived the containment guard because it can refuse (#140), and this is
+      # the only place that changes: the file is never named and never opened, so the
+      # decision below is reached with the reason in place of the text.
+      #
+      # `content` stays EMPTY, unlike the two substitute paths below. Those stand in for a
+      # file the hook did try to read; this file column is not a file name at all, the
+      # notice above has already reported the row by position, and filling `content` would
+      # inject that same sentence a second time as advisory context.
+      body = "(the text of this rule was not delivered: " file_why ")"
+      key = ""
+    } else {
+      rpath = tools_dir "/" r_file
+      if (jit_entry_load(rpath, inject_default, keepbody, ent)) {
+        body = ent["body"]
+        content = jit_inject_text(ent, ".claude/jit-context/tools/00-manual/" r_file)
+      }
+      why = ent["why"]
     }
-    why = ent["why"]
     if (why != "") {
       # BOTH, not one of the two. The substitute goes into content so that a `mode: block`
       # rule still reaches the block below -- content == "" is the no-op path, and #77 is
@@ -426,11 +497,13 @@ END {
         # requirement -- which is the safer direction and still wrong.
         if (index(fold_full, jit_fold_latin1(tolower(reqs[ri]))) == 0) {
           blocked = "BLOCKED: Missing required: " reqs[ri] ". " body
-          log_matches = log_matches sep "tool:" r_file "(BLOCKED:" reqs[ri] ")"
+          log_matches = log_matches sep "tool:" r_logname "(BLOCKED:" reqs[ri] ")"
           sep = ", "
-          # Delivered: the reason IS this rule body. So this one marks, where the advisory
-          # branch below only holds -- see the mark/hold split at the end of this loop.
-          if (key != "") { shown[key] = 1; jit_shown_mark(shown_file, key) }
+          # NOTHING is marked here (#139). This branch used to mark, on the reasoning that
+          # the body had been delivered as the refusal reason -- true, and the wrong unit to
+          # count. `once` bounds how often an entry is INJECTED as context; spending that
+          # budget on a refusal is what made the next matching call skip the row entirely
+          # and go through. A refusal is a decision, not knowledge the agent now carries.
           break
         }
       }
@@ -445,17 +518,16 @@ END {
         # clé-privée` stopped seeing `CLÉ-PRIVÉE` and the deny-list rule allowed the call.
         if (index(fold_full, jit_fold_latin1(tolower(forbs[fi]))) > 0) {
           blocked = "BLOCKED: Forbidden: " forbs[fi] ". " body
-          log_matches = log_matches sep "tool:" r_file "(BLOCKED:" forbs[fi] ")"
+          log_matches = log_matches sep "tool:" r_logname "(BLOCKED:" forbs[fi] ")"
           sep = ", "
-          # Delivered, same as the require refusal above.
-          if (key != "") { shown[key] = 1; jit_shown_mark(shown_file, key) }
+          # Marks nothing, same as the require refusal above (#139).
           break
         }
       }
       if (blocked != "") break
     }
 
-    header = "# JIT Context: " r_file " (matched: " r_match ")"
+    header = "# JIT Context: " r_header_name " (matched: " r_match ")"
 
     # OUTSIDE the content guard below, and that is the whole of #135. `mode: block` comes
     # off the index row, so whether this rule refuses is settled before the file is opened;
@@ -467,20 +539,25 @@ END {
     # `body` can no longer be blank here: it is the entry text, the substitute for a body
     # that could not be read, or the substitute for a file with nothing but whitespace in it.
     if (index(r_modes, "block") > 0 && blocked == "") {
-      log_matches = log_matches sep "tool:" r_file "(" r_match ")[full:block]"
+      log_matches = log_matches sep "tool:" r_logname "(" r_match ")[full:block]"
       sep = ", "
-      if (key != "") { shown[key] = 1; jit_shown_mark(shown_file, key) }
+      # Marks nothing (#139). This was the line that disarmed `mode: once, block`: the
+      # first matching call of a session refused and marked, and every call after it left
+      # the loop at the `once` check before reaching this branch at all.
       # body, not content: a block is a refusal, and a refusal is never a summary.
       blocked = header "\n" body
       break
     }
 
-    if (content != "" && blocked == "") {
+    # `hushed` is where a `once` budget that has already been spent lands now (#139): the
+    # row still reached its decision above, and this is the half -- and the only half --
+    # that the budget was ever about.
+    if (content != "" && blocked == "" && !hushed) {
       # ADVISORY, and therefore provisional. A row further down this index may still block,
       # and the block path below throws `matched` away -- so neither the once-marker nor the
       # log token may be written yet. Both are held and committed after the loop, when the
       # decision is known (#112).
-      log_adv = log_adv asep "tool:" r_file "(" r_match ")" jit_inject_tag(ent)
+      log_adv = log_adv asep "tool:" r_logname "(" r_match ")" jit_inject_tag(ent)
       asep = ", "
       if (key != "") { held[key] = 1; hold_n++ }
 

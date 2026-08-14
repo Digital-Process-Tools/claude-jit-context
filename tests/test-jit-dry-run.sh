@@ -589,6 +589,60 @@ for ENG in $BYTE_ENGINES; do
 done
 rm -rf "$BYTETREE" "$BYTEBIN"
 
+echo ""
+echo "=== a refused-name block row is reported as a refusal, not as a silence (#140) ==="
+# The sample call reads the rule names out of the hook output by looking for a `.md`. A
+# block row whose file column is not a usable name is headed by POSITION instead, so there
+# is no name to find and the line read `BLOCK  pre-tool-hook.sh  no rule fired` -- the one
+# confusion this whole script exists to prevent, printed by the script itself.
+#
+# The entry file is deliberately never created: the row is refused on its name alone,
+# before any read, and a file called `bad\name.md` cannot exist on Windows.
+# A real <project>/.claude/jit-context path, and not a bare temp dir: the sample call is
+# SKIPPED for a --base of any other shape, which is silence that reads exactly like a
+# passing assertion.
+NM_ROOT=$(mktemp -d)
+NM="$NM_ROOT/.claude/jit-context"
+mkdir -p "$NM/tools/00-manual"
+for l in 00-manual 10-auto 20-grouped 30-crosscutting; do
+  mkdir -p "$NM/paths/$l" "$NM/vocabulary/$l"
+  NM_P="$NM/paths/$l/00-index.tsv"
+  NM_V="$NM/vocabulary/$l/00-index.tsv"
+  : > "$NM_P"
+  : > "$NM_V"
+done
+NM_IDX="$NM/tools/00-manual/00-index.tsv"
+printf 'Bash\tgit push\tbad\\name.md\tblock\t\t\n' > "$NM_IDX"
+OUT=$(cd "$ELSEWHERE" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" \
+  --base "$NM" --tool Bash --command "git push origin main" 2>&1) && ST=0 || ST=$?
+assert_contains "the sample call reports the refusal" "$OUT" "BLOCK"
+# Narrowed to the tool hook line. The path hook legitimately prints `no rule fired` on the
+# same sample call, and a whole-output negative would be satisfied by a report that never
+# reached the tool hook at all.
+NM_TOOLLINE=$(printf '%s\n' "$OUT" | grep 'pre-tool-hook.sh' || true)
+assert_contains "control: the tool hook line is in the report" "$NM_TOOLLINE" "pre-tool-hook.sh"
+assert_not_contains "and a refused call is not reported as a silence" "$NM_TOOLLINE" "no rule fired"
+assert_contains "it says what happened instead" "$NM_TOOLLINE" "no usable name"
+assert_contains "the row itself is still listed as REFUSED" "$OUT" "REFUSED"
+
+# The positive control, in the same tree with the name repaired: a linter that printed the
+# new sentence unconditionally would satisfy every assertion above.
+printf 'Bash\tgit push\tgood.md\tblock\t\t\n' > "$NM_IDX"
+echo "do not push" > "$NM/tools/00-manual/good.md"
+OUT=$(cd "$ELSEWHERE" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" \
+  --base "$NM" --tool Bash --command "git push origin main" 2>&1) && ST=0 || ST=$?
+assert_contains "control: an honest block row is named by its file" "$OUT" "good.md"
+assert_not_contains "control: and does not claim its name is unusable" "$OUT" "no usable name"
+
+# And the other direction: a call this row never matched is still reported as a silence.
+OUT=$(cd "$ELSEWHERE" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" \
+  --base "$NM" --tool Bash --command "ls -la" 2>&1) && ST=0 || ST=$?
+NM_TOOLLINE=$(printf '%s\n' "$OUT" | grep 'pre-tool-hook.sh' || true)
+assert_contains "control: a call nothing matched still reads as no rule fired" "$NM_TOOLLINE" "no rule fired"
+# The control on the control: every assertion above is vacuous if the sample call never ran.
+assert_not_contains "the sample call actually ran" "$OUT" "SKIPPED sample call"
+rm -rf "$NM_ROOT"
+
 rm -rf "$CLEAN" "$BROKEN" "$ELSEWHERE"
 
 echo ""

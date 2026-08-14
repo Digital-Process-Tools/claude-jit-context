@@ -374,6 +374,13 @@ printf 'unused\n' > "$E_BASE/paths/00-manual/unused.md"
 : > "$E_BASE/paths/30-crosscutting/00-index.tsv"
 printf 'Bash\t~gitpush\tb.md\tonce,block\t\t\n' > "$E_BASE/tools/00-manual/00-index.tsv"
 printf 'DO NOT PUSH\n' > "$E_BASE/tools/00-manual/b.md"
+# An advisory `once` row beside it, because the mark channel can no longer be observed
+# through the block rule: since #139 a refusal spends no once-budget, so `~gitpush` blocks
+# on every call of a session whatever the marker says. This row is what still proves the
+# channel works at all.
+E_IDX="$E_BASE/tools/00-manual/00-index.tsv"
+printf 'Bash\t~advonce\ta.md\tonce,remind\t\t\n' >> "$E_IDX"
+printf 'ADVISORY ONCE\n' > "$E_BASE/tools/00-manual/a.md"
 : > "$E_BASE/vocabulary/00-manual/00-index.tsv"
 
 E_STATE='./.claude/jit-context/.discovery/state'
@@ -418,12 +425,23 @@ E_CTL=$( cd "$E_ROOT" && printf '{"session_id":"T","tool_name":"Bash","tool_inpu
   | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null )
 assert_contains "control: an untouched session blocks on the same payload" "$E_CTL" '"decision":"block"'
 
-# And the mark channel still WORKS. Without this a fix that deleted the channel outright
-# would pass everything above: the rule is once-mode, so the second call in session T has
-# to find its own honest mark and stay quiet.
+# The second `gitpush` of that session. This assertion used to expect {} -- a `once, block`
+# row refusing once and permitting every call after it, which is #139. It made this whole
+# section weaker than it read: the forgery defended against here was buying an attacker
+# nothing that the second honest call did not hand over anyway.
 E_AGAIN=$( cd "$E_ROOT" && printf '{"session_id":"T","tool_name":"Bash","tool_input":{"command":"gitpush now"}}' \
   | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null )
-assert_eq "an honest mark is still written, so once-mode still dedups" "$E_AGAIN" "{}"
+assert_contains "the second call of the session is refused too" "$E_AGAIN" '"decision":"block"'
+
+# And the mark channel still WORKS. Without this a fix that deleted the channel outright
+# would pass everything above: the advisory row is once-mode, so the second call naming it
+# in session T has to find its own honest mark and stay quiet.
+E_ADV=$( cd "$E_ROOT" && printf '{"session_id":"T","tool_name":"Bash","tool_input":{"command":"advonce now"}}' \
+  | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null )
+assert_contains "control: the advisory once rule fires on its first call" "$E_ADV" "ADVISORY ONCE"
+E_ADV2=$( cd "$E_ROOT" && printf '{"session_id":"T","tool_name":"Bash","tool_input":{"command":"advonce now"}}' \
+  | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null )
+assert_eq "an honest mark is still written, so once-mode still dedups" "$E_ADV2" "{}"
 
 echo ""
 echo "=== F: a marker name carrying a backslash is refused ==="
