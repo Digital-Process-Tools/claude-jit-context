@@ -384,6 +384,23 @@ rather than a command. A `~match` regex does see that text, which is the price o
 able to anchor on a later command: write `~(^|[;&|\n] *)git[[:space:]]+push` rather than
 `~git push` when you mean the command and not the words.
 
+**A `block` rule that is not `~`-anchored is advisory against a chained command.** The cut
+is at the *first* `;` `&` `|`, so a bare `match:` never sees anything after one, and
+`mode: block` on such a row stops the direct call and lets the chained one through:
+
+```text
+# a rule with match: rm -rf and mode: block, driven through pre-tool-hook.sh
+{"command":"rm -rf /tmp/x"}                    -> blocked
+{"command":"git status && rm -rf /tmp/x"}      -> not blocked
+```
+
+That is the same truncation that keeps a substring rule off a quoted commit message, and
+it is why every `block` rule in this repository is written `~(^|[;&|\n] *)…`. A bare
+`match` is fine for a reminder: the cost of one not firing is a reminder nobody got. It is
+not fine for a refusal, because the row reads as enforced and is not. `scripts/jit-dry-run.sh` prints an
+`ADVISORY` line naming every row in your tree with that shape (#136); it does not change
+the exit code, because the rule is narrower than it looks rather than broken.
+
 A command spanning several lines is one string with real newlines in it. `^` anchors that
 whole string, not each line, so a rule that must catch the second command needs the
 newline in its anchor class — see below.
@@ -695,6 +712,13 @@ And it reports **`WARN`**: a `paths` pattern carrying no `/`, no `^` and no `$`.
 matches `src/Billing`, `vendor/acme/Billing` and a scratchpad under `/tmp` alike — nothing
 in it says *where*. Sometimes that is what you meant, so this is a warning and **not** a
 refusal: it names the row and leaves the exit code alone.
+
+And it reports **`ADVISORY`**: a `tools` row that can refuse a call — `block`, or a
+`require` or `forbid` — and matches on a bare substring rather than a `~` regex. That row
+is tested against the command up to the first `;` `&` `|`, so it does not hold against a
+chained command — see [What a tool rule is tested against](#what-a-tool-rule-is-tested-against).
+Like `WARN`, it names the row and leaves the exit code alone: the rule is narrower than it
+reads, not broken.
 
 **It reads the tree you are standing in**, or `--base DIR`. That matters because the
 hooks resolve rules against `$CLAUDE_PROJECT_DIR` and never the current directory, so a
