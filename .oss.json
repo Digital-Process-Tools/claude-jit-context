@@ -1,0 +1,44 @@
+{
+  "repo": "Digital-Process-Tools/claude-jit-context",
+  "default_branch": "main",
+  "branch_pattern": "fix/{issue}",
+  "test_command": "bash tests/run-all.sh",
+  "version_sites": [
+    ".claude-plugin/plugin.json",
+    "CHANGELOG.md",
+    "README.md",
+    "SECURITY.md"
+  ],
+  "changelog_dir": "changelog.d",
+  "docs_targets": [
+    "README.md"
+  ],
+  "labels": {
+    "priority": [
+      "priority-critical",
+      "priority-high",
+      "priority-medium",
+      "priority-low"
+    ],
+    "lanes": [
+      "lane-hooks",
+      "lane-entries",
+      "lane-index",
+      "lane-docs",
+      "lane-tests"
+    ]
+  },
+  "milestones": [],
+  "ci": {
+    "required_checks": 5
+  },
+  "release": {
+    "tag_pattern": "v{version}",
+    "merge_method": "squash",
+    "commit_subject": null,
+    "triggers": {
+      "merged_prs": 10,
+      "soak_hours": 48
+    }
+  }
+}
