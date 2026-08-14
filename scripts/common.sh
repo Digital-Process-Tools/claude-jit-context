@@ -1476,14 +1476,13 @@ function jit_config_notice(list, n) {
 # exactly that -- 15 KB on one frontmatter line and summary mode costs what full mode
 # costs, silently. So both fields are clipped, and the clip is visible in what is
 # injected rather than being a quiet truncation. No other rewriting: #19 is what happens
-# when this reader edits a value it does not understand.
+# when this reader edits a value it does not understand -- so the only whitespace jit_clip()
+# removes is whitespace inside the cut it just made, never any in a value that fits (#156).
 #
 # No apostrophes in this block. It is a single-quoted bash string and one would close it.
 # shellcheck disable=SC2034
 JIT_AWK_INJECT='
 function jit_clip(s, n,   i) {
-  sub(/\r$/, "", s)
-  sub(/[[:space:]]+$/, "", s)
   if (length(s) <= n) return s
   s = substr(s, 1, n)
   # substr counts BYTES on one-true-awk and CHARACTERS on gawk, so on one of the two a
@@ -1512,6 +1511,18 @@ function jit_clip(s, n,   i) {
     }
     if (length(s) > 0 && index(jit_lead, substr(s, length(s), 1)) > 0) s = substr(s, 1, length(s) - 1)
   }
+  # The ONE rewrite this function is entitled to, and only on a string it has already cut.
+  # A cut at n can land inside a run of spaces or on a CR, and the marker would then read
+  # "word    [clipped]" -- whitespace that is not the authors, sitting where the cut was.
+  # Below the cap nothing is cut, so there is nothing to tidy and the value goes out as it
+  # was written: see #156 for what trimming everything cost.
+  #
+  # The cap is measured on the value as written, whitespace included, and that is
+  # deliberate: a value that is over budget only by its trailing spaces is cut and marked
+  # like any other. Deciding on the trimmed length instead would put the old rewrite back
+  # for a narrower band of values, which is a stranger rule than the one it replaced.
+  sub(/\r$/, "", s)
+  sub(/[[:space:]]+$/, "", s)
   return s " [clipped]"
 }
 # Fills e with title, desc, mode, body and two flags, and returns 1 when the file had
