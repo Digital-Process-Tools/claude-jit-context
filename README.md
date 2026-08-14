@@ -658,7 +658,7 @@ The hooks read 00-index.tsv, never your markdown. An entry with no row is on dis
 can never fire -- which reads exactly like a rule that fires and never matches.
 
     [paths/00-manual] orphan.md: no match: in its frontmatter
-    [00-manual] legacy.md: every keywords: term was dropped by the blacklist, so no row was written
+    [vocabulary/00-manual] legacy.md: every keywords: term was dropped by the blacklist, so no row was written
 
 2 entr(ies), counted while indexing -- one per .md file that produced no row.
 ```
