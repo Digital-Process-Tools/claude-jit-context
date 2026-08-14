@@ -344,6 +344,77 @@ assert_has   "and the run still happened" "$ERR" "Ambiguous vocabulary keywords"
 rm -f "$ERR"
 rm -rf "$PROJ"
 
+# ============================================================================
+# 156 - jit_clip() rewrote values nobody asked it to rewrite
+# ============================================================================
+# The comment block above jit_clip() promises "No other rewriting" and cites #19 as what
+# happens when this reader edits a value it does not understand. It then trimmed a trailing
+# CR and trailing whitespace off EVERY value, including ones far below the cap -- and it
+# did so BEFORE the cut, so it never once tidied the string it had just truncated.
+#
+# Only a QUOTED frontmatter value can carry trailing whitespace this far: jit_entry_load()
+# strips it off the raw line, and a wrapping quote pair is the one way an author says keep
+# it. So the trim deleted exactly what somebody had asked to keep, and left ragged
+# whitespace in front of " [clipped]" -- the one place a trim would have been right.
+echo ""
+echo "=== 156a [$ENG]: a quoted trailing space below the cap survives; an unquoted one does not ==="
+PROJ=$(new_proj); BASE="$PROJ/.claude/jit-context"; V="$BASE/vocabulary/00-manual"
+printf -- '---\ntitle: T156a\ndescription: "ALPHA end   "\ninject: summary\n---\nbody\n' > "$V/q156a.md"
+printf -- '---\ntitle: T156b\ndescription: BETA end   \ninject: summary\n---\nbody\n' > "$V/u156a.md"
+printf -- '---\ntitle: "GAMMA tail   "\ndescription: g156a\ninject: summary\n---\nbody\n' > "$V/t156a.md"
+{ printf 'kwq156a\tq156a.md\n'
+  printf 'kwu156a\tu156a.md\n'
+  printf 'kwt156a\tt156a.md\n'; } > "$V/00-index.tsv"
+run_hook "$ENG" pre-prompt-hook.sh "$PROJ" '{"prompt":"kwq156a and kwu156a and kwt156a"}'
+assert_injected "something was injected at all" "$OUT"
+assert_has   "the quoted description keeps the spaces the author quoted" "$OUT" 'ALPHA end   \n[jit]'
+assert_has   "the quoted title keeps them too" "$OUT" 'GAMMA tail   \ng156a'
+# The other direction, in the same fixture. An UNQUOTED value is trimmed by the frontmatter
+# reader long before jit_clip() sees it and must stay trimmed: without this pair, 156a
+# would pass just as well against a hook that had stopped reading frontmatter at all.
+assert_has   "an unquoted description still arrives trimmed" "$OUT" 'BETA end\n[jit]'
+assert_lacks "and grows no whitespace of its own" "$OUT" 'BETA end   '
+rm -rf "$PROJ"
+
+# ============================================================================
+# 156b - the trim the cap actually needed, at the only place it applies
+# ============================================================================
+echo ""
+echo "=== 156b [$ENG]: an over-cap value is cut, and the cut is tidied before the marker ==="
+PROJ=$(new_proj); BASE="$PROJ/.claude/jit-context"; V="$BASE/vocabulary/00-manual"
+# 398 a, four spaces, then ZTAIL: 407 characters, so it is over the 400 cap, and the cut at
+# 400 lands two characters into the whitespace.
+LONG156=$(perl -e 'print "a" x 398, "    ", "ZTAIL"')
+printf -- '---\ntitle: T156c\ndescription: %s\ninject: summary\n---\nbody\n' "$LONG156" > "$V/c156b.md"
+printf 'kwc156b\tc156b.md\n' > "$V/00-index.tsv"
+run_hook "$ENG" pre-prompt-hook.sh "$PROJ" '{"prompt":"kwc156b"}'
+assert_injected "something was injected at all" "$OUT"
+assert_has   "the over-cap description is marked as cut at all" "$OUT" "[clipped]"
+assert_has   "and the marker follows the last character that survived" "$OUT" "a [clipped]"
+assert_lacks "rather than the whitespace the cut landed in" "$OUT" "  [clipped]"
+assert_lacks "the text past the cut is gone" "$OUT" "ZTAIL"
+rm -rf "$PROJ"
+
+# ============================================================================
+# 156c - the CR that trim was quietly also eating reaches the JSON channel now
+# ============================================================================
+# The removed sub(/\r$/) was not a safety guard and this suite is the place to prove it:
+# jit_json_escape() emits 0x0D as \r, so a value ending in one is escaped rather than
+# breaking the string it sits in. A raw CR on stdout would be invalid JSON, which is #77
+# one byte over. Only a quoted value can carry a CR this far -- jit_entry_load() strips a
+# trailing one off the line itself.
+echo ""
+echo "=== 156c [$ENG]: a quoted value ending in CR is escaped, not deleted and not raw ==="
+PROJ=$(new_proj); BASE="$PROJ/.claude/jit-context"; V="$BASE/vocabulary/00-manual"
+printf -- '---\ntitle: T156d\ndescription: "CRVAL\r"\ninject: summary\n---\nbody\n' > "$V/r156c.md"
+printf 'kwr156c\tr156c.md\n' > "$V/00-index.tsv"
+run_hook "$ENG" pre-prompt-hook.sh "$PROJ" '{"prompt":"kwr156c"}'
+assert_injected "something was injected at all" "$OUT"
+assert_utf8  "stdout is valid UTF-8 JSON" "$OUT"
+assert_has   "the CR arrives, as the escape JSON has for it" "$OUT" 'CRVAL\r\n[jit]'
+assert_lacks "and never as the raw byte, which would break the string" "$OUT" "$(printf 'CRVAL\r')"
+rm -rf "$PROJ"
+
 done
 
 rm -f "$OUT"
