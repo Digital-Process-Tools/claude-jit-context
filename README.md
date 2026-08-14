@@ -713,6 +713,13 @@ matches `src/Billing`, `vendor/acme/Billing` and a scratchpad under `/tmp` alike
 in it says *where*. Sometimes that is what you meant, so this is a warning and **not** a
 refusal: it names the row and leaves the exit code alone.
 
+And it reports **`ADVISORY`**: a `tools` row that can refuse a call — `block`, or a
+`require` or `forbid` — and matches on a bare substring rather than a `~` regex. That row
+is tested against the command up to the first `;` `&` `|`, so it does not hold against a
+chained command — see [What a tool rule is tested against](#what-a-tool-rule-is-tested-against).
+Like `WARN`, it names the row and leaves the exit code alone: the rule is narrower than it
+reads, not broken.
+
 **It reads the tree you are standing in**, or `--base DIR`. That matters because the
 hooks resolve rules against `$CLAUDE_PROJECT_DIR` and never the current directory, so a
 git worktree, a checkout under review, or a plugin being developed cannot load or test
