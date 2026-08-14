@@ -82,6 +82,17 @@ assert_no_bad_byte() {
   fi
 }
 
+# Byte-exact, because the value under test in #164 differs from the correct one by ONE
+# byte in the middle of a string that greps as ordinary text either way.
+assert_bytes() {   # label expected-string
+  printf %s "$2" > "$EXP"
+  if cmp -s "$EXP" "$OUT"; then ok "$1"; else
+    bad "$1"
+    echo "    expected: $(seen "$EXP")"
+    echo "    got:      $(seen "$OUT")"
+  fi
+}
+
 # A marker line is a whole key, so the check is grep -x on the FILE: the value under test
 # in #78 is a TRUNCATED key, and a truncation is only visible against the whole line.
 assert_marker_has() {
@@ -135,6 +146,7 @@ if [ -z "$ENGINES" ]; then
 fi
 
 OUT=$(mktemp)
+EXP=$(mktemp)
 run_hook() {   # engine hook-script project payload
   printf %s "$4" | PATH="$ENGINE_BIN/$1:$PATH" CLAUDE_PROJECT_DIR="$3" bash "$SCRIPTS/$2" > "$OUT" 2>/dev/null
 }
@@ -415,9 +427,115 @@ assert_has   "the CR arrives, as the escape JSON has for it" "$OUT" 'CRVAL\r\n[j
 assert_lacks "and never as the raw byte, which would break the string" "$OUT" "$(printf 'CRVAL\r')"
 rm -rf "$PROJ"
 
+# ============================================================================
+# 164 - the trim jit_clip() makes at the cut was a LOCALE-sensitive byte class
+# ============================================================================
+# #157 moved the two sub() calls to run after the cut and after the multibyte repair, which
+# was the right fix for #156. It also put a POSIX character class downstream of raw UTF-8
+# bytes. In a single-byte locale [[:space:]] matches 0xA0 -- the trailing byte of a-grave
+# (C3 A0), S-caron (C5 A0) and the dagger (E2 80 A0). The repair strips at most three
+# continuation bytes plus one lead byte, so a cut landing after two adjacent such
+# characters leaves the string ending on a VALID, COMPLETE character whose last byte is
+# 0xA0, and the trim then ate that byte and left a lone lead byte behind: invalid UTF-8 in
+# the JSON channel, which is the #14/#15 shape the comment block above jit_clip() spends a
+# paragraph on.
+#
+# No consumer can reach it -- pre-tool-hook.sh, pre-prompt-hook.sh, pre-path-hook.sh and
+# rebuild-tsv.sh all pin LC_ALL=C -- so a hook-level drive CANNOT go red here, whatever
+# locale it is given. The property is claimed by the function, so the function is what is
+# driven: jit_clip() straight out of $JIT_AWK_INJECT, no hook in the path.
+# The program is BEGIN-only, so awk never processes an operand and ARGV[1] is read as the
+# string it is: a fixture value containing an = is data here, not a variable assignment.
+clip164() {   # locale value cap  -> bytes into $OUT
+  (
+    export CLAUDE_PROJECT_DIR="$SCRIPT_DIR"   # read by common.sh, which is sourced next
+    # shellcheck source=/dev/null
+    . "$SCRIPTS/common.sh"
+    PATH="$ENGINE_BIN/$ENG:$PATH" LC_ALL="$1" \
+      awk "$JIT_AWK_INJECT"'BEGIN { printf "%s", jit_clip(ARGV[1], ARGV[2] + 0) }' "$2" "$3"
+  ) > "$OUT" 2>/dev/null
+}
+
+# jit_clip() as source text, for the one check that has to hold where 164b cannot run.
+src164() {
+  (
+    export CLAUDE_PROJECT_DIR="$SCRIPT_DIR"
+    # shellcheck source=/dev/null
+    . "$SCRIPTS/common.sh"
+    # Comment lines are dropped: the block above the trim NAMES [[:space:]] in prose, and a
+    # check that could not tell the prose from the regex would fail on the fixed code.
+    printf %s "$JIT_AWK_INJECT" \
+      | awk '/^function jit_clip\(/, /^}/' \
+      | awk '$0 !~ /^[ \t]*#/'
+  ) > "$OUT" 2>/dev/null
+}
+
+echo ""
+echo "=== 164a [$ENG]: under C the trim is the six ASCII whitespace bytes, and only those ==="
+# The positive control for the whole section, and the regression guard on the fix: an
+# escape class written wrong degrades quietly. one-true-awk maps an escape it does not know
+# in an ERE to the bare letter, so a bounded class naming an escape this engine lacks would
+# start trimming a trailing "v" or "f" off values instead. Both directions, same fixture
+# shape. Nothing here reads a NUL, and no value ends in whitespace, so $( ) is safe.
+for B164 in '\011' '\012' '\013' '\014' '\015' '\040'; do
+  clip164 C "$(printf 'aaaaaaaa%b%bZTAIL' "$B164" "$B164")" 10
+  assert_bytes "the cut is tidied when it lands on byte $B164" "aaaaaaaa [clipped]"
+done
+for L164 in v f t n r b; do
+  clip164 C "aaaaaaaa$L164${L164}ZTAIL" 10
+  assert_bytes "and a trailing letter $L164 is not whitespace" "aaaaaaaa$L164$L164 [clipped]"
+done
+# 0xA0 is not whitespace under C either, and this is the byte the next case turns on.
+clip164 C "$(printf 'aaaaaaaa\303\240\303\240yyy')" 12
+assert_utf8  "the C reference run is valid UTF-8" "$OUT"
+assert_bytes "and keeps the whole character the repair left standing" "$(printf 'aaaaaaaa\303\240 [clipped]')"
+
+echo ""
+echo "=== 164b [$ENG]: and it is the same six bytes in a single-byte locale ==="
+# The locale is PROBED on the precondition itself rather than assumed from its name: does
+# this engine, under this locale, call 0xA0 a [[:space:]]? A machine where no locale does
+# cannot host this case at all, and that is a named skip, never a quiet pass.
+LOC164=""
+for C164 in fr_FR.ISO8859-1 en_US.ISO8859-1 en_GB.ISO8859-1 de_DE.ISO8859-1 \
+            en_US.ISO8859-15 fr_FR.ISO-8859-1 en_US.iso88591; do
+  if printf 'x\240\n' | PATH="$ENGINE_BIN/$ENG:$PATH" LC_ALL="$C164" \
+       awk '{ exit(/[[:space:]]$/ ? 0 : 1) }' 2>/dev/null; then
+    LOC164="$C164"; break
+  fi
+done
+if [ -z "$LOC164" ]; then
+  echo "  SKIPPED: no single-byte locale on this machine makes awk call 0xA0 a [[:space:]],"
+  echo "           so the condition #164 turns on cannot be created here at all."
+else
+  echo "  locale: $LOC164"
+  clip164 "$LOC164" "$(printf 'aaaaaaaa\303\240\303\240yyy')" 12
+  assert_utf8  "the clipped value is still valid UTF-8" "$OUT"
+  assert_bytes "and is byte-identical to the C run" "$(printf 'aaaaaaaa\303\240 [clipped]')"
+  # Positive control: the same locale still trims an ASCII space at the cut, so 164b is
+  # not passing because the trim stopped happening.
+  clip164 "$LOC164" "$(printf 'aaaaaaaa  ZTAIL')" 10
+  assert_bytes "the ASCII trim still happens under that locale" "aaaaaaaa [clipped]"
+fi
+
+echo ""
+echo "=== 164c [$ENG]: and the guarantee is structural, so it holds where 164b cannot run ==="
+# 164b is the only case that reproduces #164, and it needs a locale in which awk calls 0xA0
+# a [[:space:]]. Neither the Linux nor the Windows CI leg ships one, so on two of the three
+# legs it skips -- and a skip that reads as green is the failure shape this suite exists to
+# refuse. So the property is ALSO asserted structurally, which every leg can evaluate: a
+# POSIX character class in jit_clip() CODE -- prose naming one is dropped first -- is a
+# byte class whose membership the caller picks, and the whole of #164 is that this function
+# must not contain one. Structural
+# rather than a compile probe for the same reason the pattern guard is: the answer differs
+# per engine and per locale, and the source does not.
+src164
+assert_has   "the function text was extracted at all" "$OUT" "function jit_clip("
+assert_has   "including the trim this is about" "$OUT" '+$/, "", s)'
+assert_lacks "and it names no POSIX character class" "$OUT" "[[:"
+
 done
 
-rm -f "$OUT"
+rm -f "$OUT" "$EXP"
 rm -rf "$ENGINE_BIN"
 
 echo ""

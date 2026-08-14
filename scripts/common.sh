@@ -1491,6 +1491,10 @@ function jit_clip(s, n,   i) {
   # entitled to reject invalid UTF-8, which renders as the hook having said nothing at
   # all -- the shape of #14 and #15, and unreachable on the engine CI runs on Linux.
   #
+  # The cut is not the only way that byte sequence can leave this function: the trim at
+  # the bottom runs after this repair, so it too is looking at raw bytes, and the block
+  # beside it (#164) is what keeps THAT from undoing this.
+  #
   # So the engine is PROBED rather than assumed: one two-byte character has length 1
   # where substr is character-based and 2 where it is byte-based. Under gawk this whole
   # branch is dead, and correctly so -- the cut there is already on a boundary.
@@ -1521,8 +1525,28 @@ function jit_clip(s, n,   i) {
   # deliberate: a value that is over budget only by its trailing spaces is cut and marked
   # like any other. Deciding on the trimmed length instead would put the old rewrite back
   # for a narrower band of values, which is a stranger rule than the one it replaced.
+  #
+  # The class is SPELLED OUT rather than written [[:space:]], and that is the whole of
+  # #164. A POSIX class is byte-class-sensitive: in a single-byte locale [[:space:]]
+  # matches 0xA0, which is the trailing byte of a-grave (C3 A0), S-caron (C5 A0) and the
+  # dagger (E2 80 A0). Since #157 this trim runs AFTER the repair above, so it is looking
+  # at raw UTF-8 bytes -- and a cut landing after two adjacent such characters leaves the
+  # repair a valid, complete character to stop on, whose last byte the trim then ate,
+  # exposing the lone lead byte in front of it. Invalid UTF-8 out of this function, which
+  # is the #14/#15 shape the block above describes.
+  #
+  # Every caller pins LC_ALL=C, so no session could reach it. That is exactly the reason
+  # not to leave it: the function would be describing a property it no longer held, kept
+  # alive by four pins in four files that nothing forces anyone to keep. These six bytes
+  # ARE [[:space:]] under C, on both engines -- so this changes nothing #157 established
+  # and removes the dependence on the caller. \t \n \v \f \r are the escape sequences
+  # POSIX defines for an awk ERE, which is why they are safe to spell out here. Naming one
+  # an engine did NOT know would be the quiet failure: both one-true-awk and gawk drop the
+  # backslash and match the bare letter -- gawk warns on stderr, which every hook here
+  # discards -- so the trim would start eating a trailing "v" off values and nothing would
+  # say so. tests/test-entry-bytes.sh 164a drives that in both directions.
   sub(/\r$/, "", s)
-  sub(/[[:space:]]+$/, "", s)
+  sub(/[ \t\n\v\f\r]+$/, "", s)
   return s " [clipped]"
 }
 # Fills e with title, desc, mode, body and two flags, and returns 1 when the file had
