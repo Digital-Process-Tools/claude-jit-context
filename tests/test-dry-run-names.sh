@@ -205,11 +205,12 @@ if [ "$HAVE_FORGED_DIR" = 1 ]; then
 fi
 
 # --- #134: a withheld LAYER must not push the rest of the line out of its columns --------
-# Every row of this report is `printf '<verdict, 9 wide>%-18s %-30s <free text>'`. The layer
-# label routes through jit_report_name() (#124, correct), but the long withheld form is 28
-# bytes inside an 18-byte field, so `paths/<withheld: not a plain name>` shifted every
-# column to its right -- in the one report an author reads when they are already confused
-# about why a rule is not firing.
+# Every row of this report is `printf '<verdict, 9 wide>%-18s %-30s <free text>'`. #124 sent
+# the layer label through jit_report_name(), which was right, but the long withheld form is
+# 28 bytes inside an 18-byte field -- so `paths/<withheld: not a plain name>` shifted every
+# column to its right, in the one report an author reads when they are already confused
+# about why a rule is not firing. The label now goes through report_layer(), which is that
+# same policy with a placeholder short enough for the column it is printed in.
 #
 # Asserted as POSITION and not as text: the whole defect is invisible to a grep for the
 # placeholder, and both candidate fixes in #134 (clip, or a short placeholder) are text

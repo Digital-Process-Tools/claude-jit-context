@@ -577,10 +577,13 @@ check_index_current() {
 }
 
 # The LAYER DIRECTORY name is tree text as well, and it reaches every row of this report
-# through $label -- so it goes through jit_report_name() at each of the seven places a
-# label is built (#124). rebuild-tsv.sh already builds its labels this way. Unlike an
-# entry-file column this one comes from a `basename` over the filesystem rather than from
-# a `read -r`, so a newline in it survives and forged a whole row.
+# through $label -- so it goes through report_layer() at each of the seven places a label
+# is built (#124, #134). That wrapper is jit_report_name() plus one presentation decision:
+# the short `<withheld>` placeholder, because this label sits in a fixed-width column.
+# rebuild-tsv.sh applies the same POLICY and not that presentation -- its reports have no
+# fixed-width layer column to protect, so a withheld layer prints the long form there.
+# Unlike an entry-file column this one comes from a `basename` over the filesystem rather
+# than from a `read -r`, so a newline in it survives and forged a whole row.
 #
 # $rown is counted here rather than derived, and it is 1-based on the RAW file: it has to
 # be the same number the hooks print, and jit_row_id() gets NR from awk over the same file.
