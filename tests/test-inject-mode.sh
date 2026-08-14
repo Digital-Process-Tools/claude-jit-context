@@ -895,11 +895,22 @@ printf '%s\n' \
   "" \
   "LONGBLOCK-BODY-MARKER" > "$T/longblock.md"
 
+# No frontmatter, and nothing but blank lines. TWO of them, not one: a single newline reads
+# back as the empty string, never reaches the header at all, and the one-line version of
+# this fixture would prove nothing -- the same distinction #135 drew one guard further up.
+#
+# A file with no frontmatter is pinned to `full` whatever the project sets, and `full` is
+# what exempts a header from the #146 budget, on the reasoning that a full entry delivered
+# its body whole and made no promise about what a match costs. This file delivers no body
+# at all, so it took the exemption without the reason for it (#165).
+printf '\n\n' > "$T/blankfull.md"
+
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
   Bash "~git hurl|$LONG_PAT"  longsum.md   remind "" "" \
   Bash "~git lob|$LONG_PAT"   longfull.md  remind "" "" \
   Bash "~git chuck|$LONG_PAT" longblock.md block  "" "" \
   Bash "~git fling"           "$LONG_FILE" remind "" "" \
+  Bash "~git shunt|$LONG_PAT" blankfull.md remind "" "" \
   Bash "~git toss|$LONG_PAT"  missingentry.md remind "" "" >> "$IDX_TOOLS"
 
 # The project is pinned to `full` here on purpose, and the word `default` is deliberately
@@ -960,6 +971,45 @@ assert_contains     "control: and it is still named"      "$OUT" "missingentry.m
 # the SAME default, a row whose file reads fine, still echoes its whole pattern.
 OUT=$(run_tool "git lob a brick")
 assert_contains "a full entry whose body arrived keeps its whole header" "$OUT" "LONGPATEND"
+
+# ...and the shape the exemption was never argued for (#165). The exemption above is
+# earned by "this entry delivered its body whole at its authors request". A file with no
+# frontmatter is pinned to `full` and delivers whatever text it has -- and when it has
+# none, the exemption is taken with nothing under the header to justify it. Driven at
+# cdff15a on one-true-awk with no config.env: a 60,000-byte `match:` column on this row
+# produced 60,125 bytes of additionalContext, under which the delivered body was a single
+# newline.
+#
+# Not a vulnerability, and that is why the fix is a term in the gate and not a new bound:
+# the control drive, same tree, is a short `match:` and 60,000 bytes IN the entry file,
+# which costs 60,124. The two channels cost the same and #155s caps give up nothing. What
+# was wrong is the gate taking the exemption for a case its own comment said could not
+# reach it.
+echo ""
+echo "=== An entry with no body has nothing to exempt, so its header is bounded (#165) ==="
+OUT=$(run_tool "git shunt it sideways")
+assert_contains     "the entry is still named"                "$OUT" "blankfull.md"
+assert_contains     "and the head of the pattern identifies it" \
+                    "$OUT" "matched: ~git shunt|LONGPATSTART"
+assert_contains     "and the header says it was cut"          "$OUT" "[clipped]"
+assert_not_contains "the rest of the pattern does not arrive" "$OUT" "LONGPATEND"
+
+# The control that makes the four above mean anything, and the only one that isolates the
+# BODY as the cause: the same row, the same command, the same 60,000-byte pattern, with
+# text in the file. The body is read at fire time, so this needs no rebuild. Without it,
+# "LONGPATEND did not arrive" is also true of a hook that matched nothing at all.
+printf 'SHUNT-BODY-MARKER\n' > "$T/blankfull.md"
+OUT=$(run_tool "git shunt it sideways")
+assert_contains "control: the same row fires once its file has text" "$OUT" "SHUNT-BODY-MARKER"
+assert_contains "control: and its header is whole again"             "$OUT" "LONGPATEND"
+printf '\n\n' > "$T/blankfull.md"
+
+# The other direction: the row must still be silent on a command it does not match. A
+# bound that fired on everything and a bound that fired on nothing both read as green
+# from the side above.
+OUT=$(run_tool "ls -la")
+assert_not_contains "and a command it does not match reaches no header at all" \
+                    "$OUT" "blankfull.md"
 
 echo ""
 echo "========================"

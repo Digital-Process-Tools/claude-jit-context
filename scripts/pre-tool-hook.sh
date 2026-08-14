@@ -578,7 +578,7 @@ END {
       # close -- silently, on an ordinary non-refusing match.
       #
       # So the bound is placed on the BODY BUDGET rather than on `header` itself, and the
-      # test is "was the entry text actually delivered here", which is two conditions and
+      # test is "was the entry text actually delivered here", which is three conditions and
       # not one. A `full` entry that delivered its body made no promise about what a match
       # costs and its body is unbounded at the authors own request, so a bound on its
       # header is #141s walk-around one more time. Every other case has a bounded body
@@ -588,6 +588,34 @@ END {
       # project default -- which is `full`, and is what every project that configured
       # nothing is on. Driven after the mode-only fix and before this one: 60,539 bytes for
       # the file column and 60,547 for the pattern, with no config.env present.
+      #
+      # The THIRD condition is the case the sentence above once claimed could not exist
+      # (#165). A file with no frontmatter is pinned to `full` whatever the project sets,
+      # so an entry containing nothing but blank lines arrived here with mode `full`, no
+      # `why`, and a body of a single newline -- and took the exemption with nothing under
+      # the header to justify it. Driven at cdff15a on one-true-awk with no config.env:
+      # 60,125 bytes of additionalContext for a 60,000-byte `match:` column on such a row.
+      #
+      # That was never a hole in the cap and this condition is not what closes one. Control
+      # drive, same tree: a short `match:` and the same 60,000 bytes IN the entry file cost
+      # 60,124, because the same pin delivers them. Both channels need write access to the
+      # tree and both cost the same, so #146s budget gave up nothing either way. What was
+      # wrong is that the exemption is EARNED by delivering a body and this branch granted
+      # it on the mode alone -- the `why` error one paragraph up, one shape further in, and
+      # a premise the next person to touch this gate would have reasoned from.
+      #
+      # `[[:space:]]`, not `== ""`. `content` is already non-empty by the guard this block
+      # sits inside, and a file of two blank lines reads back as one newline -- which is the
+      # distinction #135 drew for the refusal substitute seventy lines up, and the shape a
+      # truncated or half-written entry actually leaves behind.
+      #
+      # And `content`, which under `full` is the WHOLE FILE -- frontmatter included, since
+      # nothing strips it in that mode. So an entry whose frontmatter is all it has still
+      # takes the exemption, and that is correct rather than a second hole: its author can
+      # put 60,000 bytes one line below the closing `---` and have them delivered. Driven:
+      # 60,164 bytes through that header against 60,166 through that body, on one tree.
+      # The test here is not "is this entry worth much", it is "is there a body channel
+      # open beside the header" -- and for every file this branch reaches, there is.
       #
       # BOTH columns, not just the pattern. They are different kinds of text -- one is
       # written by the rule author, the other names a file -- and the second one is exactly
@@ -603,7 +631,7 @@ END {
       #
       # ent[] is safe to read here: the only branch that leaves it stale is file_why != "",
       # which keeps `content` empty and therefore never reaches this line.
-      if (ent["mode"] == "full" && why == "") adv_header = header
+      if (ent["mode"] == "full" && why == "" && content !~ /^[[:space:]]*$/) adv_header = header
       else adv_header = "# JIT Context: " jit_clip(r_header_name, 255) " (matched: " jit_clip(r_match, 160) ")"
 
       if (matched != "") matched = matched "\n---\n" adv_header "\n" content
