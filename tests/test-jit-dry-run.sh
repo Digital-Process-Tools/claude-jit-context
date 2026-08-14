@@ -589,6 +589,112 @@ for ENG in $BYTE_ENGINES; do
 done
 rm -rf "$BYTETREE" "$BYTEBIN"
 
+# =============================================================================
+# The injected-byte figure is BYTES, on every engine and in a UTF-8 locale (#163)
+# =============================================================================
+# injected_bytes() documents itself as "the BYTES a hook actually injected", and the
+# README quotes that column as the cost argument the whole plugin rests on. awk length()
+# counts CHARACTERS on gawk in a multibyte locale and BYTES on one-true-awk, so one
+# accented entry reported 101 under `C` and 93 under gawk + en_US.UTF-8 -- understated by
+# up to 4x on CJK, in the one report whose entire purpose is what a rule costs.
+#
+# Driven once per awk on this machine AND in both locales, because the defect lives in
+# exactly one of those four cells: a run pinned to `C`, or on one-true-awk alone, is green
+# for a reason that has nothing to do with the fix.
+echo ""
+echo "=== the injected-byte figure is bytes, per engine and per locale (#163) ==="
+MBBIN=$(mktemp -d)
+MB_ENGINES=""
+MB_SEEN=""
+for cand in awk gawk nawk mawk; do
+  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  case " $MB_SEEN " in *" $cand_path "*) continue ;; esac
+  MB_SEEN="$MB_SEEN $cand_path"
+  mkdir -p "$MBBIN/$cand"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$cand_path" > "$MBBIN/$cand/awk"
+  chmod +x "$MBBIN/$cand/awk"
+  MB_ENGINES="$MB_ENGINES $cand"
+done
+
+# The locale is CHOSEN BY DRIVING, not by reading `locale -a`. What this section needs is
+# a locale under which some awk here actually counts characters, and that is one probe --
+# a name lookup would be the name plus an assumption about the engine, and Git Bash has no
+# `locale -a` worth trusting anyway. The probe character travels through the environment
+# so that this suite stays ASCII on disk and cannot be re-encoded by an editor into a
+# fixture that proves nothing.
+MBCHAR=$(printf '\303\251')
+UTF8_LOCALE=""
+CHARSEM_ENGINES=""
+for loc in en_US.UTF-8 C.UTF-8 en_US.utf8 "${LC_ALL:-}" "${LANG:-}"; do
+  [ -n "$loc" ] || continue
+  found=""
+  for ENG in $MB_ENGINES; do
+    n=$(PATH="$MBBIN/$ENG:$PATH" LC_ALL="$loc" JIT_MB="$MBCHAR" \
+        awk 'BEGIN { print length(ENVIRON["JIT_MB"]) }' 2>/dev/null) || n=""
+    if [ "$n" = "1" ]; then found="$found $ENG"; fi
+  done
+  if [ -n "$found" ]; then UTF8_LOCALE="$loc"; CHARSEM_ENGINES="$found"; break; fi
+done
+
+MBTREE=$(mktemp -d)
+MBBASE="$MBTREE/.claude/jit-context"
+MBIDX="$MBBASE/paths/00-manual/00-index.tsv"
+mkdir -p "$MBBASE/paths/00-manual" "$MBBASE/tools/00-manual" "$MBBASE/vocabulary/00-manual"
+printf 'Billing/\taccents.md\n' > "$MBIDX"
+# Eight two-byte characters in the body, written as octal escapes for the same reason the
+# probe character is: 55 bytes and 47 characters, and the two must not be the same number.
+printf 'facturation \303\251t\303\251 cr\303\250me br\303\273l\303\251e na\303\257ve co\303\266p\303\251ration\n' \
+  > "$MBBASE/paths/00-manual/accents.md"
+
+# The oracle is perl, pinned to C, doing byte for byte what injected_bytes() CLAIMS to do.
+# A second implementation in a second language, so the assertion is not the code under
+# test restating itself -- and the hook is run directly here, so the expected number comes
+# from the payload that actually reached the channel rather than from the report.
+MBPAYLOAD='{"tool_name":"Read","tool_input":{"file_path":"Billing/x.txt"}}'
+MBRAW=$(mktemp)
+printf '%s' "$MBPAYLOAD" | CLAUDE_PROJECT_DIR="$MBTREE" \
+  bash "$SCRIPT_DIR/scripts/pre-path-hook.sh" > "$MBRAW" 2>/dev/null || true
+MB_EXTRACT='
+  s/\n//g;
+  $i = index($_, q{"additionalContext":"});
+  exit 1 if $i < 0;
+  $s = substr($_, $i + 21);
+  $s =~ s/"\}\}$//;'
+MB_BYTES=$(LC_ALL=C perl -0777 -ne "$MB_EXTRACT"' print length($s);' "$MBRAW") || MB_BYTES=""
+MB_CHARS=$(LC_ALL=C perl -0777 -ne "$MB_EXTRACT"'
+  $c = () = $s =~ /[\x80-\xBF]/g;
+  print length($s) - $c;' "$MBRAW") || MB_CHARS=""
+
+# The positive control, and without it every assertion below would also pass against a
+# fixture of pure ASCII -- where bytes and characters are the same number and no engine
+# can disagree with any other.
+if [ -n "$MB_BYTES" ] && [ -n "$MB_CHARS" ] && [ "$MB_BYTES" != "$MB_CHARS" ]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: control — the fixture injects $MB_BYTES bytes and $MB_CHARS characters, so the two answers are distinguishable"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: control — the fixture must inject a payload whose byte and character counts differ (bytes='$MB_BYTES' chars='$MB_CHARS')"
+fi
+
+for ENG in $MB_ENGINES; do
+  for LOC in C ${UTF8_LOCALE:-}; do
+    OUT=$(cd "$ELSEWHERE" && PATH="$MBBIN/$ENG:$PATH" LC_ALL="$LOC" CLAUDE_PROJECT_DIR="$ELSEWHERE" \
+      bash "$DRYRUN" --base "$MBBASE" --tool Read --file Billing/x.txt 2>&1) && ST=0 || ST=$?
+    assert_contains "[$ENG/$LOC] the accented entry is reported in bytes" "$OUT" "[$MB_BYTES bytes injected]"
+    assert_not_contains "[$ENG/$LOC] and never in characters" "$OUT" "[$MB_CHARS bytes injected]"
+    assert_status "[$ENG/$LOC] the tree itself is clean" "$ST" "0"
+  done
+done
+
+if [ -n "$UTF8_LOCALE" ]; then
+  echo "  note: $UTF8_LOCALE counts characters on:$CHARSEM_ENGINES — that is where this defect lives"
+else
+  echo "  SKIPPED: no locale here makes any awk on this machine count characters"
+  echo "           (tried en_US.UTF-8, C.UTF-8, en_US.utf8, \$LC_ALL, \$LANG) — the C half"
+  echo "           above still ran, but this machine cannot witness the defect"
+fi
+rm -rf "$MBTREE" "$MBBIN" "$MBRAW"
+
 echo ""
 echo "=== a refused-name block row is reported as a refusal, not as a silence (#140) ==="
 # The sample call reads the rule names out of the hook output by looking for a `.md`. A
