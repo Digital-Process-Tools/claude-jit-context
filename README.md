@@ -787,6 +787,8 @@ Timings and matches are appended to `.claude/jit-context/.discovery/logs/hooks.l
 
 `(none)` in the match column means nothing fired — useful for finding knowledge gaps. The bracket after a match says what it cost: `[summary]`, `[full]`, `[full:block]`, or `[summary:no-description]` for an entry that could only be named.
 
+A `:badmode` suffix on any of those — `[full:badmode]`, `[summary:badmode]`, `[summary:no-description:badmode]` — says the entry did not ask for that mode: its `inject:` value was not `summary` or `full`, so the project default applied. The mode column used to say `[full]` either way, which meant the durable record could not tell a deliberate `full` from a typo nobody had noticed (#130). `grep badmode` over the log is the tally, and it counts entries that **fired** — an entry with a typo that never matched anything leaves no line here at all.
+
 **`withheld[…]` names a match that was not delivered.** A `block` decision is the whole of the call's output, so the advisory rules and vocabulary entries that also matched that command are discarded — and they are therefore *not* spent: the next call in the session still gets them. They are listed apart from the delivered ones, and the `[shown:N]` count excludes them, so a blocked call can no longer read as a delivery that happened:
 
 ```

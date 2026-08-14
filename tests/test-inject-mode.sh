@@ -113,12 +113,26 @@ printf '%s\n' \
   "" \
   "LONG-BODY-MARKER" > "$V/longdesc.md"
 
+# The same typo one outcome over: a mistyped inject: AND no description: at all. Under a
+# summary default those are two different facts about the same file -- one sends the author
+# to fix a word, the other to write a line -- and the log column has to be able to carry
+# both at once, or it can only ever report whichever one is checked first.
+printf '%s\n' \
+  "---" \
+  "title: Gated and undescribed" \
+  "inject: gated" \
+  "keywords: weirdnodesc" \
+  "---" \
+  "" \
+  "WEIRDNODESC-BODY-MARKER" > "$V/weirdnodesc.md"
+
 printf '%s\t%s\n' \
   billing  billing.md \
   payments payments.md \
   nodesc   nodesc.md \
   bare     bare.md \
   weird    weird.md \
+  weirdnodesc weirdnodesc.md \
   optin    optin.md \
   pinned   pinned.md \
   longdesc longdesc.md > "$V/00-index.tsv"
@@ -403,6 +417,67 @@ assert_contains     "the mistyped entry is named"            "$OUT" "is not summ
 assert_contains     "paired: its neighbour arrived too"      "$OUT" "PAYMENTS-BODY-MARKER"
 assert_contains     "and the mistyped entry still injected"  "$OUT" "WEIRD-BODY-MARKER"
 
+# =============================================
+# SECTION 3b: the LOG can tell a typo from a decision (#130)
+# =============================================
+# The notice above is context, and context ends with the session. hooks.log is the durable
+# record and the one a person greps, so the mode column there has to distinguish an entry
+# that is deliberately `full` from one that fell back to `full` because its inject: line was
+# mistyped. Before #130 both wrote the same six bytes, `[full]`, and the tally an author
+# would want -- "which entries in this repo have a typo nobody noticed" -- was being read
+# off a column that said the typo did not happen.
+#
+# Every assertion here is paired against a correctly-written entry in the SAME log line, so
+# none of them can pass by the tag disappearing altogether.
+JIT_LOG="$BASE/.discovery/logs/hooks.log"
+
+# The log is a file the hook may legitimately decline to write, so its absence has to fail
+# LOUDLY rather than leave the assertions below reading an empty string and passing the
+# negative ones for free.
+read_log() {
+  if [ ! -s "$JIT_LOG" ]; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: $1 -- hooks.log is missing or empty, so nothing below is evidence"
+    LOGTEXT=""
+    return 1
+  fi
+  LOGTEXT="$(cat "$JIT_LOG")"
+}
+
+echo ""
+echo "=== The log distinguishes a mistyped inject: from a deliberate full ==="
+set_config "JIT_CONTEXT_INJECT=full"
+rm -f "$JIT_LOG"
+run_prompt "the weird one and payments" >/dev/null
+if read_log "full default"; then
+  assert_contains     "the mistyped entry is logged as a fallback, not a decision" \
+                      "$LOGTEXT" "weird.md(weird)[full:badmode]"
+  assert_contains     "paired: the entry that really asked for full says so plainly" \
+                      "$LOGTEXT" "payments.md(payments)[full]"
+  assert_not_contains "so the two no longer write the same token" \
+                      "$LOGTEXT" "weird.md(weird)[full]"
+fi
+
+# The same blindness one default over, which is the half the issue did not name: a project
+# on JIT_CONTEXT_INJECT=summary has a mistyped entry rendering as `[summary]`, which is
+# exactly what an entry that asked for summary writes. The badmode fact is orthogonal to
+# which of the three outcomes was reached, so it is carried as a suffix on all three rather
+# than folded into the `full` one alone.
+echo ""
+echo "=== The same distinction under a summary default, on all three outcomes ==="
+set_config "JIT_CONTEXT_INJECT=summary"
+rm -f "$JIT_LOG"
+run_prompt "the weird one and weirdnodesc and optin" >/dev/null
+if read_log "summary default"; then
+  assert_contains     "a mistyped entry rendered as a summary says both" \
+                      "$LOGTEXT" "weird.md(weird)[summary:badmode]"
+  assert_contains     "and one with nothing to summarise says all three facts" \
+                      "$LOGTEXT" "weirdnodesc.md(weirdnodesc)[summary:no-description:badmode]"
+  assert_contains     "paired: an entry that asked for summary is still plain" \
+                      "$LOGTEXT" "optin.md(optin)[summary]"
+  assert_not_contains "and the mistyped one is not confusable with it" \
+                      "$LOGTEXT" "weird.md(weird)[summary]"
+fi
+
 echo ""
 echo "=== JIT_CONTEXT_INJECT=gated in config.env -- refused like any other bad line ==="
 set_config "JIT_CONTEXT_INJECT=gated"
@@ -624,6 +699,7 @@ printf '%s\t%s\n' \
   nodesc   nodesc.md \
   bare     bare.md \
   weird    weird.md \
+  weirdnodesc weirdnodesc.md \
   optin    optin.md \
   pinned   pinned.md \
   longdesc longdesc.md \
@@ -684,6 +760,7 @@ printf '%s\t%s\n' \
   nodesc   nodesc.md \
   bare     bare.md \
   weird    weird.md \
+  weirdnodesc weirdnodesc.md \
   optin    optin.md \
   pinned   pinned.md \
   longdesc longdesc.md \

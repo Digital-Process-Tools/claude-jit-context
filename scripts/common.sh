@@ -1661,10 +1661,36 @@ function jit_inject_text(e, rel,   out) {
 }
 # For the log, which a person reads. `full` and `summary` and `summary with nothing to
 # say` are three different outcomes and the middle one is the only cheap one.
-function jit_inject_tag(e) {
-  if (e["mode"] == "full") return "[full]"
-  if (e["desc"] == "") return "[summary:no-description]"
-  return "[summary]"
+#
+# There is a FOURTH fact, and it is not one of those three: whether the mode was chosen or
+# fallen back into (#130). A mistyped `inject:` leaves e["mode"] at the project default and
+# only sets e["badmode"], so the entry rendered as `full` under the default nobody
+# configures, and the log wrote `[full]` -- the same six bytes a correctly-written
+# `inject: full` writes. jit_badmode_note() tells the MODEL, once, in context that ends with
+# the session; hooks.log is the durable record and what jit-misses.sh reads, and it was
+# reporting that the typo had not happened. An absence produced by the tool, in the log kept
+# to find them.
+#
+# A SUFFIX on all three outcomes, not a fourth tag. The two facts are orthogonal -- which
+# mode was rendered, and whether that mode was asked for -- and a project on
+# JIT_CONTEXT_INJECT=summary is blind in exactly the same way with `[summary]`, which is the
+# half #130 did not name. `[badmode]` alone would have thrown away the outcome; `:badmode`
+# keeps it and reads the way `[summary:no-description]` already does, which is the precedent
+# for a colon-qualified tag in this very function.
+#
+# The cost is that a reader grepping the literal `[full]` no longer sees these rows -- which
+# is the point, since that reader is counting deliberate `full` entries and these are not
+# any. A `[full` prefix catches both, and `badmode` is the tally that could not be taken
+# before.
+#
+# The block path in pre-tool-hook.sh writes `[full:block]` and deliberately does NOT pass
+# through here: a refusal reads the body whatever the mode says, so a bad `inject:` changes
+# nothing it could report -- the same reasoning recorded above jit_inject_text().
+function jit_inject_tag(e,   t) {
+  if (e["mode"] == "full") t = "[full"
+  else if (e["desc"] == "") t = "[summary:no-description"
+  else t = "[summary"
+  return t (e["badmode"] ? ":badmode" : "") "]"
 }
 '
 
