@@ -193,13 +193,25 @@ printf '\n' > "$T/emptyblock.md"
 # like success from one side.
 printf '\n' > "$T/emptyadv.md"
 
+# Whitespace is not text, and the difference is not academic: a body that reads back as
+# "\n\n" is not the empty string, so a guard testing for `== ""` lets it through and the
+# rule refuses with a reason that renders as nothing at all. Blank lines are what a
+# half-written entry and a truncated one both leave behind.
+printf '\n\n  \n' > "$T/wsblock.md"
+# The same shape on a `require:` row, which refuses through a different branch. Its reason
+# is built as "BLOCKED: Missing required: X. " plus the body, so a text-less entry ends
+# that sentence on a bare space.
+printf '\n\n  \n' > "$T/wsrequire.md"
+
 # Through a variable rather than the literal path, and that is not obfuscation: this
 # repo's own tools/ rule refuses a shell redirect naming the generated index, so a payload
 # carrying one cannot be typed by an agent editing this file at all.
 IDX_TOOLS="$T/00-index.tsv"
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-  Bash "git shove" emptyblock.md block  "" "" \
-  Bash "git nudge" emptyadv.md   remind "" "" >> "$IDX_TOOLS"
+  Bash "git shove" emptyblock.md block  "" ""        \
+  Bash "git nudge" emptyadv.md   remind "" ""        \
+  Bash "git heave" wsblock.md    block  "" ""        \
+  Bash "git haul"  wsrequire.md  remind "--safe" ""  >> "$IDX_TOOLS"
 
 # --- Helpers -----------------------------------------------------------------
 
@@ -526,6 +538,34 @@ printf 'NUDGE-BODY-MARKER\n' > "$T/emptyadv.md"
 OUT=$(run_tool "git nudge origin main")
 assert_contains "control: the same row fires once its file has text" "$OUT" "NUDGE-BODY-MARKER"
 printf '\n' > "$T/emptyadv.md"
+
+# Whitespace is not text. A guard testing for the empty string alone lets a body of two
+# blank lines through, and the rule then refuses with a reason that renders as nothing --
+# the same defect one shape over, and the shape a truncated file actually leaves.
+echo ""
+echo "=== Blank lines are not a reason either ==="
+OUT=$(run_tool "git heave origin main")
+assert_blocked  "a whitespace-only entry still refuses" "$OUT"
+assert_contains "and says why the reason is absent, rather than refusing blankly" \
+                "$OUT" "was not delivered"
+
+# `require:` refuses through a different branch, and its reason is built as
+# "BLOCKED: Missing required: X. " plus the body -- so a text-less entry used to end that
+# sentence on a bare space.
+echo ""
+echo "=== A require: refusal from a text-less entry says why too ==="
+OUT=$(run_tool "git haul the thing")
+assert_blocked  "the requirement is absent, so the call is refused" "$OUT"
+assert_contains "and the refusal names the requirement" "$OUT" "Missing required: --safe"
+assert_contains "with the substitute where the body would be" "$OUT" "was not delivered"
+
+# The other direction on that row: satisfy the requirement and it must not refuse. Asserted
+# as "the rule fired and did not block" rather than as silence, because a whitespace-only
+# body is not empty and the advisory branch still injects it -- which is pre-existing
+# behaviour of an advisory rule and not what this change is about.
+OUT=$(run_tool "git haul the thing --safe")
+assert_contains     "control: the same row still fires when satisfied" "$OUT" "JIT Context: wsrequire.md"
+assert_not_contains "and does not refuse"                              "$OUT" '"decision":"block"'
 
 # =============================================
 # SECTION 9: the pull is observable

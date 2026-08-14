@@ -407,7 +407,12 @@ END {
     # once-per-session budget. That matters most here: a `once,block` row that marked
     # itself shown on a refusal carrying none of its text would be skipped on the next
     # call, and the second `git push` of the session would go through.
-    if (keepbody && body == "") {
+    # WHITESPACE, not just the empty string. A file of two blank lines reads back as "\n",
+    # which is not "" and would slip a guard testing for that alone -- and the refusal then
+    # carries a reason that renders as nothing at all, which is this defect one shape over
+    # and the shape a half-written or truncated entry actually leaves behind. `[[:space:]]`
+    # rather than `\s`: this is an awk ERE, and one-true-awk drops the class spelling.
+    if (keepbody && body ~ /^[[:space:]]*$/) {
       body = "(the text of this rule was not delivered: the entry file has no text)"
       key = ""
     }
@@ -459,8 +464,8 @@ END {
     # never fail in, and it read exactly like a rule that did not match. require and forbid
     # were already outside it, for the same reason.
     #
-    # `body` can no longer be empty here: it is the entry text, the substitute for a body
-    # that could not be read, or the substitute for a file with nothing in it.
+    # `body` can no longer be blank here: it is the entry text, the substitute for a body
+    # that could not be read, or the substitute for a file with nothing but whitespace in it.
     if (index(r_modes, "block") > 0 && blocked == "") {
       log_matches = log_matches sep "tool:" r_file "(" r_match ")[full:block]"
       sep = ", "
