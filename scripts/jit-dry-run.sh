@@ -1066,8 +1066,26 @@ json_quote() {
 #
 # The length of the additionalContext / reason payload, which is what reaches the model,
 # rather than of the whole JSON envelope. A hook that said nothing reports 0.
+#
+# LC_ALL=C, and it is what makes the word BYTES above true (#163). awk length() counts
+# CHARACTERS on gawk under a multibyte locale and BYTES on one-true-awk, so this reported
+# 101 for an accented entry under `C` and 93 for the same call under gawk + en_US.UTF-8 --
+# gawk on a UTF-8 desktop being the ordinary Linux and CI combination. The factor is the
+# UTF-8 encoding length: 2x on accented Latin, 3x on ordinary CJK, 4x on emoji -- measured
+# on a 10-byte fixture of two CJK ideographs and one emoji, which gawk under `en_US.UTF-8`
+# reports as 3. It lands in the one column the README's cost argument is read out of.
+#
+# The WHOLE call is pinned rather than the one length(), because nothing else in this
+# program wants characters. index() and the substr() beside it are self-consistent in
+# either semantics -- `"additionalContext":"` is 21 ASCII characters AND 21 bytes, so
+# k + 21 lands on the same place whichever unit k came back in -- and the sub() strips an
+# ASCII literal. So the pin changes exactly one answer, which is the one that was wrong.
+#
+# It also buys what #68 bought the hooks: this reads a payload carrying entry text, and an
+# entry saved as Latin-1 is a malformed sequence that aborted one-true-awk and made gawk
+# warn. Under `C` there is nothing to decode, so there is nothing to fail to.
 injected_bytes() {
-  printf '%s' "$1" | awk '
+  printf '%s' "$1" | LC_ALL=C awk '
     { s = s $0 }
     END {
       k = index(s, "\"additionalContext\":\"")
