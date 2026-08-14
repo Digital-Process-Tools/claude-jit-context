@@ -24,7 +24,8 @@
 #
 # Exit: 0 every pattern honourable, every index current and every config.env line
 #       honoured | 1 at least one refused or stale | 2 could not evaluate.
-#       A WARN row never moves the exit code — see check_paths_fragment below.
+#       A WARN row never moves the exit code — see check_paths_fragment below, and
+#       neither does an ADVISORY row — see check_bare_truncation.
 #       An index in ANY dimension is a tree that could be evaluated, so a tree carrying
 #       only a vocabulary index is a 0 and never a 2.
 #       A SKIPPED row is a 1 as well: a reader that stopped partway checked an unknown
@@ -46,7 +47,7 @@ usage() {
   # Through the end of the Exit: block, which is where --help says what a WARN row does
   # to the exit code. A line added above this shifts it and truncates silently, so
   # tests/test-jit-dry-run.sh asserts on the last sentence rather than on the range.
-  sed -n '2,31p' "$0"
+  sed -n '2,32p' "$0"
   exit "${1:-0}"
 }
 
@@ -219,6 +220,10 @@ VOCAB_REFUSED=0
 VOCAB_KEYS=0
 VOCAB_FILES=0
 WARNED=0
+# Counted apart from WARNED, and not folded into it, because the two tails say different
+# things: WARNED is about a paths pattern that fires too widely, this is about a tools rule
+# that refuses too narrowly. One counter would print one of those sentences over both.
+ADVISED=0
 CHECKED=0
 LISTED=0
 # An index that was OPENED, in ANY dimension. It decides one question and only one: could
@@ -576,6 +581,49 @@ check_index_current() {
   done
 }
 
+# --- A bare match on a row that can refuse (#136) ----------------------------
+# pre-tool-hook.sh matches a bare, non-`~` match with index() against `cmd`, which is the
+# command TRUNCATED at the first `;`, `&`, `|`, `"` or ` --` (pre-tool-hook.sh:127-144).
+# That truncation is deliberate and #136 does not ask for it to change: it is what keeps a
+# substring rule off the tail of a quoted commit message, and every anchored rule in this
+# repository is written the way it is because of it. Widening what a bare match sees would
+# change the meaning of every rule in every installed project.
+#
+# What was missing is that nothing said so. `match: rm -rf` with `mode: block` reads as
+# enforced, and `git status && rm -rf /tmp/x` walks straight past it — measured on both
+# payloads against the hook itself. Silence there is this repository's own defect class: a
+# rule that does not hold looks exactly like a rule that holds and was not tripped.
+#
+# Scoped to rows that can REFUSE, on the same predicate the hook uses for `can_refuse` —
+# `block` in the mode column, or a non-empty require or forbid. A bare `remind` row is
+# truncated too, and it claims nothing: the cost of it not firing is a reminder nobody got,
+# which is not a decision anybody believed was made. Saying this on every bare row would
+# put the notice on the majority of rows in an ordinary tree, and a notice that fires
+# everywhere tells its reader which rows are fine, which is nothing.
+#
+# ADVISORY, and it does not touch the exit code, for the same reason the paths WARN does
+# not: the rule is not wrong, it is narrower than it reads. #47 has CI consuming this exit
+# code, and failing every project that ever wrote a bare block rule is the breaking change
+# #136 explicitly rules out.
+#
+# The mode/require/forbid columns are index text and are NOT echoed — pre-tool-hook.sh:209
+# and #35 are what a raw column 4 in a report costs. This row derives one bit from them.
+check_bare_truncation() {
+  # $1 layer label, $2 rule file, $3 mode column, $4 require column, $5 forbid column
+  local label="$1" file="$2" mode="$3" require="$4" forbid="$5" disp
+  case "$mode" in
+    *block*) ;;
+    *) [ -n "$require" ] || [ -n "$forbid" ] || return 0 ;;
+  esac
+  ADVISED=$((ADVISED + 1))
+  disp="$(jit_report_name "$file")"
+  # Each line is a whole sentence of this script own voice. The name column between the
+  # verdict and the free text is tree text, so a claim continued across two rows would be
+  # read with a rule file name in the middle of it -- the #52 shape, one column over.
+  printf 'ADVISORY %-18s %-30s this row can refuse, and a bare match is tested against the command cut at the first ; & | " or " --"\n' "$label" "$disp"
+  printf '         %-18s %-30s so a chained command walks past it; anchor as ~(^|[;&|\\n] *)... to have it hold there\n' "" ""
+}
+
 # The LAYER DIRECTORY name is tree text as well, and it reaches every row of this report
 # through $label -- so it goes through report_layer() at each of the seven places a label
 # is built (#124, #134). That wrapper is jit_report_name() plus one presentation decision:
@@ -594,7 +642,7 @@ for tsv in "$BASE"/tools/*/00-index.tsv; do
   IDX_TOOLS=$((IDX_TOOLS + 1))
   label="tools/$(report_layer "$(basename "$(dirname "$tsv")")")"
   rown=0
-  while IFS=$'\t' read -r r_tool r_match r_file _rest; do
+  while IFS=$'\t' read -r r_tool r_match r_file r_mode r_require r_forbid _rest; do
     rown=$((rown + 1))
     [ -n "${r_match:-}" ] || continue
     [ -n "${r_file:-}" ] || continue
@@ -606,7 +654,8 @@ for tsv in "$BASE"/tools/*/00-index.tsv; do
       # $r_tool is the index's tool column and is tree text too -- `Bash`, `Edit` and every
       # other real value is a plain name, so the policy costs an honest row nothing and
       # keeps the last free-form field on this line from being a sentence.
-      *)    printf 'ok       %-18s %-30s substring, not a regex (tool %s)\n' "$label" "$(jit_report_name "$r_file")" "$(jit_report_name "$r_tool")" ;;
+      *)    printf 'ok       %-18s %-30s substring, not a regex (tool %s)\n' "$label" "$(jit_report_name "$r_file")" "$(jit_report_name "$r_tool")"
+            check_bare_truncation "$label" "$r_file" "$r_mode" "$r_require" "$r_forbid" ;;
     esac
   done < "$tsv"
 done
@@ -888,6 +937,14 @@ if [ "$WARNED" -gt 0 ]; then
   # counts line above: those are refusals, and this is not one.
   echo "$WARNED paths pattern(s) name a name rather than a place — they fire wherever that name occurs."
   echo "That is a warning, not a refusal: it does not change the exit code. Anchor with ^ or a parent directory if it was not deliberate."
+fi
+if [ "$ADVISED" -gt 0 ]; then
+  # Its own tail line for the same reason the WARN one has one: the inline rows scroll off
+  # a tree of any size, and this is the line a reader skimming the end sees. Not folded
+  # into the counts line, which is refusals, and this is not one.
+  echo "$ADVISED tool rule(s) that can refuse a call match on a bare substring, not a ~ regex."
+  echo "Those rules do not hold against a chained command: a bare match is tested against the command only up to the first ; & | \" or \" --\"."
+  printf '%s\n' 'That is advisory and does not change the exit code. Anchor with ~(^|[;&|\n] *)... if the rule was meant to be enforced.'
 fi
 if [ "$BYTES_REFUSED" -gt 0 ]; then
   echo "$BYTES_REFUSED row(s) carry bytes the hook channel cannot deliver, or name a body it cannot read."

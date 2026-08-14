@@ -665,6 +665,74 @@ assert_contains "control: a call nothing matched still reads as no rule fired" "
 assert_not_contains "the sample call actually ran" "$OUT" "SKIPPED sample call"
 rm -rf "$NM_ROOT"
 
+echo ""
+echo "=== a bare match on a row that can refuse is named as truncated (#136) ==="
+# pre-tool-hook.sh tests a bare (non-~) match against `cmd`, which is the command cut at
+# the first ; & | " or ` --`. That is design and #136 does not ask for it to change: every
+# anchored rule in this repository is written the way it is because of it. What was missing
+# is that nothing said so. `match: rm -rf` + `mode: block` reads as enforced, and
+# `git status && rm -rf /tmp/x` walks past it -- driven against the real hook, both
+# payloads, before this section existed.
+#
+# The linter has the row and knows the cut, so it says it. Advisory: it must not move the
+# exit code, because the rule is not wrong, it is narrower than it looks.
+ADV_ROOT=$(mktemp -d)
+ADV="$ADV_ROOT/.claude/jit-context"
+mkdir -p "$ADV/tools/00-manual"
+ADV_IDX="$ADV/tools/00-manual/00-index.tsv"
+{
+  # Can refuse, bare: the shape #136 is about.
+  printf 'Bash\trm -rf\tbare-block.md\tblock\t\t\n'
+  # Can refuse through the forbid column with no `block` in the mode, which is the same
+  # truncation and the same false sense of enforcement. can_refuse in the hook is
+  # `block || require || forbid`, so the notice is too, or two thirds of the shape is
+  # silent.
+  printf 'Bash\tgit push\tbare-forbid.md\tremind\t\t--force\n'
+  # Anchored, and can refuse. The notice must NOT fire here: a notice on every row of a
+  # tree tells its author which rows are fine, which is nothing.
+  printf 'Bash\t~(^|[;&|\\n] *)chmod[[:space:]]+777\tanchored-block.md\tblock\t\t\n'
+  # Bare and purely advisory. Also truncated, and it claims nothing -- a missed reminder
+  # is not a rule that reads as enforced and is not. Silent by design, asserted so a
+  # widening of this notice is a decision somebody makes on purpose.
+  printf 'Bash\tcurl\tbare-remind.md\tremind\t\t\n'
+} > "$ADV_IDX"
+for f in bare-block bare-forbid anchored-block bare-remind; do
+  echo "$f body" > "$ADV/tools/00-manual/$f.md"
+done
+
+OUT=$(cd "$ELSEWHERE" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --base "$ADV" 2>&1) && ST=0 || ST=$?
+ADV_LINES=$(printf '%s\n' "$OUT" | grep '^ADVISORY' || true)
+
+assert_contains "a bare block row is named as truncated" "$ADV_LINES" "bare-block.md"
+assert_contains "and so is a bare row that refuses through forbid" "$ADV_LINES" "bare-forbid.md"
+assert_contains "the notice says what the command is cut at" "$ADV_LINES" '; & | " or'
+assert_contains "and says how to anchor it" "$OUT" '(^|[;&|\n]'
+assert_not_contains "an anchored block row is not named" "$ADV_LINES" "anchored-block.md"
+assert_not_contains "and neither is a bare advisory row" "$ADV_LINES" "bare-remind.md"
+# The whole point of the row is that the rule is narrower than it reads, not broken. A
+# linter leg in CI that started failing on every bare block rule would be a breaking
+# change to every installed project, which is the thing #136 rules out.
+assert_status "advisory does not move the exit code" "$ST" "0"
+# The inline rows scroll off a tree of any size, so the tail carries the count too --
+# the same reason the paths WARN summary exists.
+assert_contains "the tail names the count" "$OUT" "do not hold against a chained command"
+# Control on the control: an ADVISORY row that appeared on a tree with no bare refusing
+# row at all would satisfy every positive above.
+OUT2=$(cd "$CLEAN" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" 2>&1) || true
+assert_not_contains "a tree whose refusing rules are all anchored says nothing" "$OUT2" "ADVISORY"
+
+# #134: every row of this report is `<verdict, 9 wide>%-18s %-30s <free text>`, and a new
+# verdict word is exactly how that gets broken. Asserted as POSITION, because a text
+# assertion passes on a misaligned line.
+ADV_BAD=$(printf '%s\n' "$ADV_LINES" | LC_ALL=C grep -cvE '^.{27} [^ ]' || true)
+if [ "${ADV_BAD:-0}" -eq 0 ] && [ -n "$ADV_LINES" ]; then
+  PASS=$((PASS + 1)); echo "  PASS: the ADVISORY verdict keeps the name column at byte 29"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the ADVISORY verdict keeps the name column at byte 29"
+  printf '%s\n' "$ADV_LINES" | LC_ALL=C grep -vE '^.{27} [^ ]' | sed 's/^/      /'
+fi
+rm -rf "$ADV_ROOT"
+
 rm -rf "$CLEAN" "$BROKEN" "$ELSEWHERE"
 
 echo ""
