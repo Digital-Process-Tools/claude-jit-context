@@ -84,9 +84,23 @@ EOF
 # A flag whose value is missing needs the same loud refusal as an unknown flag. The first
 # draft left `shift 2` to fail on its own, which exits 2 having printed NOTHING -- three
 # outcomes collapsed back into two, in the script written to keep them apart.
+# Every refusal in this file goes to STDERR, and that is the contract in
+# paths/00-manual/tooling.md rather than a preference: a tool that cannot do its job says
+# so on stderr, with a non-zero status. The status was always right here; the stream was
+# not (#125).
+#
+# It matters for one reason. STDOUT IS THE REPORT. A caller doing
+# `bash scripts/jit-misses.sh > misses.txt` captured "jit-misses: SKIPPED -- not readable"
+# into the findings file, where it sits under no heading and reads as a finding -- the
+# tool reporting an absence it produced itself, which is the defect class this whole
+# script exists to report on. The three outcomes in the header stay three only if the
+# reader can tell them apart after a redirect.
+#
+# --help is NOT a refusal and keeps stdout: it is what the reader asked for, and
+# `jit-misses.sh --help | less` has to work.
 need_value() {
-  echo "jit-misses: SKIPPED -- $1 needs a value"
-  echo "  run with --help for the accepted flags"
+  echo "jit-misses: SKIPPED -- $1 needs a value" >&2
+  echo "  run with --help for the accepted flags" >&2
   exit 2
 }
 
@@ -99,15 +113,15 @@ while [ $# -gt 0 ]; do
     *)
       # An unknown flag is refused rather than ignored. A silently dropped --min reads as
       # a threshold that applied, which is the failure this whole script is written about.
-      echo "jit-misses: SKIPPED -- unknown argument: $1"
-      echo "  run with --help for the accepted flags"
+      echo "jit-misses: SKIPPED -- unknown argument: $1" >&2
+      echo "  run with --help for the accepted flags" >&2
       exit 2
       ;;
   esac
 done
 
-case "$MIN" in ""|*[!0-9]*) echo "jit-misses: SKIPPED -- --min takes a whole number"; exit 2 ;; esac
-case "$TOP" in ""|*[!0-9]*) echo "jit-misses: SKIPPED -- --top takes a whole number"; exit 2 ;; esac
+case "$MIN" in ""|*[!0-9]*) echo "jit-misses: SKIPPED -- --min takes a whole number" >&2; exit 2 ;; esac
+case "$TOP" in ""|*[!0-9]*) echo "jit-misses: SKIPPED -- --top takes a whole number" >&2; exit 2 ;; esac
 [ "$MIN" -ge 1 ] || MIN=1
 [ "$TOP" -ge 1 ] || TOP=1
 
@@ -116,8 +130,8 @@ if [ -z "$LOG" ]; then
 fi
 
 skip() {
-  echo "jit-misses: SKIPPED -- $1"
-  echo "  log: $LOG"
+  echo "jit-misses: SKIPPED -- $1" >&2
+  echo "  log: $LOG" >&2
   exit 2
 }
 
@@ -140,7 +154,29 @@ skip() {
 # The fold table below is the byte-identical copy of the one in common.sh, built out of
 # index() and substr() with no decode and carrying both cases, so `C` costs it nothing --
 # tests/test-jit-misses.sh drives the accented fixture under both engines.
-LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" '
+# BUFFERED, and the stream is chosen from the exit code (#125). Three of this script own
+# refusals are reached inside the END block below -- an empty file, a file with no record
+# this tool recognises, and a log with records but none from pre-prompt -- and awk `print`
+# goes to stdout, which is the one stream that has to stay the report. A refusal captured
+# by `jit-misses.sh > misses.txt` sits in the findings file under no heading and reads as
+# a finding.
+#
+# `print ... > "/dev/stderr"` would be the short fix and is not taken. All three awks this
+# repo cares about special-case that name, but Git Bash is a CI leg nobody here can
+# observe, and an awk that opened it as a real file would abort on a platform where it is
+# not there -- turning a stream bug into a tool that says nothing at all.
+#
+# No temp file either. --help promises this script writes nothing and creates nothing, and
+# a reporting tool that quietly starts touching $TMPDIR to fix its own stream is a worse
+# trade than buffering a report already bounded by --top.
+#
+# $( ) is the right channel for it, and it is worth saying why, because
+# paths/00-manual/tests.md warns that it drops NUL bytes. The subject is hooks.log, and
+# every byte of that file was written by _log_hook()/jit_log_write() in common.sh -- bash
+# functions, and a bash variable cannot hold a NUL at all. A NUL in a prompt was dropped
+# before the log was written, not here. The awk output ends in exactly one newline on
+# every branch, which is what the printf below puts back.
+_JIT_MISSES_OUT=$(LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" '
 BEGIN {
   # Filler that two prompts can share without sharing a subject. Deliberately short and
   # visible: it is the only part of the grouping rule that is a matter of taste, and a
@@ -350,4 +386,24 @@ END {
   print "  .claude/jit-context/vocabulary/00-manual/<name>.md, then bash scripts/rebuild-tsv.sh"
   exit 0
 }
-' "$LOG"
+' "$LOG")
+_JIT_MISSES_RC=$?
+
+# 2 is this script own "could not evaluate", and an awk that DIED also exits 2 on both
+# gawk and one-true-awk. The fork does not try to tell those apart, and that is the right
+# side of it rather than an oversight: an awk that aborted mid-report emitted a partial
+# report, and a partial report on stdout reads as a complete one -- which is this
+# repository own defect class, arriving through the stream this change exists to fix. It
+# goes to stderr, where the engine diagnostic already is, and the status is 2, which is
+# what the header already promises a reader for a log that could not be evaluated. So the
+# two cases are conflated on purpose and land on the same honest answer.
+#
+# Any other non-zero is an awk that failed before producing anything worth calling a
+# report; it keeps stdout, because the status already says the run was not clean and
+# hiding the little it managed helps nobody.
+if [ "$_JIT_MISSES_RC" -eq 2 ]; then
+  printf '%s\n' "$_JIT_MISSES_OUT" >&2
+else
+  printf '%s\n' "$_JIT_MISSES_OUT"
+fi
+exit "$_JIT_MISSES_RC"

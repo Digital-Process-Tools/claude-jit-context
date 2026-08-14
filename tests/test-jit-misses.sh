@@ -500,6 +500,113 @@ for eng in $ENGINES; do
 done
 rm -rf "$ENGINE_BIN"
 
+# --- #125: a refusal is not a finding, and stdout is the report -------------------------
+# paths/00-manual/tooling.md states the contract these five tools live under: a tool that
+# cannot do its job says so on STDERR, with a non-zero status. This one had the status
+# right and the stream wrong.
+#
+# It matters for exactly one reason, and it is this repository defect shape in miniature:
+# stdout IS the report. `bash scripts/jit-misses.sh > misses.txt` captured
+# "jit-misses: SKIPPED -- not readable" into the findings file, where it reads as a
+# finding -- the tool reporting an absence it produced itself.
+#
+# Driven in both directions and from FILES, never $( ): the refusal reaches stderr AND is
+# absent from the redirected report, and an ordinary run report still lands on stdout.
+# Reading stdout and stderr out of one `2>&1` capture, which is what every assertion above
+# this line does, cannot tell the two streams apart at all.
+
+# jit-drive: assert_file_has contains path-arg
+# jit-drive: assert_file_lacks not_contains path-arg
+assert_file_has() {
+  local desc="$1" path="$2" needle="$3"
+  if grep -qF -- "$needle" "$path"; then
+    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    expected to contain: $needle"
+    echo "    in file: $path"
+  fi
+}
+
+assert_file_lacks() {
+  local desc="$1" path="$2" needle="$3"
+  if grep -qF -- "$needle" "$path"; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    should NOT contain: $needle"
+    echo "    in file: $path"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  fi
+}
+
+echo ""
+echo "=== refusals go to stderr, the report keeps stdout (#125) ==="
+
+R_OUT="$TMP/refusal.out"
+R_ERR="$TMP/refusal.err"
+
+# A file with lines but no record this tool recognises: the refusal built inside the awk
+# END block, which is a different set of print statements from the bash half above it.
+NORECORDS="$TMP/no-records.log"
+printf 'this file has lines but none of them is a hook record\n' > "$NORECORDS"
+
+# The awk END block carries three refusals, not one, and they are three separate sets of
+# print statements. This is the second reachable one: well-formed hook records, none of
+# them from pre-prompt. (The third, `lines == 0`, cannot be reached through the CLI --
+# `[ -s "$LOG" ]` refuses an empty file in bash first -- so driving it here would assert
+# nothing.)
+NOPROMPTS="$TMP/no-prompt-records.log"
+printf '[10:00:01.001] pre-tool (Bash) 9ms | (none) [shown:0] << git status\n' > "$NOPROMPTS"
+
+# One case per refusal SHAPE in the script, because they are independent sets of writes
+# and a fix applied to four of them looks identical to a fix applied to all six.
+#   --min with no value        need_value()
+#   --zzz                      the unknown-argument arm
+#   --min x                    the whole-number guard
+#   --log /nonexistent         skip()
+#   --log <no records>         the awk END block, shaped == 0
+#   --log <no pre-prompt>      the awk END block, prompts == 0
+for c in "--min:" "--zzz:" "--min:x" "--log:/nonexistent/hooks.log" "--log:$NORECORDS" \
+         "--log:$NOPROMPTS"; do
+  cflag="${c%%:*}"; cval="${c#*:}"
+  if [ -n "$cval" ]; then set -- "$cflag" "$cval"; else set -- "$cflag"; fi
+  bash "$MISSES" "$@" > "$R_OUT" 2> "$R_ERR" && ST=0 || ST=$?
+  assert_status "[$cflag ${cval:-<none>}] a refusal still exits 2" "$ST" "2"
+  assert_file_has "[$cflag ${cval:-<none>}] the refusal reaches stderr" "$R_ERR" "SKIPPED"
+  assert_file_lacks "[$cflag ${cval:-<none>}] and never the redirected report" "$R_OUT" "SKIPPED"
+  # Not just the SKIPPED word: the reason and the log path travel on their own lines, and
+  # a fix that redirected the first line only would pass the two assertions above.
+  assert_file_lacks "[$cflag ${cval:-<none>}] the whole refusal, not its first line" "$R_OUT" "jit-misses:"
+done
+
+# The other direction, and it is the half that fails if a fix redirected EVERYTHING: an
+# ordinary run still writes its findings to stdout and says nothing on stderr.
+OK_OUT="$TMP/ok.out"
+OK_ERR="$TMP/ok.err"
+bash "$MISSES" --log "$A" > "$OK_OUT" 2> "$OK_ERR" && ST=0 || ST=$?
+assert_status "an ordinary run still exits 0" "$ST" "0"
+assert_file_has "and its report is on stdout" "$OK_OUT" "jit-misses:"
+assert_file_has "with the finding still in it" "$OK_OUT" "xsd"
+if [ -s "$OK_ERR" ]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: an ordinary run writes nothing to stderr"
+  echo "    stderr held: $(head -c 200 "$OK_ERR")"
+else
+  PASS=$((PASS + 1)); echo "  PASS: an ordinary run writes nothing to stderr"
+fi
+
+# --help is not a refusal. It is what the reader ASKED for, so it keeps stdout -- a fix
+# that moved every non-finding to stderr would break `jit-misses.sh --help | less`.
+H_OUT="$TMP/help.out"
+H_ERR="$TMP/help.err"
+bash "$MISSES" --help > "$H_OUT" 2> "$H_ERR" && ST=0 || ST=$?
+assert_status "--help still exits 0" "$ST" "0"
+assert_file_has "--help is a report the reader asked for, so it keeps stdout" "$H_OUT" "the vocabulary this project keeps not having"
+if [ -s "$H_ERR" ]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: --help writes nothing to stderr"
+else
+  PASS=$((PASS + 1)); echo "  PASS: --help writes nothing to stderr"
+fi
+
 echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))

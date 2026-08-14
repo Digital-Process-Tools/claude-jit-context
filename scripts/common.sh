@@ -1959,3 +1959,54 @@ _log_hook() {
   fi
   jit_log_write "[$(_ts)] $hook ${ms}ms | $matches${tail:+ $tail}"
 }
+
+# --- What a MAINTAINER TOOL may say about a name the clone chose (#113, #124) -----------
+#
+# jit_row_id() above is the hooks' answer to this question: a refused row is named by
+# POSITION and its file-name column is never quoted, because that column arrives with the
+# repository and the notice fires with no rule having matched.
+#
+# rebuild-tsv.sh and jit-dry-run.sh cannot take that answer whole. Their reader is the
+# author of the tree, the file name is most of the actionable content of every report they
+# print, and a maintainer tool that will not tell you WHICH entry is broken has thrown away
+# the reason it exists. So they keep the name when the name is a NAME, and withhold it when
+# it is prose:
+#
+#   ^[A-Za-z0-9][A-Za-z0-9._-]*$, at most 64 bytes
+#
+# The set carries no space, which is what separates a name from a sentence -- no length cap
+# does, since `Run rm -rf ~` is twelve bytes. The cap is only there to keep a 4 KB name out
+# of a report. The set also excludes the NEWLINE, and that half was never a judgement call:
+# a name carrying one forged a whole report line in the voice of the tool, reproduced in
+# both tools (#113 in rebuild-tsv.sh, #124 in jit-dry-run.sh).
+#
+# The cost is real and accepted. An author whose entry is honestly called `my rule.md` sees
+# the placeholder, `ls` the layer named beside it, and the odd name is the one that stands
+# out. A worse report for a rare legitimate name, in exchange for a report that cannot
+# carry a payload at all.
+#
+# Withholding is a REPORT decision and nothing else. The row is still indexed under the
+# real name, the rule still fires, and the linter still lints it -- tests/test-report-names.sh
+# and tests/test-dry-run-names.sh both pin that, because a fix that stopped reading the
+# entry would satisfy every negative assertion for free.
+#
+# It lives HERE, and not in the tool that needed it first, for the reason this repo keeps
+# rediscovering: two answers to one question drift, and the drift is invisible until a name
+# printed by one tool is withheld by the other. rebuild-tsv.sh still carries the copy #113
+# landed and sources this file, so its copy wins there; tests/test-report-names.sh pins the
+# two to the same behaviour until that copy is deleted.
+#
+# Exported for the awk half in rebuild-tsv.sh, which reads it out of ENVIRON.
+export JIT_NAME_WITHHELD='<withheld: not a plain name>'
+
+jit_report_name() {
+  # C collation for the duration. Under a UTF-8 locale bash own [A-Za-z0-9] can admit
+  # accented letters and ${#s} counts characters; the whole point of the set is that it is
+  # a BYTE range. `local` restores the caller locale on return.
+  local LC_ALL=C
+  case "$1" in
+    ''|[!A-Za-z0-9]*|*[!A-Za-z0-9._-]*) printf '%s' "$JIT_NAME_WITHHELD"; return 0 ;;
+  esac
+  [ "${#1}" -gt 64 ] && { printf '%s' "$JIT_NAME_WITHHELD"; return 0; }
+  printf '%s' "$1"
+}
