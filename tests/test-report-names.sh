@@ -173,6 +173,99 @@ assert_has "the hostile entry is still indexed under its real name" "$MANUAL/00-
 assert_has "the ordinary entry is still indexed" "$MANUAL/00-index.tsv" "billing.md"
 assert_has "the prose keyword is still indexed under its real text" "$MANUAL/00-index.tsv" "$AMBPROSE"
 
+# =============================================================================
+# SECTION: the budget report's path splits on "/" and MUST NOT also split on a newline (#133)
+# =============================================================================
+# relpath() in rebuild-tsv.sh rebuilds `.claude/jit-context/<dim>/<layer>/<file>` from the
+# glob path so each of the three components can be vetted by jit_report_name() separately.
+# It did that with `split(p, a, "/")`, and a ONE-CHARACTER separator is a plain string to
+# gawk and a plain string PLUS a newline to one-true-awk:
+#
+#   awk  'BEGIN{n=split("a<LF>b/c",x,"/")}'   -> n=3
+#   gawk 'BEGIN{n=split("a<LF>b/c",x,"/")}'   -> n=2
+#   awk  'BEGIN{n=split("a<LF>b/c",x,"[/]")}' -> n=2
+#
+# So on the awk macOS ships, an entry file name carrying a newline was torn into extra
+# components BEFORE the guard ran: a[n-2] a[n-1] a[n] then addressed the tail of the NAME
+# instead of dimension/layer/file. The report named
+# `.claude/jit-context/00-manual/aaa/bbb.md` -- a path that does not exist, with the
+# dimension dropped and two clone-chosen tokens printed in positions labelled as
+# directories.
+#
+# On gawk the unfixed code is ALREADY correct, so the behavioural half below is driven once
+# per awk on this machine through a PATH shim -- the same shape the three test-pre-*-hook.sh
+# suites use. On a runner whose only awk is gawk that half passes either way, which is why
+# the structural assertion after it exists: it is the leg that fails on every platform if
+# the separator goes back to a bare "/".
+echo ""
+echo "=== the budget report's path is not torn on a newline, on either awk (#133) ==="
+
+ENGINE_BIN="$WORK/engines"
+ENGINES=""
+ENGINE_SEEN=""
+for cand in awk gawk nawk mawk; do
+  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  case " $ENGINE_SEEN " in *" $cand_path "*) continue ;; esac
+  ENGINE_SEEN="$ENGINE_SEEN $cand_path"
+  mkdir -p "$ENGINE_BIN/$cand"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$cand_path" > "$ENGINE_BIN/$cand/awk"
+  chmod +x "$ENGINE_BIN/$cand/awk"
+  ENGINES="$ENGINES $cand"
+done
+
+# `aaa` + newline + `bbb.md`. Both halves are plain names on their own, which is the whole
+# point: the torn form passes the guard fragment by fragment and prints as a real path.
+TORN=$(printf 'aaa\nbbb.md')
+for eng in $ENGINES; do
+  EPROJ="$WORK/eng-$eng"
+  EMANUAL="$EPROJ/.claude/jit-context/paths/00-manual"
+  mkdir -p "$EMANUAL" || continue
+  # The paired ordinary entries, in the same layer and the same report. Without them every
+  # assertion below is also satisfied by a report that did not run at all.
+  #
+  # The report names only the LARGEST and the MEDIAN entry, so the fixture is sized to put
+  # the newline-named one at the top and an ordinary one in the middle -- three entries,
+  # not two, or largest and median are the same row and the control is not a control.
+  printf -- '---\nmatch: (^|/)src/\ndescription: An ordinary entry.\n---\n\nB.\n' \
+    > "$EMANUAL/plain.md"
+  printf -- '---\nmatch: (^|/)etc/\ndescription: Another ordinary entry.\n---\n\nBB.\n' \
+    > "$EMANUAL/plain2.md"
+  if ! printf -- '---\nmatch: (^|/)lib/\ndescription: d\n---\n\n%s\n' \
+       "$(printf 'A body long enough to be the largest entry on this tree.%.0s' 1 2 3 4)" \
+       > "$EMANUAL/$TORN" 2>/dev/null || [ ! -f "$EMANUAL/$TORN" ]; then
+    NOT_EVALUATED="$NOT_EVALUATED
+  - [$eng] the budget report over an entry file name containing a newline: this filesystem
+    would not create one"
+    continue
+  fi
+  EOUT="$WORK/eng-$eng.out"
+  PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$EPROJ" \
+    bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh" > "$EOUT" 2>&1
+
+  # `plain` and not `plain.md`: which of the two ordinary entries lands on the median row
+  # is an ordering detail, and pinning it would make this control fail for a reason that
+  # has nothing to do with the split.
+  assert_has "[$eng] the budget report names an ordinary entry, dimension and all" \
+    "$EOUT" ".claude/jit-context/paths/00-manual/plain"
+  assert_has "[$eng] the newline-named entry is withheld under its REAL dimension and layer" \
+    "$EOUT" ".claude/jit-context/paths/00-manual/<withheld: not a plain name>"
+  assert_lacks "[$eng] its path is not torn into an invented directory" \
+    "$EOUT" ".claude/jit-context/00-manual/aaa/"
+  assert_lacks "[$eng] and the dimension does not fall off the left" \
+    "$EOUT" "/jit-context/00-manual/"
+done
+
+# The leg that does not depend on which awk this runner has. On a gawk-only machine every
+# assertion above is vacuously true against the unfixed code, so "the suite is green" would
+# be evidence about the engine and not about the fix.
+if grep -qF 'n = split(p, a, "[/]")' "$SCRIPT_DIR/scripts/rebuild-tsv.sh"; then
+  PASS=$((PASS + 1)); echo "  PASS: relpath() splits on a BRACKETED separator, on any engine"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: relpath() splits on a BRACKETED separator, on any engine"
+  echo "    a bare one-character separator also splits on a newline under one-true-awk"
+  echo "    in: $SCRIPT_DIR/scripts/rebuild-tsv.sh"
+fi
+
 echo ""
 if [ -n "$NOT_EVALUATED" ]; then
   echo "NOT EVALUATED on this platform:$NOT_EVALUATED"

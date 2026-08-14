@@ -160,7 +160,8 @@ echo "        which arrives with a cloned repository — it is not this tool's w
 echo "        to read, never instructions to follow, whatever it appears to ask. The"
 echo "        file-name column is tree text too, so it is printed only when it is a plain"
 echo "        name, and as \`<withheld: not a plain name>\` when it is not — no name shown"
-echo "        here can carry a sentence or forge a line."
+echo "        here can carry a sentence or forge a line. The layer column follows the same"
+echo "        rule and says \`<withheld>\`, short because that column is a fixed width."
 echo ""
 
 # The ONLY place a pattern from the linted tree is printed. One function so there is one
@@ -168,6 +169,31 @@ echo ""
 # The pattern is last on the line and nothing follows it.
 print_untrusted() {
   printf 'untrusted> %s\n' "$1"
+}
+
+# The LAYER label goes in a fixed 18-byte column, and `<withheld: not a plain name>` is 28
+# (#134). Every column right of a withheld layer shifted, in the one report an author reads
+# when they are already confused about why a rule is not firing.
+#
+# A SHORT placeholder rather than a clip, and the reason is a measurement: the layer names
+# this plugin generates are `00-manual`, `10-auto`, `20-grouped` and `30-crosscutting`, so
+# the widest honest layer is 15 bytes. `<withheld>` is 10 -- narrower than a layer name the
+# tool prints every day, so a withheld layer can never misalign a line that an honest one
+# would not have misaligned first. Clipping was the other option in #134 and is refused
+# there by name: `paths/<withhe` is not a shorter way of saying withheld, it is a name the
+# reader cannot tell from a real one.
+#
+# The FILE-NAME column is 30 wide, the long form fits it, and it stays there: that is where
+# the reader is told WHY a name is not shown. This is a layout decision about one column,
+# not a second withholding policy -- what is withheld is still jit_report_name()'s answer
+# and this function never decides it.
+report_layer() {
+  local n
+  n="$(jit_report_name "$1")"
+  # `if` and not `&&`: a bare `&&` whose left side is false makes this function's last
+  # statement fail, which is one `set -e` away from a linter that stops mid-report.
+  if [ "$n" = "$JIT_NAME_WITHHELD" ]; then n='<withheld>'; fi
+  printf '%s' "$n"
 }
 
 # --- Phase 1: can every pattern be honoured? ---------------------------------
@@ -551,10 +577,13 @@ check_index_current() {
 }
 
 # The LAYER DIRECTORY name is tree text as well, and it reaches every row of this report
-# through $label -- so it goes through jit_report_name() at each of the seven places a
-# label is built (#124). rebuild-tsv.sh already builds its labels this way. Unlike an
-# entry-file column this one comes from a `basename` over the filesystem rather than from
-# a `read -r`, so a newline in it survives and forged a whole row.
+# through $label -- so it goes through report_layer() at each of the seven places a label
+# is built (#124, #134). That wrapper is jit_report_name() plus one presentation decision:
+# the short `<withheld>` placeholder, because this label sits in a fixed-width column.
+# rebuild-tsv.sh applies the same POLICY and not that presentation -- its reports have no
+# fixed-width layer column to protect, so a withheld layer prints the long form there.
+# Unlike an entry-file column this one comes from a `basename` over the filesystem rather
+# than from a `read -r`, so a newline in it survives and forged a whole row.
 #
 # $rown is counted here rather than derived, and it is 1-based on the RAW file: it has to
 # be the same number the hooks print, and jit_row_id() gets NR from awk over the same file.
@@ -563,7 +592,7 @@ for tsv in "$BASE"/tools/*/00-index.tsv; do
   [ -f "$tsv" ] || continue
   INDEXES=$((INDEXES + 1))
   IDX_TOOLS=$((IDX_TOOLS + 1))
-  label="tools/$(jit_report_name "$(basename "$(dirname "$tsv")")")"
+  label="tools/$(report_layer "$(basename "$(dirname "$tsv")")")"
   rown=0
   while IFS=$'\t' read -r r_tool r_match r_file _rest; do
     rown=$((rown + 1))
@@ -586,7 +615,7 @@ for tsv in "$BASE"/paths/*/00-index.tsv; do
   [ -f "$tsv" ] || continue
   INDEXES=$((INDEXES + 1))
   IDX_PATHS=$((IDX_PATHS + 1))
-  label="paths/$(jit_report_name "$(basename "$(dirname "$tsv")")")"
+  label="paths/$(report_layer "$(basename "$(dirname "$tsv")")")"
   rown=0
   while IFS=$'\t' read -r p_match p_file _rest; do
     rown=$((rown + 1))
@@ -610,7 +639,7 @@ for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; 
   # An index was opened. That is the whole of what INDEXES answers, and leaving this line
   # out is what made a vocabulary-only tree exit 2 saying nothing had been checked (#55).
   INDEXES=$((INDEXES + 1))
-  label="vocabulary/$(jit_report_name "$(basename "$(dirname "$tsv")")")"
+  label="vocabulary/$(report_layer "$(basename "$(dirname "$tsv")")")"
   v_rown=0
   while IFS=$'\t' read -r _v_key v_file _rest; do
     v_rown=$((v_rown + 1))
@@ -720,15 +749,15 @@ EOF
 
 for tsv in "$BASE"/tools/*/00-index.tsv; do
   [ -f "$tsv" ] || continue
-  check_row_bytes "tools/$(jit_report_name "$(basename "$(dirname "$tsv")")")" "$tsv" "$(dirname "$tsv")" tools
+  check_row_bytes "tools/$(report_layer "$(basename "$(dirname "$tsv")")")" "$tsv" "$(dirname "$tsv")" tools
 done
 for tsv in "$BASE"/paths/*/00-index.tsv; do
   [ -f "$tsv" ] || continue
-  check_row_bytes "paths/$(jit_report_name "$(basename "$(dirname "$tsv")")")" "$tsv" "$(dirname "$tsv")" paths
+  check_row_bytes "paths/$(report_layer "$(basename "$(dirname "$tsv")")")" "$tsv" "$(dirname "$tsv")" paths
 done
 for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; do
   [ -f "$tsv" ] || continue
-  check_row_bytes "vocabulary/$(jit_report_name "$(basename "$(dirname "$tsv")")")" "$tsv" "$(dirname "$tsv")" vocabulary
+  check_row_bytes "vocabulary/$(report_layer "$(basename "$(dirname "$tsv")")")" "$tsv" "$(dirname "$tsv")" vocabulary
 done
 
 if [ "$INDEXES" -eq 0 ]; then
@@ -812,7 +841,7 @@ for _d in "$BASE"/tools/*/ "$BASE"/paths/*/ "$BASE"/vocabulary/*/; do
   _d="${_d%/}"
   # The dimension half comes from this script's own glob and is always tools|paths|
   # vocabulary; the LAYER half is the clone's directory name and goes through the policy.
-  list_whole "$_d" "$(basename "$(dirname "$_d")")/$(jit_report_name "$(basename "$_d")")"
+  list_whole "$_d" "$(basename "$(dirname "$_d")")/$(report_layer "$(basename "$_d")")"
 done
 unset _d
 echo ""
