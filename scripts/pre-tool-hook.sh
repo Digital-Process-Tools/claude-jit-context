@@ -561,8 +561,53 @@ END {
       asep = ", "
       if (key != "") { held[key] = 1; hold_n++ }
 
-      if (matched != "") matched = matched "\n---\n" header "\n" content
-      else matched = header "\n" content
+      # The SECOND header, and the reason there are two (#146). `header` above is the
+      # refusal header and is deliberately unbounded: #141 asked for a bound there and was
+      # refused, because the block reason carries the whole entry body anyway, so bounding
+      # the header alone is a defence walked around by moving one line down the same entry.
+      # Nothing about that has changed and the block branch above still uses `header`.
+      #
+      # On THIS path the same reasoning does not hold, and that asymmetry was the defect.
+      # Under `summary` the body is on a budget -- 160 bytes of title and 400 of
+      # description, spent in jit_inject_text() -- and the header sat outside it, quoting
+      # two index columns whole. Driven: a 60,000-byte regex `match:` column on a summary
+      # entry produced 60,223 bytes of ordinary advisory context, and a 60,000-byte
+      # entry-file column produced 60,539 with no entry file involved at all. `summary`
+      # exists so a match costs about twenty tokens instead of the whole entry (#1), and a
+      # single frontmatter-free index column reopened exactly the cost it was added to
+      # close -- silently, on an ordinary non-refusing match.
+      #
+      # So the bound is placed on the BODY BUDGET rather than on `header` itself, and the
+      # test is "was the entry text actually delivered here", which is two conditions and
+      # not one. A `full` entry that delivered its body made no promise about what a match
+      # costs and its body is unbounded at the authors own request, so a bound on its
+      # header is #141s walk-around one more time. Every other case has a bounded body
+      # sitting under this header, and `why != ""` is the second of them: a row whose entry
+      # file could not be read delivers no body at all, only the two-line substitute built
+      # above, IN EVERY MODE. Gating on the mode alone left that shape unbounded under the
+      # project default -- which is `full`, and is what every project that configured
+      # nothing is on. Driven after the mode-only fix and before this one: 60,539 bytes for
+      # the file column and 60,547 for the pattern, with no config.env present.
+      #
+      # BOTH columns, not just the pattern. They are different kinds of text -- one is
+      # written by the rule author, the other names a file -- and the second one is exactly
+      # how that substitute path is reached, so clipping the pattern alone moves the 60 KB
+      # one column over.
+      #
+      # The two caps differ for that same reason. 160 is the title cap, because in this
+      # header the pattern does the title job -- name the rule well enough to find it. 255
+      # is NAME_MAX on every platform this runs on, so it never bites a column that names
+      # a file which could exist, and always bounds one that cannot. jit_clip() marks the
+      # cut in what is injected rather than truncating quietly, so the reader can tell a
+      # clipped pattern from a short one.
+      #
+      # ent[] is safe to read here: the only branch that leaves it stale is file_why != "",
+      # which keeps `content` empty and therefore never reaches this line.
+      if (ent["mode"] == "full" && why == "") adv_header = header
+      else adv_header = "# JIT Context: " jit_clip(r_header_name, 255) " (matched: " jit_clip(r_match, 160) ")"
+
+      if (matched != "") matched = matched "\n---\n" adv_header "\n" content
+      else matched = adv_header "\n" content
     }
   }
   close(tools_tsv)

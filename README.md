@@ -273,11 +273,12 @@ An entry with no `description:` cannot be summarised into anything but its own n
 
 **The project chooses, not the entry's author.** The default lives in `config.env`, set by whoever pays for the context window; an individual entry overrides it with `inject: summary` or `inject: full`. That asymmetry is deliberate — an author who marks their own entry critical is marking it against a count somebody reads at build time.
 
-Three rules that are not settings:
+Four rules that are not settings:
 
 - **An entry with no `description:` is named and not injected**, under `summary`. Nothing is auto-derived — a generated summary of a wrong entry is a confident wrong summary, and it removes the moment you would have noticed. What you get instead is the entry's name and a line saying it has no description.
 - **A tools rule that *refuses* a call injects its whole body**, whatever the mode says. The call is already stopped; there is no next turn in which to spend a cheaper answer.
 - **An entry with no frontmatter at all injects its body**, in every mode. It has no `description:` — and no `keywords:` or `match:` either, so `rebuild-tsv.sh` could not have indexed it. Its body is the entry.
+- **The `(matched: …)` header is inside the budget, not beside it.** Wherever a tools match injects something *other* than the entry body — a summary, or the substitute for an entry file that could not be read — both index columns that line quotes are clipped and the cut is marked `[clipped]`: the pattern at 160 bytes, the file name at 255 (#146). A 60 KB `match:` pattern cannot reopen the cost `summary` was added to close, and cannot ride in on a row whose file is missing either. The header is echoed whole in exactly two places, and both deliver the whole entry beneath it: a `full` entry that was read, and a refusal.
 
 Any other value — including `gated`, a third mode that is designed and deliberately **not built**, held until there is data on how often the pull step is actually taken — falls back to the default, which stands, and is **named** rather than silently ignored. The two settings say so through different channels, because they are different mistakes:
 

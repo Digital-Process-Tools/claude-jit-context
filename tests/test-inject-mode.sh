@@ -832,6 +832,135 @@ for eng in $ENGINES; do
 done
 rm -rf "$ENGINE_BIN"
 
+# =============================================
+# SECTION 11: summary mode bounds its own header (#146)
+# =============================================
+# `summary` exists so that a match costs about twenty tokens instead of the whole entry
+# (#1). The BODY was given a budget -- 160 bytes of title, 400 of description -- and the
+# header beside it was not, so the two index columns the header quotes reopened exactly
+# the cost the mode was added to close. Driven at ca89547: a 60,000-byte regex `match:`
+# column on a `summary` entry, matching `git push origin main`, produced 60,223 bytes of
+# ordinary advisory context, and a 60,000-byte entry-file column produced 60,539.
+#
+# Four assertions, one tree, and the last two are not decoration:
+#
+#   1. a long `match:` column on a `summary` row is bounded, and the header still names
+#      the rule and the head of the pattern -- a bound that destroyed the handle would
+#      trade one absence for another.
+#   2. a `full` row is untouched. It never promised a cheap match, and a bound on its
+#      header alone is walked around by moving one line down into the body -- which is
+#      the argument that got #141 refused, applied to the path where it still holds.
+#   3. a REFUSAL still carries its header whole. #141 asked for that bound and was
+#      refused on a driven reason; without this leg the decision is one edit from being
+#      undone silently.
+#   4. the entry-file column is bounded too. Clipping only the pattern moves the same
+#      60 KB one column over: an unreadable file name reaches the very same header with
+#      a two-line substitute for a body.
+#
+# The assertions are byte-for-byte over ASCII, so no awk engine can disagree about them
+# and they do not go through the PATH shim SECTION 10 builds.
+echo ""
+echo "=== A long index column cannot escape the summary budget (#146) ==="
+
+LONG_PAT="LONGPATSTART$(printf 'x%.0s' $(seq 1 4000))LONGPATEND"
+LONG_FILE="LONGFILESTART$(printf 'x%.0s' $(seq 1 4000))LONGFILEEND.md"
+
+printf '%s\n' \
+  "---" \
+  "title: Enormous pattern, summarised" \
+  "description: A rule whose match column is far larger than the entry it names." \
+  "tool: Bash" \
+  "inject: summary" \
+  "---" \
+  "" \
+  "LONGSUM-BODY-MARKER" > "$T/longsum.md"
+
+printf '%s\n' \
+  "---" \
+  "title: Enormous pattern, whole" \
+  "description: The same rule, asking for its whole body." \
+  "tool: Bash" \
+  "inject: full" \
+  "---" \
+  "" \
+  "LONGFULL-BODY-MARKER" > "$T/longfull.md"
+
+printf '%s\n' \
+  "---" \
+  "title: Enormous pattern, refusing" \
+  "description: The same rule again, and this one stops the call." \
+  "tool: Bash" \
+  "inject: summary" \
+  "---" \
+  "" \
+  "LONGBLOCK-BODY-MARKER" > "$T/longblock.md"
+
+printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+  Bash "~git hurl|$LONG_PAT"  longsum.md   remind "" "" \
+  Bash "~git lob|$LONG_PAT"   longfull.md  remind "" "" \
+  Bash "~git chuck|$LONG_PAT" longblock.md block  "" "" \
+  Bash "~git fling"           "$LONG_FILE" remind "" "" \
+  Bash "~git toss|$LONG_PAT"  missingentry.md remind "" "" >> "$IDX_TOOLS"
+
+# The project is pinned to `full` here on purpose, and the word `default` is deliberately
+# not used: SECTION 10 left `summary` in config.env, so this is an explicit override and
+# the entry alone opts back in. What is being measured is the entrys own mode. The leg
+# further down that says DEFAULT means the other thing -- no config.env at all -- and the
+# two are not interchangeable, which is exactly what the first version of this section
+# got wrong.
+set_config "JIT_CONTEXT_INJECT=full"
+OUT=$(run_tool "git hurl at the wall")
+assert_contains     "the entry is still named"                    "$OUT" "longsum.md"
+assert_contains     "the head of the pattern still identifies it" "$OUT" "matched: ~git hurl|LONGPATSTART"
+assert_contains     "and the header says it was cut"              "$OUT" "[clipped]"
+assert_not_contains "the rest of the pattern does not arrive"     "$OUT" "LONGPATEND"
+assert_contains     "control: the summary itself still arrives"   "$OUT" "far larger than the entry"
+
+echo ""
+echo "=== Paired: a full entry has no budget to protect, so its header is untouched ==="
+OUT=$(run_tool "git lob a brick")
+assert_contains "the whole pattern is echoed back"    "$OUT" "LONGPATEND"
+assert_contains "control: and the body arrives whole" "$OUT" "LONGFULL-BODY-MARKER"
+
+echo ""
+echo "=== Paired: a refusal still carries its header whole, under summary (#141) ==="
+set_config "JIT_CONTEXT_INJECT=summary"
+OUT=$(run_tool "git chuck it over there")
+assert_blocked  "the call is refused"                          "$OUT"
+assert_contains "the refusal header keeps the whole pattern"   "$OUT" "LONGPATEND"
+assert_contains "and the whole body, as a refusal always does" "$OUT" "LONGBLOCK-BODY-MARKER"
+
+echo ""
+echo "=== The entry-file column is bounded on the same path, or the bound moves over ==="
+OUT=$(run_tool "git fling it away")
+assert_not_contains "the file column does not arrive whole" "$OUT" "LONGFILEEND"
+assert_contains     "control: the row still says its text could not be delivered" \
+                    "$OUT" "was not delivered"
+
+# ...and the same two rows under the DEFAULT, which is `full` and is what every project
+# that configured nothing is on. This is the leg the first version of this section did not
+# have, and it was wrong in exactly the way that matters: `full` exempts the header
+# because a full entry delivers its body whole at its author-s request -- and a row whose
+# entry file cannot be read delivers no body at all, only a two-line substitute, in every
+# mode. So the mode is the wrong question here and the header was still 60 KB. Driven
+# against the first fix: 60,539 bytes for the file column, 60,547 for the pattern.
+echo ""
+echo "=== A row with no deliverable text is bounded whatever the mode says ==="
+set_config ""
+OUT=$(run_tool "git fling it away")
+assert_not_contains "the file column is still bounded under the default" "$OUT" "LONGFILEEND"
+assert_contains     "control: the row still reports itself" "$OUT" "was not delivered"
+
+OUT=$(run_tool "git toss it out")
+assert_not_contains "and so is the pattern beside it" "$OUT" "LONGPATEND"
+assert_contains     "control: that row reports itself too" "$OUT" "was not delivered"
+assert_contains     "control: and it is still named"      "$OUT" "missingentry.md"
+
+# Paired, and this is what keeps the bound above from reading as `full is now clipped`:
+# the SAME default, a row whose file reads fine, still echoes its whole pattern.
+OUT=$(run_tool "git lob a brick")
+assert_contains "a full entry whose body arrived keeps its whole header" "$OUT" "LONGPATEND"
+
 echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))
