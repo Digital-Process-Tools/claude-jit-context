@@ -480,13 +480,22 @@ build_vocab_path_tsv() {
   done
 
   COUNT=$(wc -l < "$tsv" | tr -d ' ')
-  _log "rebuild-tsv" $(($(_ms) - T0)) "$label: $COUNT path mappings"
+  # The LEAF, unlike every other builder's log line, because this is the only dimension
+  # that writes two indexes out of one layer directory and the layer name alone would name
+  # both. `$label/${tsv##*/}` is the same string truncate_index is handed above, so the
+  # FATAL line and the success line for this index agree on what it is called -- and it is
+  # a path that exists, which `vocabulary/<layer>/paths` never was (#153).
+  _log "rebuild-tsv" $(($(_ms) - T0)) "$label/${tsv##*/}: $COUNT path mappings"
 }
 
 for dir in "$VOCAB_BASE"/*/; do
   [ -d "$dir" ] || continue
   dir="${dir%/}"
-  label="vocabulary/$(jit_report_name "$(basename "$dir")")/paths"
+  # No `/paths` suffix: `label` is a DIRECTORY at every one of these eight sites, and both
+  # consumers here append the leaf themselves. The suffix named which index of the layer
+  # this was, in the position a path component occupies, so `vocabulary/00-manual/paths`
+  # went into a FATAL line pointing at something that has never existed on disk (#153).
+  label="vocabulary/$(jit_report_name "$(basename "$dir")")"
   build_vocab_path_tsv "$dir" "$dir/01-paths.tsv" "$label"
 done
 

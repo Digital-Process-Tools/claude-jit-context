@@ -476,7 +476,7 @@ fi
 assert_has "the vocabulary FATAL line names its dimension" \
   "$LOUT" "FATAL    vocabulary/00-manual/00-index.tsv: could not be written"
 assert_has "so does the FATAL line for its path index" \
-  "$LOUT" "FATAL    vocabulary/00-manual/paths/01-paths.tsv: could not be written"
+  "$LOUT" "FATAL    vocabulary/00-manual/01-paths.tsv: could not be written"
 assert_has "the unindexed report names the vocabulary dimension" \
   "$LOUT" "[vocabulary/10-shared] note.md: no keywords:"
 assert_has "the dropped-keyword report names it too" \
@@ -532,6 +532,71 @@ if [ -n "$LBAD" ]; then
   echo "  FAIL: a layer label is built without naming its dimension:$LBAD"
 else
   PASS=$((PASS + 1)); echo "  PASS: every layer label is built with its dimension in front of it"
+fi
+
+# =============================================================================
+# SECTION: a path a report prints is a path that exists (#153)
+# =============================================================================
+# The vocabulary loop writes TWO indexes out of ONE layer directory, and #150 left the
+# second one labelled `vocabulary/<layer>/paths` -- a name for WHICH index of the layer,
+# printed in the position a path component occupies. `vocabulary/00-manual/paths` has
+# never existed on disk, so the FATAL line sent a reader somewhere they cannot go.
+#
+# #150 refused it on the grounds that the suffix is the only thing distinguishing the
+# layer's two indexes in the `_log` line, which prints no leaf. That is not so: the two
+# lines already end in different nouns -- "N keywords" against "N path mappings" -- so
+# the suffix was never carrying the distinction alone. The `_log` line names the leaf
+# instead, which is a real path AND a stricter answer than `/paths` was: it says which
+# file, not which category of file.
+echo ""
+echo "=== every path a report prints exists on disk (#153) ==="
+
+# 10-shared is the layer whose indexes CAN be written, so it is the only one that reaches
+# the two _log lines at all. 7 keyword rows: drop.md contributes `widget` with `file`
+# blacklisted, and the six amb*.md contribute one each.
+assert_has "the path index's _log line names the index it wrote" \
+  "$LOUT" "vocabulary/10-shared/01-paths.tsv: 0 path mappings"
+assert_has "the keyword index's _log line still names its layer" \
+  "$LOUT" "vocabulary/10-shared: 7 keywords"
+assert_lacks "the FATAL line no longer invents a paths/ component" \
+  "$LOUT" "00-manual/paths/01-paths.tsv"
+assert_lacks "nor does the _log line print a bare /paths label" \
+  "$LOUT" "10-shared/paths:"
+
+# The general form, and the one that would still be red if the two needles above were
+# merely updated to whatever the code prints today: EVERY `vocabulary/...` token anywhere
+# in the report must resolve to something under the fixture's base. That is the property
+# #153 is about -- a report names paths a reader can open -- rather than one line's text.
+LRESOLVED=0
+LMISSING=""
+while IFS= read -r ltok; do
+  [ -n "$ltok" ] || continue
+  if [ -e "$LBASE/$ltok" ]; then
+    LRESOLVED=$((LRESOLVED + 1))
+  else
+    LMISSING="$LMISSING
+    $ltok"
+  fi
+done <<EOF
+$(grep -o 'vocabulary/[A-Za-z0-9._-][A-Za-z0-9._/-]*' "$LOUT" | sort -u)
+EOF
+# Positive control on the extraction: a report that stopped naming vocabulary paths at all
+# leaves the loop iterating over nothing, and the emptiness assertion below passes for
+# that reason rather than because the paths are good.
+if [ "$LRESOLVED" -lt 3 ]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the label report named fewer than 3 resolvable vocabulary paths (matched"
+  echo "        $LRESOLVED) -- this check is now blind, fix the extraction"
+else
+  PASS=$((PASS + 1))
+  echo "  PASS: the label report still names vocabulary paths ($LRESOLVED resolved)"
+fi
+if [ -n "$LMISSING" ]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: a report line names a path that does not exist under the base:$LMISSING"
+else
+  PASS=$((PASS + 1))
+  echo "  PASS: every vocabulary path the report printed exists on disk"
 fi
 
 echo ""
