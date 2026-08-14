@@ -732,8 +732,22 @@ else
 # names the clone chose (#113). Dimension and layer are kept when they are names, for the
 # same reason the file is: a withheld leaf beside a real directory is what tells the
 # reader which `ls` to run.
+#
+# The separator is BRACKETED, and that is not decoration (#133). A one-character separator
+# is a regex to gawk and a plain string to one-true-awk -- and one-true-awk splits a plain
+# one-character separator on the NEWLINE as well:
+#
+#   awk  split("a<LF>b/c", x, "/")    -> 3 fields
+#   gawk split("a<LF>b/c", x, "/")    -> 2 fields
+#   both split("a<LF>b/c", x, "[/]")  -> 2 fields
+#
+# An entry file name may contain a newline, so on the awk macOS ships the path was torn
+# into extra components BEFORE the guard below ran: a[n-2] a[n-1] a[n] then addressed the
+# tail of the NAME instead of dimension/layer/file, the dimension fell off the left, and
+# the report printed a path nobody could open with two clone-chosen tokens standing in
+# positions labelled as directories. The guard was vetting fragments, not names.
 function relpath(p,   n, a) {
-  n = split(p, a, "/")
+  n = split(p, a, "[/]")
   if (n < 3) return jit_report_name(p)
   return ".claude/jit-context/" jit_report_name(a[n-2]) "/" jit_report_name(a[n-1]) "/" jit_report_name(a[n])
 }

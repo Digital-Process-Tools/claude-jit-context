@@ -517,7 +517,10 @@ most 64 bytes — and `<withheld: not a plain name>` when it is not, so followin
 own advice does not quietly undo what the notice withheld. The row's `match` pattern is
 still printed verbatim, on its own line marked `untrusted>`: a linter that will not show you
 your own pattern has no reason to exist, and it is also how a row whose name was withheld
-stays identifiable. `rebuild-tsv.sh` uses the same rule for the same reason.
+stays identifiable. The layer directory beside it is tree text too and follows the same
+rule, printed as `<withheld>` — short, because that column is a fixed width and the long
+form pushed every column right of it out of line. `rebuild-tsv.sh` uses the same rule for
+the same reason.
 
 **The list of refused rows is bounded, and the count beside it is not.** The index arrives
 with the repository, so the number of unhonourable rows in it is chosen by whoever wrote
