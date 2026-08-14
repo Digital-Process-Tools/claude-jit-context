@@ -91,7 +91,7 @@ JIT_RC=0
 jit_rc() { [ "$1" -gt "$JIT_RC" ] && JIT_RC="$1"; return 0; }
 
 # --- What a report may say about a name that arrived with the clone (#113, #131) ----
-# Every name printed by the five reports below is a directory entry under
+# Every name printed by the reports below is a directory entry under
 # `.claude/jit-context/`, and that tree arrives with the repository. The policy for what
 # may be printed of one -- kept when it is a NAME, withheld when it is prose -- and the
 # argument for why a maintainer tool answers that differently from a hook both live in
@@ -114,6 +114,12 @@ jit_rc() { [ "$1" -gt "$JIT_RC" ] && JIT_RC="$1"; return 0; }
 # The two columns beside these names that carry a KEYWORD rather than a name are guarded
 # separately, by jit_report_keyword() below -- see the #126 block at the top of this file
 # for why the character set here is the wrong one for a term.
+#
+# The number of such sites is deliberately NOT written here. It said "five" from #113 until
+# #144, by which point there were seven -- and a stale count in the one comment an author
+# reads before adding a report is worse than no count, because it reads as an enumeration
+# somebody keeps. tests/test-report-names.sh keeps it, one fixture per site, and #144
+# established by mutation rather than by reading that each of them is really routed.
 #
 # JIT_NAME_WITHHELD is exported by common.sh, and the awk half reads it out of ENVIRON, so
 # the placeholder cannot drift from the bash one either.

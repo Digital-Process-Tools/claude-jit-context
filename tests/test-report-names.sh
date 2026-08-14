@@ -25,6 +25,10 @@
 # SAME report, because "the hostile name is absent" is also what a report that never ran
 # looks like.
 #
+# The four reports listed above are the ones #113 found. They are not all of them: this file
+# is where the enumeration of print sites is KEPT, and the two sections #144 added at the
+# bottom carry the two that no fixture here reached.
+#
 # Usage: bash tests/test-report-names.sh
 
 set -uo pipefail
