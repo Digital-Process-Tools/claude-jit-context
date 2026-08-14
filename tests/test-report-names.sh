@@ -5,7 +5,8 @@
 # `.claude/jit-context/` arrives with the clone. Every name under it is attacker-chosen
 # text, and rebuild-tsv.sh printed several of them back verbatim:
 #
-#   dropped keywords    [00-manual] <name>: "file"          -- one entry carrying a
+#   dropped keywords    [vocabulary/00-manual] <name>: "file"
+#                                                           -- one entry carrying a
 #                                                              blacklisted keyword is the
 #                                                              whole trigger
 #   ambiguity           files: <name>,<name>,...            -- behind >5 files per keyword
@@ -147,7 +148,9 @@ assert_lacks "the FATAL line withholds the hostile layer directory" "$OUT" "wget
 # Positive controls first. Each one fails if its report did not run at all, which is the
 # only way the withholding assertions below could pass vacuously.
 assert_has "dropped-keyword report names an ordinary entry" "$OUT" 'billing.md: "file"'
-assert_has "dropped-keyword report names an ordinary layer" "$OUT" "[00-manual]"
+# Dimension included since #150: a bare `[00-manual]` named a layer that exists in three
+# dimensions at once. Stricter than what it replaced, not looser.
+assert_has "dropped-keyword report names an ordinary layer" "$OUT" "[vocabulary/00-manual]"
 assert_has "ambiguity report names an ordinary entry" "$OUT" "entry1.md"
 # An ordinary keyword -- multi-word, which jit_report_name()'s set would have refused --
 # is still printed in full. Without this the two assertions below pass over a report that
@@ -415,6 +418,121 @@ for eng in $ENGINES; do
   assert_has "[$eng] and it is still located by layer and row position" \
     "$BOUT" "rebuild-tsv: paths/00-manual row "
 done
+
+# =============================================================================
+# SECTION: every layer label a report prints names its DIMENSION (#150)
+# =============================================================================
+# The build loops each make a `label` out of the layer directory name, and three of the
+# eight sites that do it did not put the dimension in front. So a vocabulary layer reached
+# truncate_index's FATAL line, the unindexed report, the dropped-keyword report and the
+# ambiguity tally as a bare `00-manual`, while the paths equivalent read `paths/00-manual`.
+#
+# `00-manual/` is the ordinary layer name -- every project has one in each dimension it
+# uses -- so two same-named layers in different dimensions were indistinguishable in the
+# exact reports a person reads when an entry did not get indexed.
+#
+# Both dimensions are in ONE fixture and one run, under layer names that COLLIDE across
+# them. A fix that relabelled everything, or one that dropped the paths prefix to match,
+# passes half of what is below and fails the other half.
+echo ""
+echo "=== every layer label names its dimension (#150) ==="
+
+LPROJ="$WORK/labels"
+LBASE="$LPROJ/.claude/jit-context"
+# `00-manual` in BOTH dimensions, each with a DIRECTORY where its index belongs -- the
+# same deterministic trigger the FATAL section above uses. The vocabulary loop writes two
+# indexes out of one layer, so both leaves are blocked and both its FATAL lines are driven.
+mkdir -p "$LBASE/vocabulary/00-manual/00-index.tsv" \
+         "$LBASE/vocabulary/00-manual/01-paths.tsv" \
+         "$LBASE/paths/00-manual/00-index.tsv" \
+  || { echo "SKIPPED: could not build the label fixture"; exit 2; }
+
+# A second layer name, again colliding across the two dimensions, whose index CAN be
+# written -- the FATAL branch returns before any entry is read, so the unindexed and
+# dropped-keyword reports need a layer that got further than that.
+mkdir -p "$LBASE/vocabulary/10-shared" "$LBASE/paths/10-shared" || true
+printf -- '---\ntitle: t\n---\n\nBody.\n'           > "$LBASE/vocabulary/10-shared/note.md"
+printf -- '---\ntitle: t\n---\n\nBody.\n'           > "$LBASE/paths/10-shared/note.md"
+printf -- '---\nkeywords: file, widget\n---\n\nB\n' > "$LBASE/vocabulary/10-shared/drop.md"
+# Six entries sharing one keyword is what the ambiguity tally is behind, and it prints the
+# layer in the same bracketed position as the two reports above it.
+for i in 1 2 3 4 5 6; do
+  printf -- '---\nkeywords: widget\n---\n\nB\n' > "$LBASE/vocabulary/10-shared/amb$i.md"
+done
+
+LOUT="$WORK/labels.out"
+CLAUDE_PROJECT_DIR="$LPROJ" bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh" > "$LOUT" 2>&1
+LRC=$?
+
+# 2, for the reason the first fixture asserts it: a change that stopped the FATAL branch
+# firing would take three of the assertions below with it.
+if [ "$LRC" -ne 2 ]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: the label fixture still exits 2 (got $LRC)"
+else
+  PASS=$((PASS + 1)); echo "  PASS: the label fixture still exits 2"
+fi
+
+# --- The vocabulary half: the direction that was wrong. -------------------------------
+assert_has "the vocabulary FATAL line names its dimension" \
+  "$LOUT" "FATAL    vocabulary/00-manual/00-index.tsv: could not be written"
+assert_has "so does the FATAL line for its path index" \
+  "$LOUT" "FATAL    vocabulary/00-manual/paths/01-paths.tsv: could not be written"
+assert_has "the unindexed report names the vocabulary dimension" \
+  "$LOUT" "[vocabulary/10-shared] note.md: no keywords:"
+assert_has "the dropped-keyword report names it too" \
+  "$LOUT" '[vocabulary/10-shared] drop.md: "file"'
+assert_has "and so does the ambiguity tally" \
+  "$LOUT" '[vocabulary/10-shared] "widget"'
+
+# --- The paths half: the direction that was already right, and must stay. -------------
+assert_has "the paths FATAL line still names its dimension" \
+  "$LOUT" "FATAL    paths/00-manual/00-index.tsv: could not be written"
+assert_has "the paths unindexed line still names its dimension" \
+  "$LOUT" "[paths/10-shared] note.md: no match:"
+
+# --- Neither layer name may appear bare. Both needles are exact today. -----------------
+assert_lacks "no FATAL line prints a layer with no dimension in front of it" \
+  "$LOUT" "FATAL    00-manual/"
+assert_lacks "no bracketed report prints a bare layer name" \
+  "$LOUT" "[10-shared]"
+
+# --- Structural: the idiom that builds a layer label, at every site that uses it. ------
+# The behavioural half above covers the report sites a fixture can reach. This covers the
+# ones it cannot, and it is why the fix is not "prefix the two lines #150 named".
+#
+# Deliberately NOT a dimension parameter on the build functions, which was the alternative
+# #150 offered on the grounds that omitting it would become a syntax error. It would not:
+# bash has no arity check and this script sets no `-u`, so an omitted argument is an empty
+# `$3` and prints `[/10-shared]` -- a silent WRONG answer in place of a silent incomplete
+# one. In bash the only mechanism that makes the omission unable to survive is a red test.
+LSITES=$(grep -c 'jit_report_name "$(basename' "$SCRIPT_DIR/scripts/rebuild-tsv.sh")
+# Positive control on the grep itself: if the idiom is renamed or rewritten, the loop
+# below iterates over nothing and its assertion passes for that reason.
+if [ "${LSITES:-0}" -lt 6 ]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the layer-label idiom was not found in rebuild-tsv.sh (matched $LSITES lines,"
+  echo "        expected at least 6) -- this check is now blind, fix the pattern"
+else
+  PASS=$((PASS + 1)); echo "  PASS: the layer-label idiom is still findable ($LSITES sites)"
+fi
+
+LBAD=""
+while IFS= read -r lline; do
+  [ -n "$lline" ] || continue
+  case "$lline" in
+    *tools/*|*paths/*|*vocabulary/*) ;;
+    *) LBAD="$LBAD
+    $lline" ;;
+  esac
+done <<EOF
+$(grep -n 'jit_report_name "$(basename' "$SCRIPT_DIR/scripts/rebuild-tsv.sh")
+EOF
+if [ -n "$LBAD" ]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: a layer label is built without naming its dimension:$LBAD"
+else
+  PASS=$((PASS + 1)); echo "  PASS: every layer label is built with its dimension in front of it"
+fi
 
 echo ""
 if [ -n "$NOT_EVALUATED" ]; then

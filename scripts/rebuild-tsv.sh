@@ -435,7 +435,7 @@ VOCAB_BASE="$JIT_BASE/vocabulary"
 for dir in "$VOCAB_BASE"/*/; do
   [ -d "$dir" ] || continue
   dir="${dir%/}"
-  label=$(jit_report_name "$(basename "$dir")")
+  label="vocabulary/$(jit_report_name "$(basename "$dir")")"
   build_vocab_tsv "$dir" "$dir/00-index.tsv" "$label"
 done
 
@@ -486,7 +486,7 @@ build_vocab_path_tsv() {
 for dir in "$VOCAB_BASE"/*/; do
   [ -d "$dir" ] || continue
   dir="${dir%/}"
-  label="$(jit_report_name "$(basename "$dir")")/paths"
+  label="vocabulary/$(jit_report_name "$(basename "$dir")")/paths"
   build_vocab_path_tsv "$dir" "$dir/01-paths.tsv" "$label"
 done
 
@@ -598,7 +598,11 @@ echo "" >&2
 HAS_AMBIG=0
 for tsv in "$VOCAB_BASE"/*/00-index.tsv; do
   [ -f "$tsv" ] || continue
-  layer=$(jit_report_name "$(basename "$(dirname "$tsv")")")
+  # Dimension included, like every other layer label this script prints (#150). This
+  # report is vocabulary-only, so the dimension carries no information the section header
+  # does not -- but a reader greps `[vocabulary/00-manual]` out of one report and expects
+  # it in the next, and a rule with one exception is a rule nobody keeps.
+  layer="vocabulary/$(jit_report_name "$(basename "$(dirname "$tsv")")")"
   # LC_ALL=C so jit_report_name() decides on BYTES, the same as the bash half. The file
   # names here are the index column rebuild-tsv.sh just wrote from a basename, so they
   # carry whatever the clone chose to call its entries (#113). A withheld one cannot be
