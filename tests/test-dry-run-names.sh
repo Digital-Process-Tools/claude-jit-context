@@ -122,10 +122,12 @@ body "$MANUAL/ordinary-warn.md"
 body "$MANUAL/$H_WHOLE"
 
 # --- The `inject:` ADVISORY row (#147), folded into this battery by #154. ----------------
-# #147 added a print site and asserted its jit_report_name() guard only inside its own test
-# section, so the hostile-name fixture above never reached it: nothing here carried an
-# `inject:` key at all, and the row fires on nothing else. Two entries, ordinary and
-# hostile, in the same layer and the same report as everything else.
+# #147 asserted that row's jit_report_name() guard inside its own section of
+# tests/test-jit-dry-run.sh, which drives the row and drives a hostile inject: VALUE. What
+# it does not drive is a hostile entry NAME on it -- and this battery, whose whole subject
+# is the name column, never reached the row at all: nothing here carried an `inject:` key,
+# and the row fires on nothing else. Two entries, ordinary and hostile, in the same layer
+# and the same report as everything else.
 #
 # The value is deliberately identical on both, so the entry NAME is the only thing that
 # differs between the two rows -- the same isolation tests/test-report-names.sh uses. It
@@ -174,11 +176,13 @@ fi
 
 # --- A tools layer, for the three sites the paths-only fixture could not reach (#154) ---
 # The enumeration at the bottom of this file lists every report row site; three of them are
-# reached only from the `tools` loop, and this fixture had no tools index at all:
+# reached only from the `tools` loop, and this fixture had no tools index at all. Both of
+# those rows are executed by tests/test-jit-dry-run.sh, which is the suite for what this
+# linter SAYS; what is missing is what it may say about a NAME, which is this suite:
 #
-#   the ok row                `substring, not a regex (tool <t>)`, which is the only site
-#                             that prints the index TOOL column, through its own
-#                             jit_report_name() call that nothing else drives
+#   the ok row                `substring, not a regex (tool <t>)`, the only site that
+#                             prints the index TOOL column -- through a jit_report_name()
+#                             call whose withholding half nothing anywhere drives
 #   check_bare_truncation()   the `ADVISORY ... bare match ... cut at the first ;` pair
 #                             (#136), on a row that can refuse
 #
@@ -631,14 +635,31 @@ fi
 # --- The two indirections the closed set above leans on ----------------------------------
 # `"$disp"` is only an acceptable column because of what disp is assigned FROM, and
 # `"$label"` only because of where a label is built. Neither is visible to the enumeration.
-DISP_BAD=$(grep -nE '(^|[^_[:alnum:]])disp=' "$SCRIPT_DIR/scripts/jit-dry-run.sh" \
-  | grep -vE 'disp="\$\(jit_report_name |disp="row \$rown"')
-N_DISP=$(grep -cE '(^|[^_[:alnum:]])disp=' "$SCRIPT_DIR/scripts/jit-dry-run.sh" | tr -d ' ')
-if [ "${N_DISP:-0}" -ge 6 ] && [ -z "$DISP_BAD" ]; then
+# Per ASSIGNMENT and not per line, which is not a refinement: jit-dry-run.sh already
+# carries two on one line -- `if [ -n "$file" ]; then disp=...; else disp="row $rown"; fi`
+# -- and a line-wise `grep -v` drops the whole line the moment ONE spelling on it is safe.
+# An unsafe assignment appended to that exact line, the one shape in the file that is
+# already known to occur, would have been filtered out by its own safe neighbour.
+DISP_SCAN=$(awk '
+  {
+    line = $0
+    while (match(line, /disp=/)) {
+      pre = (RSTART == 1) ? "" : substr(line, RSTART - 1, 1)
+      line = substr(line, RSTART + 5)
+      if (pre ~ /[_A-Za-z0-9]/) continue
+      total++
+      if (line !~ /^"\$\(jit_report_name / && line !~ /^"row \$rown"/)
+        printf "%d: disp=%s\n", FNR, substr(line, 1, 40)
+    }
+  }
+  END { printf "TOTAL\t%d\n", total + 0 }' "$SCRIPT_DIR/scripts/jit-dry-run.sh")
+N_DISP=$(printf '%s\n' "$DISP_SCAN" | awk -F'\t' '$1 == "TOTAL" { print $2 }')
+DISP_BAD=$(printf '%s\n' "$DISP_SCAN" | grep -v '^TOTAL')
+if [ "${N_DISP:-0}" -ge 7 ] && [ -z "$DISP_BAD" ]; then
   PASS=$((PASS + 1)); echo "  PASS: all $N_DISP disp= assignments are the policy's answer, or the documented row fallback"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: a disp= assignment is neither jit_report_name() nor the row fallback ($N_DISP found, floor 6)"
+  echo "  FAIL: a disp= assignment is neither jit_report_name() nor the row fallback ($N_DISP found, floor 7)"
   printf '%s\n' "$DISP_BAD" | sed 's/^/      /'
 fi
 
