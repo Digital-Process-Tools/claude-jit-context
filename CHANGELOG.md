@@ -5,6 +5,344 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] — A match no longer costs the whole entry, and a rule with nothing to say still enforces
+
+### Added
+
+- **`summary` mode: a match can now inject the entry title and its author-written
+  `description:` instead of the entry body** (#1). Matching was never the defect; the cost of
+  getting it wrong was. A miss costs nothing and a false positive costs the whole entry,
+  and one session about token tooling pulled a 14.9 KB tag-hierarchy reference —
+  `tag_relation` table layout included — on the word `tag`, in a conversation about YAML
+  metadata. The match was word-bounded and correctly evaluated. It was 15,000 tokens
+  wrong. Four such hits in four turns cost roughly 19 KB, and nothing noticed, because
+  per-session dedup was working exactly as designed: it prevents repetition, not
+  irrelevance.
+
+  So being wrong can now be cheap instead of the matcher having to get cleverer. A match
+  under `summary` costs roughly 20 tokens and the agent reads the file if it wants the
+  rest.
+
+  **`full` remains the default, and the reason is upgrade safety rather than doubt about
+  the trade.** A project that installed this before the mode existed has entries that
+  arrive whole and agents that behave as though they will. Flipping that on an upgrade
+  nobody read the notes for takes away knowledge the project already relies on, silently
+  — an absence produced by the tool, read as an absence in the world, which is the one
+  failure this repository exists to name. Nothing changes for an existing tree until it
+  asks. `JIT_CONTEXT_INJECT=summary` in `config.env` is the ask.
+
+  **Default-`full` is a stage, not a destination, and that is the part most likely to rot
+  quietly.** The risk it carries is issue #1s own objection one level up: a setting nobody
+  revisits stays at maximum by inertia, and "we will move to summary later" becomes a
+  sentence nobody acts on. So the exit is measured rather than asserted. `rebuild-tsv.sh`
+  now prints what one match costs on *your* tree — the largest and the median entry, in
+  bytes, each beside what the same entry would cost summarised — and names the entries
+  carrying no `description:` yet, which is the work between a tree and being able to flip.
+  When that count is zero it says so, in those words. On this repository, at this commit:
+  15174 bytes for the largest match against 311 summarised, 3562 for the median against
+  236, 9 entries, none of them blocking.
+
+  An entry that can never *become* a summary is not counted as blocking. One pinned to
+  `full` by its own `inject:`, or carrying no frontmatter at all, stays whole whatever the
+  project sets — naming it would send an author to write a `description:` that nothing
+  will ever read. `jit_entry_load()` reports that pin separately, because when the default
+  and the override agree the two are indistinguishable from the mode alone.
+
+  It prices **one match**, deliberately never a corpus total. "Summary mode would save
+  2.4 MB on this tree" is technically true and useless: nothing here is ever resident, so
+  that quantity has never been in a context window and never will be. The saving that
+  actually happens is per-match times how often each entry fires, and only the first
+  factor is knowable at build time — the second is in `hooks.log`, which is where the
+  report sends the reader for it. `jit-dry-run.sh` carries the per-call half and measures
+  rather than estimates it, off the hook's own output: `hooks.md(WHOLE BODY) [6245 bytes
+  injected]` against `hooks.md(summary) [385 bytes injected]` for the same sample call.
+
+  **This is not the `inject: full | summary` flag issue #1 rejected in its own body, and
+  the difference is the only reason it survives that objection.** The objection was:
+
+  > The value would be self-assessed by whoever writes the entry, and every author
+  > believes their own entry is the critical one. Within a month every entry is `full`
+  > and the flag has bought nothing.
+
+  That is an objection about the CHOOSER, and it is correct. The default belongs to the
+  project owner in `config.env` — the person whose context window fills up — not to the
+  entry author. A flag nobody pays for goes to maximum; a flag the chooser pays for does
+  not. Anyone reading this later and about to revert it as "the mode flag we already
+  rejected": check who does the choosing first.
+
+  The per-entry `inject:` override is still an author choice, and that is deliberate: it
+  overrides a default the project set, against a population `rebuild-tsv.sh` counts at
+  build time. `jit-dry-run.sh` annotates each fired rule `(summary)` or `(WHOLE BODY)`
+  with the bytes it actually injected, so the cost is visible before it is paid.
+
+  **The loss `summary` buys with, stated rather than buried.** The pull is a soft rule. An
+  agent handed 20 tokens decides whether to read the rest, and under momentum it will
+  sometimes skip one it needed, where a full body would have put the knowledge in front of
+  it. At a 750:1 cost ratio the trade looks right, and it is a trade and not a free win —
+  which is the other half of why it is not the default. It is
+  also measurable with no new machinery, which is the half issue #1 asked for and could
+  not have before this existed: reading an entry is a tool call, so a pull lands in
+  `hooks.log` in the path column like any other read. The `pre-path` log field was widened
+  from 80 to 200 characters for that reason — at 80, an absolute path to an entry under
+  any real project directory was cut before the part that identifies it, and the
+  measurement read as a pull that never happened.
+
+  **What does not become a summary.** A tools rule that refuses a call injects its whole
+  body, whatever the mode says. The call is already stopped, so there is no next turn in
+  which to spend a cheaper answer, and a block reason that says "read the file to find out
+  why" is an absence produced by the tool — the one failure this repository exists to
+  name. `block`, `require` and `forbid` all take that path, decided from the index columns
+  before the entry file is opened, so a rule that cannot refuse never pays for a body it
+  will not use.
+
+  **An entry with no `description:` is named and not injected, under `summary`.** Nothing
+  is auto-derived.
+  A generated summary of a wrong entry is a confident wrong summary, and it removes the one
+  moment where the author would have noticed. What arrives instead says plainly that the
+  entry has no description and where to read it, and `hooks.log` marks the match
+  `[summary:no-description]` so the gap is countable. `rebuild-tsv.sh` counts those too.
+
+  **A file with no frontmatter at all injects its body in every mode.** It has no `description:`,
+  and it has no `keywords:`, `match:` or `tool:` either — so `rebuild-tsv.sh` could not
+  have produced its index row, and its body is the entry. That is not a loophole an author
+  can live in: deleting the frontmatter to keep the whole body also unindexes the entry on
+  the next rebuild.
+
+  **No index schema change, and nothing to migrate.** The description is read out of the
+  entry file at fire time, which the hook already opened. A third TSV column would have
+  been public behaviour — every project with a committed index would have had a stale one,
+  and `session-start-hook.sh` clears markers without rebuilding. It would also have been
+  slower: in summary mode the read stops at the closing `---`, so a large entry costs its
+  frontmatter instead of its body. Measured on macOS, awk version 20200816, a 31.6 KB entry
+  matched by one keyword, 60 invocations per arm over three interleaved rounds: 32.6 / 32.8
+  / 35.8 ms per invocation reading the whole file against 29.1 / 28.0 / 30.3 stopping at
+  the frontmatter. Running `rebuild-tsv.sh` over this repository after adding `description:`
+  to every entry produced byte-identical index files.
+
+  **Dedup applies to both modes**, though issue #1 suggested a 20-token injection might
+  make it unnecessary under `summary`. It is what makes the pull rate readable: an entry summarised once and then
+  read is a clean signal, one re-announced on every prompt is noise the agent learns to
+  skip. The refusal and `config.env` notices continue to ride the same marker deliberately.
+
+  The report in `rebuild-tsv.sh` computes its sizes with `jit_entry_load()` and
+  `jit_inject_text()` — the same reader the hooks use, not a second parser beside it. An
+  earlier cut had its own frontmatter parse and drifted within a day: it read `inject:
+  "full"` as an unrecognised value, so an entry that arrived whole at runtime was reported
+  as a summary. A budget computed by a different parser from the thing it is budgeting is
+  worse than no budget.
+
+  `title:` and `description:` are clipped — 160 and 400 characters — and the clip is
+  visible in what is injected rather than being a silent truncation. Without a cap the
+  promise that a match is cheap is only a convention: 15 KB on one frontmatter line and
+  summary mode costs what full mode cost, silently. Nothing else about the value is
+  rewritten; `0.3.0` records what happens when this reader edits a value it does not
+  understand.
+
+- **`JIT_CONTEXT_INJECT` in `config.env`, and `inject:` in an entry** (#1). `full` (the
+  default) or `summary`. Any other value is **refused and named** — in `hooks.log`, and
+  once per session in the injected context through the channel `config.env` refusals
+  already use — and the default stands. An unrecognised value falls back to `full`, which
+  is the safe direction for a fallback: a project whose setting could not be honoured
+  keeps what it had rather than quietly losing it. An unrecognised `inject:` in an entry
+  falls back to the project default and says so in what that entry injects, without ever
+  echoing the value back — it is free text from a file that arrived with the repository.
+
+  **`gated` was designed and deliberately not built, on instruction, and this is the
+  record of that so the diff does not read as an oversight.** It is a third mode in which
+  a small model is asked whether an entry is relevant, given its description and the
+  preceding message, before the body is spent — a ~200-token call gating a ~15,000-token
+  injection. It is held until there is data on how often the pull step under `summary` is
+  actually taken, because that is the only evidence that settles whether a gate earns its
+  network dependency, and only the `summary` path can produce it. There is no stub, no
+  dead branch and no half-parsed value: `gated` in a `config.env` or in an entry is
+  handled exactly as `banana` is. Two constraints are recorded for whenever it is built —
+  no key, offline, in CI or rate-limited must degrade to injecting the body and never to
+  silence, and it must be opt-in and never a default.
+
+- **`rebuild-tsv.sh` now names the entries it wrote no index row for** (#44). The hooks read `00-index.tsv`, never your markdown, so a `paths/` entry with no `match:`, a `vocabulary/` entry with no `keywords:`, a `tools/` entry missing `tool:` or `match:`, or an entry whose every keyword the blacklist dropped or the normaliser emptied, is a file you wrote, committed and can open that nothing will ever load. Until now the only signal was a `continue`: nothing errored, nothing warned, the rebuild exited `0`, and from a session that is indistinguishable from a rule that fires and never matches.
+
+  Each case is recorded at the point of the drop rather than inferred afterwards by diffing the entry glob against the index — the indexer knows *why*, and a diff would have to guess between "no `match:`" and "every keyword was blacklisted", which are two different fixes. The number printed is a count of files and says so; bytes belong to the `What a match costs` report one section down.
+
+  Advisory, exit `0`, like the two reports beside it. A layer directory may legitimately hold a note that was never meant to be an entry, and this reports rather than nags.
+
+  The rest of #44's original list — largest and median entry, the `full`/`summary` population, entries with no `description:` — was built by #54 and is not duplicated here. Its later per-entry mode economics from `hooks.log` is a separate, log-driven deliverable and is not in this change.
+
+### Fixed
+
+- **The entries this repository ships to other people were driven by nothing, and could not be used as shipped** (#93). `examples/jit-context/` held its four samples one directory above the layer the hooks read. `rebuild-tsv.sh` walks `<dimension>/*/` for a layer, so copying the tree into a project — the only thing those files are for — produced no index at all: every sample was inert, in silence, which is the exact defect this plugin exists to prevent. The entries now live in `<dimension>/00-manual/`, and `cp -R examples/jit-context/. .claude/jit-context/` works.
+
+  `tests/test-shipped-examples.sh` does that copy, rebuilds, and drives the real hooks against the result — both directions for every sample, with a positive control beside every silence and a harness probe per hook that exits loudly rather than letting an unreadable tree read as a clean sweep. The hooks and not `jit-dry-run.sh` alone, because only `pre-tool-hook.sh` emits the `{"decision":"block"}` a session acts on; the linter is still run once, as a gate, with an absolute `--base`.
+
+  This also fixtures the `## Modules` module-path channel (`01-paths.tsv`), which #93 reported as untestable here and asked to be named as a skip. Nothing is skipped: the shipped billing example carries a `## Modules` section, and the channel's opt-in gate is driven in both positions — on, it injects the entry for a file inside the module; off, which is the default, it does not.
+
+  `tests/test-dogfood-entries.sh` gains the vocabulary assertions it never had, so this repository's own `jit-context.md` entry can no longer stop matching without a leg going red.
+
+- **Three anchors in the shipped examples misfired, and the anchor is the part people copy** (#94). `git-push.example.md` matched the bare substring `git push`, so it fired on `git pushd` and on `echo git push` — the headline tools sample teaching the word where #76 and #79 had already paid for teaching the invocation. It now uses `~@invocation git push`, and says in its own body why.
+
+  `phpunit.example.md` carried a `require: --no-coverage` and a `forbid: --coverage-html` in one entry. `require` is evaluated first and short-circuits, so that `forbid` could only ever speak on `bin/phpunit --no-coverage --coverage-html` — a command that contradicts itself and that nobody types. The entry keeps the `require`, drops the unreachable `forbid`, and states the ordering rule instead of demonstrating a mechanism it never reached. `forbid` is now shown where it is reachable, on its own axis, by a new `git-commit.example.md` refusing `--no-verify`.
+
+  `billing.example.md` shipped `amount` and `total` as keywords, so `give me the total number of tests` loaded the whole billing entry into an unrelated session — the failure that `templates/jit-context/.../writing-rules.md`, the entry `jit-init.sh` seeds into every new project, warns new users about. Both are gone, replaced by the multi-word `amount vat out`, and the entry now explains the choice.
+
+  All three are driven in both directions by `tests/test-shipped-examples.sh`.
+
+- **A keyword the index writer discarded now says so, and two of this repository's own rules were not reaching what they describe** (#95). Three findings with one shape: something was dropped or uncovered while the build reported success.
+
+  `rebuild-tsv.sh` skipped any `keywords:` term matching `JIT_CONTEXT_KEYWORD_BLACKLIST` with no line anywhere — so `keywords: file, invoice` produced a rule firing on `invoice`, never on `file`, out of a rebuild that printed nothing but success. Each skipped keyword is now named with the entry it came from, in the same report block as the ambiguity tally, and a tree with no drops says so in its own words rather than falling silent.
+
+  It stays **exit 0**, deliberately. Skipping a generic word is what the field is documented to do — the word is kept in frontmatter for human searching — no row was written and so nothing is refused in the sense exit `1` means, and the pattern is project-configurable, so a project that widened it would exit non-zero on every rebuild forever. What was missing was the sentence, not the status.
+
+  The other two were rules of ours that did not reach their subject. The vocabulary entry describing the plugin carried `jit-context` and not `jit context`, so the spelling a person types mid-sentence matched nothing — while the entry we ship into other people's projects carries both, deliberately. And the entry about rebuilding the index was anchored on `.claude/` and `examples/` alone, so editing `templates/jit-context/**/*.md` — the one entry whose keywords are copied into every new project — fired no rule at all. Both fixed, both driven in each direction, and the alternation is now anchored on a path component so a directory merely ending in `templates` does not claim the rule.
+
+- **A rule the matcher could not evaluate is now named on the call that was blocked, instead of only in the log** (#103). The refusal notice — `N rule(s) could not be evaluated, so they did NOT run` — was withheld whenever the `tools` dimension refused the call, so that a block reason stayed the only thing the model read. For a row refused at load, that was a deferral: the next call that was not blocked reported it. For a row whose entry file cannot be read, it was not. Such a row is only counted on a command it actually matched, so when that is the same command a `block` rule refuses, every call that would report it is blocked, and the notice never arrived for the rest of the session — a dark rule beside a block rule, reported nowhere a person looks.
+
+  The notice is now appended after the block reason rather than withheld. The block is structural: the call is refused whatever is read afterwards, so nothing appended here can dilute a decision into failing open. A blocked call does not spend the once-per-session budget, because the row scan stops at the rule that blocked and the list beside a block reason can therefore be short; the complete list still arrives on the next call that is not blocked. The refused-`config.env` notice is delivered on the same path and does spend it, since that file is parsed whole before `awk` starts and there is nothing left to arrive later.
+
+- **The dogfood entry for the hooks now carries the one exception to "a mark records an injection that happened"** (#108). `paths/00-manual/hooks.md` stated the mark rule as a question of ordering — read the body, then mark it shown — which is still true and is not the whole rule. Since #103 the two once-per-session notices in `pre-tool-hook.sh` sit on opposite sides of a second axis: the refused-rules notice is delivered beside a block reason and does **not** consume its marker, because `break` at the block rule truncates the row scan and the list delivered there may be short, while the `config.env` refusal notice on the same path **does** consume its marker, because `config.env` is parsed whole before `awk` starts. Someone editing the hooks reads that entry at the moment they are editing them, and the paragraph gave them no way to predict either half. Entry text only — no behaviour changed, and nothing here ships inside the plugin.
+
+- **The meta-suite bound on helper names, so a suite that read its output from a file got a false red** (#110). `tests/test-assertion-helpers.sh` drives every suite's real assertion helpers with a 1 MB payload, because the `| grep -q` SIGPIPE shape only misreports once the output outgrows the pipe buffer. It found its subjects by name: any `assert_blocked()` was called with the signature it assumed, `(description, captured-output)`. That is not the only correct signature — `$( )` silently drops NUL bytes, so suites are told to write hook output to a file and assert against the file, and a helper written that way takes a needle and a path. Handed the payload as a needle, it was reported as broken when it was not: a false red in the suite whose job is to catch false greens.
+
+  A suite now declares what may be driven, one `# jit-drive: <function> <semantic> <source>` line per helper, or `# jit-drive: none -- <reason>`. The semantic is what the helper means rather than what it is called, and the source says where it reads output from — a captured argument, a path in a named variable, or a path argument. Every declaration is driven in both directions, so declaring the wrong one is red rather than silently wrong.
+
+  There are three outcomes now instead of two. A suite that declares nothing at all fails, rather than being driven with guessed arguments; the suites that declared `none` are printed with their reasons at the end of every run, alongside every `assert_*`/`expect_*` function no declaration mentions. Neither list fails the run — whether a helper is payload-shaped cannot be decided from outside it — but neither is silent, which is the outcome the previous design could not express.
+
+  The harness now also tests itself against a controlled tree of four fixtures in one run: a correct file-reading helper that must come out green, a genuinely broken helper that must still come out red, an undeclared suite that must be reported, and a declaration naming an output variable the harness uses for its own bookkeeping, which must be refused by name rather than driven into a false verdict. Declaring the file-reading and path-argument shapes brought eight helpers under coverage that nothing had ever driven, taking the run from 77 helper calls to 93.
+
+- **A blocked tool call no longer burns the entries it never delivered, and the log no longer claims it did** (#112). `pre-tool-hook.sh` ran its vocabulary pass after the rule loop had already broken on a `block`, marked every entry it matched as shown for the session, and then discarded them — a block reason is the whole of that call's output. The marker file is the one `pre-prompt-hook.sh` reads too, so the entry was spent in **both** dimensions, delivered to nobody, for the rest of the session. The same thing happened to an advisory `once` rule that matched earlier in the same scan.
+
+  `hooks.log` is the half that let this survive two audits. It reported `00-manual:billing.md(billing) [shown:1]` on the blocked call — indistinguishable from a correct delivery — so the one surface that could have shown the burn agreed with it. Matches that were discarded are now listed as `withheld[…]` and left out of the `[shown:N]` count.
+
+  The pass still runs on the block path, and that is a decision rather than an oversight: a vocabulary row that cannot be evaluated is reported beside the block reason, and on a command that is always refused there is no later call for that report to arrive on (#103). What it stops doing is marking. Pre-existing at 0.3.2; it shipped in 0.3.3.
+
+- **`rebuild-tsv.sh` printed attacker-chosen entry file names straight back into the report** (#113). `.claude/jit-context/` arrives with the clone, so an entry's file name — and its layer directory's name — is text a repository chooses, and four reports echoed it verbatim: the dropped-keyword list, the ambiguity tally, the `What a match costs` budget, and the bad-bytes notice. One entry carrying a blacklisted keyword such as `file` was the whole trigger. No rule had to match, no hook had to fire, and `CLAUDE.md` tells the agent to run this tool after every frontmatter edit — so a file named `IGNORE ALL PREVIOUS INSTRUCTIONS. …md` landed in a model's tool result by instruction rather than by accident. `common.sh` had already carried the argument for the hooks since #35 and answered it there by naming a refused row's *position*; the maintainer tool beside it had never asked the question.
+
+  A file name containing a **newline** forged a whole report line, in the tool's own voice. That half was never a judgement call.
+
+  Names are now kept when they are names — `[A-Za-z0-9]` then `[A-Za-z0-9._-]`, at most 64 bytes — and replaced by `<withheld: not a plain name>` otherwise. Kept, rather than swapped for a row number like the hooks do, because this tool is run *by* the author and the file name is the entire actionable content of all four reports. The character set is chosen for one property: it contains no space, and an instruction is prose. No length cap would have done it — `Run rm -rf ~` is twelve bytes.
+
+  The `FATAL` line for an index that could not be written leaked the whole path too, and for a second reason: `: > "$tsv" 2>/dev/null` applies its redirections left to right, so bash printed its own diagnostic — absolute path included — while stderr was still the terminal, and the `2>/dev/null` that followed silenced nothing. A clone reaches that branch deliberately by shipping a *directory* named `00-index.tsv`.
+
+  Withholding is a report decision only: the entry is still indexed under its real name and its rules still fire.
+
+- **A valued flag with no value hung `jit-init.sh` and `jit-dry-run.sh` forever, in silence** (#114). `--base) BASE="${2:-}"; shift 2 ;;` under `set -uo pipefail` with no `-e` is a hang rather than an error: with one positional argument left `shift 2` fails, `$1` never advances, and the argument loop spins. `bash scripts/jit-init.sh --base` ran to a `timeout` kill having written zero bytes to stdout and zero to stderr, and so did all four of `jit-dry-run.sh`'s `--base`, `--tool`, `--command` and `--prompt`.
+
+  An *unknown* flag was refused correctly and loudly the whole time — exit 2, on stderr, naming the argument. The quiet path was the *known* one. Both scripts now check `[ $# -ge 2 ]` on each arm before consuming a value and refuse with the same shape `jit-misses.sh` has always used, which is the third tool in the sweep and needed no change.
+
+  `jit-dry-run.sh` is the command the hooks' own refusal notice sends rule authors to, so the caller hitting this was usually an agent, spending its entire timeout against no output at all.
+
+  `tests/test-arg-flag-values.sh` reads each script's own argument loop for arms carrying `shift 2` rather than taking a list on trust, so a valued flag added later is covered without anyone remembering; each flag is also driven *with* a value in the same fixture, and a new flag with no such positive control declared fails the suite rather than skipping it.
+
+- **A `match` is accent-folded, and an accented character class becomes its ASCII fold**
+  (#115). The Latin-1 fold that makes `détail` and `detail` one keyword in every direction
+  runs on the pattern as well as on the subject, and it is a literal substitution with no
+  idea what a bracket expression is. `[éè]` becomes `[ee]`, which is the
+  accent-insensitivity the author wanted. `[é-ü]` becomes `[e-u]`, which is not: driven at
+  this commit, a `mode: block` rule on `~[é-ü]` refused `git push origin main` on the `i`
+  in `origin`, and refused `ls` as well. Nothing is refused at load, because the row is a
+  valid ERE both before and after folding.
+
+  Documented rather than changed, and the alternative is why. Leaving bracket expressions
+  unfolded would kill `[éè]` outright — the subject is folded, so an accented class would
+  match nothing at all — turning a rule that is loudly wrong into one that is silently
+  dead, which is the trade refused everywhere else here. The entry a hook injects when you
+  open any entry file now says the pattern is folded, shows the shape that misbehaves, and
+  says what to write instead.
+
+- **A `match` escaping a non-ASCII character slipped past the pattern guard, and made gawk write into the session** (#116). `jit_bad_pattern()` refused an undefined escape only when the next character was ASCII alphanumeric. `LC_ALL=C` is pinned on every `awk` in the plugin, so `substr()` returns one **byte** — and no byte above `0x7F` is in any character class under `C`, on either engine. `\<accented character>` was therefore never tested at all and went straight to `match()`.
+
+  Two things followed, and the second is the one with no workaround. Both engines drop the backslash and match the bare character, so the rule fires on text its author wrote a backslash for; and gawk — which is `awk` on most Linux machines and on CI's Linux leg — wrote `regexp escape sequence ... is not a known regexp operator` into the stranger's session on the way to exit 0, which is precisely what the hooks' `LC_ALL=C` preamble exists to prevent. Such a row is now refused and named by position in the injected notice like `\s` is, so it never reaches `match()` and no engine says anything.
+
+  The refusal reads `undefined escape \ before a non-ASCII byte` and does **not** append the byte: a lone continuation byte in the notice is the class of defect that channel was hardened against.
+
+  `scripts/jit-dry-run.sh` half of the same issue. Both of its pattern probes now run `LC_ALL=C`, because the hooks do and a verdict reached in another locale is a verdict about a different matcher — unpinned, the structural probe aborted with `awk: towc: multibyte conversion failure` printed into the middle of the report, with an empty verdict captured behind it, and the engine probe called a row fatal that the hook accepts. Its engine line is also split: `this row alone silences every rule in its index` is said only where nothing refuses the row first, because a row the guard already refuses never reaches `match()` and takes nothing with it. A reversed interval such as `a{3,1}` is the shape that still earns the original sentence, and the suite drives both.
+
+- **A mistyped `inject:` said nothing at all under `full`, which is the default no project
+  has to choose** (#118). `jit_inject_text()` returned the entry body *before* the notice
+  naming an unrecognised value was appended, so the notice only ever arrived under
+  `summary`. An author who typed `inject: gated`, or `inject: fulll`, got an entry that
+  behaved exactly as though the line had never been written — the value silently ignored,
+  the fallback indistinguishable from a correct configuration, and the next signal being an
+  entry that does not do what its frontmatter says. That is the defect shape this
+  repository exists to name, inside the one feature written to give an author control over
+  what a match costs.
+
+  The contract states itself in this same release, two entries up: an unrecognised value
+  "falls back to the project default and says so in what that entry injects". It has never
+  shipped — the fragment carrying it is unreleased, and `CHANGELOG.md` at `0.3.3` says
+  nothing about inject modes. So this is not a published promise being restored; it is the
+  fix that makes a promise true before anybody reads it. The first half was true
+  everywhere; the second was true only under `summary`, the mode a project has to opt into,
+  and the two entries land together rather than a version apart.
+
+  **Named on every fire rather than once per session, and that is the considered dose.**
+  The notice rides the injection of the entry itself, which is already deduped once per
+  session in the paths and vocabulary dimensions and by `once` in tools — so it can never
+  be noisier than the entry it is attached to, and under `full` it is 94 bytes against a
+  whole body. A separate once-per-session channel would need session state inside
+  a function that has none, and would go quiet for exactly the sessions that resume or
+  compact, where the agent reading the injection is not the one that read the notice. The
+  refusal channels report once per session because a refused index row is a standing fact
+  about the tree; a mistyped `inject:` is a property of one entry, and it stops the moment
+  somebody fixes the line.
+
+  A refusal still never carries it. A `block`, `require` or `forbid` rule builds its reason
+  from the body and reads that body whatever the mode says, so a bad `inject:` changes
+  nothing there and there is nothing to report.
+
+  The value itself is still never echoed back, in either mode.
+
+- **`main` went red on a suite that arrived one hour after the rule it broke** (#119). PR #54
+  added `tests/test-inject-mode.sh`; PR #110 had just made an undeclared suite a hard failure
+  in `tests/test-assertion-helpers.sh`. Each PR was green against its own merge base, and
+  neither run ever saw the other's file — the squash produced a tree no CI had tested. The
+  suite now declares its two helpers, and its 12 assertions are driven by the 1 MB payload
+  like every other suite's.
+
+- **`jit-dry-run.sh` printed an entry file name the clone chose, and the README said it did not** (#124). `.claude/jit-context/` arrives with the repository, so an entry file name and a layer directory name are text a stranger picked. The linter echoed both verbatim on every row it printed, in both phases of its report, while `print_untrusted()` — the one function in that file whose job is framing tree text — was called on patterns alone.
+
+  This is the third instance of one channel: [#35](https://github.com/Digital-Process-Tools/claude-jit-context/issues/35) was it in `pre-tool-hook.sh`, [#113](https://github.com/Digital-Process-Tools/claude-jit-context/issues/113) was it across five reports in `rebuild-tsv.sh`, and this is the linter the hooks' own refusal notice sends authors to. That notice names a refused row **by position** precisely so its file-name column never reaches the model — and then closes by recommending the command that printed it.
+
+  A name now prints only when it is a plain name — `[A-Za-z0-9]` then `[A-Za-z0-9._-]*`, at most 64 bytes — and as `<withheld: not a plain name>` otherwise. That is `jit_report_name()`, the same rule `rebuild-tsv.sh` has used since #113, moved into `common.sh` so there is one answer rather than two.
+
+  The half that was never a judgement call: a **newline** in a name forged a whole `REFUSED` row in the voice of the tool. An index row cannot carry one, but a layer directory and an entry file on disk both can, and the `STALE` report and the whole-body budget read those from the filesystem.
+
+  The linter keeps its reason to exist. The `match` pattern is still printed verbatim on its own `untrusted>` line, and the one report whose whole class is unprintable — a name that is not bare is never a plain name either — now closes with the row position, worded exactly as the hooks word it.
+
+  `README.md` claimed this tool "prints that text framed as untrusted". It described a note above the output, not containment, and it was the sentence a reader checked before deciding to trust the report. It now says what the tool does, for every column it prints.
+
+- **`jit-misses.sh` wrote its refusals to stdout, where they read as findings** (#125). The contract these diagnostic tools live under is that a tool which cannot do its job says so on **stderr**, with a non-zero status. The status was already right; the stream was not.
+
+  It matters for one reason: stdout is the report. `bash scripts/jit-misses.sh > misses.txt` captured `jit-misses: SKIPPED -- the file is empty` into the findings file, under no heading, where it reads as a finding — the tool reporting an absence it produced itself, which is the defect class the script exists to report on.
+
+  Every refusal path now writes to stderr: the argument loop, the whole-number guards, the log checks, and the three built inside the `awk` `END` block. Those three are routed by buffering the run and choosing the stream from its exit code, rather than `print > "/dev/stderr"` — every `awk` this project supports special-cases that name, but Git Bash is a leg nobody here can observe, and an `awk` that opened it as a real file would abort where it does not exist. `--help` is not a refusal and keeps stdout.
+
+- **The keyword a `rebuild-tsv.sh` report prints is now bounded** (#126). #113 routed every file *name* in every report through a guard and left the keyword columns alone. The ambiguity tally printed whatever an author wrote in `keywords:`, at any length, and six entries sharing one long keyword is the whole trigger — repository-chosen prose reaching a model through a tool `CLAUDE.md` orders the agent to run after every frontmatter edit.
+
+  `jit_report_name()` is the wrong guard for a term: its character set is chosen for having no space, and `vat rate` is a legitimate keyword. So the space is admitted and the term is bounded instead — the bytes the keyword normaliser actually emits, at most 40 of them and at most four words, and `<withheld: not a plain keyword>` otherwise. The entry files print either way, so a withheld term is still something to grep for. No bound that admits `vat rate` can refuse all imperative English; what this removes is the unbounded channel.
+
+  The dropped-keyword report is guarded too. The argument recorded for leaving it alone — that its keyword "is one of a closed set" because the blacklist is anchored on single words — was wrong: the blacklist is project-configurable and `config.env` arrives with the repository.
+
+- **The cost report named an entry path that does not exist, on the awk macOS ships** (#133). `rebuild-tsv.sh`'s "What a match costs on this tree" report rebuilds `.claude/jit-context/<dimension>/<layer>/<file>` from the glob path so each component can be vetted on its own. It split that path with `split(p, a, "/")` — and a one-character separator is a plain string to gawk and a plain string **plus the newline** to one-true-awk.
+
+  So for an entry file name containing a newline the path was torn into extra components **before** the guard ran. `.claude/jit-context/paths/00-manual/` + `aaa` + newline + `bbb.md` was reported as `.claude/jit-context/00-manual/aaa/bbb.md`: the dimension dropped off the left, and two fragments of the clone-chosen name were printed in positions labelled as directories. Nothing was disclosed that the guard would have refused — each surviving fragment still had to be a plain name — but a maintainer report named a path its author could not open, and the guard was vetting fragments rather than names.
+
+  The separator is now bracketed, `split(p, a, "[/]")`, which both engines read the same way. All 29 single-character `split()` calls under `scripts/` were re-derived against this: every other one takes an awk **record**, which is newline-free by construction — including the four hooks' JSON payload, which is accumulated as `input = input $0` and so drops its own line terminators — or splits on `" "`, which is whitespace mode on both engines, or is already bracketed.
+
+  On gawk the old code was already correct, which is the trap in testing it: `tests/test-report-names.sh` drives the report once per `awk` on the machine through a `PATH` shim, and carries one structural assertion that fails on a gawk-only runner too.
+
+- **A withheld layer name pushed every column of the dry-run report out of line** (#134). `jit-dry-run.sh` prints `<verdict> <layer, 18 wide> <name, 30 wide> <free text>`. The layer label routes through `jit_report_name()` — correct, and what [#124](https://github.com/Digital-Process-Tools/claude-jit-context/issues/124) added — but `<withheld: not a plain name>` is 28 bytes inside an 18-byte field, so a withheld layer shifted everything to its right. Cosmetic, and it landed in the one report an author reads when they are already confused about why a rule is not firing.
+
+  The fixed-width layer column now says `<withheld>`, and the reason is a measurement rather than a preference: the layer names this plugin generates are `00-manual`, `10-auto`, `20-grouped` and `30-crosscutting`, so the widest honest layer is 15 bytes and the placeholder is 10. A withheld layer can no longer misalign a line that an honest layer would not have misaligned first.
+
+  Clipping to the field width was the other option and is refused: `paths/<withhe` is not a shorter way of saying withheld, it is a name a reader cannot tell from a real one. The 30-wide **file-name** column is unchanged and still carries `<withheld: not a plain name>` in full — that is where the reader is told why a name is not shown, and it fits.
+
+- **A `block` rule whose entry file has no text now refuses the call instead of permitting it** (#135). The `mode: block` branch in `pre-tool-hook.sh` sat inside `if (content != "" && blocked == "")`, so a rule with nothing to inject was never reached: exit 0, `{}`, nothing on stderr — indistinguishable from a rule that did not match. Failing open, on the one dimension that can refuse a call.
+
+  The reachable door is narrow and it is not "an empty body": an entry with frontmatter and nothing under it still blocked, because under `full` the body carries its own frontmatter. What reproduces is a file with **no frontmatter at all**, or one truncated after it was indexed. `rebuild-tsv.sh` cannot have written that pair itself — a file with no frontmatter has no `tool:` and no `match:` — so the row is hand-written, or `00-index.tsv` is a committed file that outlived the markdown it names. Both are drift this plugin already knows about, and both were silently unenforced.
+
+  Whether a rule refuses is now settled by the index row and never by what its file had in it. Where there is no deliverable text — empty, or nothing but blank lines — the refusal carries the substitute the unreadable-body path already built, `(the text of this rule was not delivered: …)`. That covers `require:` and `forbid:` too, whose refusals used to end on a bare space. And a `once, block` row no longer spends its once-per-session budget on a refusal carrying none of its own text, which would have let the second matching call of the session through.
+
+  Pre-existing at `v0.3.3`, and **not** config-dependent: the issue expected `JIT_CONTEXT_INJECT=summary` to block the same tree, but an entry with no frontmatter is pinned to `full` whatever the project sets, so both modes permitted it. Driven both directions and on both awks: the text-less `block` rule refuses, a command it does not match is still silent, and an advisory rule with no text still injects nothing.
+
 ## [0.3.3] — A rule that could not be evaluated read exactly like a rule with nothing to say
 
 ### Added
