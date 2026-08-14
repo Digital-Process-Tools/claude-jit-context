@@ -800,6 +800,130 @@ for eng in $ENGINES; do
 
   rm -rf "$T112_BLK" "$T112_CTL"
   rm -f "$T112_OUT"
+
+  echo "=== [$eng] once does not spend its budget on a refusal (issue #139) ==="
+  # `mode: once, block` refused the first matching call of a session and permitted every
+  # one after it: the block branch marked the once-key, and the next call skipped the row
+  # before it ever reached the decision. An injection is knowledge the agent now has, so
+  # repeating it is waste; a refusal is a decision, and a decision that expires was never
+  # enforced.
+  #
+  # Both halves in the same fixture, because each is vacuous alone: the block rule must
+  # refuse on calls 1 AND 2, and the plain `once, remind` row beside it must still inject
+  # on call 1 and be silent on call 2. Without that second pair, "the block still fires"
+  # is equally true of a build where `once` stopped working altogether.
+  t139_tree() {
+    local d="$1" t v l idx
+    idx=00-index.tsv
+    t="$d/.claude/jit-context/tools/00-manual"
+    v="$d/.claude/jit-context/vocabulary"
+    mkdir -p "$t" "$v/00-manual" "$v/10-auto" "$v/20-grouped" "$v/30-crosscutting"
+    for l in 00-manual 10-auto 20-grouped 30-crosscutting; do : > "$v/$l/$idx"; done
+    printf 'Bash\tpushcmd\tob139.md\tonce,block\t\t\n' > "$t/$idx"
+    printf 'Bash\tadvcmd\tadv139.md\tonce,remind\t\t\n' >> "$t/$idx"
+    printf 'Bash\treqcmd\trq139.md\tonce,remind\t--safe\t\n' >> "$t/$idx"
+    echo "once block rule body" > "$t/ob139.md"
+    echo "once advisory rule body" > "$t/adv139.md"
+    echo "once require rule body" > "$t/rq139.md"
+  }
+  T139_OUT=$(mktemp)
+  T139=$(mktemp -d)
+  t139_tree "$T139"
+  T139_MARK="$T139/.claude/jit-context/.discovery/state/vocab-shown-s139$u.txt"
+  t139_run() {
+    printf '{"session_id":"s139%s","tool_name":"Bash","tool_input":{"command":"%s"}}\n' "$u" "$1" \
+      | PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$T139" bash "$HOOK" > "$T139_OUT" 2>/dev/null
+  }
+
+  t139_run "pushcmd now"
+  assert_path_contains "[$eng] control: a once,block rule refuses the first call" "$T139_OUT" '"decision":"block"'
+  assert_path_contains "[$eng] and the reason is its own text" "$T139_OUT" "once block rule body"
+  t139_run "pushcmd now"
+  assert_path_contains "[$eng] the SECOND call of the session is refused too" "$T139_OUT" '"decision":"block"'
+  assert_path_contains "[$eng] with the same reason, not an empty one" "$T139_OUT" "once block rule body"
+  t139_run "pushcmd now"
+  assert_path_contains "[$eng] and the third" "$T139_OUT" '"decision":"block"'
+  assert_path_not_contains "[$eng] a refusal spends no once-budget" "$T139_MARK" "rule:ob139.md"
+
+  # A `once` rule carrying `require` is the same shape: the refusal must survive, and the
+  # advisory injection beside it must still be once. Call 1 satisfies the requirement and
+  # injects; call 2 satisfies it and is silent; call 3 does not, and is refused.
+  t139_run "reqcmd --safe"
+  assert_path_contains "[$eng] control: a once,require rule injects on call 1" "$T139_OUT" "once require rule body"
+  t139_run "reqcmd --safe"
+  assert_path_not_contains "[$eng] and is silent on call 2, once still meaning once" "$T139_OUT" "once require rule body"
+  t139_run "reqcmd now"
+  assert_path_contains "[$eng] but the require refusal still fires after the budget is gone" "$T139_OUT" '"decision":"block"'
+
+  # The positive control for every silence above. If `once` had simply been disabled, the
+  # assertions on the require row would still pass and this pair would not.
+  t139_run "advcmd now"
+  assert_path_contains "[$eng] control: a plain once rule injects on call 1" "$T139_OUT" "once advisory rule body"
+  assert_path_contains "[$eng] control: and marks itself shown" "$T139_MARK" "rule:adv139.md"
+  t139_run "advcmd now"
+  assert_path_not_contains "[$eng] control: and is silent on call 2" "$T139_OUT" "once advisory rule body"
+
+  rm -rf "$T139"
+  rm -f "$T139_OUT"
+
+  echo "=== [$eng] a refused-name block row refuses the call (issue #140) ==="
+  # jit_bad_entry_file() drops a row whose file column carries a separator -- right, and
+  # not in question. What was wrong is what happened next when that row said `block`: the
+  # row was skipped before the tool and match columns were ever read, so the call was
+  # PERMITTED and the only trace was a once-per-session notice.
+  #
+  # The entry files below are deliberately NOT created. The row is refused on its name
+  # alone, before any read, and a file literally named `back\slash.md` cannot exist on
+  # Windows -- where a backslash IS the separator, which is why the guard refuses it.
+  t140_tree() {
+    local d="$1" t v l idx
+    idx=00-index.tsv
+    t="$d/.claude/jit-context/tools/00-manual"
+    v="$d/.claude/jit-context/vocabulary"
+    mkdir -p "$t" "$v/00-manual" "$v/10-auto" "$v/20-grouped" "$v/30-crosscutting"
+    for l in 00-manual 10-auto 20-grouped 30-crosscutting; do : > "$v/$l/$idx"; done
+    printf 'Bash\tblkbs\tback\\slash.md\tblock\t\t\n' > "$t/$idx"
+    printf 'Bash\tadvbs\tother\\name.md\tremind\t\t\n' >> "$t/$idx"
+    printf 'Bash\tokcmd\tok140.md\tblock\t\t\n' >> "$t/$idx"
+    echo "honest block rule body" > "$t/ok140.md"
+  }
+  T140_OUT=$(mktemp)
+  T140=$(mktemp -d)
+  t140_tree "$T140"
+  T140_NOTICE='could not be evaluated, so they did NOT run'
+  t140_run() {
+    printf '{"session_id":"%s","tool_name":"Bash","tool_input":{"command":"%s"}}\n' "$1" "$2" \
+      | PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$T140" bash "$HOOK" > "$T140_OUT" 2>/dev/null
+  }
+
+  t140_run "s140a$u" "blkbs now"
+  assert_path_contains "[$eng] a block row whose name was refused still refuses the call" "$T140_OUT" '"decision":"block"'
+  assert_path_contains "[$eng] and says why in place of the body" "$T140_OUT" "was not delivered: not a bare file name"
+  assert_path_not_contains "[$eng] without echoing the refused name back" "$T140_OUT" "slash.md"
+  t140_run "s140a$u" "blkbs now"
+  assert_path_contains "[$eng] the second call of the session is refused too" "$T140_OUT" '"decision":"block"'
+
+  # The other direction, and the one that makes this a rule rather than a blanket refusal:
+  # the row is refused on EVERY call, so a command it never matched must still go through.
+  t140_run "s140b$u" "echo hello"
+  assert_path_not_contains "[$eng] a command the refused row never matched is not blocked" "$T140_OUT" '"decision":"block"'
+  assert_path_contains "[$eng] control: it still carries the refusal notice" "$T140_OUT" "$T140_NOTICE"
+
+  # An ADVISORY row with the same bad name keeps the old behaviour exactly: the notice,
+  # and nothing else. A fresh session, because that notice is once per session.
+  t140_run "s140c$u" "advbs now"
+  assert_path_contains "[$eng] an advisory refused row still produces its notice" "$T140_OUT" "$T140_NOTICE"
+  assert_path_not_contains "[$eng] and does not refuse the call" "$T140_OUT" '"decision":"block"'
+  assert_path_not_contains "[$eng] and injects no substitute body" "$T140_OUT" "was not delivered"
+
+  # Control: an honest block row in the same index still blocks with its own text, so
+  # none of the above passes because the fixture stopped working.
+  t140_run "s140d$u" "okcmd now"
+  assert_path_contains "[$eng] control: an honest block row still blocks" "$T140_OUT" '"decision":"block"'
+  assert_path_contains "[$eng] control: with its own body as the reason" "$T140_OUT" "honest block rule body"
+
+  rm -rf "$T140"
+  rm -f "$T140_OUT"
 done
 
 rm -rf "$ENGINE_BIN"

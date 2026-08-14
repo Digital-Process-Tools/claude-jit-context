@@ -490,9 +490,15 @@ done
 OUT="$(run_hook pre-tool-hook.sh "$P" "$TOOL_PAYLOAD")"
 RC=$?
 assert_not_contains "s3f: nothing is written to the session stderr" "$OUT" "Argument list too long"
-assert_contains "s3f: the hook still emits JSON rather than nothing at all" "$OUT" "hookEventName"
+assert_contains "s3f: the hook still emits JSON rather than nothing at all" "$OUT" '"reason"'
+# The tree cannot be vouched for, so the ROW is refused -- and because that row says
+# `block`, the CALL is refused with it (#140). It used to be permitted, with the notice
+# below as its only trace, which is the fail-OPEN this whole section was written about one
+# cause over. What the row may no longer do is SPEAK: its body is never read, and the
+# substitute says why in place of it.
+assert_contains "s3f: an unvouchable block rule refuses the call rather than permitting it" "$OUT" '"decision":"block"'
 assert_contains "s3f: and it refuses the tree rather than running unguarded" "$OUT" "too many symbolic links"
-assert_not_contains "s3f: a rule in a tree nobody can vouch for does not fire" "$OUT" "block body here"
+assert_not_contains "s3f: a rule in a tree nobody can vouch for does not deliver its body" "$OUT" "block body here"
 if [ "$RC" -eq 0 ]; then
   PASS=$((PASS + 1)); echo "  PASS: s3f: the hook still exits 0"
 else

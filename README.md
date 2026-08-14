@@ -357,9 +357,13 @@ Coverage runs take 8 minutes locally and are produced by CI anyway.
 | -------- | ------------------------------------------------------- |
 | `remind` | Injects the entry as additional context — the whole body, or its title and `description:` under `summary` |
 | `block`  | Rejects the tool call, returning the **whole body** as the reason, whatever the injection mode says |
-| `once`   | Fires at most once per session                          |
+| `once`   | Injects at most once per session — see below, it does not bound a refusal |
 
 **A `block` rule refuses whether or not its text can be delivered.** Whether the call is stopped is decided by the index row; the entry file decides only what the reason *says*. So an entry that is unreadable, or empty, or missing under a row that still names it, produces a refusal carrying `(the text of this rule was not delivered: …)` in place of the body — never a permitted call. A refusal with a poor reason is still a refusal; a silent allow is not.
+
+That holds for the entry **file name** too, which was the remaining hole (#140). A row whose file column is not a usable name — a `/` or `\` in it, a leading dot, an entry or a layer directory that is a symbolic link, a tree carrying more links than the hook can check — is refused and reported by position, and if it said `block`, the call is refused with it. The rule never gets to read that file, so the reason is the substitute rather than the body; what it does not do is quietly become advisory.
+
+**`once` bounds the injection, never the refusal.** `mode: once, block` refuses **every** matching call of the session, not the first one (#139). The two words are still composable and still mean what they say separately — the entry text is injected at most once, and the call is stopped every time — because an injection is knowledge the agent now has and repeating it is waste, while a refusal is a decision, and a decision that expires was never enforced. The same holds for a `once` rule carrying `require` or `forbid`.
 
 `mode` and `inject` are different axes and it is worth not confusing them: `mode` decides *what the hook does* — remind, refuse, once — and `inject` decides *how much of the entry comes with it*.
 
