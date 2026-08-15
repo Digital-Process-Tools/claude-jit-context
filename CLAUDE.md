@@ -19,7 +19,8 @@ Most of what used to be written out here now lives in `.claude/jit-context/`, an
 | Entry                                       | Fires when                             | Carries                                                             |
 | ------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------- |
 | `paths/00-manual/hooks.md`                  | you open a `scripts/*-hook.sh` or `common.sh` | never fail hard, no new dependencies, test-first, both platforms |
-| `paths/00-manual/tooling.md`                | you open `rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh`, `jit-init.sh` or `.github/scripts/assemble_changelog.py` | the opposite contract — fail loudly, what each exit code means, which suite covers it |
+| `paths/00-manual/tooling.md`                | you open `rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh` or `jit-init.sh` | the opposite contract — fail loudly, what each exit code means, which suite covers it |
+| `paths/00-manual/vendored-oss.md`           | you open anything in `.oss/` or `.github/workflows/oss-changelog.yml` | these are not ours — the scaffold rewrites them, and the assembler's exit codes are inverted |
 | `paths/00-manual/tests.md`                  | you open anything in `tests/`          | a negative assertion needs a positive control; `$( )` drops NUL bytes |
 | `paths/00-manual/entries.md`                | you edit any `jit-context/*.md`         | the rebuild trap, keyword normalisation, how to prove an entry fires |
 | `paths/00-manual/release.md`                | you edit `.claude-plugin/plugin.json`  | the three version sites and the sweep that finds them                |
@@ -76,7 +77,7 @@ Lints every pattern in the tree you name, prints which rule fires for a sample c
 | `scripts/rebuild-tsv.sh` | Frontmatter → `00-index.tsv`. The only writer of that file.               |
 | `scripts/jit-dry-run.sh` | Lints one tree's patterns and dry-runs a sample call against it.          |
 | `scripts/jit-misses.sh`  | Reads the hook log and reports repeated vocabulary misses. Writes nothing. |
-| `.github/scripts/assemble_changelog.py` | Folds `changelog.d/` fragments into `CHANGELOG.md` at release. The only writer of that file. Python, under `.github/`, and **not** part of the runtime — see below. |
+| `.oss/assemble_changelog.py` | Folds `changelog.d/` fragments into `CHANGELOG.md` at release. The only writer of that file. **Vendored from the `oss` plugin and rewritten by every `/oss:scaffold --apply`** — an edit here is lost, and its exit codes are `0` ok / `1` skipped / `2` refused, the inverse of everything under `scripts/`. Python, and **not** part of the runtime — see below. |
 | `changelog.d/`           | One fragment per change. Its `README.md` is the convention.                 |
 | `tests/test-*.sh`        | One suite per hook, plus `run-all.sh`.                                     |
 | `examples/jit-context/`  | Shipped example entries. They carry real frontmatter and must stay valid.  |
@@ -91,9 +92,9 @@ The detail arrives on the file itself. What holds everywhere:
 
 **A hook must never fail hard, and silence must not mean "nothing to say".** These two are the whole safety story: the scripts run in someone else's session, and the tool dimension can refuse a call. A rule that cannot be evaluated is not a rule that did not match.
 
-**No new runtime dependencies.** No `jq`, no Python, no Node — in **`scripts/`**, which is what ships and what runs in a stranger's session. `.github/` is not the runtime: `assemble_changelog.py` is Python and depends on `markdown-it-py`, and that is the same line `tooling.md` already draws between the hooks and `rebuild-tsv.sh`. If you find yourself reaching for a language outside bash/awk/perl for anything under `scripts/`, that is the rule and the answer is no.
+**No new runtime dependencies.** No `jq`, no Python, no Node — in **`scripts/`**, which is what ships and what runs in a stranger's session. `.oss/` and `.github/` are not the runtime: `assemble_changelog.py` is Python and depends on `markdown-it-py`, and that is the same line `tooling.md` already draws between the hooks and `rebuild-tsv.sh`. If you find yourself reaching for a language outside bash/awk/perl for anything under `scripts/`, that is the rule and the answer is no.
 
-**Never edit `CHANGELOG.md`. Write a fragment.** `changelog.d/<issue>.<section>.md`, the entry exactly as it should read, naming its own issue in its body — `changelog.d/README.md` is the convention and `.github/scripts/assemble_changelog.py` folds them in at the tag. This is not a style preference: two PRs that share no other line still conflicted in that file, four times in one afternoon, and one of those merges would have produced two `### Added` headings under one version.
+**Never edit `CHANGELOG.md`. Write a fragment.** `changelog.d/<issue>.<section>.md`, the entry exactly as it should read, naming its own issue in its body — `changelog.d/README.md` is the convention and `.oss/assemble_changelog.py` folds them in at the tag. This is not a style preference: two PRs that share no other line still conflicted in that file, four times in one afternoon, and one of those merges would have produced two `### Added` headings under one version.
 
 **Every behaviour change gets a test first.** Write it, watch it fail, then fix. A test written after the fix asserts what the code happens to do.
 

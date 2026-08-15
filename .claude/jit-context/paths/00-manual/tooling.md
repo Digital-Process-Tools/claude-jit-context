@@ -1,10 +1,10 @@
 ---
-title: These five fail loudly, and their exit codes carry meaning
-description: rebuild-tsv, jit-dry-run, jit-misses, jit-init and assemble_changelog are build tools, not hooks - they must fail loudly, their exit codes 0/1/2 each mean something, and the hook never-fail-hard contract does not apply.
-match: (^|/)(scripts/(rebuild-tsv|jit-dry-run|jit-misses|jit-init)\.sh|\.github/scripts/assemble_changelog\.py)$
+title: These four fail loudly, and their exit codes carry meaning
+description: rebuild-tsv, jit-dry-run, jit-misses and jit-init are build tools, not hooks - they must fail loudly, their exit codes 0/1/2 each mean something, and the hook never-fail-hard contract does not apply.
+match: (^|/)scripts/(rebuild-tsv|jit-dry-run|jit-misses|jit-init)\.sh$
 ---
 
-`rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh`, `jit-init.sh` and `.github/scripts/assemble_changelog.py` are build, diagnostic and release tools. They are run deliberately, by a person or by CI, and never inside a stranger's session.
+`rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh` and `jit-init.sh` are build and diagnostic tools. They are run deliberately, by a person or by CI, and never inside a stranger's session.
 
 **So `paths/00-manual/hooks.md` does not apply here, and following it would be the bug.** "Every failure path exits `0` with nothing injected" is the hook contract; obeying it in `rebuild-tsv.sh` produces a half-written index that nothing reports, which is the exact defect this plugin exists to prevent. Fail loudly instead: a tool that cannot do its job must say so, on stderr, with a non-zero status.
 
@@ -16,13 +16,8 @@ match: (^|/)(scripts/(rebuild-tsv|jit-dry-run|jit-misses|jit-init)\.sh|\.github/
 | `jit-misses.sh` | findings, **or** the log was read and nothing recurs — the two are distinguished in the text, not the status | — | `SKIPPED`, with a named reason |
 | `rebuild-tsv.sh` | the index was written and every row can be honoured | the index was written, and at least one row will be **refused** by the matcher — a `~@macro` it could not expand, written through unexpanded | could not build the index: no `tools/`, `paths/` or `vocabulary/` under `JIT_BASE`, or an index file it could not write |
 | `jit-init.sh` | the starter entry was seeded **and** the index rebuilt, so it is live rather than inert | the entry is already there — a copy the user edited is not ours to replace — or the rebuild did not complete | a bad argument, a `--base` that is not a `<project>/.claude/jit-context` path, a symbolic link **at or below `.claude`**, an install carrying no template, or a directory that could not be created |
-| `assemble_changelog.py` | assembled, or `--check` found nothing to refuse | a fragment or the request was refused — bad filename, unknown section, a body that does not name its own issue, a fragment the CommonMark guard rejects, an entry count that did not balance, or a `--version` disagreeing with `plugin.json` | could not evaluate: no `changelog.d/`, no `CHANGELOG.md`, no `[Unreleased]` heading, an unreadable `plugin.json`, nothing to assemble, **or `markdown-it-py` not importable** |
 
-**`assemble_changelog.py` is Python and that is not the runtime rule being broken.** The `bash`/`awk`/`perl` promise is about the hooks, which run in a stranger's session; this runs in CI and at a tag. It lives under `.github/` rather than `scripts/` so the separation is structural — nothing in `.github/` ships inside the plugin — and its exit codes were **swapped** on the way over from `claude-supertool`, whose script uses 1 for skipped and 2 for refused. A fifth tool here with inverted codes is exactly the trap this repository exists to describe.
-
-Its guard is a real CommonMark parser and there is deliberately **no text-scanning fallback**: three pattern-based scanners upstream were each bypassed within one audit. So a missing `markdown-it-py` is `2`, never `0` — "did not look" must never render as "looked and found nothing".
-
-`--version` is an argument *and* is verified against the manifest: reading it out of `plugin.json` would make the `CHANGELOG.md` heading a copy of that file, and `tests/test-version-sites.sh` compares exactly those two — the guard would then be asserting only that this script ran.
+**The changelog assembler is no longer one of these.** It used to be, at `.github/scripts/assemble_changelog.py`, with this table's `1`/`2` meanings. It is now `.oss/assemble_changelog.py`, vendored from the `oss` plugin, and **its codes are the other way round: `0` ok, `1` skipped, `2` refused.** Do not carry this table across to it — `paths/00-manual/vendored-oss.md` is its subject, and reading a status by number against the wrong contract is the trap.
 
 **A valued flag missing its value is refused, in the argument loop, and every one of these tools does it the same way.** `--base) BASE="${2:-}"; shift 2 ;;` under `set -uo pipefail` with no `-e` is a **hang**, not an error: `shift 2` fails with one positional left, `$1` never advances, and `while [ $# -gt 0 ]` spins. `jit-init.sh --base` and all four of `jit-dry-run.sh`'s flags ran to a `timeout` kill having written zero bytes to either stream (#114), which is the exact inverse of this file's contract — and `jit-dry-run.sh` is the command the hooks' own refusal notice sends authors to, so the caller is usually an agent that then burns its whole budget against no output. The check is `[ $# -ge 2 ] || need_value "$1"` on each arm, because the failing `shift 2` is the mechanism and a wrapper cannot see it. Note what was already right: an **unknown** flag exited 2 loudly the whole time. The quiet path was the *known* one, which is why a sweep here reads every arm rather than the arms someone thought of. `tests/test-arg-flag-values.sh` parses each script's own loop for arms carrying `shift 2`, so a flag added later is covered without anyone remembering to add it — and a flag with no positive control declared beside it is a FAIL, not a skip.
 
@@ -93,8 +88,8 @@ bash tests/test-report-names.sh       # rebuild-tsv.sh: what a report may print 
 bash tests/test-silent-drops.sh       # rebuild-tsv.sh: what it discarded while reporting success
 bash tests/test-invocation-macro.sh   # rebuild-tsv.sh: macro expansion, and refusal
 bash tests/test-frontmatter-quotes.sh # rebuild-tsv.sh: frontmatter parsing
-bash tests/test-assemble-changelog.sh # assemble_changelog.py: the guard, every refusal, the count
 bash tests/test-changelog-fragment-refs.sh # nothing names a fragment the next tag deletes
+bash tests/test-changelog-workflow-untagged.sh # the local edit in an owned workflow is still there
 bash tests/test-dogfood-entries.sh    # this repo's own rules, both directions
 bash tests/run-all.sh                 # non-zero on any failure
 ```

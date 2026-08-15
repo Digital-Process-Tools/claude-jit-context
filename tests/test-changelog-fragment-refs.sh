@@ -1,7 +1,7 @@
 #!/bin/bash
 # Nothing outside changelog.d/ may name a fragment that is currently on disk.
 #
-# The release CONSUMES fragments: .github/scripts/assemble_changelog.py folds the prose
+# The release CONSUMES fragments: .oss/assemble_changelog.py folds the prose
 # into CHANGELOG.md and deletes the file. So a test, a doc example, a fixture or a
 # jit-context entry keyed to `changelog.d/<n>.<section>.md` is green for exactly the
 # window between the PR that adds it and the next tag, and red on that tag and every tag
