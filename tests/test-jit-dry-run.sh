@@ -696,6 +696,114 @@ else
 fi
 rm -rf "$MBTREE" "$MBBIN" "$MBRAW"
 
+# =============================================================================
+# The sample call is dry-run against the bytes the author typed (#169)
+# =============================================================================
+# json_quote() escapes --command / --file into the hand-built JSON with a substr($0, i, 1)
+# loop. On gawk in a multibyte locale that loop iterates CHARACTERS, and a byte that is not
+# valid UTF-8 comes back out as U+FFFD -- three bytes where the author typed one. So the
+# whole point of the tool is undone: the rule is evaluated against a string nobody typed,
+# a rule that matches what they wrote reports `no rule fired`, and a rule that does not
+# appears to fire. Same root cause as #163, opposite consequence -- that one misreported a
+# NUMBER, this one misreports the SUBJECT.
+#
+# The two rows discriminate on the byte alone and are pure ASCII, so the index itself stays
+# valid UTF-8 and is not refused by the #77/#78 checks above:
+#
+#   ~jitbyte a.b     one byte between a and b -- what the author typed
+#   ~jitbyte a...b   three bytes between them -- the U+FFFD replacement
+#
+# `.` is a byte here because every awk in the hooks is pinned to LC_ALL=C, so the two
+# patterns are mutually exclusive and each run says which string reached the hook.
+#
+# THE FIXTURE CARRIES A VALID MULTIBYTE CHARACTER AS WELL AS THE BAD BYTE, and that is not
+# decoration. gawk only enters its multibyte path for a record that contains at least one
+# valid multibyte character; a record of ASCII plus a lone 0xE9 goes down the single-byte
+# path and is preserved on every engine and locale. Driven both ways before this section
+# was written: the first fixture carried the bad byte ALONE, and it was green on all six
+# cells against the unfixed code. A repro without the trailing accent proves nothing.
+echo ""
+echo "=== the sample call is dry-run against the bytes the author typed (#169) ==="
+QBIN=$(mktemp -d)
+Q_ENGINES=""
+Q_SEEN=""
+for cand in awk gawk nawk mawk; do
+  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  case " $Q_SEEN " in *" $cand_path "*) continue ;; esac
+  Q_SEEN="$Q_SEEN $cand_path"
+  mkdir -p "$QBIN/$cand"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$cand_path" > "$QBIN/$cand/awk"
+  chmod +x "$QBIN/$cand/awk"
+  Q_ENGINES="$Q_ENGINES $cand"
+done
+
+# The locale is chosen by driving, exactly as the #163 section chooses it: a name lookup
+# would be a name plus an assumption about the engine.
+QCHAR=$(printf '\303\251')
+Q_UTF8_LOCALE=""
+Q_CHARSEM=""
+for loc in en_US.UTF-8 C.UTF-8 en_US.utf8 "${LC_ALL:-}" "${LANG:-}"; do
+  [ -n "$loc" ] || continue
+  found=""
+  for ENG in $Q_ENGINES; do
+    n=$(PATH="$QBIN/$ENG:$PATH" LC_ALL="$loc" JIT_MB="$QCHAR" \
+        awk 'BEGIN { print length(ENVIRON["JIT_MB"]) }' 2>/dev/null) || n=""
+    if [ "$n" = "1" ]; then found="$found $ENG"; fi
+  done
+  if [ -n "$found" ]; then Q_UTF8_LOCALE="$loc"; Q_CHARSEM="$found"; break; fi
+done
+
+QTREE=$(mktemp -d)
+make_tree "$QTREE"
+QBASE="$QTREE/.claude/jit-context"
+QIDX="$QBASE/tools/00-manual/00-index.tsv"
+{ printf 'Bash\t~jitbyte a.b\tbyte-typed.md\tremind\t\t\n'
+  printf 'Bash\t~jitbyte a...b\tbyte-mangled.md\tremind\t\t\n'; } > "$QIDX"
+echo "the byte the author typed reached the hook" > "$QBASE/tools/00-manual/byte-typed.md"
+echo "a byte nobody typed reached the hook" > "$QBASE/tools/00-manual/byte-mangled.md"
+
+# One lone 0xE9 -- a Latin-1 accent, the ordinary way a non-UTF-8 byte turns up in a path
+# or a command -- and one genuine UTF-8 accent to put gawk into its multibyte path.
+QCMD="jitbyte a$(printf '\351')b $(printf '\303\251')"
+# The same string with U+FFFD already in it: valid UTF-8 on every engine, so it is what the
+# mangled call becomes. This is the positive control for the negative half below -- without
+# it, `byte-mangled.md did not fire` is equally true of a row that can never fire at all.
+QCMD_FFFD="jitbyte a$(printf '\357\277\275')b $(printf '\303\251')"
+
+for ENG in $Q_ENGINES; do
+  for LOC in C ${Q_UTF8_LOCALE:-}; do
+    OUT=$(cd "$ELSEWHERE" && PATH="$QBIN/$ENG:$PATH" LC_ALL="$LOC" CLAUDE_PROJECT_DIR="$ELSEWHERE" \
+      bash "$DRYRUN" --base "$QBASE" --tool Bash --command "$QCMD" 2>&1) && ST=0 || ST=$?
+    # Narrowed to the tool hook line: both entry names are printed in the phase 1 listing
+    # above, so a whole-output assertion would be satisfied by the index rather than by
+    # the call. The path hook prints `no rule fired` for this sample and is not the subject.
+    QLINE=$(printf '%s\n' "$OUT" | grep 'pre-tool-hook.sh' || true)
+    assert_contains "[$ENG/$LOC] control: the tool hook line is in the report" "$QLINE" "pre-tool-hook.sh"
+    assert_contains "[$ENG/$LOC] the rule matching the typed bytes fires" "$QLINE" "byte-typed.md"
+    assert_not_contains "[$ENG/$LOC] and the U+FFFD rule does not" "$QLINE" "byte-mangled.md"
+    assert_not_contains "[$ENG/$LOC] control: the sample call actually ran" "$OUT" "SKIPPED sample call"
+    assert_status "[$ENG/$LOC] the tree itself is clean" "$ST" "0"
+
+    # The control, same tree, same two rows: handed U+FFFD for real, the other row fires
+    # and this one does not. Both rows are therefore live, and the pair above is a
+    # statement about the string that reached the hook rather than about a dead pattern.
+    OUT=$(cd "$ELSEWHERE" && PATH="$QBIN/$ENG:$PATH" LC_ALL="$LOC" CLAUDE_PROJECT_DIR="$ELSEWHERE" \
+      bash "$DRYRUN" --base "$QBASE" --tool Bash --command "$QCMD_FFFD" 2>&1) && ST=0 || ST=$?
+    QLINE=$(printf '%s\n' "$OUT" | grep 'pre-tool-hook.sh' || true)
+    assert_contains "[$ENG/$LOC] control: a real U+FFFD fires the other row" "$QLINE" "byte-mangled.md"
+    assert_not_contains "[$ENG/$LOC] control: and not the typed-byte row" "$QLINE" "byte-typed.md"
+  done
+done
+
+if [ -n "$Q_UTF8_LOCALE" ]; then
+  echo "  note: $Q_UTF8_LOCALE counts characters on:$Q_CHARSEM — that is where this defect lives"
+else
+  echo "  SKIPPED: no locale here makes any awk on this machine count characters"
+  echo "           (tried en_US.UTF-8, C.UTF-8, en_US.utf8, \$LC_ALL, \$LANG) — the C half"
+  echo "           above still ran, but this machine cannot witness the defect"
+fi
+rm -rf "$QTREE" "$QBIN"
+
 echo ""
 echo "=== a refused-name block row is reported as a refusal, not as a silence (#140) ==="
 # The sample call reads the rule names out of the hook output by looking for a `.md`. A
