@@ -861,8 +861,38 @@ jit_frontmatter() {
         # defect this whole change is about. Anything that is not unambiguously a wrapped
         # scalar is preserved verbatim, and a value is never required to be quoted here:
         # the reader takes the rest of the line as it stands.
+        #
+        # No apostrophes in this block either. It sits inside the same single-quoted bash
+        # string as the rest of this program and one would close it.
+        #
+        # The trailing trim is the six ASCII whitespace bytes SPELLED OUT, not [[:space:]],
+        # which is the rule #164 established in jit_clip() applied one function over (#172).
+        # A POSIX class is byte-class-sensitive: in a single-byte locale [[:space:]] matches
+        # 0xA0 -- the trailing byte of a-grave (C3 A0), S-caron (C5 A0) and the dagger
+        # (E2 80 A0), and a character in its own right in ISO-8859-1. jit_clip() could argue
+        # no session reached that, because every caller pins LC_ALL=C. THIS function has no
+        # such argument: it pins nothing, and neither rebuild-tsv.sh nor jit-dry-run.sh pins
+        # it for the call, so the byte class is whatever the operator exported.
+        #
+        # What the wide class cost was never invalid UTF-8 out of here, and the reason is
+        # worth stating rather than re-deriving: v is only tested against ^"[^"]*"$, the trim
+        # can only ever expose a byte that is not a quote, and the substr cuts between two
+        # ASCII quotes -- so a damaged value fails the test and the line goes out untouched.
+        # It cost the PARSE DECISION instead. Eating a trailing 0xA0 turned a value the
+        # author did not write as a quoted scalar into one, deleting that byte and both
+        # quotes with it, so rebuild-tsv.sh indexed a different `match:` ERE depending on who
+        # ran it. That is #19 one locale over, silently, and #19 is why this reader stopped
+        # rewriting values it does not understand.
+        #
+        # \t \n \v \f \r are the escapes POSIX defines for an awk ERE and all three engines
+        # honour them. Naming one an engine did NOT know is the quiet failure: an awk that
+        # drops an unrecognised escape matches the bare letter, so the trim would start
+        # eating a trailing "v" off values with nothing said anywhere. 172a in
+        # tests/test-entry-bytes.sh drives both directions per engine, 172b drives the byte
+        # under a probed single-byte locale, and 172c refuses a POSIX class in the source of
+        # this function on the CI legs where no such locale exists.
         v = $0
-        sub(/[[:space:]]+$/, "", v)
+        sub(/[ \t\n\v\f\r]+$/, "", v)
         if (v ~ /^"[^"]*"$/) $0 = substr(v, 2, length(v) - 2)
       }
       print
@@ -1480,6 +1510,17 @@ function jit_config_notice(list, n) {
 # removes is whitespace inside the cut it just made, never any in a value that fits (#156).
 #
 # No apostrophes in this block. It is a single-quoted bash string and one would close it.
+#
+# THIS IS A FRAGMENT, NOT A PROGRAM (#173). jit_entry_load() below calls jit_bad_utf8() and
+# jit_entry_why(), which live in $JIT_AWK_ENTRY, so this variable must be concatenated with
+# at least $JIT_AWK_ENTRY -- the hooks compose $JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT
+# $JIT_AWK_JSON, see pre-path-hook.sh. Two of the three engines hide a violation: one-true-
+# awk and gawk only notice an undefined function when one is CALLED, so a program that never
+# reaches those call sites runs anyway. mawk refuses at PARSE time and prints nothing at all,
+# with "function jit_bad_utf8 never defined" on a stderr the caller usually discards -- empty
+# stdout and the explanation thrown away, which is this repository's own defect class. It cost
+# a full CI round on PR #171: 13 assertions red on ubuntu-latest, where mawk is the default
+# awk, every one of them with an empty got:, and none of it about the code under test.
 # shellcheck disable=SC2034
 JIT_AWK_INJECT='
 function jit_clip(s, n,   i) {
