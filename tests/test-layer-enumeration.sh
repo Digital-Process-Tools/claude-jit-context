@@ -475,12 +475,119 @@ else
     assert_rc0      "J [$eng] the hook exits 0" "$RC"
     assert_contains "J [$eng] both layers of a two-layer list fire (00-manual)" "$OUT" "PATHBODY-jmanual"
     assert_contains "J [$eng] both layers of a two-layer list fire (01-oss)"    "$OUT" "PATHBODY-joss"
-    # The empty-list half. A dimension whose only layer is refused must produce a
-    # zero-iteration loop; one empty element would name a path under the dimension root.
     assert_contains "J [$eng] a dimension with no readable layer is reported, not scanned" "$OUT" "layer directory"
-    assert_missing  "J [$eng] and no index path is built from an empty layer name" "$OUT" "vocabulary//"
+
+    # The empty-list half, probed DIRECTLY rather than through the hook. An earlier cut of
+    # this section asserted that the string `vocabulary//` was absent from the hook output
+    # -- which is true under every implementation, correct or broken, because a getline on
+    # a path that does not exist returns -1 and the path is never printed. That assertion
+    # would have passed if the code did nothing, which is the thing this suite exists to
+    # not do. The property is engine-facing, so it is asked of the engine.
+    SPLIT0=$(PATH="$ENGINE_BIN/$eng:$PATH" awk 'BEGIN { printf "%d", split("", a, " ") }' 2>/dev/null)
+    if [ "$SPLIT0" = "0" ]; then
+      PASS=$((PASS + 1)); echo "  PASS: J [$eng] an empty layer list splits to zero elements, not one empty name"
+    else
+      FAIL=$((FAIL + 1)); echo "  FAIL: J [$eng] an empty layer list split to '$SPLIT0' elements -- the loop would read an index under the dimension root"
+    fi
+    # ...and the control for that probe: the same engine must split a real list to two, or
+    # a `0` above could be an engine that failed to run at all.
+    SPLIT2=$(PATH="$ENGINE_BIN/$eng:$PATH" awk 'BEGIN { n = split("00-manual 01-oss", a, " "); printf "%d:%s:%s", n, a[1], a[2] }' 2>/dev/null)
+    if [ "$SPLIT2" = "2:00-manual:01-oss" ]; then
+      PASS=$((PASS + 1)); echo "  PASS: J [$eng] POSITIVE CONTROL: a two-layer list splits to two, in order"
+    else
+      FAIL=$((FAIL + 1)); echo "  FAIL: J [$eng] a two-layer list gave '$SPLIT2' -- the zero above says nothing"
+    fi
   done
 fi
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== K: the two refusal branches that need a permission bit to reach ==="
+
+# Added after review: sections A-J drove the bad-NAME branch and the count bound, and left
+# two of the five refusal branches in jit_scan_layers() with no fixture at all -- a layer
+# directory that cannot be opened, and a layer whose index cannot be read. A guard nothing
+# reaches is a guard that is nominally on and effectively off, which is the shape of the
+# defect this whole change is about, one level in.
+#
+# chmod is ADVISORY on some filesystems and largely synthetic under git-for-windows, so
+# each case probes whether the bit actually took effect and reports SKIPPED when it did
+# not. Neither a pass nor a failure: an assertion that cannot be constructed here must not
+# render as one that was constructed and held.
+k_probe_denied() {
+  # Did chmod actually deny us? Root ignores the bits entirely.
+  [ "$(id -u 2>/dev/null || echo 1)" != "0" ] || return 1
+  ! ls "$1" >/dev/null 2>&1
+}
+
+PROJ="$TMPROOT/k1"; BASE="$PROJ/.claude/jit-context"
+mk_path_entry "$BASE" 00-manual kmanual 'kfile\.php$'
+mk_path_entry "$BASE" 01-locked klocked 'kfile\.php$'
+rebuild "$PROJ"
+chmod 000 "$BASE/paths/01-locked" 2>/dev/null
+if ! k_probe_denied "$BASE/paths/01-locked"; then
+  chmod 755 "$BASE/paths/01-locked" 2>/dev/null
+  echo "  SKIPPED: this filesystem or user ignores the directory permission bits, so the"
+  echo "           unopenable-layer branch went undriven -- neither a pass nor a failure"
+else
+  OUT=$(run_path "$PROJ" "/x/kfile.php"); RC=$?
+  chmod 755 "$BASE/paths/01-locked" 2>/dev/null
+  assert_rc0      "K the hook exits 0 with an unopenable layer present" "$RC"
+  assert_contains "K POSITIVE CONTROL: the readable layer beside it still fires" "$OUT" "PATHBODY-kmanual"
+  assert_contains "K the unopenable layer is named, not skipped" "$OUT" "could not be opened"
+  assert_missing  "K and nothing from it is injected" "$OUT" "PATHBODY-klocked"
+fi
+
+PROJ="$TMPROOT/k2"; BASE="$PROJ/.claude/jit-context"
+mk_path_entry "$BASE" 00-manual kmanual2 'kfile\.php$'
+mk_path_entry "$BASE" 01-noindex knoindex 'kfile\.php$'
+rebuild "$PROJ"
+chmod 000 "$BASE/paths/01-noindex/00-index.tsv" 2>/dev/null
+# `( : < file )` rather than a reader: it opens the file and nothing else, so there is no
+# process to close a pipe early. tests/test-inert-without-tree.sh probes the write bit the
+# same way, and tests/test-assertion-helpers.sh refuses the `head -c1` spelling by name.
+if [ "$(id -u 2>/dev/null || echo 1)" = "0" ] || ( : < "$BASE/paths/01-noindex/00-index.tsv" ) 2>/dev/null; then
+  chmod 644 "$BASE/paths/01-noindex/00-index.tsv" 2>/dev/null
+  echo "  SKIPPED: this filesystem or user ignores the file permission bits, so the"
+  echo "           unreadable-index branch went undriven -- neither a pass nor a failure"
+else
+  OUT=$(run_path "$PROJ" "/x/kfile.php"); RC=$?
+  chmod 644 "$BASE/paths/01-noindex/00-index.tsv" 2>/dev/null
+  assert_rc0      "K the hook exits 0 with an unreadable index present" "$RC"
+  assert_contains "K POSITIVE CONTROL: the readable layer beside it still fires" "$OUT" "PATHBODY-kmanual2"
+  assert_contains "K the layer whose index cannot be read is named" "$OUT" "an index inside it could not be opened"
+  assert_missing  "K and nothing from it is injected" "$OUT" "PATHBODY-knoindex"
+fi
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== L: the refusal LIST is capped in bytes and the COUNT is not ==="
+
+# Also added after review. Section H drives JIT_LAYERS_MAX, the cap on how many layers are
+# read, which collapses to a single refusal line however many layers sit past it. The other
+# cap -- JIT_LAYERS_REFUSED_MAX, on the bytes of the refusal text -- needs dozens of
+# INDIVIDUALLY refused layers to reach, and nothing constructed that.
+#
+# The property that matters is the asymmetry: the list is truncated and says so, and the
+# COUNT is the whole total anyway. A notice that quietly stopped at N would tell the reader
+# N layers were refused, which is a false statement produced by a defence.
+PROJ="$TMPROOT/l"; BASE="$PROJ/.claude/jit-context"
+mk_path_entry "$BASE" 00-manual lmanual 'lfile\.php$'
+rebuild "$PROJ"
+i=0
+while [ "$i" -lt 70 ]; do
+  # Every one of these is refused on its NAME, so none of them counts toward the 64-layer
+  # bound and each contributes its own bullet.
+  mkdir -p "$(printf '%s/paths/bad %02d' "$BASE" "$i")"
+  i=$((i + 1))
+done
+
+OUT=$(run_path "$PROJ" "/x/lfile.php"); RC=$?
+assert_rc0      "L the hook exits 0 with 70 refused layers" "$RC"
+assert_contains "L POSITIVE CONTROL: the honest layer still fires" "$OUT" "PATHBODY-lmanual"
+assert_contains "L the count is the whole total, not the number that fitted" "$OUT" "70 jit-context layer directories"
+assert_contains "L the list says plainly that the rest are not in it" "$OUT" "the remaining refused layer directories are not listed here"
+assert_missing  "L and no refused directory name is echoed" "$OUT" "bad 42"
 
 echo ""
 echo "=========================================="
