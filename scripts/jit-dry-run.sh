@@ -98,6 +98,45 @@ if [ ! -d "$BASE" ]; then
   exit 2
 fi
 
+# --- Which layer directories the matcher will read (#176) --------------------
+# The question claude-oss asked in #176 and could not answer from outside: does the
+# INSTALLED version read this layer at all? It could not be inferred from a version string
+# -- a scaffolded repository holds whichever release it was scaffolded with -- and every
+# other signal reported the layer as healthy while nothing loaded it.
+#
+# So it is answered by MEASUREMENT rather than by documentation: jit_scan_layers() is the
+# function the three hooks call, sourced from the same common.sh they source, run here
+# against the tree being linted. A layer in the `reads` list is a layer the hooks on this
+# disk open. It is printed FIRST, above every row-level finding, because a layer that is
+# not read makes every silence below it mean something different.
+#
+# This tool used to LINT `<dimension>/*/` -- every layer, unconditionally -- while the
+# matcher read four hardcoded names. So it reported patterns as honoured in a layer the
+# hooks would never open, which is the strongest instance of #176s own complaint that
+# every observable signal reported health. That is fixed by the matcher rather than here;
+# what this section adds is the ability to see it.
+echo "layers the matcher reads, measured against the hooks in $SCRIPT_DIR:"
+JIT_LAYERS_REFUSED=""
+JIT_LAYERS_REFUSED_N=0
+for _dim in tools paths vocabulary; do
+  if [ ! -d "$BASE/$_dim" ]; then
+    printf '  %-12s (no such dimension directory)\n' "$_dim"
+    continue
+  fi
+  jit_scan_layers "$BASE/$_dim" "$_dim"
+  printf '  %-12s %s\n' "$_dim" "${JIT_LAYERS:-(none)}"
+done
+unset _dim
+if [ "$JIT_LAYERS_REFUSED_N" -gt 0 ]; then
+  # By position and never by name, the same rule the hooks own notice follows: the layer
+  # directory name arrives with the clone.
+  echo ""
+  echo "  $JIT_LAYERS_REFUSED_N layer director(y/ies) exist and are NOT read by the matcher:"
+  printf '%s\n' "$JIT_LAYERS_REFUSED" | sed 's/^/  /'
+  echo "  Nothing inside them can fire. Every finding below is silent about their rules."
+fi
+echo ""
+
 # --- The frame, printed before one character of that tree reaches the reader ---------
 #
 # jit_refusal_notice() in common.sh names refused rows BY POSITION and never quotes them,

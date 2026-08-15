@@ -47,7 +47,12 @@ jit_tmp_open
 #
 # Scoped to this awk, not exported: rebuild-tsv.sh has its own awk and the opposite
 # contract (it may fail loudly), and it sources this hook shared file too.
+# Enumerated, never a literal (#176). See jit_scan_layers() in common.sh: a layer name
+# outside the four this used to hardcode was indexed by the rebuild and read by nothing.
+jit_scan_layers "$JIT_BASE/vocabulary" vocabulary
+
 cat | LC_ALL=C awk \
+  -v vocab_layers="$JIT_LAYERS" \
   -v vocab_base="$JIT_BASE/vocabulary" \
   -v state_dir="$JIT_STATE_DIR" \
   -v inject_default="$JIT_INJECT" \
@@ -170,8 +175,12 @@ END {
   n_refused = 0
 
   # --- Scan vocab layers ---
-  split("00-manual 10-auto 20-grouped 30-crosscutting", layers, " ")
-  for (li = 1; li <= 4; li++) {
+  # The list is enumerated from disk by jit_scan_layers() in common.sh and arrives here as
+  # a -v value; the bound comes off the same split() rather than being a second literal
+  # beside it, which is how a fix for #176 that changed only the string would have
+  # truncated the list silently.
+  n_layers = split(vocab_layers, layers, " ")
+  for (li = 1; li <= n_layers; li++) {
     layer = layers[li]
     lookup = vocab_base "/" layer "/00-index.tsv"
 
@@ -274,6 +283,19 @@ END {
     jit_shown_mark(shown_file, "jit-refused-vocab")
     note = jit_refusal_notice(refused, n_refused)
     matched = (matched == "") ? note : note "\n---\n" matched
+  }
+
+  # --- A layer directory that could not be read is reported, once per session ---
+  # #176: this is the state that had no channel at all. A layer nobody could load and a
+  # layer whose rules never matched produced the same silence, and every other signal --
+  # the rebuild count, the linter, doctor -- said the layer was healthy.
+  layers_refused = ENVIRON["JIT_LAYERS_REFUSED"]
+  layers_refused_n = ENVIRON["JIT_LAYERS_REFUSED_N"] + 0
+  if (layers_refused_n > 0 && !("jit-refused-layers" in shown)) {
+    shown["jit-refused-layers"] = 1
+    jit_shown_mark(shown_file, "jit-refused-layers")
+    lnote = jit_layers_notice(layers_refused, layers_refused_n)
+    matched = (matched == "") ? lnote : lnote "\n---\n" matched
   }
 
   # --- A refused config.env line is reported, once per session ---

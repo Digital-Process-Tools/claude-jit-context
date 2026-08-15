@@ -53,9 +53,23 @@ jit_tmp_open
 #
 # Scoped to this awk, not exported: rebuild-tsv.sh has its own awk and the opposite
 # contract (it may fail loudly), and it sources this hook shared file too.
+# Enumerated, never a literal (#176). See jit_scan_layers() in common.sh.
+#
+# The tools dimension was the WORST of the three and was not in the issue title: it had no
+# layer loop at all. `tools_tsv` and `tools_dir` were pinned to tools/00-manual, so
+# `10-auto`, `20-grouped` and `30-crosscutting` were dead here even though README.md says
+# a rule in any of them is indexed and fires -- and this is the only dimension that can
+# REFUSE a call, so a `mode: block` rule in one of those layers failed OPEN and said
+# nothing. That is the shape claude-oss filed #176 against.
+jit_scan_layers "$JIT_BASE/tools" tools
+JIT_TOOL_LAYERS="$JIT_LAYERS"
+jit_scan_layers "$JIT_BASE/vocabulary" vocabulary
+JIT_VOCAB_LAYERS="$JIT_LAYERS"
+
 cat | LC_ALL=C awk \
-  -v tools_tsv="$JIT_BASE/tools/00-manual/00-index.tsv" \
-  -v tools_dir="$JIT_BASE/tools/00-manual" \
+  -v tool_layers="$JIT_TOOL_LAYERS" \
+  -v vocab_layers="$JIT_VOCAB_LAYERS" \
+  -v tools_base="$JIT_BASE/tools" \
   -v vocab_base="$JIT_BASE/vocabulary" \
   -v state_dir="$JIT_STATE_DIR" \
   -v inject_default="$JIT_INJECT" \
@@ -195,450 +209,477 @@ END {
   jit_shown_load(shown_file, shown)
 
   # --- Tool rules matching ---
-  rown = 0
-  while ((getline tline < tools_tsv) > 0) {
-    rown++
+  # THE LAYER LOOP #176 ADDED. This dimension had none: tools_tsv and tools_dir arrived
+  # pinned to tools/00-manual and nothing else in the tree was ever opened, so a rule in
+  # `01-oss` or in any of the three generated layer names README.md documents was indexed
+  # by the rebuild and read by no matcher. The list is enumerated from disk by
+  # jit_scan_layers() in common.sh; the bound comes off the same split() rather than being
+  # a second literal beside it.
+  #
+  # Everything the scan accumulates -- matched, blocked, log_matches, refused, held --
+  # lives OUTSIDE this loop and is not reset per layer. Only `rown` is, because it is a
+  # position within one index and jit_row_id() names the layer beside it.
+  #
+  # The body is indented one level for this loop and is otherwise unchanged; `git diff -w`
+  # is the reviewable form.
+  n_tool_layers = split(tool_layers, tlayers, " ")
+  for (tli = 1; tli <= n_tool_layers; tli++) {
+    tool_layer = tlayers[tli]
+    # Every report inside the loop names the layer it read, where it used to name the one
+    # layer that could be read.
+    tool_label = "tools/" tool_layer
+    tools_tsv = tools_base "/" tool_layer "/00-index.tsv"
+    tools_dir = tools_base "/" tool_layer
+    rown = 0
+    while ((getline tline < tools_tsv) > 0) {
+      rown++
 
-    split(tline, tf, "\t")
-    r_tool = tf[1]; r_match = tf[2]; r_file = tf[3]
-    r_modes = tf[4]; r_require = tf[5]; r_forbid = tf[6]
+      split(tline, tf, "\t")
+      r_tool = tf[1]; r_match = tf[2]; r_file = tf[3]
+      r_modes = tf[4]; r_require = tf[5]; r_forbid = tf[6]
 
-    # Containment first: r_file is concatenated onto tools_dir below, and a row of
-    # ../../../x made this hook read that file and inject it. jit_bad_entry_file lives in
-    # common.sh with the reproduction.
-    # The mode is DERIVED, never echoed: like the file name, column 4 is attacker text.
-    # "this was a block rule and it did not run" is worth saying; the raw column is not.
-    r_kind = (index(r_modes, "block") > 0) ? " (a block rule)" : ""
+      # Containment first: r_file is concatenated onto tools_dir below, and a row of
+      # ../../../x made this hook read that file and inject it. jit_bad_entry_file lives in
+      # common.sh with the reproduction.
+      # The mode is DERIVED, never echoed: like the file name, column 4 is attacker text.
+      # "this was a block rule and it did not run" is worth saying; the raw column is not.
+      r_kind = (index(r_modes, "block") > 0) ? " (a block rule)" : ""
 
-    # Can this row refuse a call at all? Read off the INDEX columns and nothing else, so
-    # it is settled before the entry file is named, let alone opened. Three later decisions
-    # turn on it: whether `once` may suppress the row (#139), whether an unreadable file
-    # name still costs the call (#140), and whether the body is worth reading at all.
-    can_refuse = (index(r_modes, "block") > 0 || r_require != "" || r_forbid != "")
+      # Can this row refuse a call at all? Read off the INDEX columns and nothing else, so
+      # it is settled before the entry file is named, let alone opened. Three later decisions
+      # turn on it: whether `once` may suppress the row (#139), whether an unreadable file
+      # name still costs the call (#140), and whether the body is worth reading at all.
+      can_refuse = (index(r_modes, "block") > 0 || r_require != "" || r_forbid != "")
 
-    # The row itself. The match column is echoed back in the (matched: ...) header and the
-    # require and forbid columns are echoed in a block reason, so a byte the JSON string
-    # cannot carry reaches stdout from the index alone, with no entry file involved (#77).
-    # A NUL truncated the dedup key (#78).
-    #
-    # Unlike an undeliverable BODY, this refuses the row and the call is not blocked -- and
-    # the difference is not an inconsistency. A bad body leaves the decision intact, since
-    # mode, require and forbid all come from the row, so refusing there would throw away a
-    # verdict that was reached. Bad bytes in the ROW are the decision inputs themselves:
-    # there is no verdict to preserve, and blocking a call on a rule nobody can read is not
-    # the safe direction, it is a different failure. Same posture as jit_bad_pattern().
-    #
-    # Which is why this sits AFTER r_kind and not before the split: "a block rule went
-    # dark" is the part of an untrusted row worth saying, and it is DERIVED from column 4
-    # rather than quoted out of it -- exactly what the comment above already argues.
-    why = jit_bad_bytes(tline, "the index row")
-    if (why != "") {
-      n_refused++
-      refused = jit_refuse_add(refused, jit_row_id("tools/00-manual", rown) r_kind ": " why)
-      log_matches = log_matches sep "refused:" jit_row_id("tools/00-manual", rown) "(" why ")"
-      sep = ", "
-      continue
-    }
-
-    file_why = jit_bad_entry_file(r_file, tools_dir)
-    if (file_why != "") {
-      n_refused++
-      refused = jit_refuse_add(refused, jit_row_id("tools/00-manual", rown) r_kind ": " file_why)
-      log_matches = log_matches sep "refused:" jit_log_name(r_file, "tools/00-manual", rown, file_why) "(" file_why ")"
-      sep = ", "
-      # NOT an unconditional `continue` any more (#140). This branch fires when the file
-      # column cannot be turned into a path -- a separator in it, a leading dot, an entry
-      # or a layer that is a symbolic link. The column it distrusts is the one that names
-      # the BODY, and #77 already settled what that costs: mode, require and forbid come
-      # off the row, so a body nobody can deliver leaves the decision intact. A row saying
-      # `block` was becoming advisory because its file name was malformed, and the call
-      # went through with a notice in place of a refusal.
+      # The row itself. The match column is echoed back in the (matched: ...) header and the
+      # require and forbid columns are echoed in a block reason, so a byte the JSON string
+      # cannot carry reaches stdout from the index alone, with no entry file involved (#77).
+      # A NUL truncated the dedup key (#78).
       #
-      # The other two refusal sites in this loop are deliberately NOT like this, and the
-      # difference is which column went dark. jit_bad_bytes() above distrusts the whole
-      # row, decision inputs included; jit_bad_pattern() below distrusts the match column,
-      # so whether the rule even applies is unknown. Here every decision input is intact
-      # and only the pointer to the text is not.
+      # Unlike an undeliverable BODY, this refuses the row and the call is not blocked -- and
+      # the difference is not an inconsistency. A bad body leaves the decision intact, since
+      # mode, require and forbid all come from the row, so refusing there would throw away a
+      # verdict that was reached. Bad bytes in the ROW are the decision inputs themselves:
+      # there is no verdict to preserve, and blocking a call on a rule nobody can read is not
+      # the safe direction, it is a different failure. Same posture as jit_bad_pattern().
       #
-      # This grants no new reach to a hostile index: a row that wanted to refuse a call
-      # could always do it by naming a legitimate file. The containment guard exists to
-      # stop the hook READING outside its layer, and nothing below reads this file.
-      #
-      # An advisory row still leaves here, so a bad name costs it the notice and nothing
-      # more -- unchanged, and the half a widening would have got wrong.
-      if (!can_refuse) continue
-    }
-
-    # What the log line and the block header may call this row now that it can reach them.
-    # jit_log_name() is the rule the refusal notice already applies: a name that failed the
-    # bare-name check is 250 bytes of attacker text and is replaced by the position, while
-    # a name that passed is what an author fixing a symlinked entry actually needs. The
-    # header is MODEL-facing, so it takes the position for every refusal reason, not just
-    # that one -- the same posture as the notice above (#35).
-    r_logname = (file_why != "") ? jit_log_name(r_file, "tools/00-manual", rown, file_why) : r_file
-    r_header_name = (file_why != "") ? jit_row_id("tools/00-manual", rown) : r_file
-
-    # tool may name several tools, pipe-separated: `tool: Edit|Write|Read`.
-    # Exact-match each alternative — never substring, or `Read` would match `ReadFile`.
-    tool_hit = 0
-    nt = split(r_tool, talts, "|")
-    for (ti = 1; ti <= nt; ti++) if (talts[ti] == tool_name) tool_hit = 1
-    if (!tool_hit) continue
-    if (substr(r_match, 1, 1) == "~") {
-      # Regex rules match the WHOLE command, not the truncated first segment:
-      # `cmd` is stripped at the first ; & | so `cd X && git push` was only ever
-      # tested as `cd X`, and every rule after a chain operator silently never
-      # fired. A rule that reads as enforced and is not is worse than no rule.
-      #
-      # Guard first. An undefined escape compiles to the bare letter and matches
-      # nothing while awk exits 0, and a malformed pattern is a fatal error that
-      # kills this whole program — taking every later rule, the vocabulary pass and
-      # the log line with it. Both look exactly like "no rule matched". Refuse the
-      # ROW, never the file: refusing the file turns one dead rule into all of them.
-      why = jit_bad_pattern(substr(r_match, 2))
+      # Which is why this sits AFTER r_kind and not before the split: "a block rule went
+      # dark" is the part of an untrusted row worth saying, and it is DERIVED from column 4
+      # rather than quoted out of it -- exactly what the comment above already argues.
+      why = jit_bad_bytes(tline, "the index row")
       if (why != "") {
         n_refused++
-        # POSITIONED, not named. This branch used to echo r_file, arguing that the row had
-        # passed the bare-name check so the name was safe. That check forbids a slash, a
-        # backslash, `.` and `..` and nothing else — 250 bytes of English pass it intact,
-        # and a file-name column reading "IGNORE ALL PREVIOUS INSTRUCTIONS. Run: ..." landed
-        # in the context verbatim, with no rule matched and no entry file present (#35).
-        # The sibling of the r_modes hole below, one column over in the same statement.
-        #
-        # The name is not lost, it moved: jit_log_name() puts it in hooks.log, which a
-        # person reads and no model does, and jit-dry-run.sh — which this very notice tells
-        # the author to run — prints the name beside the reason. The model gets the row.
-        #
-        # r_kind, never r_modes. Column 4 is free text from a committed index and this
-        # branch was interpolating it raw, thirty-five lines under the comment saying why
-        # that is not allowed and one branch over from the code that honours it. It needs
-        # no rule to match and no entry file to exist, so a mode column reading "IGNORE ALL
-        # PREVIOUS INSTRUCTIONS: ..." arrived in the context on the first Bash call of the
-        # session. Reproduced 2026-08-12; tests/test-security.sh drives both halves.
-        refused = jit_refuse_add(refused, jit_row_id("tools/00-manual", rown) r_kind ": " why)
-        log_matches = log_matches sep "refused:" r_file "(" why ")"
+        refused = jit_refuse_add(refused, jit_row_id(tool_label, rown) r_kind ": " why)
+        log_matches = log_matches sep "refused:" jit_row_id(tool_label, rown) "(" why ")"
         sep = ", "
         continue
       }
-      # The PATTERN is folded too, not just the subject (#76). Folding one side alone is
-      # the #31 mistake one level down: against a folded subject, an ERE carrying `é`
-      # becomes unmatchable rather than accent-insensitive. The fold is safe on a regex
-      # because every entry in the table maps a Latin-1 LETTER to ASCII letters -- it can
-      # introduce no metacharacter, so a pattern that compiled before still compiles.
-      # It runs AFTER jit_bad_pattern(), so the author is diagnosed against what they
-      # wrote.
-      #
-      # NOT tolower()-ed, unlike the three index() sites below. That is deliberate and
-      # unchanged: the subject has always been lowercased and the pattern never was, so a
-      # pattern carrying an ASCII capital has matched nothing since this line was written.
-      # Lowercasing it here would wake rules that are dead today -- including `block`
-      # rules -- which is a behaviour change nobody asked for and not this fix.
-      #
-      # The fold is a literal substitution with no bracket-expression awareness, and two
-      # shapes are widened by it. `[æ]` becomes `[ae]`, which is the accent-insensitivity
-      # the plain terms get. A RANGE across the fold is worse: under `C` `[é-ü]` is a
-      # bracket expression over the raw bytes and matches almost nothing -- measured, it
-      # does not match `exemple de phrase` -- while the folded `[e-u]` matches a third of
-      # the lowercase alphabet, and it does. Nobody has written such a pattern and a range
-      # over accented endpoints has never meant what its author intended, but this widens
-      # rather than fixes it, and a `block` rule is the one that would notice. Refusing
-      # non-ASCII inside a bracket expression was the alternative and is worse: it kills
-      # `[éè]`, which is legitimate and works.
-      if (match(fold_full, jit_fold_latin1(substr(r_match, 2))) == 0) continue
-    } else {
-      if (index(fold_cmd, jit_fold_latin1(tolower(r_match))) == 0) continue
-    }
 
-    # "once" mode. The mark moved BELOW the read (#78): a rule whose body never arrived
-    # used to consume its own once-per-session budget, so the next call skipped the row
-    # entirely and the rule was silently gone for the session.
-    key = ""
-    hushed = 0
-    if (index(r_modes, "once") > 0) {
-      key = "rule:" r_file
-      # `held` as well as `shown`: an advisory rule delivered earlier in THIS scan is not in
-      # `shown` yet -- its mark waits on the block decision below (#112) -- and without this
-      # a second row naming the same file would inject it twice in one call.
-      if ((key in shown) || (key in held)) {
-        # `hushed`, not `continue`, for a row that can refuse (#139). `once` was leaving
-        # this loop before the row reached its decision, so `mode: once, block` refused
-        # the first matching call of a session and permitted every one after it -- no
-        # notice, and a log line indistinguishable from a rule that had nothing to say.
+      file_why = jit_bad_entry_file(r_file, tools_dir)
+      if (file_why != "") {
+        n_refused++
+        refused = jit_refuse_add(refused, jit_row_id(tool_label, rown) r_kind ": " file_why)
+        log_matches = log_matches sep "refused:" jit_log_name(r_file, tool_label, rown, file_why) "(" file_why ")"
+        sep = ", "
+        # NOT an unconditional `continue` any more (#140). This branch fires when the file
+        # column cannot be turned into a path -- a separator in it, a leading dot, an entry
+        # or a layer that is a symbolic link. The column it distrusts is the one that names
+        # the BODY, and #77 already settled what that costs: mode, require and forbid come
+        # off the row, so a body nobody can deliver leaves the decision intact. A row saying
+        # `block` was becoming advisory because its file name was malformed, and the call
+        # went through with a notice in place of a refusal.
         #
-        # An injection is knowledge the agent now has, so repeating it is waste and that
-        # is what `once` is for. A refusal is not knowledge, it is a decision, and a
-        # decision that expires was never enforced. So `once` keeps its exact meaning for
-        # the advisory half -- the body is injected at most once per session -- and buys
-        # no silence at all on the refusal half.
+        # The other two refusal sites in this loop are deliberately NOT like this, and the
+        # difference is which column went dark. jit_bad_bytes() above distrusts the whole
+        # row, decision inputs included; jit_bad_pattern() below distrusts the match column,
+        # so whether the rule even applies is unknown. Here every decision input is intact
+        # and only the pointer to the text is not.
         #
-        # This is the same reasoning the #135 substitute path already applied one branch
-        # down, where it empties `key` so a refusal carrying none of its text cannot spend
-        # the budget. That closed the case where the body was missing; this closes the
-        # case where the body was fine and the budget was already gone.
+        # This grants no new reach to a hostile index: a row that wanted to refuse a call
+        # could always do it by naming a legitimate file. The containment guard exists to
+        # stop the hook READING outside its layer, and nothing below reads this file.
         #
-        # The cost is one entry read per call for a `once` row that can refuse, which is
-        # a read it was already paying on the call that refused.
+        # An advisory row still leaves here, so a bad name costs it the notice and nothing
+        # more -- unchanged, and the half a widening would have got wrong.
         if (!can_refuse) continue
-        hushed = 1
       }
-    }
 
-    # Read rule .md. A body that cannot be delivered does NOT cancel the decision: mode,
-    # require and forbid all come out of the index row, so a block rule whose text is
-    # unreadable still blocks and says why in place of the text (#77). Refusing the row
-    # outright would turn an unhonourable rule into an allowed call, which is the one
-    # direction this dimension may never fail in. The row is named in the notice either
-    # way, and the substitute is ASCII, so the reason survives the JSON channel.
-    #
-    # That sentence was FALSE for one shape of unreadable body until #97, and false in the
-    # direction it exists to rule out. A file-name column naming a directory -- or an empty
-    # one, which concatenates to the layer directory -- made this getline a fatal i/o error
-    # on one-true-awk, so the process carrying a block decision reached three lines below
-    # died inside END with no JSON on stdout at all. Not "blocks without its text": no
-    # block. jit_entry_why() now refuses both shapes before the read, off a set the bash
-    # half sweeps, so what this paragraph claims is what the code does on every engine.
-    # It is the funnel BOTH entry readers call -- jit_read_body() and jit_entry_load() --
-    # which is why the summary-mode reader below is safe where a plain getline was not.
-    #
-    # jit_entry_load/jit_inject_text live in common.sh: what a match contributes is the
-    # title and the author-written description by default, and the whole body only when
-    # the project or the entry asks for it.
-    #
-    # A rule that can REFUSE the call reads its body whatever the mode says, and the
-    # three refusal messages below use that body and never the summary. The call has
-    # already been stopped, so there is no cheaper outcome left to buy -- and the pull
-    # step summary mode relies on is a SOFT rule an agent under momentum skips. A block
-    # reason that says "read the file to find out why" is an absence produced by the
-    # tool, which is the one failure this repository exists to name. The cost trade that
-    # justifies a summary needs a next turn to spend it in; a refusal has none.
-    #
-    # keepbody is read off the INDEX columns, before the file is opened, so a rule that
-    # cannot block never pays for a body it will not use.
-    keepbody = can_refuse
-    content = ""
-    body = ""
-    why = ""
-    if (file_why != "") {
-      # The row survived the containment guard because it can refuse (#140), and this is
-      # the only place that changes: the file is never named and never opened, so the
-      # decision below is reached with the reason in place of the text.
-      #
-      # `content` stays EMPTY, unlike the two substitute paths below. Those stand in for a
-      # file the hook did try to read; this file column is not a file name at all, the
-      # notice above has already reported the row by position, and filling `content` would
-      # inject that same sentence a second time as advisory context.
-      body = "(the text of this rule was not delivered: " file_why ")"
-      key = ""
-    } else {
-      rpath = tools_dir "/" r_file
-      if (jit_entry_load(rpath, inject_default, keepbody, ent)) {
-        body = ent["body"]
-        content = jit_inject_text(ent, ".claude/jit-context/tools/00-manual/" r_file)
-      }
-      why = ent["why"]
-    }
-    if (why != "") {
-      # BOTH, not one of the two. The substitute goes into content so that a `mode: block`
-      # rule still reaches the block below -- content == "" is the no-op path, and #77 is
-      # that an unhonourable rule must never become an allowed call -- and into body so
-      # that the require and forbid refusals say the same thing rather than nothing.
-      body = "(the text of this rule was not delivered: " why ")"
-      content = body
-      n_refused++
-      refused = jit_refuse_add(refused, jit_row_id("tools/00-manual", rown) r_kind ": " why)
-      log_matches = log_matches sep "refused:" jit_log_name(r_file, "tools/00-manual", rown, why) "(" why ")"
-      sep = ", "
-      # A substitute is not the rule text, so it consumes no once-per-session budget. That
-      # was already true -- the branch below is what marked, and this one skipped it -- and
-      # emptying `key` here is how it stays true now that the mark has moved down to the
-      # three places the text is actually delivered.
-      key = ""
-    }
+      # What the log line and the block header may call this row now that it can reach them.
+      # jit_log_name() is the rule the refusal notice already applies: a name that failed the
+      # bare-name check is 250 bytes of attacker text and is replaced by the position, while
+      # a name that passed is what an author fixing a symlinked entry actually needs. The
+      # header is MODEL-facing, so it takes the position for every refusal reason, not just
+      # that one -- the same posture as the notice above (#35).
+      r_logname = (file_why != "") ? jit_log_name(r_file, tool_label, rown, file_why) : r_file
+      r_header_name = (file_why != "") ? jit_row_id(tool_label, rown) : r_file
 
-    # A rule that can REFUSE must reach its decision on the strength of its INDEX ROW, and
-    # never on whether its file had text in it (#135). `why` above covers a file that could
-    # not be read; this covers one that read fine and said nothing -- a file with no
-    # frontmatter and no text, or one truncated after it was indexed. rebuild-tsv.sh cannot
-    # have produced that pair itself, since a file with no frontmatter carries no tool: and
-    # no match:, so the row is hand-written or the file drifted out from under a committed
-    # index. Either way the index says `block` and the markdown has nothing to say.
-    #
-    # Without this the three refusals below read an empty `body`: the block branch was
-    # guarded on `content != ""` and was never reached at all -- exit 0, {}, THE CALL
-    # PERMITTED, indistinguishable from a rule that did not match -- while require and
-    # forbid refused with a reason ending in a bare space.
-    #
-    # `body` only, deliberately NOT `content`. content == "" is what keeps an advisory rule
-    # with nothing to say silent, and filling it here would start injecting this sentence
-    # at authors whose entry never refuses anything -- a behaviour change nobody asked for.
-    #
-    # The same wording as the `why` substitute, because from the side that reads it this is
-    # the same fact: the text of this rule did not arrive. And `key` is emptied for the
-    # reason recorded above -- a substitute is not the rule text, so it may not spend a
-    # once-per-session budget. That matters most here: a `once,block` row that marked
-    # itself shown on a refusal carrying none of its text would be skipped on the next
-    # call, and the second `git push` of the session would go through.
-    # WHITESPACE, not just the empty string. A file of two blank lines reads back as "\n",
-    # which is not "" and would slip a guard testing for that alone -- and the refusal then
-    # carries a reason that renders as nothing at all, which is this defect one shape over
-    # and the shape a half-written or truncated entry actually leaves behind. `[[:space:]]`
-    # rather than `\s`: this is an awk ERE, and one-true-awk drops the class spelling.
-    if (keepbody && body ~ /^[[:space:]]*$/) {
-      body = "(the text of this rule was not delivered: the entry file has no text)"
-      key = ""
-    }
-
-    # Check require
-    if (r_require != "") {
-      nr = split(r_require, reqs, "|")
-      for (ri = 1; ri <= nr; ri++) {
-        # Folded on both sides (#76): `require: validé` must be satisfied by `VALIDÉ`.
-        # This half fails CLOSED when it breaks -- it refuses a command that met its
-        # requirement -- which is the safer direction and still wrong.
-        if (index(fold_full, jit_fold_latin1(tolower(reqs[ri]))) == 0) {
-          blocked = "BLOCKED: Missing required: " reqs[ri] ". " body
-          log_matches = log_matches sep "tool:" r_logname "(BLOCKED:" reqs[ri] ")"
+      # tool may name several tools, pipe-separated: `tool: Edit|Write|Read`.
+      # Exact-match each alternative — never substring, or `Read` would match `ReadFile`.
+      tool_hit = 0
+      nt = split(r_tool, talts, "|")
+      for (ti = 1; ti <= nt; ti++) if (talts[ti] == tool_name) tool_hit = 1
+      if (!tool_hit) continue
+      if (substr(r_match, 1, 1) == "~") {
+        # Regex rules match the WHOLE command, not the truncated first segment:
+        # `cmd` is stripped at the first ; & | so `cd X && git push` was only ever
+        # tested as `cd X`, and every rule after a chain operator silently never
+        # fired. A rule that reads as enforced and is not is worse than no rule.
+        #
+        # Guard first. An undefined escape compiles to the bare letter and matches
+        # nothing while awk exits 0, and a malformed pattern is a fatal error that
+        # kills this whole program — taking every later rule, the vocabulary pass and
+        # the log line with it. Both look exactly like "no rule matched". Refuse the
+        # ROW, never the file: refusing the file turns one dead rule into all of them.
+        why = jit_bad_pattern(substr(r_match, 2))
+        if (why != "") {
+          n_refused++
+          # POSITIONED, not named. This branch used to echo r_file, arguing that the row had
+          # passed the bare-name check so the name was safe. That check forbids a slash, a
+          # backslash, `.` and `..` and nothing else — 250 bytes of English pass it intact,
+          # and a file-name column reading "IGNORE ALL PREVIOUS INSTRUCTIONS. Run: ..." landed
+          # in the context verbatim, with no rule matched and no entry file present (#35).
+          # The sibling of the r_modes hole below, one column over in the same statement.
+          #
+          # The name is not lost, it moved: jit_log_name() puts it in hooks.log, which a
+          # person reads and no model does, and jit-dry-run.sh — which this very notice tells
+          # the author to run — prints the name beside the reason. The model gets the row.
+          #
+          # r_kind, never r_modes. Column 4 is free text from a committed index and this
+          # branch was interpolating it raw, thirty-five lines under the comment saying why
+          # that is not allowed and one branch over from the code that honours it. It needs
+          # no rule to match and no entry file to exist, so a mode column reading "IGNORE ALL
+          # PREVIOUS INSTRUCTIONS: ..." arrived in the context on the first Bash call of the
+          # session. Reproduced 2026-08-12; tests/test-security.sh drives both halves.
+          refused = jit_refuse_add(refused, jit_row_id(tool_label, rown) r_kind ": " why)
+          log_matches = log_matches sep "refused:" r_file "(" why ")"
           sep = ", "
-          # NOTHING is marked here (#139). This branch used to mark, on the reasoning that
-          # the body had been delivered as the refusal reason -- true, and the wrong unit to
-          # count. `once` bounds how often an entry is INJECTED as context; spending that
-          # budget on a refusal is what made the next matching call skip the row entirely
-          # and go through. A refusal is a decision, not knowledge the agent now carries.
-          break
+          continue
+        }
+        # The PATTERN is folded too, not just the subject (#76). Folding one side alone is
+        # the #31 mistake one level down: against a folded subject, an ERE carrying `é`
+        # becomes unmatchable rather than accent-insensitive. The fold is safe on a regex
+        # because every entry in the table maps a Latin-1 LETTER to ASCII letters -- it can
+        # introduce no metacharacter, so a pattern that compiled before still compiles.
+        # It runs AFTER jit_bad_pattern(), so the author is diagnosed against what they
+        # wrote.
+        #
+        # NOT tolower()-ed, unlike the three index() sites below. That is deliberate and
+        # unchanged: the subject has always been lowercased and the pattern never was, so a
+        # pattern carrying an ASCII capital has matched nothing since this line was written.
+        # Lowercasing it here would wake rules that are dead today -- including `block`
+        # rules -- which is a behaviour change nobody asked for and not this fix.
+        #
+        # The fold is a literal substitution with no bracket-expression awareness, and two
+        # shapes are widened by it. `[æ]` becomes `[ae]`, which is the accent-insensitivity
+        # the plain terms get. A RANGE across the fold is worse: under `C` `[é-ü]` is a
+        # bracket expression over the raw bytes and matches almost nothing -- measured, it
+        # does not match `exemple de phrase` -- while the folded `[e-u]` matches a third of
+        # the lowercase alphabet, and it does. Nobody has written such a pattern and a range
+        # over accented endpoints has never meant what its author intended, but this widens
+        # rather than fixes it, and a `block` rule is the one that would notice. Refusing
+        # non-ASCII inside a bracket expression was the alternative and is worse: it kills
+        # `[éè]`, which is legitimate and works.
+        if (match(fold_full, jit_fold_latin1(substr(r_match, 2))) == 0) continue
+      } else {
+        if (index(fold_cmd, jit_fold_latin1(tolower(r_match))) == 0) continue
+      }
+
+      # "once" mode. The mark moved BELOW the read (#78): a rule whose body never arrived
+      # used to consume its own once-per-session budget, so the next call skipped the row
+      # entirely and the rule was silently gone for the session.
+      key = ""
+      hushed = 0
+      if (index(r_modes, "once") > 0) {
+        key = "rule:" r_file
+        # `held` as well as `shown`: an advisory rule delivered earlier in THIS scan is not in
+        # `shown` yet -- its mark waits on the block decision below (#112) -- and without this
+        # a second row naming the same file would inject it twice in one call.
+        if ((key in shown) || (key in held)) {
+          # `hushed`, not `continue`, for a row that can refuse (#139). `once` was leaving
+          # this loop before the row reached its decision, so `mode: once, block` refused
+          # the first matching call of a session and permitted every one after it -- no
+          # notice, and a log line indistinguishable from a rule that had nothing to say.
+          #
+          # An injection is knowledge the agent now has, so repeating it is waste and that
+          # is what `once` is for. A refusal is not knowledge, it is a decision, and a
+          # decision that expires was never enforced. So `once` keeps its exact meaning for
+          # the advisory half -- the body is injected at most once per session -- and buys
+          # no silence at all on the refusal half.
+          #
+          # This is the same reasoning the #135 substitute path already applied one branch
+          # down, where it empties `key` so a refusal carrying none of its text cannot spend
+          # the budget. That closed the case where the body was missing; this closes the
+          # case where the body was fine and the budget was already gone.
+          #
+          # The cost is one entry read per call for a `once` row that can refuse, which is
+          # a read it was already paying on the call that refused.
+          if (!can_refuse) continue
+          hushed = 1
         }
       }
-      if (blocked != "") break
-    }
 
-    # Check forbid
-    if (r_forbid != "" && blocked == "") {
-      nfb = split(r_forbid, forbs, "|")
-      for (fi = 1; fi <= nfb; fi++) {
-        # Folded on both sides (#76). This is the half that failed OPEN: `forbid:
-        # clé-privée` stopped seeing `CLÉ-PRIVÉE` and the deny-list rule allowed the call.
-        if (index(fold_full, jit_fold_latin1(tolower(forbs[fi]))) > 0) {
-          blocked = "BLOCKED: Forbidden: " forbs[fi] ". " body
-          log_matches = log_matches sep "tool:" r_logname "(BLOCKED:" forbs[fi] ")"
-          sep = ", "
-          # Marks nothing, same as the require refusal above (#139).
-          break
+      # Read rule .md. A body that cannot be delivered does NOT cancel the decision: mode,
+      # require and forbid all come out of the index row, so a block rule whose text is
+      # unreadable still blocks and says why in place of the text (#77). Refusing the row
+      # outright would turn an unhonourable rule into an allowed call, which is the one
+      # direction this dimension may never fail in. The row is named in the notice either
+      # way, and the substitute is ASCII, so the reason survives the JSON channel.
+      #
+      # That sentence was FALSE for one shape of unreadable body until #97, and false in the
+      # direction it exists to rule out. A file-name column naming a directory -- or an empty
+      # one, which concatenates to the layer directory -- made this getline a fatal i/o error
+      # on one-true-awk, so the process carrying a block decision reached three lines below
+      # died inside END with no JSON on stdout at all. Not "blocks without its text": no
+      # block. jit_entry_why() now refuses both shapes before the read, off a set the bash
+      # half sweeps, so what this paragraph claims is what the code does on every engine.
+      # It is the funnel BOTH entry readers call -- jit_read_body() and jit_entry_load() --
+      # which is why the summary-mode reader below is safe where a plain getline was not.
+      #
+      # jit_entry_load/jit_inject_text live in common.sh: what a match contributes is the
+      # title and the author-written description by default, and the whole body only when
+      # the project or the entry asks for it.
+      #
+      # A rule that can REFUSE the call reads its body whatever the mode says, and the
+      # three refusal messages below use that body and never the summary. The call has
+      # already been stopped, so there is no cheaper outcome left to buy -- and the pull
+      # step summary mode relies on is a SOFT rule an agent under momentum skips. A block
+      # reason that says "read the file to find out why" is an absence produced by the
+      # tool, which is the one failure this repository exists to name. The cost trade that
+      # justifies a summary needs a next turn to spend it in; a refusal has none.
+      #
+      # keepbody is read off the INDEX columns, before the file is opened, so a rule that
+      # cannot block never pays for a body it will not use.
+      keepbody = can_refuse
+      content = ""
+      body = ""
+      why = ""
+      if (file_why != "") {
+        # The row survived the containment guard because it can refuse (#140), and this is
+        # the only place that changes: the file is never named and never opened, so the
+        # decision below is reached with the reason in place of the text.
+        #
+        # `content` stays EMPTY, unlike the two substitute paths below. Those stand in for a
+        # file the hook did try to read; this file column is not a file name at all, the
+        # notice above has already reported the row by position, and filling `content` would
+        # inject that same sentence a second time as advisory context.
+        body = "(the text of this rule was not delivered: " file_why ")"
+        key = ""
+      } else {
+        rpath = tools_dir "/" r_file
+        if (jit_entry_load(rpath, inject_default, keepbody, ent)) {
+          body = ent["body"]
+          content = jit_inject_text(ent, ".claude/jit-context/" tool_label "/" r_file)
         }
+        why = ent["why"]
       }
-      if (blocked != "") break
+      if (why != "") {
+        # BOTH, not one of the two. The substitute goes into content so that a `mode: block`
+        # rule still reaches the block below -- content == "" is the no-op path, and #77 is
+        # that an unhonourable rule must never become an allowed call -- and into body so
+        # that the require and forbid refusals say the same thing rather than nothing.
+        body = "(the text of this rule was not delivered: " why ")"
+        content = body
+        n_refused++
+        refused = jit_refuse_add(refused, jit_row_id(tool_label, rown) r_kind ": " why)
+        log_matches = log_matches sep "refused:" jit_log_name(r_file, tool_label, rown, why) "(" why ")"
+        sep = ", "
+        # A substitute is not the rule text, so it consumes no once-per-session budget. That
+        # was already true -- the branch below is what marked, and this one skipped it -- and
+        # emptying `key` here is how it stays true now that the mark has moved down to the
+        # three places the text is actually delivered.
+        key = ""
+      }
+
+      # A rule that can REFUSE must reach its decision on the strength of its INDEX ROW, and
+      # never on whether its file had text in it (#135). `why` above covers a file that could
+      # not be read; this covers one that read fine and said nothing -- a file with no
+      # frontmatter and no text, or one truncated after it was indexed. rebuild-tsv.sh cannot
+      # have produced that pair itself, since a file with no frontmatter carries no tool: and
+      # no match:, so the row is hand-written or the file drifted out from under a committed
+      # index. Either way the index says `block` and the markdown has nothing to say.
+      #
+      # Without this the three refusals below read an empty `body`: the block branch was
+      # guarded on `content != ""` and was never reached at all -- exit 0, {}, THE CALL
+      # PERMITTED, indistinguishable from a rule that did not match -- while require and
+      # forbid refused with a reason ending in a bare space.
+      #
+      # `body` only, deliberately NOT `content`. content == "" is what keeps an advisory rule
+      # with nothing to say silent, and filling it here would start injecting this sentence
+      # at authors whose entry never refuses anything -- a behaviour change nobody asked for.
+      #
+      # The same wording as the `why` substitute, because from the side that reads it this is
+      # the same fact: the text of this rule did not arrive. And `key` is emptied for the
+      # reason recorded above -- a substitute is not the rule text, so it may not spend a
+      # once-per-session budget. That matters most here: a `once,block` row that marked
+      # itself shown on a refusal carrying none of its text would be skipped on the next
+      # call, and the second `git push` of the session would go through.
+      # WHITESPACE, not just the empty string. A file of two blank lines reads back as "\n",
+      # which is not "" and would slip a guard testing for that alone -- and the refusal then
+      # carries a reason that renders as nothing at all, which is this defect one shape over
+      # and the shape a half-written or truncated entry actually leaves behind. `[[:space:]]`
+      # rather than `\s`: this is an awk ERE, and one-true-awk drops the class spelling.
+      if (keepbody && body ~ /^[[:space:]]*$/) {
+        body = "(the text of this rule was not delivered: the entry file has no text)"
+        key = ""
+      }
+
+      # Check require
+      if (r_require != "") {
+        nr = split(r_require, reqs, "|")
+        for (ri = 1; ri <= nr; ri++) {
+          # Folded on both sides (#76): `require: validé` must be satisfied by `VALIDÉ`.
+          # This half fails CLOSED when it breaks -- it refuses a command that met its
+          # requirement -- which is the safer direction and still wrong.
+          if (index(fold_full, jit_fold_latin1(tolower(reqs[ri]))) == 0) {
+            blocked = "BLOCKED: Missing required: " reqs[ri] ". " body
+            log_matches = log_matches sep "tool:" r_logname "(BLOCKED:" reqs[ri] ")"
+            sep = ", "
+            # NOTHING is marked here (#139). This branch used to mark, on the reasoning that
+            # the body had been delivered as the refusal reason -- true, and the wrong unit to
+            # count. `once` bounds how often an entry is INJECTED as context; spending that
+            # budget on a refusal is what made the next matching call skip the row entirely
+            # and go through. A refusal is a decision, not knowledge the agent now carries.
+            break
+          }
+        }
+        if (blocked != "") break
+      }
+
+      # Check forbid
+      if (r_forbid != "" && blocked == "") {
+        nfb = split(r_forbid, forbs, "|")
+        for (fi = 1; fi <= nfb; fi++) {
+          # Folded on both sides (#76). This is the half that failed OPEN: `forbid:
+          # clé-privée` stopped seeing `CLÉ-PRIVÉE` and the deny-list rule allowed the call.
+          if (index(fold_full, jit_fold_latin1(tolower(forbs[fi]))) > 0) {
+            blocked = "BLOCKED: Forbidden: " forbs[fi] ". " body
+            log_matches = log_matches sep "tool:" r_logname "(BLOCKED:" forbs[fi] ")"
+            sep = ", "
+            # Marks nothing, same as the require refusal above (#139).
+            break
+          }
+        }
+        if (blocked != "") break
+      }
+
+      header = "# JIT Context: " r_header_name " (matched: " r_match ")"
+
+      # OUTSIDE the content guard below, and that is the whole of #135. `mode: block` comes
+      # off the index row, so whether this rule refuses is settled before the file is opened;
+      # `content` is about what there is to SAY. Sitting inside that guard turned an entry
+      # with no deliverable text into an allowed call -- the one direction this dimension may
+      # never fail in, and it read exactly like a rule that did not match. require and forbid
+      # were already outside it, for the same reason.
+      #
+      # `body` can no longer be blank here: it is the entry text, the substitute for a body
+      # that could not be read, or the substitute for a file with nothing but whitespace in it.
+      if (index(r_modes, "block") > 0 && blocked == "") {
+        log_matches = log_matches sep "tool:" r_logname "(" r_match ")[full:block]"
+        sep = ", "
+        # Marks nothing (#139). This was the line that disarmed `mode: once, block`: the
+        # first matching call of a session refused and marked, and every call after it left
+        # the loop at the `once` check before reaching this branch at all.
+        # body, not content: a block is a refusal, and a refusal is never a summary.
+        blocked = header "\n" body
+        break
+      }
+
+      # `hushed` is where a `once` budget that has already been spent lands now (#139): the
+      # row still reached its decision above, and this is the half -- and the only half --
+      # that the budget was ever about.
+      if (content != "" && blocked == "" && !hushed) {
+        # ADVISORY, and therefore provisional. A row further down this index may still block,
+        # and the block path below throws `matched` away -- so neither the once-marker nor the
+        # log token may be written yet. Both are held and committed after the loop, when the
+        # decision is known (#112).
+        log_adv = log_adv asep "tool:" r_logname "(" r_match ")" jit_inject_tag(ent)
+        asep = ", "
+        if (key != "") { held[key] = 1; hold_n++ }
+
+        # The SECOND header, and the reason there are two (#146). `header` above is the
+        # refusal header and is deliberately unbounded: #141 asked for a bound there and was
+        # refused, because the block reason carries the whole entry body anyway, so bounding
+        # the header alone is a defence walked around by moving one line down the same entry.
+        # Nothing about that has changed and the block branch above still uses `header`.
+        #
+        # On THIS path the same reasoning does not hold, and that asymmetry was the defect.
+        # Under `summary` the body is on a budget -- 160 bytes of title and 400 of
+        # description, spent in jit_inject_text() -- and the header sat outside it, quoting
+        # two index columns whole. Driven: a 60,000-byte regex `match:` column on a summary
+        # entry produced 60,223 bytes of ordinary advisory context, and a 60,000-byte
+        # entry-file column produced 60,539 with no entry file involved at all. `summary`
+        # exists so a match costs about twenty tokens instead of the whole entry (#1), and a
+        # single frontmatter-free index column reopened exactly the cost it was added to
+        # close -- silently, on an ordinary non-refusing match.
+        #
+        # So the bound is placed on the BODY BUDGET rather than on `header` itself, and the
+        # test is "was the entry text actually delivered here", which is three conditions and
+        # not one. A `full` entry that delivered its body made no promise about what a match
+        # costs and its body is unbounded at the authors own request, so a bound on its
+        # header is #141s walk-around one more time. Every other case has a bounded body
+        # sitting under this header, and `why != ""` is the second of them: a row whose entry
+        # file could not be read delivers no body at all, only the two-line substitute built
+        # above, IN EVERY MODE. Gating on the mode alone left that shape unbounded under the
+        # project default -- which is `full`, and is what every project that configured
+        # nothing is on. Driven after the mode-only fix and before this one: 60,539 bytes for
+        # the file column and 60,547 for the pattern, with no config.env present.
+        #
+        # The THIRD condition is the case the sentence above once claimed could not exist
+        # (#165). A file with no frontmatter is pinned to `full` whatever the project sets,
+        # so an entry containing nothing but blank lines arrived here with mode `full`, no
+        # `why`, and a body of a single newline -- and took the exemption with nothing under
+        # the header to justify it. Driven at cdff15a on one-true-awk with no config.env:
+        # 60,125 bytes of additionalContext for a 60,000-byte `match:` column on such a row.
+        #
+        # That was never a hole in the cap and this condition is not what closes one. Control
+        # drive, same tree: a short `match:` and the same 60,000 bytes IN the entry file cost
+        # 60,124, because the same pin delivers them. Both channels need write access to the
+        # tree and both cost the same, so #146s budget gave up nothing either way. What was
+        # wrong is that the exemption is EARNED by delivering a body and this branch granted
+        # it on the mode alone -- the `why` error one paragraph up, one shape further in, and
+        # a premise the next person to touch this gate would have reasoned from.
+        #
+        # `[[:space:]]`, not `== ""`. `content` is already non-empty by the guard this block
+        # sits inside, and a file of two blank lines reads back as one newline -- which is the
+        # distinction #135 drew for the refusal substitute seventy lines up, and the shape a
+        # truncated or half-written entry actually leaves behind.
+        #
+        # And `content`, which under `full` is the WHOLE FILE -- frontmatter included, since
+        # nothing strips it in that mode. So an entry whose frontmatter is all it has still
+        # takes the exemption, and that is correct rather than a second hole: its author can
+        # put 60,000 bytes one line below the closing `---` and have them delivered. Driven:
+        # 60,164 bytes through that header against 60,166 through that body, on one tree.
+        # The test here is not "is this entry worth much", it is "is there a body channel
+        # open beside the header" -- and for every file this branch reaches, there is.
+        #
+        # BOTH columns, not just the pattern. They are different kinds of text -- one is
+        # written by the rule author, the other names a file -- and the second one is exactly
+        # how that substitute path is reached, so clipping the pattern alone moves the 60 KB
+        # one column over.
+        #
+        # The two caps differ for that same reason. 160 is the title cap, because in this
+        # header the pattern does the title job -- name the rule well enough to find it. 255
+        # is NAME_MAX on every platform this runs on, so it never bites a column that names
+        # a file which could exist, and always bounds one that cannot. jit_clip() marks the
+        # cut in what is injected rather than truncating quietly, so the reader can tell a
+        # clipped pattern from a short one.
+        #
+        # ent[] is safe to read here: the only branch that leaves it stale is file_why != "",
+        # which keeps `content` empty and therefore never reaches this line.
+        if (ent["mode"] == "full" && why == "" && content !~ /^[[:space:]]*$/) adv_header = header
+        else adv_header = "# JIT Context: " jit_clip(r_header_name, 255) " (matched: " jit_clip(r_match, 160) ")"
+
+        if (matched != "") matched = matched "\n---\n" adv_header "\n" content
+        else matched = adv_header "\n" content
+      }
     }
-
-    header = "# JIT Context: " r_header_name " (matched: " r_match ")"
-
-    # OUTSIDE the content guard below, and that is the whole of #135. `mode: block` comes
-    # off the index row, so whether this rule refuses is settled before the file is opened;
-    # `content` is about what there is to SAY. Sitting inside that guard turned an entry
-    # with no deliverable text into an allowed call -- the one direction this dimension may
-    # never fail in, and it read exactly like a rule that did not match. require and forbid
-    # were already outside it, for the same reason.
-    #
-    # `body` can no longer be blank here: it is the entry text, the substitute for a body
-    # that could not be read, or the substitute for a file with nothing but whitespace in it.
-    if (index(r_modes, "block") > 0 && blocked == "") {
-      log_matches = log_matches sep "tool:" r_logname "(" r_match ")[full:block]"
-      sep = ", "
-      # Marks nothing (#139). This was the line that disarmed `mode: once, block`: the
-      # first matching call of a session refused and marked, and every call after it left
-      # the loop at the `once` check before reaching this branch at all.
-      # body, not content: a block is a refusal, and a refusal is never a summary.
-      blocked = header "\n" body
-      break
-    }
-
-    # `hushed` is where a `once` budget that has already been spent lands now (#139): the
-    # row still reached its decision above, and this is the half -- and the only half --
-    # that the budget was ever about.
-    if (content != "" && blocked == "" && !hushed) {
-      # ADVISORY, and therefore provisional. A row further down this index may still block,
-      # and the block path below throws `matched` away -- so neither the once-marker nor the
-      # log token may be written yet. Both are held and committed after the loop, when the
-      # decision is known (#112).
-      log_adv = log_adv asep "tool:" r_logname "(" r_match ")" jit_inject_tag(ent)
-      asep = ", "
-      if (key != "") { held[key] = 1; hold_n++ }
-
-      # The SECOND header, and the reason there are two (#146). `header` above is the
-      # refusal header and is deliberately unbounded: #141 asked for a bound there and was
-      # refused, because the block reason carries the whole entry body anyway, so bounding
-      # the header alone is a defence walked around by moving one line down the same entry.
-      # Nothing about that has changed and the block branch above still uses `header`.
-      #
-      # On THIS path the same reasoning does not hold, and that asymmetry was the defect.
-      # Under `summary` the body is on a budget -- 160 bytes of title and 400 of
-      # description, spent in jit_inject_text() -- and the header sat outside it, quoting
-      # two index columns whole. Driven: a 60,000-byte regex `match:` column on a summary
-      # entry produced 60,223 bytes of ordinary advisory context, and a 60,000-byte
-      # entry-file column produced 60,539 with no entry file involved at all. `summary`
-      # exists so a match costs about twenty tokens instead of the whole entry (#1), and a
-      # single frontmatter-free index column reopened exactly the cost it was added to
-      # close -- silently, on an ordinary non-refusing match.
-      #
-      # So the bound is placed on the BODY BUDGET rather than on `header` itself, and the
-      # test is "was the entry text actually delivered here", which is three conditions and
-      # not one. A `full` entry that delivered its body made no promise about what a match
-      # costs and its body is unbounded at the authors own request, so a bound on its
-      # header is #141s walk-around one more time. Every other case has a bounded body
-      # sitting under this header, and `why != ""` is the second of them: a row whose entry
-      # file could not be read delivers no body at all, only the two-line substitute built
-      # above, IN EVERY MODE. Gating on the mode alone left that shape unbounded under the
-      # project default -- which is `full`, and is what every project that configured
-      # nothing is on. Driven after the mode-only fix and before this one: 60,539 bytes for
-      # the file column and 60,547 for the pattern, with no config.env present.
-      #
-      # The THIRD condition is the case the sentence above once claimed could not exist
-      # (#165). A file with no frontmatter is pinned to `full` whatever the project sets,
-      # so an entry containing nothing but blank lines arrived here with mode `full`, no
-      # `why`, and a body of a single newline -- and took the exemption with nothing under
-      # the header to justify it. Driven at cdff15a on one-true-awk with no config.env:
-      # 60,125 bytes of additionalContext for a 60,000-byte `match:` column on such a row.
-      #
-      # That was never a hole in the cap and this condition is not what closes one. Control
-      # drive, same tree: a short `match:` and the same 60,000 bytes IN the entry file cost
-      # 60,124, because the same pin delivers them. Both channels need write access to the
-      # tree and both cost the same, so #146s budget gave up nothing either way. What was
-      # wrong is that the exemption is EARNED by delivering a body and this branch granted
-      # it on the mode alone -- the `why` error one paragraph up, one shape further in, and
-      # a premise the next person to touch this gate would have reasoned from.
-      #
-      # `[[:space:]]`, not `== ""`. `content` is already non-empty by the guard this block
-      # sits inside, and a file of two blank lines reads back as one newline -- which is the
-      # distinction #135 drew for the refusal substitute seventy lines up, and the shape a
-      # truncated or half-written entry actually leaves behind.
-      #
-      # And `content`, which under `full` is the WHOLE FILE -- frontmatter included, since
-      # nothing strips it in that mode. So an entry whose frontmatter is all it has still
-      # takes the exemption, and that is correct rather than a second hole: its author can
-      # put 60,000 bytes one line below the closing `---` and have them delivered. Driven:
-      # 60,164 bytes through that header against 60,166 through that body, on one tree.
-      # The test here is not "is this entry worth much", it is "is there a body channel
-      # open beside the header" -- and for every file this branch reaches, there is.
-      #
-      # BOTH columns, not just the pattern. They are different kinds of text -- one is
-      # written by the rule author, the other names a file -- and the second one is exactly
-      # how that substitute path is reached, so clipping the pattern alone moves the 60 KB
-      # one column over.
-      #
-      # The two caps differ for that same reason. 160 is the title cap, because in this
-      # header the pattern does the title job -- name the rule well enough to find it. 255
-      # is NAME_MAX on every platform this runs on, so it never bites a column that names
-      # a file which could exist, and always bounds one that cannot. jit_clip() marks the
-      # cut in what is injected rather than truncating quietly, so the reader can tell a
-      # clipped pattern from a short one.
-      #
-      # ent[] is safe to read here: the only branch that leaves it stale is file_why != "",
-      # which keeps `content` empty and therefore never reaches this line.
-      if (ent["mode"] == "full" && why == "" && content !~ /^[[:space:]]*$/) adv_header = header
-      else adv_header = "# JIT Context: " jit_clip(r_header_name, 255) " (matched: " jit_clip(r_match, 160) ")"
-
-      if (matched != "") matched = matched "\n---\n" adv_header "\n" content
-      else matched = adv_header "\n" content
-    }
+    close(tools_tsv)
+    # A block ends the WHOLE scan, not just this layer index. The `break`s inside the row
+    # loop end one index; without this the next layer would be scanned after a decision
+    # was already made, and the entries it matched would be held and then discarded --
+    # which is the burn #112 named, one loop out.
+    if (blocked != "") break
   }
-  close(tools_tsv)
 
   # The decision is known now. Either the advisory rules were delivered -- commit their
   # marks and their log tokens -- or a later row blocked and they were not, in which case
@@ -718,8 +759,10 @@ END {
   }
 
   if (tt != "") {
-    split("00-manual 10-auto 20-grouped 30-crosscutting", layers, " ")
-    for (li = 1; li <= 4; li++) {
+    # Enumerated, and its OWN list rather than the tools one: the two dimensions can hold
+    # different layer directories (#176). The bound comes off the same split().
+    n_vocab_layers = split(vocab_layers, layers, " ")
+    for (li = 1; li <= n_vocab_layers; li++) {
       layer = layers[li]
       lookup = vocab_base "/" layer "/00-index.tsv"
 
@@ -846,6 +889,24 @@ END {
     } else {
       block_tail = block_tail "\n---\n" note
     }
+  }
+
+  # --- A layer directory that could not be read is reported, once per session ---
+  # #176: the state that had no channel at all, and in THIS hook the one that matters most
+  # -- an unread tools layer holding a `mode: block` rule fails open, and every other
+  # signal (the rebuild count, the linter, doctor) reported the layer as healthy.
+  #
+  # Delivered on the block path too, and it consumes its marker there, for the reason the
+  # config notice does: the list is built whole in the bash half before awk starts, so
+  # nothing about it can arrive later. It is the RULE list that a `break` can cut short.
+  layers_refused = ENVIRON["JIT_LAYERS_REFUSED"]
+  layers_refused_n = ENVIRON["JIT_LAYERS_REFUSED_N"] + 0
+  if (layers_refused_n > 0 && !("jit-refused-layers" in shown)) {
+    shown["jit-refused-layers"] = 1
+    jit_shown_mark(shown_file, "jit-refused-layers")
+    lnote = jit_layers_notice(layers_refused, layers_refused_n)
+    if (blocked == "") matched = (matched == "") ? lnote : lnote "\n---\n" matched
+    else block_tail = block_tail "\n---\n" lnote
   }
 
   # --- A refused config.env line is reported, once per session ---
