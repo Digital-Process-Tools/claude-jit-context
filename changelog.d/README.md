@@ -33,7 +33,7 @@ receipt, and every one of them was paid for in a shipped release.
 
 ## Nothing outside this directory may name your fragment by path
 
-The release *consumes* fragments: `.github/scripts/assemble_changelog.py` folds the prose
+The release *consumes* fragments: `.oss/assemble_changelog.py` folds the prose
 into `CHANGELOG.md` and deletes the file. So a test, a doc example, a fixture or a
 jit-context entry keyed to `changelog.d/<n>.<section>.md` is green for exactly the window
 between your PR and the next tag, and red on that tag and every tag after — and the
@@ -161,19 +161,24 @@ still no.
 
 ```bash
 python3 -m pip install markdown-it-py
-python3 .github/scripts/assemble_changelog.py --check                        # on every PR
-python3 .github/scripts/assemble_changelog.py --version 0.4.0 --title "..."  # at the tag
+python3 .oss/assemble_changelog.py --check                                    # on every PR
+python3 .oss/assemble_changelog.py --version 0.4.0 --changelog CHANGELOG.md --dir changelog.d
 ```
 
-Bump `.claude-plugin/plugin.json` **first**: `--version` is verified against it and
-refused on disagreement, which is what keeps `tests/test-version-sites.sh` meaningful —
-reading the version out of the manifest instead would make that guard assert only that
-this script ran.
+Bump `.claude-plugin/plugin.json` **first**, and check it yourself. The fork this
+assembler replaced verified `--version` against the manifest and refused on
+disagreement; this one takes your word for it, so `tests/test-version-sites.sh` is
+the only thing left comparing the sites and it has to run before the tag.
 
-The assembler folds every fragment into a new `## [x.y.z] — Title` section, **merges into
+Its exit codes are **`0` ok, `1` skipped, `2` refused** — the inverse of every tool
+under `scripts/`. The file itself is owned by the `oss` plugin and rewritten by every
+`/oss:scaffold --apply`, so a change to it goes upstream rather than into the file.
+
+The assembler folds every fragment into a new `## [x.y.z] - YYYY-MM-DD` section, **merges into
 the `###` headings the existing `[Unreleased]` body already carries** rather than opening
 a second one, leaves an empty `[Unreleased]` behind, refuses unless the entries it
 produced equal the entries it was given, **re-parses the file it is about to write** and
 refuses unless its headings are the old ones plus exactly what this run wrote, and only
 then deletes the fragments. Exit codes are documented at the top of the script — 0 ok, 1
-refused, 2 could not evaluate — and `tests/test-assemble-changelog.sh` drives every one.
+skipped, 2 refused — and the suite driving every one of them is upstream, in the `oss`
+plugin, along with the script.

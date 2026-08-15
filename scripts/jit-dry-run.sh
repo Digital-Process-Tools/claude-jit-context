@@ -1082,8 +1082,28 @@ fi
 # Built by hand rather than with gsub: a backslash in a gsub REPLACEMENT has its own layer
 # of meaning, and getting that count right is exactly the kind of thing that is wrong in
 # one awk and right in another.
+#
+# LC_ALL=C, and it is what makes "character for character" above true (#169). The loop
+# below walks substr($0, i, 1), which is a BYTE under `C` and a CHARACTER on gawk under a
+# multibyte locale -- and a byte that is not valid UTF-8 comes back out of that character
+# walk as U+FFFD, three bytes where the caller typed one. So `--command` or `--file`
+# carrying a Latin-1 accent was dry-run against a DIFFERENT STRING than the author typed:
+# a rule matching what they wrote reported `no rule fired`, and a rule that did not could
+# appear to fire. The tool that exists to tell an author whether their rule works,
+# answering about another string -- and gawk's `Invalid multibyte data detected` goes to
+# this script's own stderr, which report_hook's capture does not cover, so nothing said so.
+#
+# Same root cause as the pin on injected_bytes() below, opposite consequence: that one
+# misreported a NUMBER, this one misreported the SUBJECT. Under `C` there is no decoding
+# to go wrong, and the hooks read the payload as bytes anyway, so the pin is what makes
+# the sample call and the real call the same call.
+#
+# Worth knowing if you go to reproduce it: gawk only takes its multibyte path for a record
+# that ALSO contains a valid multibyte character. `a<0xE9>b` alone is preserved on every
+# engine and locale. tests/test-jit-dry-run.sh puts a real accent in the fixture for that
+# reason, and says so.
 json_quote() {
-  printf '%s' "$1" | awk '{
+  printf '%s' "$1" | LC_ALL=C awk '{
     o = ""
     for (i = 1; i <= length($0); i++) {
       c = substr($0, i, 1)
