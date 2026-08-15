@@ -305,9 +305,13 @@ END {
   n_refused = 0
 
   # --- Scan path layers ---
-  split("00-manual 10-auto 20-grouped 30-crosscutting", layers, " ")
-  for (li = 1; li <= 4; li++) {
-    layer = layers[li]
+  # Enumerated from disk by jit_scan_layers() in common.sh and handed in as a -v value
+  # (#176). The bound comes off the same split() rather than being a second literal beside
+  # it: the `li <= 4` this replaces was a separate copy of the same fact, and a fix that
+  # changed only the string would have truncated the list silently.
+  n_path_layers = split(path_layers, players, " ")
+  for (li = 1; li <= n_path_layers; li++) {
+    layer = players[li]
     index_file = paths_base "/" layer "/00-index.tsv"
 
     rown = 0
@@ -421,8 +425,13 @@ END {
   if (vocab_paths == "1") {
     jit_shown_load(vocab_shown_file, vshown)
 
-    for (li = 1; li <= 4; li++) {
-      layer = layers[li]
+    # Its OWN list, not the path one. Until #176 this loop reused the `layers` array the
+    # path scan above built, which was only correct while both were the same constant --
+    # enumerated, vocabulary/ and paths/ can legitimately hold different layer directories,
+    # and sharing the array would have read this dimension for the other one names.
+    n_vocab_layers = split(vocab_layers, vlayers, " ")
+    for (li = 1; li <= n_vocab_layers; li++) {
+      layer = vlayers[li]
       vindex = vocab_base "/" layer "/01-paths.tsv"
 
       vrown = 0
@@ -498,6 +507,19 @@ END {
     matched = (matched == "") ? note : note "\n---\n" matched
   }
 
+  # --- A layer directory that could not be read is reported, once per session ---
+  # #176: the state that had no channel at all. A layer nobody could load and a layer whose
+  # rules never matched produced the same silence, and every other signal -- the rebuild
+  # count, the linter, doctor -- reported the layer as healthy.
+  layers_refused = ENVIRON["JIT_LAYERS_REFUSED"]
+  layers_refused_n = ENVIRON["JIT_LAYERS_REFUSED_N"] + 0
+  if (layers_refused_n > 0 && !("jit-refused-layers" in shown)) {
+    shown["jit-refused-layers"] = 1
+    jit_shown_mark(shown_file, "jit-refused-layers")
+    lnote = jit_layers_notice(layers_refused, layers_refused_n)
+    matched = (matched == "") ? lnote : lnote "\n---\n" matched
+  }
+
   # --- A refused config.env line is reported, once per session ---
   # Parsed in common.sh, reported here, because this is the only channel that reaches the
   # user. The case that matters is the one where they did NOT write the file: config.env
@@ -557,10 +579,36 @@ END {
 }
 '
 
+# Enumerated, never a literal (#176). See jit_scan_layers() in common.sh.
+#
+# TWO SCANS, TWO LISTS, and that is the change rather than an accident of it: this hook
+# used to build one `layers` array and walk it over BOTH paths_base and vocab_base, which
+# was only correct while the list was a constant. Enumerated, the two dimensions can hold
+# different layer directories -- a scaffold that ships vocabulary/01-oss and no
+# paths/01-oss is the ordinary case -- and one array serving both would read each
+# dimension for the other one directories.
+#
+# Scanned HERE and not inside jit_path_awk(), because that function may run twice in one
+# invocation and the refusal list accumulates: scanning per call would count every refused
+# layer twice and report a number that is not the number of layers.
+#
+# The vocabulary scan is gated exactly as its loop is. With DYNAMIC_RULES_VOCAB_PATHS off
+# this hook never opens that dimension, and a notice about layers it was not going to read
+# would be a report of a consequence that does not exist.
+jit_scan_layers "$JIT_BASE/paths" paths
+JIT_PATH_LAYERS="$JIT_LAYERS"
+JIT_VOCAB_LAYERS=""
+if [ "$VOCAB_PATHS" = "1" ]; then
+  jit_scan_layers "$JIT_BASE/vocabulary" vocabulary
+  JIT_VOCAB_LAYERS="$JIT_LAYERS"
+fi
+
 # One place the -v list lives, because this program may run twice. cand_mode is the only
 # thing that differs: 0 parses the payload on stdin, 1 takes its paths from the environment.
 jit_path_awk() {
   LC_ALL=C awk \
+    -v path_layers="$JIT_PATH_LAYERS" \
+    -v vocab_layers="$JIT_VOCAB_LAYERS" \
     -v paths_base="$JIT_BASE/paths" \
     -v vocab_base="$JIT_BASE/vocabulary" \
     -v vocab_paths="$VOCAB_PATHS" \

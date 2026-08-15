@@ -1437,6 +1437,18 @@ function jit_refusal_notice(list, n) {
   return "# JIT Context: " n " rule(s) could not be evaluated, so they did NOT run\n" list \
     "\nA pattern the matcher cannot honour is not a rule that did not match, and until now the two looked identical. Lint the tree that owns these rules:\n  bash scripts/jit-dry-run.sh --base <tree>/.claude/jit-context"
 }
+# The third state for a LAYER rather than for a row (#176). Everything above reports a
+# rule the matcher read and could not honour; this reports a directory of rules the
+# matcher never opened, which until #176 was reported by nothing at all and rendered
+# exactly like a layer whose rules simply never matched.
+#
+# The list is built in bash (jit_scan_layers) and arrives through ENVIRON, for the reason
+# JIT_CONFIG_REFUSED does: it is newline-separated, and a newline in an awk -v value is a
+# fatal error raised before the program runs. No layer NAME is ever in it -- the bullets
+# carry a dimension, a position in the glob and a constant reason.
+function jit_layers_notice(list, n) {
+  return "# JIT Context: " n " jit-context layer director" (n == 1 ? "y" : "ies") " could not be read, so no rule inside them ran\n" list "\nThese are directories under .claude/jit-context/<dimension>/ that exist and hold rules the matcher never opened. A layer that was never loaded and a layer whose rules never matched look identical from a session, which is why this says so. Name a layer directory with letters, digits, dot, underscore and hyphen only, and lint the tree:\n  bash scripts/jit-dry-run.sh --base <tree>/.claude/jit-context"
+}
 function jit_config_notice(list, n) {
   return "# JIT Context: " n " line(s) in .claude/jit-context/config.env were refused, so they did NOT take effect\n" list \
     "\nconfig.env is read as plain KEY=VALUE and is never executed. Only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* settings are read; anything else, shell included, is refused. If a refused line is not one you wrote, treat that file as hostile -- it arrived with the repository."
@@ -2071,6 +2083,162 @@ _log_hook() {
 #
 # Exported for the awk half in rebuild-tsv.sh, which reads it out of ENVIRON.
 export JIT_NAME_WITHHELD='<withheld: not a plain name>'
+
+# --- Which layer directories the matcher reads (#176) ------------------------
+# The three hooks used to enumerate their layers from a literal:
+#
+#   split("00-manual 10-auto 20-grouped 30-crosscutting", layers, " ")
+#   for (li = 1; li <= 4; li++)
+#
+# -- a string in three files with the bound written beside it as a SECOND literal, and in
+# the tools dimension not even that: pre-tool-hook.sh read $JIT_BASE/tools/00-manual
+# directly and no other layer at all. rebuild-tsv.sh has always globbed `<dimension>/*/`,
+# so a layer outside that string was written by its author, indexed by the rebuild, and
+# counted by every report this repository prints -- and read by nothing. claude-oss filed
+# #176 after shipping five entries into a `01-oss` layer that had never fired anywhere.
+#
+# So the directories are ENUMERATED, and the ordering falls out for free: the numeric
+# prefixes are what the layer scheme is for, and a C-collated glob puts 00-manual before
+# 01-oss before 10-auto without anything here having to sort. `local LC_ALL=C` for the
+# duration, the same technique and the same reason as jit_report_name() below -- under a
+# UTF-8 locale the collation that orders the glob is not the byte order the prefixes were
+# designed around.
+#
+# NO SUBSHELL, for the reason jit_scan_symlinks() has none: this runs twice per hook
+# invocation inside a 30-110 ms budget, and a fork per dimension is a cost the whole
+# design exists to avoid. Globals out, like that function, rather than a captured stdout.
+#
+# THE NAME IS ATTACKER-CHOSEN TEXT. A layer directory arrives with the clone exactly as an
+# entry file name does, and the comment above jit_report_name() cites the three findings
+# where such a name reached a report (#35, #113, #124). Two consequences here:
+#
+#   - The list is handed to awk through `-v`, space-separated, so a name carrying a space
+#     would inject a list entry and a name carrying a newline is the fatal "newline in
+#     string" that JIT_CONFIG_REFUSED is routed around the environment to avoid. Refusing
+#     the name is what makes the plain separator safe; nothing downstream re-checks it.
+#   - A refused layer is never named in the report. It is named BY POSITION in the glob,
+#     which is what an author `ls` next.
+#
+# The accepted set is jit_report_name()s set, character for character, and it has to be:
+# a name that cannot be reported must not be silently loaded either, and a name that is
+# refused here must be reportable when some other surface prints it. It is inlined rather
+# than called because calling costs a fork per layer. tests/test-layer-enumeration.sh
+# section I drives the same boundary names through both and fails if they ever disagree.
+#
+# THE THIRD STATE IS THE POINT. A layer that exists and cannot be read is NAMED -- in what
+# the hook injects and in the log -- rather than skipped in silence. That is the whole of
+# #176: a rule that never matched and a rule that never loaded rendered identically, and
+# every signal available to the reporter said the layer was healthy.
+JIT_LAYERS_MAX=64
+JIT_LAYERS_REFUSED_MAX=4096
+JIT_LAYERS=""
+export JIT_LAYERS_REFUSED=""
+export JIT_LAYERS_REFUSED_N=0
+JIT_LAYERS_REFUSED_CUT=0
+
+# One appender, so there is one place the byte cap is applied -- jit_config_refuse()
+# exactly, and for the same reason: the number of layer directories is chosen by the
+# repository being cloned, and an unbounded list pushes the environment past ARG_MAX,
+# after which every exec fails and the hook emits nothing while exiting 0.
+#
+# The COUNT is not capped, only the list. A truncated list that also under-counted would
+# be a report that reads as complete and is not, which is the defect this notice exists
+# to end rather than to re-commit one layer up.
+jit_layer_refuse() {
+  # $1 dimension label (a constant written by the caller), $2 what could not be done
+  JIT_LAYERS_REFUSED_N=$((JIT_LAYERS_REFUSED_N + 1))
+  if [ "${#JIT_LAYERS_REFUSED}" -gt "$JIT_LAYERS_REFUSED_MAX" ]; then
+    if [ "$JIT_LAYERS_REFUSED_CUT" = 0 ]; then
+      JIT_LAYERS_REFUSED_CUT=1
+      JIT_LAYERS_REFUSED="$JIT_LAYERS_REFUSED$JIT_NL- the remaining refused layer directories are not listed here; the count above is the whole total"
+    fi
+    return 0
+  fi
+  JIT_LAYERS_REFUSED="$JIT_LAYERS_REFUSED${JIT_LAYERS_REFUSED:+$JIT_NL}- $1: $2"
+}
+
+# Sets JIT_LAYERS to a space-separated list of the layer directory names under one
+# dimension, in scan order. Appends to JIT_LAYERS_REFUSED, which ACCUMULATES across the
+# calls in one hook process -- pre-path-hook.sh scans two dimensions, and their lists can
+# legitimately differ, but their refusals are one notice.
+jit_scan_layers() {
+  # $1 dimension base directory, $2 dimension label (a constant written by the caller)
+  local base="$1" dim="$2" d name tsv seen=0 kept=0 cut=0
+  # See above. `local` restores the caller locale on return.
+  local LC_ALL=C
+  JIT_LAYERS=""
+  # nullglob is deliberately not set, for the reason jit_scan_symlinks() gives: toggling a
+  # shell option in a sourced file changes it for whatever sourced us. An unmatched glob
+  # stays literal and falls out of the `[ -d ]` on its own.
+  for d in "$base"/*/; do
+    [ -d "$d" ] || continue
+    d="${d%/}"
+    name="${d##*/}"
+    seen=$((seen + 1))
+
+    # THE BOUND IS REPORTED, NOT TAKEN QUIETLY. The loop does not break: the glob is
+    # already expanded, so counting the rest is free, and a notice that said "64 layers
+    # were read" without saying how many were not would be this repositorys own defect
+    # class wearing a fix as a disguise.
+    if [ "$kept" -ge "$JIT_LAYERS_MAX" ]; then
+      if [ "$cut" = 0 ]; then
+        cut=1
+        jit_layer_refuse "$dim" "the layer directories after the first $JIT_LAYERS_MAX were not read"
+      fi
+      continue
+    fi
+
+    # jit_report_name()s set, inlined. See above for why it is not called.
+    case "$name" in
+      ''|[!A-Za-z0-9]*|*[!A-Za-z0-9._-]*)
+        jit_layer_refuse "$dim" "layer directory $seen was not read: the directory name is not a plain name"
+        continue ;;
+    esac
+    if [ "${#name}" -gt 64 ]; then
+      jit_layer_refuse "$dim" "layer directory $seen was not read: the directory name is longer than 64 bytes"
+      continue
+    fi
+
+    # A directory the process cannot open is the third state in its most literal form.
+    # awk would getline -1 on every index inside it and report nothing, which is
+    # indistinguishable from a layer that holds no rules.
+    if [ ! -r "$d" ] || [ ! -x "$d" ]; then
+      jit_layer_refuse "$dim" "layer directory $seen was not read: the directory could not be opened"
+      continue
+    fi
+    # And the indexes themselves. Same verdict for the same reason -- an unreadable
+    # 00-index.tsv is a layer whose every rule is inert, reported by nobody. The whole
+    # layer is refused rather than the one index: two indexes are built out of a
+    # vocabulary layer, and a partial read there is a partial rule set with nothing
+    # saying so.
+    # NAMED, not globbed, and the reason is a measurement. `for tsv in "$d"/*.tsv` reads
+    # the WHOLE layer directory, and a layer directory holds one .md per rule -- so that
+    # form costs the size of the rule set to answer a question about two files. Measured
+    # on a 300-entry layer, nine interleaved rounds of 400 scans: 1.7-3.9 ms per scan
+    # globbing against 0.8-1.3 ms naming the leaves. The machine was noisy enough that
+    # only the ratio is worth quoting, and the ratio is about three to one, against a hook
+    # budget of 30-110 ms with two of these calls in it.
+    #
+    # These two are the only index leaves rebuild-tsv.sh writes -- 00-index.tsv in every
+    # dimension, 01-paths.tsv in vocabulary -- and a .tsv nothing reads is not this check
+    # business. A third index leaf added later has to be added here too, and that is the
+    # cost of the named form.
+    #
+    # `if`, not a bare `&&`: a `&&` whose left side is false leaves the loop body ending
+    # on a non-zero status, which is one `set -e` in a future caller away from a hook that
+    # stops mid-scan. jit-dry-run.sh report_layer() records the same trap.
+    for tsv in "$d/00-index.tsv" "$d/01-paths.tsv"; do
+      [ -e "$tsv" ] || continue
+      if [ ! -r "$tsv" ]; then
+        jit_layer_refuse "$dim" "layer directory $seen was not read: an index inside it could not be opened"
+        continue 2
+      fi
+    done
+
+    JIT_LAYERS="$JIT_LAYERS${JIT_LAYERS:+ }$name"
+    kept=$((kept + 1))
+  done
+}
 
 jit_report_name() {
   # C collation for the duration. Under a UTF-8 locale bash own [A-Za-z0-9] can admit
