@@ -570,6 +570,128 @@ assert_has   "the function text was extracted at all" "$OUT" "function jit_clip(
 assert_has   "including the trim this is about" "$OUT" '+$/, "", s)'
 assert_lacks "and it names no POSIX character class" "$OUT" "[[:"
 
+# ============================================================================
+# 172 - jit_frontmatter() carried the same locale-sensitive class one function over
+# ============================================================================
+# #164 spelled the class out in jit_clip(). The identical shape survived in the ONE reader
+# of an entry frontmatter -- and here it is not latent. jit_clip() is reached only through
+# awk invocations that every caller pins to LC_ALL=C; jit_frontmatter() pins nothing, and
+# neither rebuild-tsv.sh nor jit-dry-run.sh pins it for the call, so the locale in play is
+# whatever the operator has exported.
+#
+# What it costs is NOT invalid UTF-8, and saying so precisely is the point of this block: v
+# is trimmed and then tested against ^"[^"]*"$, the trim can only ever expose a byte that is
+# not a quote, and substr() cuts the survivor between two ASCII quotes -- so a damaged value
+# fails the test and no half-character can leave this function. What changes is the PARSE
+# DECISION. 0xA0 is the trailing byte of a-grave (C3 A0), S-caron (C5 A0) and the dagger
+# (E2 80 A0), and a character in its own right in ISO-8859-1. In a single-byte locale the
+# trim eats it, and a value the author did not write as a quoted scalar is unwrapped as one:
+# the byte is deleted and both quotes go with it. rebuild-tsv.sh then writes a DIFFERENT
+# match: ERE into the index depending on who ran it, with nothing said anywhere. That is #19
+# one locale over, and #19 is the reason this reader stopped rewriting values at all.
+fm172() {   # locale field fixture -> bytes into $OUT, diagnostics into $CLIPERR
+  : > "$CLIPERR"
+  (
+    export CLAUDE_PROJECT_DIR="$SCRIPT_DIR"   # read by common.sh, which is sourced next
+    # shellcheck source=/dev/null
+    . "$SCRIPTS/common.sh"
+    PATH="$ENGINE_BIN/$ENG:$PATH" LC_ALL="$1" jit_frontmatter "$2" "$3"
+  ) > "$OUT" 2>"$CLIPERR"
+}
+
+# jit_frontmatter() as source text, for the one check that has to hold where 172b cannot run.
+src172() {
+  # Comment lines are dropped: the block inside the function names classes in prose, and a
+  # check that could not tell the prose from the regex would fail on the fixed code.
+  awk '/^jit_frontmatter\(\) \{/, /^\}/' "$SCRIPTS/common.sh" \
+    | awk '$0 !~ /^[ \t]*#/' > "$OUT" 2>/dev/null
+}
+
+# jit_frontmatter() prints with awk `print`, so every expected value carries the record
+# separator. Asserting the trimmed string instead would mean reading OUT through $( ), which
+# this suite does not do -- see the header.
+LF172=$(printf 'x\nx'); LF172=${LF172#x}; LF172=${LF172%x}
+FM172=$(mktemp -d)
+
+echo ""
+echo "=== 172a [$ENG]: under C the frontmatter trim is the six ASCII whitespace bytes ==="
+# The control that has to come first: did the driver run? common.sh is sourced into a
+# subshell here, and a source that failed leaves an empty OUT that every byte-exact check
+# below would read as "the value came back empty" rather than "nothing happened".
+printf -- '---\nplain: kept\n---\nbody\n' > "$FM172/p.md"
+fm172 C plain "$FM172/p.md"
+assert_bytes  "the driver reaches jit_frontmatter at all" "kept$LF172"
+assert_silent "and common.sh sourced with no diagnostics" "$CLIPERR"
+
+# The trim doing its actual job: a quoted scalar with trailing whitespace after the closing
+# quote is still recognised as one. 0x0A is not driven and cannot be -- a newline ends the
+# record before awk ever sees it as a trailing byte, so there is nothing there to trim.
+for B172 in '\011' '\013' '\014' '\015' '\040'; do
+  printf -- '---\nw: "abc"%b\n---\nbody\n' "$B172" > "$FM172/w.md"
+  fm172 C w "$FM172/w.md"
+  assert_bytes "byte $B172 after the closing quote is trimmed and the scalar unwraps" "abc$LF172"
+done
+# The other direction, and the regression guard on the fix: an awk that does not recognise
+# an escape drops the backslash and matches the bare letter, so a bounded class naming one
+# the engine lacks would start eating a trailing "v" or "f" off values with nothing said.
+for L172 in v f t n r b; do
+  printf -- '---\nw: "abc"%s%s\n---\nbody\n' "$L172" "$L172" > "$FM172/w.md"
+  fm172 C w "$FM172/w.md"
+  assert_bytes "and a trailing letter $L172 is not whitespace" "\"abc\"$L172$L172$LF172"
+done
+# The byte the next case turns on. Under C it is data, so the value is not a wrapped scalar
+# and the reader hands the line back exactly as the author wrote it.
+printf -- '---\nw: "abc"\240\n---\nbody\n' > "$FM172/a.md"
+fm172 C w "$FM172/a.md"
+assert_bytes "0xA0 is not whitespace under C, so the value goes out verbatim" "$(printf '"abc"\240')$LF172"
+printf -- '---\nw: "d\303\240f"\240\n---\nbody\n' > "$FM172/m.md"
+fm172 C w "$FM172/m.md"
+assert_bytes "and neither the trailing byte nor the quotes are touched" "$(printf '"d\303\240f"\240')$LF172"
+
+echo ""
+echo "=== 172b [$ENG]: and it is the same six bytes in a single-byte locale ==="
+# Probed on the precondition rather than assumed from the name, and probed again here rather
+# than reusing 164b's answer: 164 is about a different function, and a shared variable would
+# make this case skip or run for a reason nothing in it states.
+LOC172=""
+for C172 in fr_FR.ISO8859-1 en_US.ISO8859-1 en_GB.ISO8859-1 de_DE.ISO8859-1 \
+            en_US.ISO8859-15 fr_FR.ISO-8859-1 en_US.iso88591; do
+  if printf 'x\240\n' | PATH="$ENGINE_BIN/$ENG:$PATH" LC_ALL="$C172" \
+       awk '{ exit(/[[:space:]]$/ ? 0 : 1) }' 2>/dev/null; then
+    LOC172="$C172"; break
+  fi
+done
+if [ -z "$LOC172" ]; then
+  echo "  SKIPPED: no single-byte locale on this machine makes awk call 0xA0 a [[:space:]],"
+  echo "           so the condition #172 turns on cannot be created here at all."
+else
+  echo "  locale: $LOC172"
+  fm172 "$LOC172" w "$FM172/a.md"
+  assert_silent "the driver ran under that locale with no diagnostics" "$CLIPERR"
+  assert_bytes  "0xA0 is data there too, and the value is byte-identical to the C run" "$(printf '"abc"\240')$LF172"
+  fm172 "$LOC172" w "$FM172/m.md"
+  assert_bytes  "so a match: ERE indexes the same whatever locale rebuild-tsv ran under" "$(printf '"d\303\240f"\240')$LF172"
+  # Positive control: the same locale still unwraps a genuinely quoted scalar, so 172b is
+  # not passing because the trim stopped happening.
+  printf -- '---\nw: "abc"   \n---\nbody\n' > "$FM172/s.md"
+  fm172 "$LOC172" w "$FM172/s.md"
+  assert_bytes  "the ASCII trim still happens under that locale" "abc$LF172"
+fi
+
+echo ""
+echo "=== 172c [$ENG]: and the guarantee is structural, so it holds where 172b cannot run ==="
+# 172b is the only case that reproduces #172, and neither the Linux nor the Windows CI leg
+# ships a locale it can run under -- so on two of the three legs it skips, and a skip that
+# reads as green is the failure shape this suite exists to refuse. The property is therefore
+# also asserted against the SOURCE, which every leg can evaluate: a POSIX character class
+# here is a byte class whose membership the operator's environment picks, and the whole of
+# #172 is that this reader must not contain one.
+src172
+assert_has   "the function text was extracted at all" "$OUT" "jit_frontmatter() {"
+assert_has   "including the trim this is about" "$OUT" '+$/, "", v)'
+assert_lacks "and it names no POSIX character class" "$OUT" "[[:"
+rm -rf "$FM172"
+
 done
 
 rm -f "$OUT" "$EXP" "$CLIPERR"
