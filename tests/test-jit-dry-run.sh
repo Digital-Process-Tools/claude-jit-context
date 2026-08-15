@@ -801,6 +801,20 @@ else
   echo "  SKIPPED: no locale here makes any awk on this machine count characters"
   echo "           (tried en_US.UTF-8, C.UTF-8, en_US.utf8, \$LC_ALL, \$LANG) — the C half"
   echo "           above still ran, but this machine cannot witness the defect"
+  # And the C half alone cannot tell this fix from its revert: the loop sets LC_ALL=C on
+  # the whole call, so json_quote()'s own pin changes nothing there. Every assertion above
+  # then passes for a reason unrelated to #169, and run-all.sh renders the note green.
+  # Git Bash is the case in mind. Same escape hatch the four hook suites already carry:
+  # if the environment says it was CONFIGURED to have a UTF-8 locale, not having one is a
+  # broken configuration and fails, rather than going quietly green.
+  if [ "${JIT_TESTS_REQUIRE_UTF8_LOCALE:-}" = 1 ]; then
+    FAIL=$((FAIL + 1))
+    echo ""
+    echo "  FAIL: A UTF-8 LOCALE WAS REQUIRED AND NOT OBTAINED."
+    echo "        JIT_TESTS_REQUIRE_UTF8_LOCALE=1 says this environment was configured to"
+    echo "        have one, so the #169 assertions above could not run in the one cell the"
+    echo "        defect lives in. Nothing here is a defect in jit-dry-run.sh."
+  fi
 fi
 rm -rf "$QTREE" "$QBIN"
 
