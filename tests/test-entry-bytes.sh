@@ -464,10 +464,11 @@ rm -rf "$PROJ"
 # The program is BEGIN-only, so awk never processes an operand and ARGV[1] is read as the
 # string it is: a fixture value containing an = is data here, not a variable assignment.
 #
-# The FOUR fragments are concatenated, exactly as pre-path-hook.sh:67 composes them, and
-# $JIT_AWK_INJECT alone would be wrong. It is a fragment: jit_entry_load() in it calls
-# jit_bad_utf8() and jit_entry_why(), which live in $JIT_AWK_ENTRY. one-true-awk and gawk
-# only notice an undefined function when one is CALLED, so a program that never reaches
+# The FOUR fragments are concatenated, exactly as the `JIT_PATH_PROG=` assignment in
+# pre-path-hook.sh composes them, and $JIT_AWK_INJECT alone would be wrong. It is a
+# fragment: jit_entry_load() in it calls jit_bad_utf8() and jit_entry_why(), which live
+# in $JIT_AWK_ENTRY. one-true-awk and gawk only notice an undefined function when one is
+# CALLED, so a program that never reaches
 # those call sites runs anyway -- mawk refuses it at PARSE time and the whole program
 # produces nothing. That is what reddened 13 assertions on the ubuntu-latest leg of #164's
 # first CI run, where mawk is the default awk, and none of it was a statement about

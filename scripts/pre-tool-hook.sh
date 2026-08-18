@@ -267,8 +267,9 @@ END {
   # non-ASCII text", and it is the right one here because it is locale-independent BY
   # CONSTRUCTION: it is index()/substr() over a table carrying both cases explicitly, so
   # it decodes nothing and asks the locale nothing. That is also why rebuild-tsv.sh may
-  # keep folding without the pin (common.sh:1108) -- the fold is bytes in, bytes out, and
-  # the two locales cannot disagree about it. Only tolower() was ever locale-sensitive.
+  # keep folding without the pin (`jit_fold_latin1()` in common.sh) -- the fold is bytes
+  # in, bytes out, and the two locales cannot disagree about it. Only tolower() was ever
+  # locale-sensitive.
   #
   # Folded HERE, once, rather than per row: the fold is 51 index() scans of the subject,
   # and the loop below would run it per rule otherwise. The terms are folded at their four

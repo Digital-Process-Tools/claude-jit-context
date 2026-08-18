@@ -57,7 +57,7 @@ Body-only edits do not need it — the body is read from the file at fire time. 
 
 ## The second trap: rules that resolve against another tree
 
-**`JIT_BASE` resolves against `$CLAUDE_PROJECT_DIR`, never the cwd** (`scripts/common.sh:7`). A worktree's rules are inert for a session rooted anywhere else — including yours, editing them.
+**`JIT_BASE` resolves against `$CLAUDE_PROJECT_DIR`, never the cwd** (the `JIT_BASE=` assignment in `scripts/common.sh`). A worktree's rules are inert for a session rooted anywhere else — including yours, editing them.
 
 So neither trap is visible from where you are working. Both are:
 
@@ -98,6 +98,10 @@ The detail arrives on the file itself. What holds everywhere:
 **No new runtime dependencies.** No `jq`, no Python, no Node — in **`scripts/`**, which is what ships and what runs in a stranger's session. `.oss/` and `.github/` are not the runtime: `assemble_changelog.py` is Python and depends on `markdown-it-py`, and that is the same line `tooling.md` already draws between the hooks and `rebuild-tsv.sh`. If you find yourself reaching for a language outside bash/awk/perl for anything under `scripts/`, that is the rule and the answer is no.
 
 **Never edit `CHANGELOG.md`. Write a fragment.** `changelog.d/<issue>.<section>.md`, the entry exactly as it should read, naming its own issue in its body — `changelog.d/README.md` is the convention and `.oss/assemble_changelog.py` folds them in at the tag. This is not a style preference: two PRs that share no other line still conflicted in that file, four times in one afternoon, and one of those merges would have produced two `### Added` headings under one version.
+
+**Never cite a line number in another file — or in this one.** A `<file>.sh:NNN` pointer is exact on the day it is written and wrong on the next PR that inserts a line above it, silently, because a rotted citation reads exactly like a live one. Counted on `main` at `98386f1`, outside the assembled changelog: nine such citations existed, six pointed at the wrong thing, one had drifted off the block it named, two were still right — and one of the six had been added three hours before the PR that moved it (#191). Point at something greppable instead — a function name, a distinctive literal, or the issue number, which additionally says *why* rather than *where*. If a line genuinely must be named, write it as prose (`line 7 of scripts/common.sh`) so it reads as the approximation it is.
+
+`tests/test-line-citations.sh` enforces this over tracked `scripts/*.sh` and `tests/*.sh`, and **reports without failing** over every other tracked file except `CHANGELOG.md`, which is assembled rather than edited. The needle is a tracked basename followed by a colon and a digit; measured over all 96 tracked basenames and the whole tree, it produced 10 hits and 0 false positives. The advisory half is advisory only because `.claude/jit-context/paths/00-manual/tooling.md` was held by another branch when the check landed — widening it is one `awk` pattern in that suite, and #191 asks for it.
 
 **Every behaviour change gets a test first.** Write it, watch it fail, then fix. A test written after the fix asserts what the code happens to do.
 
