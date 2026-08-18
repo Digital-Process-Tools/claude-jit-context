@@ -130,6 +130,26 @@ END {
     else if (k == "skill") f_skill = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
     else if (k == "file_path") f_file_path = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
     else if (k == "pattern") f_pattern = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
+    # #182. An Agent dispatch carries description, prompt and subagent_type and none of
+    # the four above, so `cmd` came out empty and this hook printed {} and exited 59
+    # lines before the layer loop. A `tool: Agent` rule -- including a `mode: block` one
+    # -- was written, validated, indexed, counted by every diagnostic, and inert.
+    #
+    # subagent_type ONLY, and the other two are a deliberate no. `prompt` and
+    # `description` are author-written prose, and two things go wrong with prose as a
+    # subject. It is matched by `forbid`/`require`/substring rules that were written
+    # about COMMANDS, so a prompt saying "do not run git push here" trips a deny-list
+    # rule about `git push`. And `cmd` is cut at the first ; & | or double quote (see
+    # the strip below), so a prose subject is compared as an arbitrary prefix of itself
+    # -- the #7 false-block shape, rebuilt.
+    #
+    # The cost is real too, though it is the weaker half of the argument. Measured on a
+    # two-rule tools index, 40 calls per point, interleaved, one-true-awk 20200816 on
+    # darwin 24.3.0, read out of the hook OWN timing in hooks.log rather than wall clock
+    # around the process: a 7-byte subject 91 ms median, a 4.4 KB one 97 ms, a 44 KB one
+    # 207 ms. A prompt is routinely in the second band and can reach the third.
+    # subagent_type is a bounded identifier and is always in the first.
+    else if (k == "subagent_type") f_subagent = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
   }
 
   # Fallback chain for tool matching
@@ -137,6 +157,7 @@ END {
   if (full_command == "") full_command = f_skill
   if (full_command == "") full_command = f_file_path
   if (full_command == "") full_command = f_pattern
+  if (full_command == "") full_command = f_subagent
 
   # Strip to command words (before ; & | quotes flags). `full_command` can now hold real
   # newlines, and the one strip that had to change is the quote.
@@ -163,7 +184,43 @@ END {
   gsub(/[[:space:]]/, "", probe)
   if (probe == "") cmd = ""
 
-  if (tool_name == "" || cmd == "") { print "{}"; exit }
+  # No tool name at all is a payload this hook has nothing to say about, and there is
+  # no rule it could be measured against. Unchanged, and still the only silent exit.
+  if (tool_name == "") { print "{}"; exit }
+
+  # THE THIRD STATE, #182. `cmd == ""` used to leave here the same way, and that is the
+  # whole defect: "no rule matched" and "no rule could be reached" printed the same {}.
+  #
+  # The subject is built from a fixed set of tool_input KEYS and `tool:` accepts any tool
+  # NAME, and nothing joined those two facts. `tool: Agent` was the measured case;
+  # `tool: TodoWrite`, `tool: WebFetch`, `tool: ExitPlanMode` and every `tool: mcp__*`
+  # rule are the same shape. The set is open -- an MCP server defines its own input
+  # schema -- so it is not enumerable here, in rebuild-tsv.sh, or in any list that could
+  # be committed. See jit_no_subject_notice() in common.sh for why an index-time refusal
+  # was rejected.
+  #
+  # So the scan below RUNS, on evidence rather than on a list: a real dispatch arrived,
+  # nothing in it could be made into a subject, and if any rule in the tree names this
+  # tool the author is told. `no_subject` turns the row loop into a census -- no pattern
+  # is compiled, no entry body is read, no call is ever blocked on this path -- and if
+  # no rule names the tool the output is {} exactly as before, which is the case for
+  # every TodoWrite in a tree whose rules are about Bash.
+  #
+  # `full_command`, NOT `cmd`, and the difference is the whole accuracy of the notice.
+  # `cmd` is the command WORDS -- `full_command` cut at the first ; & | or double quote
+  # -- so it is empty for two completely different reasons: no tool_input key yielded
+  # anything at all, or a key yielded something the cut then took. The notice makes a
+  # factual claim about which one it is, and gating it on `cmd` made it fire on
+  # `{"command":"\""}` and on `{"command":"; cat x"}`, telling the author that every
+  # Bash rule in their tree was unreachable on a call that carried a command the whole
+  # time. Reproduced against the first cut of this fix; tests/test-agent-subject.sh
+  # section H drives both shapes.
+  #
+  # A subject that was built and then cut to nothing keeps the old silent exit below. It
+  # is arguably its own third state -- a `~match` rule would have matched `full_command`
+  # and never ran -- but that is behaviour older than this fix and not this fix.
+  no_subject = (full_command == "")
+  if (cmd == "" && !no_subject) { print "{}"; exit }
 
   # --- The subjects the tool rules are matched against, folded once (#76) --------------
   # tolower() is not enough on its own and never was. Under the `C` pin from #68 neither
@@ -204,6 +261,13 @@ END {
   sep = ""
   refused = ""
   n_refused = 0
+  # #182: the rows that name this tool and could not be reached, and their count. Kept
+  # apart from `refused` because they are a different verdict about a different thing --
+  # `refused` is a row the matcher read and could not honour, this is a row the matcher
+  # could honour and had nothing to measure it against. Merging them would put one
+  # sentence on two states, which is the defect this hook exists to avoid.
+  unreached = ""
+  n_unreached = 0
 
   # --- Load shown file into set ---
   jit_shown_load(shown_file, shown)
@@ -319,6 +383,26 @@ END {
       nt = split(r_tool, talts, "|")
       for (ti = 1; ti <= nt; ti++) if (talts[ti] == tool_name) tool_hit = 1
       if (!tool_hit) continue
+
+      # #182: this row names the tool, and the dispatch gave us nothing to match it
+      # against. Count it and move on. Deliberately AFTER the tool test, so a tree full
+      # of Bash rules pays one split() per row on a TodoWrite and reports nothing --
+      # and deliberately after the two refusal checks above, because "this row has bad
+      # bytes" is a truer thing to say about it than "it was unreachable".
+      #
+      # `continue`, always: nothing below this point may run on this path. The pattern
+      # is never compiled (an unreachable rule must not also report a bad ERE, which
+      # would be a second verdict about a row nobody could have run), no `once` marker
+      # is spent, no entry body is read, and no decision is reached -- so `blocked`
+      # stays empty and the census can never refuse a call.
+      if (no_subject) {
+        n_unreached++
+        unreached = jit_unreached_add(unreached, jit_row_id(tool_label, rown) r_kind)
+        log_matches = log_matches sep "nosubject:" jit_row_id(tool_label, rown)
+        sep = ", "
+        continue
+      }
+
       if (substr(r_match, 1, 1) == "~") {
         # Regex rules match the WHOLE command, not the truncated first segment:
         # `cmd` is stripped at the first ; & | so `cd X && git push` was only ever
@@ -758,7 +842,14 @@ END {
     gsub(/  +/, " ", stale)
   }
 
-  if (tt != "") {
+  # `!no_subject` is dead by construction and is here so that it stays dead (#182).
+  # `no_subject` means NO tool_input key yielded anything, so `command` and `f_file_path`
+  # are both empty, so `tt` is empty and this pass is skipped anyway -- one comparison to
+  # make that an invariant rather than a coincidence. The shape it used to guard, a Bash
+  # command cut to nothing that still names a path (`; cat src/Billing/x.php`), no longer
+  # reaches here at all: it takes the old silent exit above, because a subject WAS built
+  # for it.
+  if (tt != "" && !no_subject) {
     # Enumerated, and its OWN list rather than the tools one: the two dimensions can hold
     # different layer directories (#176). The bound comes off the same split().
     n_vocab_layers = split(vocab_layers, layers, " ")
@@ -851,6 +942,31 @@ END {
         }
       }
     }
+  }
+
+  # --- A rule that could not be reached at all is reported, once per session (#182) ---
+  # The sibling of the block below and of the layer notice under it, one state further
+  # out: that one reports a rule the matcher read and could not honour, this one reports
+  # a rule the matcher would have honoured and had nothing to measure against.
+  #
+  # ONCE PER SESSION, on a constant key, and the key is constant on purpose. `tool_name`
+  # is payload text and putting it in a marker key would put payload text in a file this
+  # hook reads back (#65). The cost is stated rather than hidden: a session whose tree
+  # has unreachable rules for two different tools reports the first one it meets and
+  # then goes quiet, so the author fixes one class, and the notice returns next session
+  # for the next. That is the same trade every notice here already makes.
+  #
+  # The marker is consumed here and there is no block path to worry about: the census
+  # `continue`s before any decision is reached, so `blocked` cannot be set on a call
+  # that produced this list. The branch is written anyway, and is dead by construction
+  # rather than by luck -- if a later edit ever lets a decision through, the notice
+  # travels with the refusal instead of vanishing.
+  if (n_unreached > 0 && !("jit-no-subject" in shown)) {
+    shown["jit-no-subject"] = 1
+    jit_shown_mark(shown_file, "jit-no-subject")
+    unote = jit_no_subject_notice(unreached, n_unreached)
+    if (blocked == "") matched = (matched == "") ? unote : unote "\n---\n" matched
+    else block_tail = block_tail "\n---\n" unote
   }
 
   # --- A refused row is reported, once per session ---
