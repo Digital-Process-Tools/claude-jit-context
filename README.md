@@ -425,6 +425,15 @@ not fine for a refusal, because the row reads as enforced and is not. `scripts/j
 `ADVISORY` line naming every row in your tree with that shape (#136); it does not change
 the exit code, because the rule is narrower than it looks rather than broken.
 
+**The whole-command row of that table holds even when the command words are empty.** A
+command that *begins* with one of the cut bytes — `{"command":"; git push"}` — has no
+command words at all: the cut takes the lot. Until #186 the hook treated that as nothing
+to say and answered `{}` before consulting any rule, so a `~match` rule that would have
+matched the whole command never ran, and a `mode: block` one failed open. It runs now, on
+the same subject it uses for every other command. A bare `match:` is unchanged and still
+sees nothing there, for the same reason it sees nothing after any `;` — that cut is what
+keeps it off a quoted commit message.
+
 A command spanning several lines is one string with real newlines in it. `^` anchors that
 whole string, not each line, so a rule that must catch the second command needs the
 newline in its anchor class — see below.
