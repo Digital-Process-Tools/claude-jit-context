@@ -1463,6 +1463,24 @@ function jit_refuse_add(list, item) {
   }
   return list (list == "" ? "- " : "\n- ") item
 }
+# The census of #182 needs the same 4096-byte threshold and the same cut line, and it
+# must NOT share jit_refuse_cut. That variable is program-scope on purpose -- one awk
+# process, one hook, and whichever of the seven refusal sites overflows first adds the
+# cut line once. Two DIFFERENT lists sharing it is a different thing: if `refused`
+# overflows first and sets the flag, every later append to the unreachable list is
+# dropped silently, with no cut line and with n_unreached still counting the whole
+# total. The notice would then say "N rule(s)" above a list shorter than N and offer no
+# hint that anything was removed -- a false statement produced by a defence, which is
+# the exact failure the comment above jit_refuse_add() names. Its own flag, so the two
+# lists cannot cut each other.
+function jit_unreached_add(list, item) {
+  if (length(list) > 4096) {
+    if (jit_unreached_cut) return list
+    jit_unreached_cut = 1
+    return list "\n- the remaining unreachable rows are not listed here; the count above is the whole total"
+  }
+  return list (list == "" ? "- " : "\n- ") item
+}
 function jit_refusal_notice(list, n) {
   return "# JIT Context: " n " rule(s) could not be evaluated, so they did NOT run\n" list \
     "\nA pattern the matcher cannot honour is not a rule that did not match, and until now the two looked identical. Lint the tree that owns these rules:\n  bash scripts/jit-dry-run.sh --base <tree>/.claude/jit-context"
@@ -1478,6 +1496,38 @@ function jit_refusal_notice(list, n) {
 # carry a dimension, a position in the glob and a constant reason.
 function jit_layers_notice(list, n) {
   return "# JIT Context: " n " jit-context layer director" (n == 1 ? "y" : "ies") " could not be read, so no rule inside them ran\n" list "\nThese are directories under .claude/jit-context/<dimension>/ that exist and hold rules the matcher never opened. A layer that was never loaded and a layer whose rules never matched look identical from a session, which is why this says so. Name a layer directory with letters, digits, dot, underscore and hyphen only, and lint the tree:\n  bash scripts/jit-dry-run.sh --base <tree>/.claude/jit-context"
+}
+# The third state for a TOOL rather than for a row or a layer (#182). The two above
+# report rules the matcher read; this reports rules the matcher never reached, because
+# the dispatch carried nothing it could build a subject out of.
+#
+# It exists because `tool:` accepts any tool name and the subject is built from a fixed
+# set of tool_input KEYS -- command, skill, file_path, pattern, subagent_type. Those two
+# facts do not line up, and nothing joined them: `tool: Agent` validated, indexed, was
+# counted by every diagnostic that counts rules, and could not fire. So did `tool:
+# TodoWrite`, `tool: WebFetch`, and every `tool: mcp__*` rule there will ever be.
+#
+# WHY THIS IS A RUNTIME NOTICE AND NOT AN INDEX-TIME REFUSAL. Refusing the row in
+# rebuild-tsv.sh would need a tool -> key map hardcoded somewhere, and that map cannot
+# be written: an MCP server defines its own input schema at connect time, and Claude
+# Code adds tools between releases. A hardcoded list would refuse rules that work and
+# accept rules that do not -- the #176 defect in a new spelling, in the one place that
+# is committed to disk and shipped to strangers. This fires only on EVIDENCE: a real
+# dispatch of that tool arrived, no subject came out of it, and rules in this tree name
+# it. That evidence cannot be stale.
+#
+# By position, never by the file-name column, and no tool NAME either: the name column
+# of a row is untrusted free text (#35) and tool_name is payload. The bullets carry a
+# dimension, a layer, a row number and a derived kind, exactly as the bullets of
+# jit_refusal_notice do.
+#
+# NOTE FOR THE NEXT EDITOR: this whole block lives inside a single-quoted shell string.
+# An apostrophe here ends it, and bash then reads awk source as shell. Measured while
+# writing this comment -- the validator caught it, the rollback undid it, and the next
+# person should not have to rediscover it.
+function jit_no_subject_notice(list, n) {
+  return "# JIT Context: " n " tools rule(s) name this tool, but the hook could build no subject to match them against, so they did NOT run\n" list \
+    "\nA tools rule is matched against a subject built from the tool_input keys `command`, `skill`, `file_path`, `pattern` and `subagent_type`. This dispatch carried none of them, so the rules above were indexed and counted and never consulted. Either they name a tool whose input this hook cannot read, or they name the wrong tool. A rule that cannot be reached is not a rule that did not match, and until now the two looked identical."
 }
 function jit_config_notice(list, n) {
   return "# JIT Context: " n " line(s) in .claude/jit-context/config.env were refused, so they did NOT take effect\n" list \

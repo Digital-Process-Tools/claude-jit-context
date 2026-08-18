@@ -348,7 +348,7 @@ Coverage runs take 8 minutes locally and are produced by CI anyway.
 
 | Field     | Required | Meaning                                                           |
 | --------- | -------- | ----------------------------------------------------------------- |
-| `tool`    | yes      | Tool name: `Bash`, `Read`, `Edit`, `Skill`, `Task`, …             |
+| `tool`    | yes      | Tool name: `Bash`, `Read`, `Edit`, `Skill`, `Agent`, … — pipe-separated for several, and see [which tools a rule can name](#which-tools-a-rule-can-name) |
 | `match`   | yes      | Substring, a regex when prefixed with `~`, or an [invocation macro](#anchoring-on-an-invocation) |
 | `mode`    | no       | `remind` (default), `block`, `once` — comma-separated, composable |
 | `require` | no       | Pipe-separated strings that MUST appear, else the call is blocked |
@@ -378,6 +378,29 @@ firing on prose that merely mentions it.
 | `match` (substring)  | the **command words** — the command up to the first `;` `&` `\|`, the first `"`, or the first ` --` |
 | `~match` (regex)     | the **whole command**, including quoted arguments and later lines   |
 | `require` / `forbid` | the **whole command**                                               |
+
+#### Which tools a rule can name
+
+`tool:` accepts any tool name, and the subject above is built from a fixed set of tool
+input keys — `command`, `skill`, `file_path`, `pattern` and `subagent_type`. A rule
+naming a tool whose call carries none of those has nothing to be matched against, so it
+is indexed, counted by every report, and **never consulted**. An `Agent` rule was in
+exactly that position until #182; `TodoWrite`, `WebFetch` and any `mcp__…` tool still are.
+
+That set cannot be listed here and kept true — an MCP server defines its own input schema
+— so the hook says so instead, on the first dispatch of the session where it happens
+(one line, wrapped here):
+
+```text
+# JIT Context: 1 tools rule(s) name this tool, but the hook could build no subject to match them against, so they did NOT run
+- tools/00-manual row 3
+```
+
+An `Agent` rule is matched against `subagent_type` and **not** against `prompt` or
+`description`. Those are prose that routinely quotes the very commands deny-list rules
+are written about, and the command-words cut above would compare them as an arbitrary
+prefix — so `tool: Agent, match: general-purpose` fires on *which agent is dispatched*,
+never on what it was asked to do.
 
 So `match: git push` does not fire on `git commit -m "fix git push detection"`, in one
 line or twenty — the quote ends the command words, and everything after it is an argument
