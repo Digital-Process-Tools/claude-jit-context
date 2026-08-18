@@ -33,11 +33,19 @@
 #
 #   ENFORCED   tracked scripts and tests shell files -- a hit here fails this suite.
 #   ADVISORY   every other tracked file except the changelog -- a hit is PRINTED, in
-#              full, and does not fail. One instance lives in an entry held by another
-#              branch (#192) at the time #191 was implemented, and reddening a file this
-#              change may not edit is how a check gets disabled in its first week.
-#              Widening this to enforced is one awk pattern below, and #191 asks for it
-#              once that branch lands.
+#              full, and does not fail. Originally because its one finding lived in an
+#              entry held by PR #192 and reddening a file you may not edit is how a check
+#              gets disabled in its first week. #192 HAS NOW LANDED, so that reason is
+#              spent, and the honest statement of where this stands is: widening is a
+#              scope decision nobody has taken yet, not a blocked one.
+#
+#              What it costs is the thing to weigh. Enforcing prose binds docs/,
+#              templates/, examples/ and every jit-context entry -- surfaces where the
+#              one residual below (`grep -n` output quoted verbatim) is likelier than it
+#              is in a shell comment, and where the author is often a contributor
+#              meeting this rule for the first time. Measured false positives there are
+#              still zero, twice. Widening is one alternation in the two awk selectors
+#              below plus one line in the entry that is currently flagged.
 #   NOT SWEPT  the assembled changelog. It is written by .oss/assemble_changelog.py and
 #              never hand-edited, so a finding there is unactionable by construction.
 #              Stated rather than silently skipped.
@@ -263,9 +271,10 @@ if [ -n "$adv" ]; then
   while IFS= read -r line; do
     [ -n "$line" ] && echo "    $line"
   done < "$WORK/adv"
-  echo "  Prose outside scripts and tests is advisory only while #192 holds one of the"
-  echo "  files it would flag. Fixing these is welcome; #191 asks for the flag to move"
-  echo "  once that branch lands."
+  echo "  Prose outside scripts and tests is REPORTED rather than enforced. Fixing what"
+  echo "  is listed is welcome and needs no permission. Making this half fail the suite"
+  echo "  is a scope decision nobody has taken -- see the ADVISORY paragraph at the top"
+  echo "  of this file for what it would cost and the two lines it would take."
 else
   echo "  Clean across $((ADV_N - adv_unread)) file(s)."
 fi
