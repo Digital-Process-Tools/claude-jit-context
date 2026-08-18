@@ -145,6 +145,10 @@ positive_argv() {
         --min) printf '%s\n%s\n%s\n%s\n' "--log" "$LOGFILE" "--min" "2" ;;
         --top) printf '%s\n%s\n%s\n%s\n' "--log" "$LOGFILE" "--top" "5" ;;
       esac ;;
+    jit-doctor.sh)
+      case "$2" in
+        --base) printf '%s\n%s\n' "--base" "$TREE" ;;
+      esac ;;
   esac
 }
 
@@ -230,6 +234,12 @@ drive_script "$REPO/scripts/jit-dry-run.sh"
 # jit-misses.sh already had this right -- its need_value() is the shape the other two
 # were missing. It is driven here as the third leg of the sweep, not as a fix.
 drive_script "$REPO/scripts/jit-misses.sh"
+# NOTE, because the comment at the top of this file overstates its own reach: the FLAGS of
+# a script named here are enumerated from the script, so a flag added later is covered
+# without anyone remembering. The SCRIPTS are not -- this list is hand-written, and a new
+# tool under scripts/ is silently untested here until someone adds a line. jit-doctor.sh
+# (#183) is that line for the fifth tool.
+drive_script "$REPO/scripts/jit-doctor.sh"
 
 echo ""
 echo "========================"

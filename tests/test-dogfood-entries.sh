@@ -98,6 +98,9 @@ assert_silent "a lookalike directory"  "myscripts/common.sh"       "hooks.md"
 # jit-init.sh must never inherit "every failure path exits 0" -- it exits 1 to refuse an
 # overwrite and 2 when it cannot evaluate the request.
 assert_silent "the project seeder"     "scripts/jit-init.sh"       "hooks.md"
+# Same split for the fifth tool: "every failure path exits 0" is actively wrong for a
+# diagnostic whose exit code is the answer.
+assert_silent "the doctor"             "scripts/jit-doctor.sh"     "hooks.md"
 
 echo ""
 echo "=== tooling.md fires on the five build, diagnostic and release scripts ==="
@@ -109,6 +112,10 @@ assert_fires  "the index writer"       "scripts/rebuild-tsv.sh"    "tooling.md"
 assert_fires  "the project seeder"     "scripts/jit-init.sh"       "tooling.md"
 assert_fires  "the linter"             "scripts/jit-dry-run.sh"    "tooling.md"
 assert_fires  "the miss reporter"      "scripts/jit-misses.sh"     "tooling.md"
+# The fifth (#183). It answers "is any of this running at all", exits 1 on a layer whose
+# rules can never load, and 2 when it cannot evaluate the tree -- so the tooling contract
+# is the one that applies to it, and the hook contract below must not.
+assert_fires  "the doctor"             "scripts/jit-doctor.sh"     "tooling.md"
 # The changelog assembler used to be here, at `.github/scripts/assemble_changelog.py`,
 # under the same contract (#66). It is now `.oss/assemble_changelog.py`, vendored from
 # the oss plugin, and `tooling.md`'s exit-code table is the INVERSE of what it does --
