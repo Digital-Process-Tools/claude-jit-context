@@ -27,9 +27,42 @@ source "$SCRIPT_DIR/common.sh"
 # simpler regex here would be a second answer to "what is a session id", and the two would
 # drift. Guarded on a tty because a SessionStart hook always has stdin and a person running
 # this by hand does not -- awk would sit there waiting.
+#
+# LC_ALL=C, for the same reason the other three hooks set it (#68) and one this hook lacked
+# until #177: the same parser in a different locale is not the same parser, so without the
+# pin the sentence above was a claim the code did not carry out.
+#
+# Measured at 98386f1 on a payload whose session_id carries a lone 0xE9 -- 3 engines x 2
+# locales, the value jit_session_key() returned:
+#
+#   one-true-awk C, gawk C, mawk C, mawk en_US.UTF-8   ""  refused, which is correct
+#   one-true-awk en_US.UTF-8                           ""  plus a `towc: multibyte
+#                                                          conversion failure` diagnostic
+#                                                          that 2>/dev/null already ate
+#   gawk en_US.UTF-8                                   the id ACCEPTED, 0xE9 and all
+#
+# gawk in a multibyte locale does not match a lone 0xE9 against `[^A-Za-z0-9_-]`, so the
+# bare-name check silently stopped being a bare-name check and an id the three matching
+# hooks REFUSE was accepted here -- on gawk, which is `awk` on most Linux boxes and on
+# ubuntu-latest. What that cost is bounded and worth stating rather than implying: `/` and
+# `\` are single-byte and still match, so no name ever left the state directory. It cost
+# AGREEMENT. The matching hooks refused the id and kept no marker; this hook built two
+# marker names out of it and cleared files under names nothing had written -- and on macOS
+# it could not even do that, because APFS refuses a file name that is not valid UTF-8.
+#
+# tests/test-session-markers.sh section J drives all three engines through a shimmed `rm`
+# and fails on gawk without this pin.
+#
+# THE `$( )` HERE DROPS NUL BYTES, and that was measured rather than reasoned about (#177):
+# it cannot cost anything, because no NUL ever reaches the capture. Driven on the same 3x2
+# matrix with a NUL inside the session_id value -- one-true-awk truncates the record at the
+# NUL and returns the prefix, gawk carries it through and `k ~ /[^A-Za-z0-9_-]/` matches it,
+# mawk refuses it too. Every path either refuses the key or has already lost the NUL before
+# `print`, in both locales. There is nothing to fix here; it is written down so the next
+# reader does not have to re-measure it to find that out.
 SESSION_ID=""
 if [ ! -t 0 ]; then
-  SESSION_ID="$(awk "$JIT_AWK_JSON"'
+  SESSION_ID="$(LC_ALL=C awk "$JIT_AWK_JSON"'
     { input = input $0 }
     END {
       n = jit_json_fields(input, raw, fs, fe)

@@ -312,13 +312,212 @@ else
 fi
 
 echo ""
-if [ "$SKIPPED_SECTIONS" -gt 0 ] || [ "$H_SKIPPED" -eq 1 ]; then
-  echo "$PASS passed, $FAIL failed, $SKIPPED_SECTIONS section(s) SKIPPED (no symbolic links here)"
+echo "=== J: session-start reads a session id with the same parser AND the same locale (#177) ==="
+# session-start-hook.sh:32 parses the payload with jit_json_fields + jit_session_key out of
+# common.sh -- the SAME functions the three matching hooks use -- and its comment says that
+# is deliberate, so that there is one answer to "what is a session id". It was the only one
+# of the four that did not pin `LC_ALL=C`, and the parser is not the same parser in another
+# locale.
+#
+# MEASURED at 98386f1, 3 engines x 2 locales, on a payload whose session_id carries a lone
+# 0xE9 byte:
+#
+#   one-true-awk C / gawk C / mawk C / mawk UTF-8   ->  ""   (refused, correct)
+#   one-true-awk UTF-8                              ->  ""   + a suppressed towc diagnostic
+#   gawk + en_US.UTF-8                              ->  the id ACCEPTED, 0xE9 and all
+#
+# Under gawk in a UTF-8 locale the bare-name test `k ~ /[^A-Za-z0-9_-]/` does not match a
+# lone 0xE9, so an id the three sibling hooks REFUSE is accepted here and concatenated into
+# two marker names for `rm -f`. It is bounded -- `/` is single-byte and still matches, so no
+# traversal -- but it is exactly the drift the comment exists to prevent, at the one hook
+# whose whole job is clearing that state.
+#
+# WHY THIS IS OBSERVED THROUGH AN `rm` SHIM AND NOT THROUGH THE FILESYSTEM. The obvious
+# fixture -- plant the marker file the unpinned parse would clear, and assert it survives --
+# CANNOT BE BUILT on macOS. APFS enforces valid UTF-8 in file names, so
+# `printf x > "$S/path-shown-jbad\351id.txt"` fails with `Illegal byte sequence` and creates
+# nothing; the assertion then reads "the marker is gone" and goes red on a fixed hook and a
+# broken one alike. Measured here 2026-08-18: that first draft was red in all three engines
+# for exactly that reason, with the redirection error on stderr as the only tell.
+#
+# So the question asked is the one that has an answer on every filesystem: DID THIS HOOK
+# TREAT THAT STRING AS A SESSION ID? A shimmed `rm` first on PATH records every argument it
+# is handed. A refused id never reaches the `if [ -n "$SESSION_ID" ]` branch, so no marker
+# path is passed to `rm` at all -- true whether or not that name could exist on disk.
+#
+# THE PAIR. "No marker path reached rm" is also true of a hook that died, of a shim that
+# never ran, and of a PATH that did not take. So the same fixture, engine and locale then
+# runs an HONEST session id and requires both marker paths to appear in the same log.
+J_ENGINE_BIN=$(mktemp -d)
+J_RMLOG=$(mktemp)
+J_REAL_RM=$(command -v rm)
+J_ENGINES=""
+J_SEEN=""
+for cand in awk gawk nawk mawk; do
+  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  case " $J_SEEN " in *" $cand_path "*) continue ;; esac
+  J_SEEN="$J_SEEN $cand_path"
+  mkdir -p "$J_ENGINE_BIN/$cand"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$cand_path" > "$J_ENGINE_BIN/$cand/awk"
+  chmod +x "$J_ENGINE_BIN/$cand/awk"
+  # The observer. One line per argument, so a marker path is greppable whatever bytes it
+  # carries; the real rm still runs, so the hook behaves exactly as it would unshimmed.
+  printf '#!/bin/sh\nfor a in "$@"; do printf "%%s\\n" "$a" >> "%s"; done\nexec "%s" "$@"\n' \
+    "$J_RMLOG" "$J_REAL_RM" > "$J_ENGINE_BIN/$cand/rm"
+  chmod +x "$J_ENGINE_BIN/$cand/rm"
+  J_ENGINES="$J_ENGINES $cand"
+done
+
+# The locale is the caller's and it is the whole point: `C` is where this does not
+# reproduce, so a run that could not obtain a UTF-8 locale has to say so rather than go
+# quietly green. Same shape as test-pre-tool-hook.sh and #169's escape hatch.
+j_pick_utf8_locale() {
+  local c
+  for c in en_US.UTF-8 C.UTF-8 en_US.utf8 C.utf8; do
+    if [ "$(LC_ALL="$c" locale charmap 2>/dev/null)" = "UTF-8" ]; then
+      printf '%s' "$c"; return 0
+    fi
+  done
+  printf '%s' "${LC_ALL:-${LANG:-C}}"
+}
+J_UTF8="$(j_pick_utf8_locale)"
+J_UTF8_REAL=no
+J_SKIPPED=0
+if [ "$(LC_ALL="$J_UTF8" locale charmap 2>/dev/null)" = "UTF-8" ]; then J_UTF8_REAL=yes; fi
+if [ "$J_UTF8_REAL" != yes ]; then
+  # A SKIP, not a note. The five sibling suites print the note and exit 0, which is the
+  # convention -- and it is the wrong one HERE, because this file already carries the third
+  # state and section I already uses it. Without this flag a run on a host with no UTF-8
+  # locale prints "N passed, 0 failed" and exits 0, which is byte-identical to a run that
+  # DID drive the gawk cell the whole section exists for. That is this repository's own
+  # defect class, in the test written to close an instance of it.
+  J_SKIPPED=1
+  echo "  SKIP-NOTE: no UTF-8 locale on this machine ($J_UTF8). Section J runs under a byte"
+  echo "             locale, which is where the defect does NOT reproduce -- the assertions"
+  echo "             still state the guarantee, they just cannot fail for it here."
+  if [ "${JIT_TESTS_REQUIRE_UTF8_LOCALE:-}" = 1 ]; then
+    FAIL=$((FAIL + 1))
+    echo ""
+    echo "  FAIL: A UTF-8 LOCALE WAS REQUIRED AND NOT OBTAINED."
+    echo "        JIT_TESTS_REQUIRE_UTF8_LOCALE=1 says this environment was configured to"
+    echo "        have one, so the note above is a broken configuration and not a platform"
+    echo "        without the capability. Nothing here is a defect in session-start-hook.sh."
+  fi
+fi
+echo "  caller locale for section J: $J_UTF8"
+
+# A lone 0xE9 -- a valid Latin-1 byte and never a valid UTF-8 sequence on its own.
+J_BAD="jbad$(printf '\351')id"
+
+j_session_start() {
+  # $1 project, $2 session id, $3 engine
+  printf '{"session_id":"%s","hook_event_name":"SessionStart"}' "$2" \
+    | LC_ALL="$J_UTF8" PATH="$J_ENGINE_BIN/$3:$PATH" CLAUDE_PROJECT_DIR="$1" \
+      bash "$SCRIPTS/session-start-hook.sh" 2>/dev/null
+}
+j_path_hook() {
+  printf '{"session_id":"%s","tool_name":"Edit","tool_input":{"file_path":"src/a.php"}}' "$2" \
+    | LC_ALL="$J_UTF8" PATH="$J_ENGINE_BIN/$3:$PATH" CLAUDE_PROJECT_DIR="$1" \
+      bash "$SCRIPTS/pre-path-hook.sh" 2>/dev/null
+}
+
+# Whether any argument handed to `rm` during the last run was a marker path. Read with grep
+# -c over a FILE rather than a $( ) of the log, because the argument may carry a byte no
+# locale can decode and the count is what is being asserted, not the text.
+# `grep -c` PRINTS 0 and EXITS 1 when it matches nothing, so a `|| printf 0` fallback
+# appends a second zero and the caller reads "0\n0" -- which `[ "$n" -eq 0 ]` then refuses as
+# a non-integer. Measured here while writing this. The status is discarded instead.
+j_rm_marker_count() {
+  local n
+  n="$(LC_ALL=C grep -c -e '-shown-' "$J_RMLOG" 2>/dev/null)"
+  printf '%s' "${n:-0}"
+}
+
+for eng in $J_ENGINES; do
+  P="$(new_project "j-$eng")"
+  S="$(state_of "$P")"
+  mkdir -p "$S"
+
+  # Leg 1 -- the negative. A byte outside [A-Za-z0-9_-] means this is not a session id, on
+  # every engine and in every locale, so the hook must not build a marker name out of it.
+  : > "$J_RMLOG"
+  OUT="$(j_session_start "$P" "$J_BAD" "$eng")"; RC=$?
+  N_BAD="$(j_rm_marker_count)"
+  assert_rc0 "[$eng] session-start exits 0 on a malformed session id" "$RC"
+  assert_contains "[$eng] and still answers with JSON" "$OUT" "{}"
+  if [ "$N_BAD" -eq 0 ]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: [$eng] a session id carrying a bad byte built no marker path at all"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: [$eng] a malformed session id was treated as a session id"
+    echo "    $N_BAD marker path(s) reached rm; the three matching hooks refuse this id"
+    LC_ALL=C sed -n 's/^/      rm arg: /p' "$J_RMLOG" | LC_ALL=C tr -c '[:print:]\n' '?'
+  fi
+
+  # Leg 2 -- the positive control, same engine, locale and shim. Leg 1 counts to zero for a
+  # hook that died, a shim that never ran and a PATH that did not take; this requires the
+  # SAME machinery to count to two on an id that is honest.
+  : > "$J_RMLOG"
+  OUT="$(j_session_start "$P" "jgood" "$eng")"
+  N_GOOD="$(j_rm_marker_count)"
+  if [ "$N_GOOD" -ge 2 ]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: [$eng] control: an honest session id DOES reach rm, with both marker paths"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: [$eng] control: an honest session id built $N_GOOD marker path(s), expected 2"
+    echo "    leg 1 above proved nothing -- the shim or the hook did not run"
+    LC_ALL=C sed -n 's/^/      rm arg: /p' "$J_RMLOG"
+  fi
+  assert_contains "[$eng] control: and the paths are this session's" \
+    "$(LC_ALL=C cat "$J_RMLOG")" "path-shown-jgood.txt"
+
+  # Leg 3 -- the same claim from the other side, and the reason the comment at
+  # session-start-hook.sh:25-29 is not merely tidy. pre-path-hook.sh is pinned, so it refuses
+  # this id and keeps no marker -- which shows as the entry being offered AGAIN on a second
+  # call. Asserted through dedup rather than through a file, for the reason in the header:
+  # the file name at issue is unrepresentable on macOS.
+  P2="$(new_project "j2-$eng")"
+  OUT1="$(j_path_hook "$P2" "$J_BAD" "$eng")"
+  OUT2="$(j_path_hook "$P2" "$J_BAD" "$eng")"
+  assert_contains "[$eng] pre-path-hook injects on a malformed session id" \
+    "$OUT1" "php coding rules"
+  assert_contains "[$eng] and injects AGAIN -- it kept no marker, so it refused that id too" \
+    "$OUT2" "php coding rules"
+  # The control for leg 3: the same two calls with an honest id must dedup, or "injected
+  # twice" is a statement about a hook that cannot dedup at all.
+  P3="$(new_project "j3-$eng")"
+  OUT3="$(j_path_hook "$P3" "jgood" "$eng")"
+  OUT4="$(j_path_hook "$P3" "jgood" "$eng")"
+  assert_contains "[$eng] control: an honest id injects the first time" "$OUT3" "php coding rules"
+  assert_empty_json "[$eng] control: and is silent the second -- so leg 3 saw a real refusal" "$OUT4"
+done
+
+rm -rf "$J_ENGINE_BIN"
+rm -f "$J_RMLOG"
+
+echo ""
+if [ "$SKIPPED_SECTIONS" -gt 0 ] || [ "$H_SKIPPED" -eq 1 ] || [ "$J_SKIPPED" -eq 1 ]; then
+  # The symlink clause is printed only when a symlink section actually skipped. It used to
+  # be unconditional, so an H-only skip already rendered as "0 section(s) SKIPPED (no
+  # symbolic links here)" -- a count of zero and a reason for a section that ran fine.
+  # Adding J as a third caller made that line reachable one more way, so it is fixed here
+  # rather than left to say the wrong thing about a new case.
+  if [ "$SKIPPED_SECTIONS" -gt 0 ]; then
+    echo "$PASS passed, $FAIL failed, $SKIPPED_SECTIONS section(s) SKIPPED (no symbolic links here)"
+  else
+    echo "$PASS passed, $FAIL failed, with section(s) skipped -- see the notes above"
+  fi
+  if [ "$J_SKIPPED" -eq 1 ]; then
+    echo "section J SKIPPED: no UTF-8 locale here, so the one cell the #177 divergence lives"
+    echo "in -- gawk under a multibyte locale -- was never driven. Not a clean result."
+  fi
 else
   echo "$PASS passed, $FAIL failed"
 fi
 # A failure outranks a skip: a red assertion is an answer, a skip is the absence of one.
 [ "$FAIL" -eq 0 ] || exit 1
 # 2 is this repo "could not evaluate", the code run-all.sh keeps apart from both.
-[ "$SKIPPED_SECTIONS" -eq 0 ] || exit 2
+if [ "$SKIPPED_SECTIONS" -ne 0 ] || [ "$J_SKIPPED" -ne 0 ]; then exit 2; fi
 exit 0
