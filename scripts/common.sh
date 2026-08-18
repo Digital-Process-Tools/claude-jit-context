@@ -2292,3 +2292,49 @@ jit_report_name() {
   [ "${#1}" -gt 64 ] && { printf '%s' "$JIT_NAME_WITHHELD"; return 0; }
   printf '%s' "$1"
 }
+
+# --- What a maintainer tool may say about a KEYWORD (#126) --------------------
+# A different question from the one above, and jit_report_name() is the wrong guard for
+# it: that set is chosen for having NO SPACE, and `vat rate` is a legitimate keyword --
+# normalised to exactly that, spaces included, by the code that writes the index. A guard
+# that withheld every multi-word term would pass every negative test and make the reports
+# that carry a term useless in their ordinary case.
+#
+# So the space is admitted and the term is bounded instead: ^[a-z0-9][a-z0-9 -]*$ -- the
+# bytes the keyword normaliser actually emits, so anything else means the term did not
+# come from this run -- at most 40 bytes and at most 4 words.
+#
+# Be honest about what that buys: no bound admitting `vat rate` can refuse all imperative
+# English, since `delete all ssh keys` is four words and 19 bytes. What it removes is the
+# UNBOUNDED channel -- the paragraph, the forged line, the control character. The entry
+# FILES print beside every such term either way, so a withheld one is still greppable.
+#
+# It lived in rebuild-tsv.sh until #183, which is where #126 needed it first. It is here
+# now for the reason jit_report_name() moved here in #131: two bash answers to one
+# question drift, and the drift is invisible until a term printed by one tool is withheld
+# by the other. jit-doctor.sh was the second caller that made that real.
+#
+# The awk half is NOT a copy that can be deleted and stays in rebuild-tsv.sh beside its
+# name twin: three of that script reports are built inside awk, and awk cannot source a
+# bash file.
+#
+# The bash half maps every space to a hyphen before the class check rather than putting a
+# space inside a `case` bracket expression, where it would have to be quoted mid-pattern.
+# The hyphen is already in the kept set, so the substitution cannot admit anything the
+# class does not, and a LEADING space becomes a leading hyphen and is refused.
+export JIT_KEYWORD_WITHHELD='<withheld: not a plain keyword>'
+
+jit_report_keyword() {
+  # LC_ALL=C for the reason jit_report_name() sets it: the set is a byte range, and ${#s}
+  # must count bytes, not characters.
+  local LC_ALL=C s="$1" flat rest n=1
+  flat="${s// /-}"
+  case "$flat" in
+    ''|[!a-z0-9]*|*[!a-z0-9-]*) printf '%s' "$JIT_KEYWORD_WITHHELD"; return 0 ;;
+  esac
+  [ "${#s}" -gt 40 ] && { printf '%s' "$JIT_KEYWORD_WITHHELD"; return 0; }
+  rest="$s"
+  while [ "$rest" != "${rest#* }" ]; do rest="${rest#* }"; n=$((n + 1)); done
+  [ "$n" -gt 4 ] && { printf '%s' "$JIT_KEYWORD_WITHHELD"; return 0; }
+  printf '%s' "$s"
+}

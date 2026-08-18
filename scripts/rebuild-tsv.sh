@@ -45,7 +45,8 @@ if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
 # it removes is the UNBOUNDED channel: the paragraph, the forged report line, the control
 # character. The report stays actionable when a term is withheld because the entry FILES
 # are printed beside it either way, and those are what an author greps.
-export JIT_KEYWORD_WITHHELD='<withheld: not a plain keyword>'
+# JIT_KEYWORD_WITHHELD and jit_report_keyword() both live in common.sh since #183, for
+# the reason jit_report_name() and its placeholder do: one answer, one file.
 
 # --- Three outcomes, never two (#47) -----------------------------------------
 # This script used to have no non-zero exit at all: it already detected a macro it could
@@ -139,25 +140,12 @@ function jit_report_name(s) {
 # The keyword rule (#126), in both halves for the same reason the name rule has two: the
 # ambiguity report is built inside awk and the dropped-keyword report in bash.
 #
-# The bash half maps every space to a hyphen before the class check rather than putting a
-# space inside a `case` bracket expression, where it would have to be quoted mid-pattern.
-# The hyphen is already in the kept set, so the substitution cannot admit anything the
-# class does not, and a LEADING space becomes a leading hyphen and is refused.
-jit_report_keyword() {
-  # LC_ALL=C for the reason jit_report_name() sets it: the set is a byte range, and ${#s}
-  # must count bytes, not characters.
-  local LC_ALL=C s="$1" flat rest n=1
-  flat="${s// /-}"
-  case "$flat" in
-    ''|[!a-z0-9]*|*[!a-z0-9-]*) printf '%s' "$JIT_KEYWORD_WITHHELD"; return 0 ;;
-  esac
-  [ "${#s}" -gt 40 ] && { printf '%s' "$JIT_KEYWORD_WITHHELD"; return 0; }
-  rest="$s"
-  while [ "$rest" != "${rest#* }" ]; do rest="${rest#* }"; n=$((n + 1)); done
-  [ "$n" -gt 4 ] && { printf '%s' "$JIT_KEYWORD_WITHHELD"; return 0; }
-  printf '%s' "$s"
-}
-
+# The BASH half is gone from this file, and it went the way jit_report_name()'s copy went
+# in #131: it lives in common.sh, which is sourced at the top of this script, so every
+# bash call site below is that one definition. #183 added a second bash caller
+# (jit-doctor.sh), which is the point at which a second copy stops being a duplicate and
+# starts being a drift -- a term printed by one tool and withheld by the other.
+#
 # Read by the ambiguity report awk below, which shellcheck cannot see into.
 # shellcheck disable=SC2034
 JIT_AWK_REPORT_KEYWORD='

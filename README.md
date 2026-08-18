@@ -668,6 +668,34 @@ That number is a count of files, not of bytes or tokens. A `paths/` entry with n
 
 A keyword the reports print is your own text, so it is bounded the way file names are: an ordinary term — `billing`, `vat rate` — prints in full, and anything longer than a term is replaced by `<withheld: not a plain keyword>` with the entry files still listed beside it.
 
+### Is any of this running at all?
+
+The first question, and the one nothing answered until `jit-doctor.sh`. An entry that never
+fires looks like work that was done — and a *plugin* that never runs looks exactly the same,
+because nothing errors when it does not.
+
+```bash
+bash scripts/jit-doctor.sh                    # the tree the hooks would read
+bash scripts/jit-doctor.sh --base ~/work/other-project/.claude/jit-context
+```
+
+It names the tree it is judging before it says anything about it, then reports **which copy
+of the hooks would actually run** — the plugin cache, a `hooks` block in your settings, both,
+or `cannot tell`. That last one is a real answer and not a failure: Claude Code merges
+settings from places no script in a repository can enumerate, so a confident wrong answer
+here would be worse than none. It also prints, per layer, how many entries there are, whether
+the matcher loads that layer at all, whether `00-index.tsv` is there and whether an entry is
+newer than it; and whether `hooks.log` exists and when it was last written, because *the hooks
+never ran here* and *they ran and matched nothing* are different facts.
+
+It exits **1** when a layer holds entries and no index — those rules cannot fire, exactly —
+**2** when it could not evaluate the tree, and **0** otherwise. Its `ADVISORY` findings —
+short keywords, entries over a byte threshold, entries with no record in the log — never move
+the exit code.
+
+It does not lint patterns. `jit-dry-run.sh` below owns that, and doctor points at it rather
+than answering the same question a second time.
+
 ### Verify an entry actually fires
 
 An entry that never fires looks exactly like work that was done.
@@ -794,6 +822,16 @@ Optional, in `.claude/jit-context/config.env`:
 # Any other value is refused and named — the default stands.
 # Run scripts/rebuild-tsv.sh to see what one match costs on your tree.
 JIT_CONTEXT_INJECT=full
+
+# scripts/jit-doctor.sh only. An entry body over this many bytes, and a keyword
+# shorter than this many, each get an ADVISORY line. Both are advisory by
+# construction: they never move doctor's exit code, so CI consuming that code
+# cannot start failing over a two-character keyword.
+# Doctor prints its effective value and WHERE IT CAME FROM, so a mistyped key —
+# JIT_CONTEXT_DOCTOR_MAX_BYTE, singular — reads as "(default)" beside a key it
+# names as unread, rather than as a setting that applied and did nothing.
+JIT_CONTEXT_DOCTOR_MAX_BYTES=4096
+JIT_CONTEXT_DOCTOR_MIN_KEYWORD=3
 
 # Source-root prefix used when turning a vocabulary entry's "## Modules"
 # section into path triggers. Default: src/

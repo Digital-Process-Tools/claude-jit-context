@@ -1,10 +1,12 @@
 ---
-title: These four fail loudly, and their exit codes carry meaning
-description: rebuild-tsv, jit-dry-run, jit-misses and jit-init are build tools, not hooks - they must fail loudly, their exit codes 0/1/2 each mean something, and the hook never-fail-hard contract does not apply.
-match: (^|/)scripts/(rebuild-tsv|jit-dry-run|jit-misses|jit-init)\.sh$
+title: These five fail loudly, and their exit codes carry meaning
+description: rebuild-tsv, jit-dry-run, jit-misses, jit-init and jit-doctor are build tools, not hooks - they must fail loudly, their exit codes 0/1/2 each mean something, and the hook never-fail-hard contract does not apply.
+match: (^|/)scripts/(rebuild-tsv|jit-dry-run|jit-misses|jit-init|jit-doctor)\.sh$
 ---
 
-`rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh` and `jit-init.sh` are build and diagnostic tools. They are run deliberately, by a person or by CI, and never inside a stranger's session.
+`rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh`, `jit-init.sh` and `jit-doctor.sh` are build and diagnostic tools. They are run deliberately, by a person or by CI, and never inside a stranger's session.
+
+**The alternation above is enumerated one script at a time, and that is on purpose** — `tests/test-dogfood-entries.sh` fails until every file `git ls-files -- scripts` returns is matched by some `paths/` rule, and #83 rejected a catch-all `scripts/` entry precisely because it would satisfy that leg by construction and the leg could never go red again. So a new script under `scripts/` is a deliberate decision between widening this list and writing the script its own entry, taken by whoever adds it.
 
 **So `paths/00-manual/hooks.md` does not apply here, and following it would be the bug.** "Every failure path exits `0` with nothing injected" is the hook contract; obeying it in `rebuild-tsv.sh` produces a half-written index that nothing reports, which is the exact defect this plugin exists to prevent. Fail loudly instead: a tool that cannot do its job must say so, on stderr, with a non-zero status.
 
@@ -16,6 +18,7 @@ match: (^|/)scripts/(rebuild-tsv|jit-dry-run|jit-misses|jit-init)\.sh$
 | `jit-misses.sh` | findings, **or** the log was read and nothing recurs — the two are distinguished in the text, not the status | — | `SKIPPED`, with a named reason |
 | `rebuild-tsv.sh` | the index was written and every row can be honoured | the index was written, and at least one row will be **refused** by the matcher — a `~@macro` it could not expand, written through unexpanded | could not build the index: no `tools/`, `paths/` or `vocabulary/` under `JIT_BASE`, or an index file it could not write |
 | `jit-init.sh` | the starter entry was seeded **and** the index rebuilt, so it is live rather than inert | the entry is already there — a copy the user edited is not ours to replace — or the rebuild did not complete | a bad argument, a `--base` that is not a `<project>/.claude/jit-context` path, a symbolic link **at or below `.claude`**, an install carrying no template, or a directory that could not be created |
+| `jit-doctor.sh` | nothing inert. Every ADVISORY finding lands here too | a layer holds `*.md` entries and **no** `00-index.tsv`, so the matcher can never load them | a bad argument, a `--base` that is not a directory, or one with no `tools/`, `paths/` or `vocabulary/` under it |
 
 **The changelog assembler is no longer one of these.** It used to be, at `.github/scripts/assemble_changelog.py`, with this table's `1`/`2` meanings. It is now `.oss/assemble_changelog.py`, vendored from the `oss` plugin, and **its codes are the other way round: `0` ok, `1` skipped, `2` refused.** Do not carry this table across to it — `paths/00-manual/vendored-oss.md` is its subject, and reading a status by number against the wrong contract is the trap.
 
@@ -82,6 +85,7 @@ Which suite covers what — run the one you touched, then `tests/run-all.sh`:
 bash tests/test-jit-dry-run.sh        # jit-dry-run.sh: flags, exit codes, STALE detection
 bash tests/test-jit-init.sh           # jit-init.sh: what it seeds, the refusal, and the entry both ways
 bash tests/test-jit-misses.sh         # jit-misses.sh: the three outcomes
+bash tests/test-jit-doctor.sh         # jit-doctor.sh: the three states of every section
 bash tests/test-arg-flag-values.sh    # all three: a valued flag with no value, every arm
 bash tests/test-rebuild-exit-codes.sh # rebuild-tsv.sh: 0/1/2, each against a fixture
 bash tests/test-report-names.sh       # rebuild-tsv.sh: what a report may print -- names and keywords
