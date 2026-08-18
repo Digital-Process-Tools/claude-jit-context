@@ -31,24 +31,33 @@
 #
 # WHAT IS ENFORCED, AND WHAT IS ONLY REPORTED. Three outcomes, not two:
 #
-#   ENFORCED   tracked scripts and tests shell files -- a hit here fails this suite.
-#   ADVISORY   every other tracked file except the changelog -- a hit is PRINTED, in
-#              full, and does not fail. Originally because its one finding lived in an
-#              entry held by PR #192 and reddening a file you may not edit is how a check
-#              gets disabled in its first week. #192 HAS NOW LANDED, so that reason is
-#              spent, and the honest statement of where this stands is: widening is a
-#              scope decision nobody has taken yet, not a blocked one.
-#
-#              What it costs is the thing to weigh. Enforcing prose binds docs/,
-#              templates/, examples/ and every jit-context entry -- surfaces where the
-#              one residual below (`grep -n` output quoted verbatim) is likelier than it
-#              is in a shell comment, and where the author is often a contributor
-#              meeting this rule for the first time. Measured false positives there are
-#              still zero, twice. Widening is one alternation in the two awk selectors
-#              below plus one line in the entry that is currently flagged.
+#   ENFORCED   tracked scripts and tests shell files, AND every tracked markdown file
+#              outside the two exclusions below -- a hit here fails this suite.
+#   ADVISORY   everything else tracked: the generated indexes, json, yml, and the
+#              vendored .oss/ tree -- a hit is PRINTED, in full, and does not fail.
+#              Two different reasons, both of them "the fix does not belong in the file
+#              the finding names": 00-index.tsv is written by rebuild-tsv.sh, so a
+#              finding there is fixed in the ENTRY; .oss/ is vendored and rewritten by
+#              every `/oss:scaffold --apply`, so a fix there is lost on the next run.
+#              Reported rather than not swept, because seeing it still costs nothing.
 #   NOT SWEPT  the assembled changelog. It is written by .oss/assemble_changelog.py and
 #              never hand-edited, so a finding there is unactionable by construction.
 #              Stated rather than silently skipped.
+#
+# MARKDOWN MOVED FROM ADVISORY TO ENFORCED IN #198, and the scope of that move was the
+# open question rather than the move itself. It is every markdown file, not the
+# .claude/jit-context/ entries alone. The rule CLAUDE.md states is unconditional, so
+# enforcing it on one directory while merely REPORTING it on every other markdown file
+# in the tree rebuilds the half-closed shape one level in; and examples/ and templates/ are
+# the shape a stranger copies into their own repo, which makes a rotted citation there
+# worse than one in a dogfood entry rather than better. What it binds is this
+# repository's contributor path only. The plugin manifest carries no file list, so an
+# installed plugin cache does hold a copy of this directory -- but nothing there ever
+# RUNS it: Claude Code runs hooks, not suites, and run-all.sh is invoked by CI and by
+# whoever is editing this repo. The population this widening can red is exactly the
+# population the shell half already reds. The advisory half was advisory because its one
+# finding lived in an entry held by PR #192; that reason was spent when #192 landed,
+# and the finding itself is fixed in the same commit as this widening.
 #
 # THE FALSE-POSITIVE SURFACE, costed before the check was written rather than after.
 # The needle is a TRACKED BASENAME followed by a colon and a digit. Measured twice: on
@@ -133,6 +142,46 @@ CITE_RE="(^|[^A-Za-z0-9_.-])([A-Za-z0-9_.-]+/)*($ALT):[0-9]"
 
 cites_in() { grep -nIE -- "$CITE_RE" "$1" 2>/dev/null; }
 
+# --- the bucket selectors ------------------------------------------------------------
+#
+# ONE definition of each, read by the two sweeps AND by the control that proves them, so
+# a selector cannot drift from the thing that demonstrates it works. `[.]` and not `\.`
+# because these travel through `awk -v`, which processes escape sequences in the VALUE:
+# `\.` is an undefined escape there and implementations disagree about what it becomes.
+#
+# `.*` and not `[^/]*` in the shell arm: a script that lands in a subdirectory one day
+# would otherwise fall silently into ADVISORY and stay there, which is the ENFORCED
+# label understating its own reach.
+NOT_SWEPT_RE='^CHANGELOG[.]md$'
+VENDORED_RE='^[.]oss/'
+# The markdown arm is the whole of #198, and it is deliberately not `.claude/jit-context/`
+# only. The rule CLAUDE.md states is unconditional -- never cite a line number in another
+# file -- so enforcing it on one directory and merely REPORTING it on every other
+# markdown file in the tree rebuilds the shape #198 was filed to close, one level in.
+# `examples/` and `templates/` are the shape a stranger copies into their own repo, which
+# makes a rotted citation there worse than one in a dogfood entry rather than better.
+#
+# What binds is this repository's contributor path only -- an installed plugin cache
+# holds a copy of this directory but never runs it. Measured false positives across the
+# whole markdown surface: zero, three times -- 98386f1, 5b46095, and f3a3228, where the
+# one hit was the real citation this change fixes.
+#
+# Non-markdown stays ADVISORY rather than being swept in with it: `00-index.tsv` is
+# generated by rebuild-tsv.sh, so a finding there is fixed in the entry and failing on
+# the file would name the wrong place; json and yml are not prose. That keeps the
+# advisory bucket a live third state with real files in it rather than a branch that
+# can no longer fire.
+ENFORCED_RE='^(scripts|tests)/.*[.]sh$|[.]md$'
+
+# Exactly one bucket per path, and the order of the tests is the precedence.
+BUCKET_AWK='{ b = ($0 ~ ns) ? "not-swept" : (($0 ~ vend) ? "advisory" : (($0 ~ enf) ? "enforced" : "advisory")) }'
+
+# Reads paths on stdin, prints the ones in bucket $1.
+in_bucket() {
+  awk -v want="$1" -v enf="$ENFORCED_RE" -v ns="$NOT_SWEPT_RE" -v vend="$VENDORED_RE" \
+    "$BUCKET_AWK"' b == want { print }'
+}
+
 # --- the controls, first -------------------------------------------------------------
 #
 # A sweep that found nothing because its needle was broken is indistinguishable from a
@@ -192,14 +241,64 @@ else
   pass "control: the recommended forms and a longer basename are NOT citations"
 fi
 
+# --- the control on the SELECTORS ----------------------------------------------------
+#
+# The three controls above prove the NEEDLE sees a citation. None of them proves that a
+# file lands in the bucket whose label claims it, and that is the half #198 moved. A
+# markdown file quietly classified ADVISORY would print its findings and pass forever,
+# which is exactly the half-closed state #198 exists to end -- and the tree cannot
+# demonstrate the difference, because a correct sweep and a mis-bucketed one both come
+# back green once the one real finding is fixed. So the selectors are driven against
+# planted paths, not against today's tree.
+#
+# Positive and negative cases sit in the SAME table on purpose. A classifier that
+# returned nothing, or the empty string for every input, would satisfy every "must NOT
+# be enforced" row on its own; the `enforced` rows are what refuse that.
+sel_fail=0
+sel_n=0
+while IFS=' ' read -r want path; do
+  [ -n "$want" ] || continue
+  sel_n=$((sel_n + 1))
+  got=$(printf '%s\n' "$path" | awk -v enf="$ENFORCED_RE" -v ns="$NOT_SWEPT_RE" \
+        -v vend="$VENDORED_RE" "$BUCKET_AWK"' { print b }')
+  if [ "$got" != "$want" ]; then
+    sel_fail=$((sel_fail + 1))
+    echo "    $path -> ${got:-<nothing>}, expected $want"
+  fi
+done <<'CASES'
+enforced scripts/pre-tool-hook.sh
+enforced tests/test-line-citations.sh
+enforced .claude/jit-context/paths/00-manual/tooling.md
+enforced .claude/jit-context/tools/00-manual/no-hand-editing-the-index.md
+enforced examples/jit-context/tools/00-manual/git-push.example.md
+enforced templates/jit-context/vocabulary/00-manual/writing-rules.md
+enforced changelog.d/README.md
+enforced README.md
+enforced CLAUDE.md
+not-swept CHANGELOG.md
+advisory .oss/README.md
+advisory .oss/assemble_changelog.py
+advisory .claude/jit-context/paths/00-manual/00-index.tsv
+advisory .github/workflows/ci.yml
+advisory .claude-plugin/plugin.json
+CASES
+
+# A table that failed to be read at all would leave sel_fail at 0 and pass. The floor is
+# the same third state both file sets get: nothing checked is not a clean check.
+if [ "$sel_n" -lt 10 ]; then
+  fail "control: only $sel_n selector case(s) were read -- the table did not arrive" \
+       "every bucket claim below rests on a control that did not run"
+elif [ "$sel_fail" -eq 0 ]; then
+  pass "control: all $sel_n sample paths land in the bucket their label claims"
+else
+  fail "control: $sel_fail of $sel_n sample path(s) landed in the wrong bucket" \
+       "the labels below would describe coverage this sweep does not have"
+fi
+
 # --- the enforced sweep --------------------------------------------------------------
 echo ""
-echo "=== no tracked shell file under scripts or tests cites a line number ==="
-# `.*` and not `[^/]*`: a script that lands in a subdirectory one day would otherwise
-# fall silently into the ADVISORY bucket and stay there, which is the ENFORCED label
-# understating its own reach. Every tracked shell file is flat under scripts/ or tests/
-# today, so widening this costs nothing and closes the shape rather than half of it.
-awk '/^(scripts|tests)\/.*\.sh$/ { print }' "$WORK/tracked" > "$WORK/enforced"
+echo "=== no enforced file cites a line number ==="
+in_bucket enforced < "$WORK/tracked" > "$WORK/enforced"
 ENF_N=$(awk 'END { print NR + 0 }' "$WORK/enforced")
 if [ "$ENF_N" -lt 10 ]; then
   echo "SKIPPED: only $ENF_N enforced file(s) matched -- the list is wrong, and a clean"
@@ -240,9 +339,8 @@ fi
 
 # --- the advisory sweep --------------------------------------------------------------
 echo ""
-echo "=== everything else: reported, NOT enforced ==="
-awk '$0 != "CHANGELOG.md" && $0 !~ /^(scripts|tests)\/.*\.sh$/ { print }' \
-  "$WORK/tracked" > "$WORK/advisory"
+echo "=== generated and vendored files: reported, NOT enforced ==="
+in_bucket advisory < "$WORK/tracked" > "$WORK/advisory"
 ADV_N=$(awk 'END { print NR + 0 }' "$WORK/advisory")
 # The same floor the enforced set gets, for the same reason. `Clean across 0 file(s)` and
 # a genuinely clean tree are one sentence apart in the log and IDENTICAL in the exit code,
@@ -271,10 +369,11 @@ if [ -n "$adv" ]; then
   while IFS= read -r line; do
     [ -n "$line" ] && echo "    $line"
   done < "$WORK/adv"
-  echo "  Prose outside scripts and tests is REPORTED rather than enforced. Fixing what"
-  echo "  is listed is welcome and needs no permission. Making this half fail the suite"
-  echo "  is a scope decision nobody has taken -- see the ADVISORY paragraph at the top"
-  echo "  of this file for what it would cost and the two lines it would take."
+  echo "  Generated and vendored files are REPORTED rather than enforced, because the fix"
+  echo "  does not belong in the file the finding names: an index is rewritten by"
+  echo "  rebuild-tsv.sh from the entry, and .oss/ is rewritten by /oss:scaffold --apply."
+  echo "  Fix it at the source. This half is NOT a bucket for prose -- since #198 every"
+  echo "  tracked markdown file except the assembled changelog is enforced."
 else
   echo "  Clean across $((ADV_N - adv_unread)) file(s)."
 fi
