@@ -6,11 +6,18 @@
 # exactly like a live one. The reader follows it, lands on a plausible-looking comment,
 # and believes it. That is this repository own defect class pointed at its own source.
 #
-# Counted on merged main at 98386f1, outside the assembled changelog: nine citations of
-# this shape existed. Six pointed at the wrong thing, one had drifted off the block it
-# named, two were still right. #191 names three of the six; this sweep found the other
-# three. #185 added one of them three hours before #190 moved it. Nothing here is a
-# hypothetical rot rate.
+# Counted on merged main at 5b46095, outside the assembled changelog: ELEVEN citations of
+# this shape existed. Seven pointed at the wrong thing, one had drifted off the block it
+# named, three were still right. #191 names three of the seven; this sweep found the rest.
+#
+# The rot rate is measured, not asserted, and the measurement got sharper while this
+# branch was open. It was nine citations at 98386f1, the commit this branch was cut from.
+# #194 then merged and added TWO more -- both to this directory, in a file this branch
+# does not touch -- and one of the two was already wrong on the day it was written, its
+# line number landing three lines past the sentence it names. The interval between the
+# branch point and the rebase was hours. Earlier, #185 added one three hours before #190
+# moved it. That is the whole argument for a check rather than a cleanup: the citations
+# this sweep first went red on were not the ones it was written for.
 #
 # WHAT REPLACES A LINE NUMBER. A function name, a distinctive literal, or an issue
 # number. All three are greppable, all three survive an insertion above them, and the
@@ -36,12 +43,15 @@
 #              Stated rather than silently skipped.
 #
 # THE FALSE-POSITIVE SURFACE, costed before the check was written rather than after.
-# The needle is a TRACKED BASENAME followed by a colon and a digit. Measured on 98386f1 --
-# the parent of the commit that added this file -- over its 96 tracked basenames and every
-# one of its tracked files: 10 hits, 10 of them real citations, 0 false. Those two counts
-# are pinned to that commit rather than restated as a present-tense fact about the tree,
-# because both grow with every file added and a number nobody re-measures is the shape
-# this suite exists to refuse. The counts the sweep prints below are the live ones.
+# The needle is a TRACKED BASENAME followed by a colon and a digit. Measured twice: on
+# 98386f1 (96 basenames, 10 hits, 0 false) and again on 5b46095 after the rebase (98
+# basenames, 12 hits, 0 false). Every hit both times was a real citation.
+#
+# Those counts are pinned to a commit rather than restated as a present-tense fact about
+# the tree, because both grow with every file added and a number nobody re-measures is
+# the shape this suite exists to refuse. The re-measure is the point of the pin: the
+# first pin was two commits stale within a day, and it said so instead of reading true.
+# The counts the sweep prints when it runs are the live ones.
 #
 # The shapes that were considered and do NOT match --
 #

@@ -313,7 +313,7 @@ fi
 
 echo ""
 echo "=== J: session-start reads a session id with the same parser AND the same locale (#177) ==="
-# session-start-hook.sh:32 parses the payload with jit_json_fields + jit_session_key out of
+# session-start-hook.sh parses the payload with jit_json_fields + jit_session_key out of
 # common.sh -- the SAME functions the three matching hooks use -- and its comment says that
 # is deliberate, so that there is one answer to "what is a session id". It was the only one
 # of the four that did not pin `LC_ALL=C`, and the parser is not the same parser in another
@@ -473,11 +473,13 @@ for eng in $J_ENGINES; do
   assert_contains "[$eng] control: and the paths are this session's" \
     "$(LC_ALL=C cat "$J_RMLOG")" "path-shown-jgood.txt"
 
-  # Leg 3 -- the same claim from the other side, and the reason the comment at
-  # session-start-hook.sh:25-29 is not merely tidy. pre-path-hook.sh is pinned, so it refuses
-  # this id and keeps no marker -- which shows as the entry being offered AGAIN on a second
-  # call. Asserted through dedup rather than through a file, for the reason in the header:
-  # the file name at issue is unrepresentable on macOS.
+  # Leg 3 -- the same claim from the other side, and the reason the `jit_json_fields` +
+  # `jit_session_key` comment in session-start-hook.sh is not merely tidy: it is a claim
+  # about two hooks agreeing, and this leg is the half of it that lives in the OTHER hook.
+  # pre-path-hook.sh is pinned, so it refuses this id and keeps no marker -- which shows as
+  # the entry being offered AGAIN on a second call. Asserted through dedup rather than
+  # through a file, for the reason in the header: the file name at issue is
+  # unrepresentable on macOS.
   P2="$(new_project "j2-$eng")"
   OUT1="$(j_path_hook "$P2" "$J_BAD" "$eng")"
   OUT2="$(j_path_hook "$P2" "$J_BAD" "$eng")"
