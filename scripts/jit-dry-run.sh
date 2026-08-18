@@ -627,7 +627,7 @@ check_index_current() {
 # --- A bare match on a row that can refuse (#136) ----------------------------
 # pre-tool-hook.sh matches a bare, non-`~` match with index() against `cmd`, which is the
 # command TRUNCATED at the first `;`, `&`, `|`, `"` or ` --` -- the `cmd = full_command`
-# strip in pre-tool-hook.sh, which #7 is the reason for.
+# strip in pre-tool-hook.sh, which exists because of #7.
 # That truncation is deliberate and #136 does not ask for it to change: it is what keeps a
 # substring rule off the tail of a quoted commit message, and every anchored rule in this
 # repository is written the way it is because of it. Widening what a bare match sees would
