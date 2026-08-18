@@ -216,11 +216,45 @@ END {
   # time. Reproduced against the first cut of this fix; tests/test-agent-subject.sh
   # section H drives both shapes.
   #
-  # A subject that was built and then cut to nothing keeps the old silent exit below. It
-  # is arguably its own third state -- a `~match` rule would have matched `full_command`
-  # and never ran -- but that is behaviour older than this fix and not this fix.
+  # A subject that was built and then cut to nothing is #186, and it USED to leave here
+  # too -- `if (cmd == "" && !no_subject) { print "{}"; exit }`. That line is gone, and
+  # what it was is worth stating because it did not look like a behaviour change:
+  #
+  # it was a SHORT-CIRCUIT ON THE WRONG VARIABLE. `cmd` is the command WORDS, and it is
+  # the subject of exactly ONE consumer below -- the substring arm of the tool matcher.
+  # Three others read something else and were skipped by a test about a variable that is
+  # none of their business:
+  #
+  #   - the REGEX arm matches `fold_full`, deliberately (see the comment above it): a
+  #     rule is tested against the whole command so that `cd x && git push` is reachable
+  #     at all. `full_command` is non-empty on every call this exit caught, so those
+  #     rules would have matched and never ran -- and this dimension is the only one that
+  #     can REFUSE a call, so a `mode: block` regex rule failed OPEN on any command whose
+  #     first byte is `;`, `&`, `|` or `"`. Read as enforced, never run, which is the one
+  #     failure this repository is named after.
+  #   - the VOCABULARY pass lifts path tokens out of `command`, never `cmd`, so
+  #     `; cat src/Billing/x.php` said nothing while `true; cat src/Billing/x.php` bound
+  #     Billing the whole time.
+  #   - the per-row refusal notices need no subject at all.
+  #
+  # The substring arm needs no exit of its own: `index("", term)` is 0 for a non-empty
+  # term, and rebuild-tsv.sh refuses a row with an empty `match:` (it is one of the three
+  # `jit_unindexed` reasons), so there is no row whose term could be "". A substring rule
+  # therefore still does not see past the cut -- `git push` does not fire on
+  # `; git push`, exactly as it does not fire on `true; git push`. THE CUT ITSELF IS NOT
+  # THE BUG and is deliberately unchanged: it is what stops a substring rule about
+  # `git push` firing on `echo "git push"`, which is issue #7, and narrowing it to keep
+  # the first command word would fix this case by reopening that one.
+  #
+  # This state does NOT get a notice of its own, and that is a decision rather than an
+  # omission. After this change no row is unreached: every row is read, the regex ones
+  # are evaluated and can fire, and a substring row that does not match is an ORDINARY
+  # non-match -- the same one `true; git push` has always produced silently. A notice
+  # here would fire on that entire class and would say "unreachable" about rules that
+  # are working as #7 intends.
+  #
+  # What is left below is the #182 census gate, unchanged and still on the whole subject.
   no_subject = (full_command == "")
-  if (cmd == "" && !no_subject) { print "{}"; exit }
 
   # --- The subjects the tool rules are matched against, folded once (#76) --------------
   # tolower() is not enough on its own and never was. Under the `C` pin from #68 neither
@@ -845,10 +879,14 @@ END {
   # `!no_subject` is dead by construction and is here so that it stays dead (#182).
   # `no_subject` means NO tool_input key yielded anything, so `command` and `f_file_path`
   # are both empty, so `tt` is empty and this pass is skipped anyway -- one comparison to
-  # make that an invariant rather than a coincidence. The shape it used to guard, a Bash
-  # command cut to nothing that still names a path (`; cat src/Billing/x.php`), no longer
-  # reaches here at all: it takes the old silent exit above, because a subject WAS built
-  # for it.
+  # make that an invariant rather than a coincidence.
+  #
+  # A Bash command cut to nothing that still names a path -- `; cat src/Billing/x.php` --
+  # DOES reach here now (#186), and it is not the shape this guard is about. `tt` comes
+  # from `command`, the whole command, and never from `cmd`, so this pass never cared
+  # about the cut; it was the early exit above that skipped it, and that exit is gone.
+  # `true; cat src/Billing/x.php` has always bound Billing here, and the leading-operator
+  # spelling now does the same thing rather than a different one.
   if (tt != "" && !no_subject) {
     # Enumerated, and its OWN list rather than the tools one: the two dimensions can hold
     # different layer directories (#176). The bound comes off the same split().
