@@ -339,6 +339,51 @@ assert_contains "G2 and carries its own cut line, not the other" "$OUT" "the rem
 
 # ---------------------------------------------------------------------------
 echo ""
+echo "=== H: a subject that was BUILT and then cut to nothing is not the same state ==="
+
+# The census must fire on "no tool_input key yielded anything", never on "a key yielded
+# something and the command-words cut reduced it to empty". Those are two states and the
+# notice makes a factual claim about which one it is -- it says the dispatch carried none
+# of the keys it reads.
+#
+# `cmd` is cut at the first ; & | or double quote, so a Bash command that is a lone quote,
+# or that opens with a chain operator, leaves `cmd` empty with `command` present the whole
+# time. Gating the census on `cmd` rather than on the whole subject made it report every
+# Bash rule in the tree as unreachable, on a call that carried a command -- a false
+# statement, and the loudest possible one, since it names rules that are fine.
+#
+# It is also the guard on the rest of the diff: this call must behave EXACTLY as it did
+# before #182, which means silent. The positive control below proves the tree and the
+# hook are live on the same fixture.
+PROJ="$TMPROOT/h"; BASE="$PROJ/.claude/jit-context"
+mk_tool_entry "$BASE" 00-manual hctrl Bash 'ctrltarget' remind
+rebuild "$PROJ"
+
+OUT=$(run_bash "$PROJ" "ctrltarget now")
+assert_contains "H POSITIVE CONTROL: the Bash rule fires in this tree" "$OUT" "TOOLBODY-hctrl"
+
+h_run() {
+  printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"session_id":"%s"}' "$1" "$(next_sid)" \
+    | CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null
+}
+
+# A lone double quote: the quote cut takes everything, `command` is present throughout.
+OUT=$(h_run '\"'); RC=$?
+assert_rc0     "H the hook exits 0 on a command that cuts to nothing" "$RC"
+assert_missing "H a command that cut to nothing is NOT reported as carrying no key" "$OUT" "could build no subject"
+if [ "$OUT" = "{}" ]; then
+  PASS=$((PASS + 1)); echo "  PASS: H and the call is silent, exactly as it was before #182"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: H and the call is silent, exactly as it was before #182"
+  echo "    got: ${OUT:-<EMPTY>}"
+fi
+
+# Leading chain operator: same shape, different cut.
+OUT=$(h_run '; cat /tmp/x')
+assert_missing "H a command cut at a leading ; is not reported as carrying no key" "$OUT" "could build no subject"
+
+# ---------------------------------------------------------------------------
+echo ""
 echo "=== Results ==="
 echo "PASS: $PASS"
 echo "FAIL: $FAIL"

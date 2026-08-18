@@ -205,7 +205,22 @@ END {
   # is compiled, no entry body is read, no call is ever blocked on this path -- and if
   # no rule names the tool the output is {} exactly as before, which is the case for
   # every TodoWrite in a tree whose rules are about Bash.
-  no_subject = (cmd == "")
+  #
+  # `full_command`, NOT `cmd`, and the difference is the whole accuracy of the notice.
+  # `cmd` is the command WORDS -- `full_command` cut at the first ; & | or double quote
+  # -- so it is empty for two completely different reasons: no tool_input key yielded
+  # anything at all, or a key yielded something the cut then took. The notice makes a
+  # factual claim about which one it is, and gating it on `cmd` made it fire on
+  # `{"command":"\""}` and on `{"command":"; cat x"}`, telling the author that every
+  # Bash rule in their tree was unreachable on a call that carried a command the whole
+  # time. Reproduced against the first cut of this fix; tests/test-agent-subject.sh
+  # section H drives both shapes.
+  #
+  # A subject that was built and then cut to nothing keeps the old silent exit below. It
+  # is arguably its own third state -- a `~match` rule would have matched `full_command`
+  # and never ran -- but that is behaviour older than this fix and not this fix.
+  no_subject = (full_command == "")
+  if (cmd == "" && !no_subject) { print "{}"; exit }
 
   # --- The subjects the tool rules are matched against, folded once (#76) --------------
   # tolower() is not enough on its own and never was. Under the `C` pin from #68 neither
@@ -827,13 +842,13 @@ END {
     gsub(/  +/, " ", stale)
   }
 
-  # `!no_subject` is a deliberate no-op in every shape anyone has produced, and it is
-  # here so it stays one (#182). A dispatch with no subject has no file_path and no
-  # command, so `tt` is already empty and this pass was already skipped -- with ONE
-  # exception, a Bash command whose first segment is empty but which names a path later
-  # (`; cat src/Billing/x.php`). That call exited before this pass until #182 moved the
-  # exit, and waking the vocabulary dimension on it is a behaviour change nobody asked
-  # for and not this fix.
+  # `!no_subject` is dead by construction and is here so that it stays dead (#182).
+  # `no_subject` means NO tool_input key yielded anything, so `command` and `f_file_path`
+  # are both empty, so `tt` is empty and this pass is skipped anyway -- one comparison to
+  # make that an invariant rather than a coincidence. The shape it used to guard, a Bash
+  # command cut to nothing that still names a path (`; cat src/Billing/x.php`), no longer
+  # reaches here at all: it takes the old silent exit above, because a subject WAS built
+  # for it.
   if (tt != "" && !no_subject) {
     # Enumerated, and its OWN list rather than the tools one: the two dimensions can hold
     # different layer directories (#176). The bound comes off the same split().
