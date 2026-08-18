@@ -515,8 +515,10 @@ rather than word boundaries. It matches nothing either way, and is refused the s
 **A backslash before an accented or CJK character is refused as well.** There is nothing
 to reach for instead: drop the backslash and the character matches itself. This one is
 worth stating because it used to be the quiet exception — the guard reads *bytes*, since
-`LC_ALL=C` is pinned on every `awk` in the plugin, and no byte above `0x7F` belongs to any
-character class under `C`, so the check that catches `\s` could not see `\é` at all. Both
+`LC_ALL=C` is pinned on every `awk` that reaches this guard — `pre-tool-hook.sh`,
+`pre-path-hook.sh` and `jit-dry-run.sh`'s pattern probes — and no byte above `0x7F` belongs
+to any character class under `C`, so the check that catches `\s` could not see `\é` at all.
+Both
 engines then dropped the backslash and matched the bare character, which is not what the
 author wrote; and on gawk — which is `awk` on most Linux boxes — the hook additionally
 wrote `regexp escape sequence … is not a known regexp operator` into the session while
