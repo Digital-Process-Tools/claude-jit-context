@@ -382,8 +382,16 @@ j_pick_utf8_locale() {
 }
 J_UTF8="$(j_pick_utf8_locale)"
 J_UTF8_REAL=no
+J_SKIPPED=0
 if [ "$(LC_ALL="$J_UTF8" locale charmap 2>/dev/null)" = "UTF-8" ]; then J_UTF8_REAL=yes; fi
 if [ "$J_UTF8_REAL" != yes ]; then
+  # A SKIP, not a note. The five sibling suites print the note and exit 0, which is the
+  # convention -- and it is the wrong one HERE, because this file already carries the third
+  # state and section I already uses it. Without this flag a run on a host with no UTF-8
+  # locale prints "N passed, 0 failed" and exits 0, which is byte-identical to a run that
+  # DID drive the gawk cell the whole section exists for. That is this repository's own
+  # defect class, in the test written to close an instance of it.
+  J_SKIPPED=1
   echo "  SKIP-NOTE: no UTF-8 locale on this machine ($J_UTF8). Section J runs under a byte"
   echo "             locale, which is where the defect does NOT reproduce -- the assertions"
   echo "             still state the guarantee, they just cannot fail for it here."
@@ -490,13 +498,26 @@ rm -rf "$J_ENGINE_BIN"
 rm -f "$J_RMLOG"
 
 echo ""
-if [ "$SKIPPED_SECTIONS" -gt 0 ] || [ "$H_SKIPPED" -eq 1 ]; then
-  echo "$PASS passed, $FAIL failed, $SKIPPED_SECTIONS section(s) SKIPPED (no symbolic links here)"
+if [ "$SKIPPED_SECTIONS" -gt 0 ] || [ "$H_SKIPPED" -eq 1 ] || [ "$J_SKIPPED" -eq 1 ]; then
+  # The symlink clause is printed only when a symlink section actually skipped. It used to
+  # be unconditional, so an H-only skip already rendered as "0 section(s) SKIPPED (no
+  # symbolic links here)" -- a count of zero and a reason for a section that ran fine.
+  # Adding J as a third caller made that line reachable one more way, so it is fixed here
+  # rather than left to say the wrong thing about a new case.
+  if [ "$SKIPPED_SECTIONS" -gt 0 ]; then
+    echo "$PASS passed, $FAIL failed, $SKIPPED_SECTIONS section(s) SKIPPED (no symbolic links here)"
+  else
+    echo "$PASS passed, $FAIL failed, with section(s) skipped -- see the notes above"
+  fi
+  if [ "$J_SKIPPED" -eq 1 ]; then
+    echo "section J SKIPPED: no UTF-8 locale here, so the one cell the #177 divergence lives"
+    echo "in -- gawk under a multibyte locale -- was never driven. Not a clean result."
+  fi
 else
   echo "$PASS passed, $FAIL failed"
 fi
 # A failure outranks a skip: a red assertion is an answer, a skip is the absence of one.
 [ "$FAIL" -eq 0 ] || exit 1
 # 2 is this repo "could not evaluate", the code run-all.sh keeps apart from both.
-[ "$SKIPPED_SECTIONS" -eq 0 ] || exit 2
+if [ "$SKIPPED_SECTIONS" -ne 0 ] || [ "$J_SKIPPED" -ne 0 ]; then exit 2; fi
 exit 0
