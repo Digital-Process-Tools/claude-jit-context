@@ -626,7 +626,8 @@ check_index_current() {
 
 # --- A bare match on a row that can refuse (#136) ----------------------------
 # pre-tool-hook.sh matches a bare, non-`~` match with index() against `cmd`, which is the
-# command TRUNCATED at the first `;`, `&`, `|`, `"` or ` --` (pre-tool-hook.sh:127-144).
+# command TRUNCATED at the first `;`, `&`, `|`, `"` or ` --` -- the `cmd = full_command`
+# strip in pre-tool-hook.sh, which exists because of #7.
 # That truncation is deliberate and #136 does not ask for it to change: it is what keeps a
 # substring rule off the tail of a quoted commit message, and every anchored rule in this
 # repository is written the way it is because of it. Widening what a bare match sees would
@@ -649,8 +650,9 @@ check_index_current() {
 # code, and failing every project that ever wrote a bare block rule is the breaking change
 # #136 explicitly rules out.
 #
-# The mode/require/forbid columns are index text and are NOT echoed — pre-tool-hook.sh:209
-# and #35 are what a raw column 4 in a report costs. This row derives one bit from them.
+# The mode/require/forbid columns are index text and are NOT echoed — `jit_log_name()`
+# and `jit_row_id()`, which pre-tool-hook.sh routes every refused row through, and #35,
+# are what a raw column 4 in a report costs. This row derives one bit from them.
 check_bare_truncation() {
   # $1 layer label, $2 rule file, $3 mode column, $4 require column, $5 forbid column
   local label="$1" file="$2" mode="$3" require="$4" forbid="$5" disp

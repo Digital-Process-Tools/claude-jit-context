@@ -442,8 +442,9 @@ echo ""
 # the first draft of this line quietly ran `tool:` on every invocation of the suite.
 echo "=== a tools entry is keyed on the tool: prefix, not on its layer ==="
 # The hooks spell the log key two ways: `layer:file.md(` for paths and vocabulary,
-# and the literal `tool:file.md(` for tools (pre-tool-hook.sh:535, 556, 577, 595).
-# Keyed on the layer for all three, every tools entry read as never-fired.
+# and the literal `tool:file.md(` for tools -- the four `"tool:" r_logname` appends in
+# the tools loop of pre-tool-hook.sh. Keyed on the layer for all three, every tools
+# entry read as never-fired.
 TOOLLOG="$TMP/toollog/.claude/jit-context"
 mkdir -p "$TMP/toollog"
 mk_tree "$TOOLLOG"

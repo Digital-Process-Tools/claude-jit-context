@@ -6,8 +6,8 @@
 # `jit_shown_mark()` was `print key >> file` inside awk END, and an unopenable path is a
 # FATAL awk error. awk died before the final `print`, so a rule that was indexed, matched
 # and had something to say produced nothing, exited 0, and printed an awk diagnostic into
-# the session stderr (#50). Failing OPEN and being LOUD -- the two things common.sh:48-51
-# already names as forbidden -- in one statement.
+# the session stderr (#50). Failing OPEN and being LOUD -- the two things the
+# `JIT_SYMLINKS` cap comment in common.sh already names as forbidden -- in one statement.
 #
 # The same statement followed a symbolic link, because awk cannot lstat and bash did not
 # know the path (#49). The marker got none of the five `[ -L ]` tests the log got.

@@ -550,7 +550,9 @@ for _dim in tools paths vocabulary; do
       # THE LOG KEY IS NOT THE DISPLAY LABEL, and the two dimensions spell it differently.
       # pre-path-hook.sh and the vocabulary half of pre-tool-hook.sh write `layer:file.md(`
       # -- but the TOOLS half writes the literal `tool:file.md(` and never the layer name
-      # (pre-tool-hook.sh:535, 556, 577, 595). Keyed on the layer for all three, every
+      # (the four `"tool:" r_logname` appends in the tools loop of pre-tool-hook.sh: the
+      # two BLOCKED ones for require and forbid, the `[full:block]` one, and the advisory
+      # one that builds `log_adv`). Keyed on the layer for all three, every
       # tools entry came back with a fire count of zero and was reported `never fired`
       # however often it had actually matched: an absence produced by this tool, reported
       # as an absence in the world, in the section written to end exactly that.

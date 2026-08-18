@@ -57,7 +57,7 @@ Body-only edits do not need it — the body is read from the file at fire time. 
 
 ## The second trap: rules that resolve against another tree
 
-**`JIT_BASE` resolves against `$CLAUDE_PROJECT_DIR`, never the cwd** (`scripts/common.sh:7`). A worktree's rules are inert for a session rooted anywhere else — including yours, editing them.
+**`JIT_BASE` resolves against `$CLAUDE_PROJECT_DIR`, never the cwd** (the `JIT_BASE=` assignment in `scripts/common.sh`). A worktree's rules are inert for a session rooted anywhere else — including yours, editing them.
 
 So neither trap is visible from where you are working. Both are:
 
@@ -98,6 +98,12 @@ The detail arrives on the file itself. What holds everywhere:
 **No new runtime dependencies.** No `jq`, no Python, no Node — in **`scripts/`**, which is what ships and what runs in a stranger's session. `.oss/` and `.github/` are not the runtime: `assemble_changelog.py` is Python and depends on `markdown-it-py`, and that is the same line `tooling.md` already draws between the hooks and `rebuild-tsv.sh`. If you find yourself reaching for a language outside bash/awk/perl for anything under `scripts/`, that is the rule and the answer is no.
 
 **Never edit `CHANGELOG.md`. Write a fragment.** `changelog.d/<issue>.<section>.md`, the entry exactly as it should read, naming its own issue in its body — `changelog.d/README.md` is the convention and `.oss/assemble_changelog.py` folds them in at the tag. This is not a style preference: two PRs that share no other line still conflicted in that file, four times in one afternoon, and one of those merges would have produced two `### Added` headings under one version.
+
+**Never cite a line number in another file — or in this one.** A `<file>.sh:NNN` pointer is exact on the day it is written and wrong on the next PR that inserts a line above it, silently, because a rotted citation reads exactly like a live one. Counted on `main` at `5b46095`, outside the assembled changelog: eleven such citations existed, seven pointed at the wrong thing, one had drifted off the block it named, three were still right. The rot rate is measured rather than asserted, and it was measured twice: the count was nine at `98386f1`, and #194 added two more — in a file the fixing branch did not touch — inside the hours before it rebased, one of them already wrong on the day it was written. Earlier, #185 added one three hours before #190 moved it (#191). Point at something greppable instead — a function name, a distinctive literal, or the issue number, which additionally says *why* rather than *where*. If a line genuinely must be named, write it as prose (`line 7 of scripts/common.sh`) so it reads as the approximation it is.
+
+`tests/test-line-citations.sh` enforces this over every tracked shell file under `scripts/` or `tests/`, and **reports without failing** over every other tracked file except `CHANGELOG.md`, which is assembled rather than edited. The needle is a tracked basename followed by a colon and a digit, and its false-positive surface was measured twice: `98386f1` gave 96 basenames, 10 hits, 0 false, and `5b46095` gave 98, 12 and 0. Counts are pinned to a commit rather than written in the present tense, because both grow with every file added; the suite prints the live counts when it runs, and re-pinning on a rebase is the point rather than an inconvenience.
+
+The advisory half was advisory because `.claude/jit-context/paths/00-manual/tooling.md` was held by PR #192 when the check was written, and reddening a file you may not edit is how a check gets disabled in its first week. **#192 has landed, so that reason is spent** — and the honest statement is that widening is now a scope decision nobody has taken rather than a blocked one. It costs two `awk` alternations and one line in that entry, and it binds `docs/`, `templates/`, `examples/` and every jit-context entry, where the residual (`grep -n` output quoted verbatim) is likelier than in a shell comment. Measured false positives there are still zero, twice.
 
 **Every behaviour change gets a test first.** Write it, watch it fail, then fix. A test written after the fix asserts what the code happens to do.
 
