@@ -36,9 +36,14 @@
 #              Stated rather than silently skipped.
 #
 # THE FALSE-POSITIVE SURFACE, costed before the check was written rather than after.
-# The needle is a TRACKED BASENAME followed by a colon and a digit. Measured over all 96
-# tracked basenames and every tracked file in this repository: 10 hits, 10 of them real
-# citations, 0 false. The shapes that were considered and do NOT match --
+# The needle is a TRACKED BASENAME followed by a colon and a digit. Measured on 98386f1 --
+# the parent of the commit that added this file -- over its 96 tracked basenames and every
+# one of its tracked files: 10 hits, 10 of them real citations, 0 false. Those two counts
+# are pinned to that commit rather than restated as a present-tense fact about the tree,
+# because both grow with every file added and a number nobody re-measures is the shape
+# this suite exists to refuse. The counts the sweep prints below are the live ones.
+#
+# The shapes that were considered and do NOT match --
 #
 #   awk: cmd. line:3                 no basename before the colon
 #   scripts/common.sh: line 7        bash diagnostic form, space before the number
@@ -129,6 +134,11 @@ CTRL=$(sed -n 's#^scripts/\(pre-tool-hook\.sh\)$#\1#p' "$WORK/tracked")
 [ -n "$CTRL" ] || CTRL=$(awk 'NR == 1 { print }' "$WORK/basenames")
 
 printf '# see %s:127-144 for the truncation\n' "$CTRL" > "$WORK/planted.sh"
+# The dir-prefix branch of the needle gets its own control. A bare basename and a
+# path-qualified one are meant to be the same finding, and without this the branch that
+# accepts `scripts/` in front of the name is never driven -- the enforced set happens to
+# hold only bare-basename citations, so a broken prefix branch would read as clean.
+printf '# see %s:7 for this\n' "scripts/$CTRL" > "$WORK/planted-path.sh"
 {
   printf '# see the truncation in %s, which is greppable\n' "$CTRL"
   printf '# awk: cmd. line:3\n'
@@ -148,6 +158,14 @@ else
   exit 1
 fi
 
+planted_path=$(cites_in "$WORK/planted-path.sh")
+if [ -n "$planted_path" ]; then
+  pass "control: a path-qualified citation is seen too"
+else
+  fail "control: the path-qualified citation was found NOWHERE" \
+       "the dir-prefix branch of the needle is dead, and no enforced file exercises it"
+fi
+
 clean=$(cites_in "$WORK/clean.sh")
 if [ -n "$clean" ]; then
   fail "control: the recommended forms and a longer basename are NOT citations" \
@@ -159,7 +177,11 @@ fi
 # --- the enforced sweep --------------------------------------------------------------
 echo ""
 echo "=== no tracked shell file under scripts or tests cites a line number ==="
-awk '/^(scripts|tests)\/[^\/]*\.sh$/ { print }' "$WORK/tracked" > "$WORK/enforced"
+# `.*` and not `[^/]*`: a script that lands in a subdirectory one day would otherwise
+# fall silently into the ADVISORY bucket and stay there, which is the ENFORCED label
+# understating its own reach. Every tracked shell file is flat under scripts/ or tests/
+# today, so widening this costs nothing and closes the shape rather than half of it.
+awk '/^(scripts|tests)\/.*\.sh$/ { print }' "$WORK/tracked" > "$WORK/enforced"
 ENF_N=$(awk 'END { print NR + 0 }' "$WORK/enforced")
 if [ "$ENF_N" -lt 10 ]; then
   echo "SKIPPED: only $ENF_N enforced file(s) matched -- the list is wrong, and a clean"
@@ -168,14 +190,21 @@ if [ "$ENF_N" -lt 10 ]; then
 fi
 echo "  ($ENF_N file(s), needle over $BASE_N tracked basename(s))"
 
+# A tracked path that is not a readable file is COUNTED, not skipped in silence: a
+# gitlink, or a path deleted between `ls-files` and this loop, would otherwise leave the
+# header above claiming a file count the sweep never reached.
 hits=""
+unread=0
 while IFS= read -r file; do
   [ -n "$file" ] || continue
-  [ -f "$REPO/$file" ] || continue
+  if [ ! -f "$REPO/$file" ]; then unread=$((unread + 1)); continue; fi
   found=$(cites_in "$REPO/$file")
   [ -n "$found" ] && hits="$hits$file: $found
 "
 done < "$WORK/enforced"
+if [ "$unread" -gt 0 ]; then
+  fail "$unread of $ENF_N enforced path(s) were not readable files -- that many went unswept"
+fi
 
 if [ -n "$hits" ]; then
   fail "a line-number citation is present in an enforced file"
@@ -194,14 +223,24 @@ fi
 # --- the advisory sweep --------------------------------------------------------------
 echo ""
 echo "=== everything else: reported, NOT enforced ==="
-awk '$0 != "CHANGELOG.md" && $0 !~ /^(scripts|tests)\/[^\/]*\.sh$/ { print }' \
+awk '$0 != "CHANGELOG.md" && $0 !~ /^(scripts|tests)\/.*\.sh$/ { print }' \
   "$WORK/tracked" > "$WORK/advisory"
 ADV_N=$(awk 'END { print NR + 0 }' "$WORK/advisory")
+# The same floor the enforced set gets, for the same reason. `Clean across 0 file(s)` and
+# a genuinely clean tree are one sentence apart in the log and IDENTICAL in the exit code,
+# and run-all.sh reads only the exit code. A selector that broke would report coverage
+# nobody has, which is the defect this repository is named after.
+if [ "$ADV_N" -lt 10 ]; then
+  echo "SKIPPED: only $ADV_N advisory file(s) matched -- the selector is wrong, and a"
+  echo "  clean report over it would mean nothing."
+  exit 2
+fi
 
 adv=""
+adv_unread=0
 while IFS= read -r file; do
   [ -n "$file" ] || continue
-  [ -f "$REPO/$file" ] || continue
+  if [ ! -f "$REPO/$file" ]; then adv_unread=$((adv_unread + 1)); continue; fi
   found=$(cites_in "$REPO/$file")
   [ -n "$found" ] && adv="$adv$file: $found
 "
@@ -218,7 +257,10 @@ if [ -n "$adv" ]; then
   echo "  files it would flag. Fixing these is welcome; #191 asks for the flag to move"
   echo "  once that branch lands."
 else
-  echo "  Clean across $ADV_N file(s)."
+  echo "  Clean across $((ADV_N - adv_unread)) file(s)."
+fi
+if [ "$adv_unread" -gt 0 ]; then
+  echo "  $adv_unread of $ADV_N advisory path(s) were not readable files and went unswept."
 fi
 
 echo ""

@@ -651,8 +651,8 @@ check_index_current() {
 # #136 explicitly rules out.
 #
 # The mode/require/forbid columns are index text and are NOT echoed — `jit_log_name()`
-# and `jit_row_id()` in pre-tool-hook.sh, and #35, are what a raw column 4 in a report
-# costs. This row derives one bit from them.
+# and `jit_row_id()`, which pre-tool-hook.sh routes every refused row through, and #35,
+# are what a raw column 4 in a report costs. This row derives one bit from them.
 check_bare_truncation() {
   # $1 layer label, $2 rule file, $3 mode column, $4 require column, $5 forbid column
   local label="$1" file="$2" mode="$3" require="$4" forbid="$5" disp
