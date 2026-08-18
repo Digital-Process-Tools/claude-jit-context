@@ -31,10 +31,20 @@
 #                  the gap; the gap is what the enumeration below closes.
 #
 # Enumeration turns "not in the list" into "must be driven", so a tool that legitimately
-# takes no flags needs an answer of its own. classify_script() gives every tracked file
-# one of four verdicts, read out of that file own bytes rather than off a skip list --
-# a skip list being the typed list again, one indirection further out. "This tool has no
-# flags to test" and "this tool never ran" are different lines in the output below.
+# takes no flags needs an answer of its own. classify_script() gives every tracked file one
+# of five verdicts, read out of that file own bytes rather than off a skip list -- a skip
+# list being the typed list again, one indirection further out. "This tool has no flags to
+# test" and "this tool never ran" are different lines in the output below, and so are the
+# two ways a loop can yield nothing:
+#
+#   drive               the canonical loop, carrying arms with `shift 2`
+#   no-flags            no loop, and no sign of flag parsing anywhere -- a named PASS
+#   boolean-flags-only  a loop, but no arm of it reaches for $2 -- also a named PASS, and
+#                       not the same sentence as the line below it
+#   loop-no-flags       a loop that reaches for $2 with no `shift 2` arm to read -- FAIL,
+#                       the parser rotted or the loop shape moved
+#   flags-elsewhere     no loop, but getopts / a `shift 2` / a dash case arm is present --
+#                       FAIL, because reporting it as a tool with no flags is the silence
 #
 # --- Why not `timeout` ---------------------------------------------------------------
 #
@@ -57,6 +67,8 @@ if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
   exit 2
 fi
 trap 'rm -rf "$TMP"' EXIT
+
+SKIP=0
 
 ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; for l in "$@"; do echo "    $l"; done; return 0; }
@@ -123,7 +135,19 @@ parses_flags_somehow() {
   grep -qE '(getopts|shift 2|^[[:space:]]*--?[A-Za-z][^)]*\))' "$1"
 }
 
-# One of four verdicts for one file, read out of that file own bytes. There is no skip
+# Does any arm of the loop reach for `$2` at all? This is what separates a tool whose
+# flags are all booleans -- nothing here consumes a value, so there is nothing for #114 to
+# happen to -- from a loop that consumes one in a shape valued_flags() cannot see. Without
+# it both read as "the loop yielded no flags", and a perfectly ordinary `--verbose) shift`
+# tool would be told its parser had rotted.
+loop_consumes_value() {
+  awk "$ARG_LOOP"' { inloop = 1; next }
+    inloop && /^done$/ { inloop = 0 }
+    inloop && /\$\{?2/ { found = 1 }
+    END { exit !found }' "$1"
+}
+
+# One of five verdicts for one file, read out of that file own bytes. There is no skip
 # list anywhere in this suite: a skip list is the hand-written list #188 is about, one
 # indirection further out, and it goes stale in exactly the same silence.
 classify_script() {
@@ -132,7 +156,13 @@ classify_script() {
   if has_arg_loop "$f"; then
     # To a file, not $( ): a captured variable silently drops NUL bytes.
     valued_flags "$f" > "$TMP/flags.txt" 2>/dev/null
-    if [ -s "$TMP/flags.txt" ]; then echo "drive"; else echo "loop-no-flags"; fi
+    if [ -s "$TMP/flags.txt" ]; then
+      echo "drive"
+    elif loop_consumes_value "$f"; then
+      echo "loop-no-flags"
+    else
+      echo "boolean-flags-only"
+    fi
   elif parses_flags_somehow "$f"; then
     echo "flags-elsewhere"
   else
@@ -287,20 +317,12 @@ EOF
 # claim about a file which does not exist yet. Watching it pass on today tree says nothing
 # about that claim: today tree is exactly the tree the old hand-written list already
 # covered. So the enumeration and the classifier are driven here against a throwaway git
-# repository holding three scripts this suite has never heard of, one per outcome.
+# repository holding five scripts this suite has never heard of, one per verdict.
 #
-# Four verdicts, and the third one is the whole of #188. Enumeration turns "not in the
-# list" into "must be driven", so a tool that legitimately takes no flags needs a verdict
-# of its own -- read out of its own source, not off a skip list, because a skip list is
-# the hand-written list again one indirection further out:
-#
-#   drive            an argument loop this suite can read, carrying valued flags
-#   no-flags         no argument loop and no sign of flag parsing anywhere
-#   flags-elsewhere  parses flags in a shape valued_flags() cannot read -- FAIL, not a skip
-#   loop-no-flags    the canonical loop is there and yielded nothing -- the parser rotted
-#
-# Each of the four prints a line naming the script, so "this tool has no flags to test" and
-# "this tool never ran" are different sentences in the output rather than the same silence.
+# The five verdicts are listed at the top of this file. Each of them prints a line naming
+# the script, so "this tool has no flags to test" and "this tool never ran" are different
+# sentences in the output rather than the same silence -- and each of the five has a
+# fixture here, because a verdict nothing ever reaches is a branch nobody has tested.
 
 echo "=== the sweep itself: a script named nowhere in this file ==="
 
@@ -345,6 +367,39 @@ done
 echo "ok $BASE"
 FIXTURE
 
+# The loop is there and every arm is a boolean. Nothing consumes a value, so there is
+# nothing here for #114 to happen to -- a named pass, not a failure. Without this fixture
+# the boolean-flags-only verdict is a branch nothing in the corpus ever reaches.
+cat > "$META/scripts/bool-only.sh" <<'FIXTURE'
+#!/bin/bash
+set -uo pipefail
+VERBOSE=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --verbose) VERBOSE=1; shift ;;
+    *) echo "unknown flag: $1" >&2; exit 2 ;;
+  esac
+done
+echo "ok $VERBOSE"
+FIXTURE
+
+# And the one that must NOT read as the line above: the loop consumes $2, and no arm
+# carries `shift 2`, so valued_flags() sees nothing while the script plainly takes a value.
+# This is the "the parser rotted" verdict, and it had no fixture until the audit of #188
+# pointed out that three of the verdicts were driven and this one was not.
+cat > "$META/scripts/hidden-value.sh" <<'FIXTURE'
+#!/bin/bash
+set -uo pipefail
+BASE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --base) BASE="$2"; shift; shift ;;
+    *) echo "unknown flag: $1" >&2; exit 2 ;;
+  esac
+done
+echo "ok $BASE"
+FIXTURE
+
 META_READY=1
 ( cd "$META" && git init -q . && git add -A ) > /dev/null 2>&1 || META_READY=0
 if [ "$META_READY" -eq 1 ] && [ -z "$(cd "$META" && git ls-files -- scripts)" ]; then
@@ -359,12 +414,19 @@ class_is() {
 }
 
 if [ "$META_READY" -eq 0 ]; then
+  # Three outcomes, never two, and the count is what carries it. Printing this block while
+  # leaving PASS/FAIL untouched makes the tally at the bottom byte-identical to a run where
+  # this section passed -- the absence produced by the tool reading as an absence in the
+  # world, which is the shape #188 is about, one level up and inside its own fix. So it is
+  # counted here and the suite exits 2, which run-all.sh renders as "NOT a clean result".
+  SKIP=$((SKIP + 1))
   echo "  SKIPPED: no throwaway git repository could be built here, so the one guarantee"
   echo "           the sweep exists for -- that it catches a script nobody listed -- went"
   echo "           untested. Every section below still ran; this claim did not."
 else
   META_LIST="$(tracked_scripts "$META")"
-  for want in scripts/jit-newtool.sh scripts/plain-hook.sh scripts/odd-parse.sh; do
+  for want in scripts/jit-newtool.sh scripts/plain-hook.sh scripts/odd-parse.sh \
+              scripts/bool-only.sh scripts/hidden-value.sh; do
     if grep -qxF "$want" <<<"$META_LIST"; then
       ok "the enumeration finds $want, which is named nowhere in this file"
     else
@@ -379,6 +441,11 @@ else
            "$META/scripts/plain-hook.sh" "no-flags"
   class_is "a flag in a shape this suite cannot read is a FAILURE, not a skip" \
            "$META/scripts/odd-parse.sh" "flags-elsewhere"
+  # The two halves of "the loop yielded no valued flag", which must never be one answer.
+  class_is "a loop of boolean flags has nothing to drive, and is not a failure" \
+           "$META/scripts/bool-only.sh" "boolean-flags-only"
+  class_is "a loop that consumes \$2 with no 'shift 2' is the parser having rotted" \
+           "$META/scripts/hidden-value.sh" "loop-no-flags"
 
   # The red, executed rather than reasoned about. An unlisted tool routes into
   # drive_script, which has no positive control for it and has to say so. Run in a subshell
@@ -445,12 +512,18 @@ while IFS= read -r script; do
       # looks like, and it must never be spelled the same way as "never ran".
       N_NOFLAG=$((N_NOFLAG + 1))
       ok "$script takes no flag arguments -- nothing to drive, by its own source" ;;
+    boolean-flags-only)
+      # Also the third state: a loop whose arms are all booleans consumes no value, so
+      # there is nothing here for #114 to happen to. Named, for the same reason no-flags is.
+      N_NOFLAG=$((N_NOFLAG + 1))
+      ok "$script has an argument loop, and no arm of it consumes a value -- nothing to drive" ;;
     loop-no-flags)
       echo ""
       echo "=== $script ==="
       bad "$script has an argument loop this suite can no longer read" \
-          "the loop is there and valued_flags() found no valued flag in it -- either the" \
-          "loop shape moved or the parser rotted. Every flag of this script is untested." ;;
+          "the loop is there, an arm of it reaches for \$2, and valued_flags() found no" \
+          "valued flag -- either the loop shape moved or the parser rotted. Every flag of" \
+          "this script is untested, and nothing else in this suite would have said so." ;;
     flags-elsewhere)
       echo ""
       echo "=== $script ==="
@@ -497,7 +570,11 @@ done <<<"$SCRIPT_LIST"
 echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))
-echo "  $PASS/$TOTAL passed, $FAIL failed"
+echo "  $PASS/$TOTAL passed, $FAIL failed, $SKIP section(s) SKIPPED"
 echo "========================"
 
-[ "$FAIL" -eq 0 ] && exit 0 || exit 1
+[ "$FAIL" -gt 0 ] && exit 1
+# Not a pass. A section that could not build its fixtures tested nothing, and the tally
+# above cannot tell you that on its own -- run-all.sh reads 2 and says so in as many words.
+[ "$SKIP" -gt 0 ] && exit 2
+exit 0
