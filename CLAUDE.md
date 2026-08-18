@@ -19,7 +19,7 @@ Most of what used to be written out here now lives in `.claude/jit-context/`, an
 | Entry                                       | Fires when                             | Carries                                                             |
 | ------------------------------------------- | -------------------------------------- | ------------------------------------------------------------------- |
 | `paths/00-manual/hooks.md`                  | you open a `scripts/*-hook.sh` or `common.sh` | never fail hard, no new dependencies, test-first, both platforms |
-| `paths/00-manual/tooling.md`                | you open `rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh` or `jit-init.sh` | the opposite contract — fail loudly, what each exit code means, which suite covers it |
+| `paths/00-manual/tooling.md`                | you open `rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh`, `jit-init.sh` or `jit-doctor.sh` | the opposite contract — fail loudly, what each exit code means, which suite covers it |
 | `paths/00-manual/vendored-oss.md`           | you open anything in `.oss/` or `.github/workflows/oss-changelog.yml` | these are not ours — the scaffold rewrites them, and the assembler's exit codes are inverted |
 | `paths/00-manual/tests.md`                  | you open anything in `tests/`          | a negative assertion needs a positive control; `$( )` drops NUL bytes |
 | `paths/00-manual/entries.md`                | you edit any `jit-context/*.md`         | the rebuild trap, keyword normalisation, how to prove an entry fires |
@@ -32,6 +32,8 @@ Most of what used to be written out here now lives in `.claude/jit-context/`, an
 Two consequences worth knowing before you change anything here:
 
 **The dogfood hooks are the installed plugin's, not this checkout's.** `.claude/settings.json` used to register the four hooks from `$CLAUDE_PROJECT_DIR/scripts/`; it registers `enabledPlugins` now, and `claude-jit-context@dpt-plugins` serves them from its own cache. `JIT_BASE` still resolves against `$CLAUDE_PROJECT_DIR`, so **the entries firing at you are this tree's** — what is no longer this tree's is the *code* reading them. Edit `scripts/pre-tool-hook.sh` and your own session keeps running the plugin's copy, silently, which is this repository's defect class pointed at its own contributors. Drive script changes through `tests/` and `jit-dry-run.sh`, never by watching your session behave.
+
+`bash scripts/jit-doctor.sh` is the tool for that paragraph — it reports which copy of the hooks would run, and how many versions of the plugin are sitting in the cache. On this checkout it currently answers `the plugin cache serves the hooks` and lists four installed versions, saying plainly that which one loads is not decidable from where it stands.
 
 **The `00-index.tsv` files are committed.** `session-start-hook.sh` clears `once` markers; it does not rebuild. A fresh clone with no index has silently dead entries, including the block rule. If you edit an entry's frontmatter, `bash scripts/rebuild-tsv.sh` and commit the index alongside it.
 
@@ -77,6 +79,7 @@ Lints every pattern in the tree you name, prints which rule fires for a sample c
 | `scripts/rebuild-tsv.sh` | Frontmatter → `00-index.tsv`. The only writer of that file.               |
 | `scripts/jit-dry-run.sh` | Lints one tree's patterns and dry-runs a sample call against it.          |
 | `scripts/jit-misses.sh`  | Reads the hook log and reports repeated vocabulary misses. Writes nothing. |
+| `scripts/jit-doctor.sh`  | Answers the first question: is any of this live, and against which tree? Which copy of the hooks would run, which layers load, whether an index is there and current, whether the log has ever been written. Points at `jit-dry-run.sh` for the pattern lint rather than repeating it. |
 | `.oss/assemble_changelog.py` | Folds `changelog.d/` fragments into `CHANGELOG.md` at release. The only writer of that file. **Vendored from the `oss` plugin and rewritten by every `/oss:scaffold --apply`** — an edit here is lost, and its exit codes are `0` ok / `1` skipped / `2` refused, the inverse of everything under `scripts/`. Python, and **not** part of the runtime — see below. |
 | `changelog.d/`           | One fragment per change. Its `README.md` is the convention.                 |
 | `tests/test-*.sh`        | One suite per hook, plus `run-all.sh`.                                     |

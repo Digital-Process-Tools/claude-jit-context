@@ -193,7 +193,27 @@ scan_settings() {
   SETTINGS_SEEN=$((SETTINGS_SEEN + 1))
   SETTINGS_LIST="$SETTINGS_LIST  $(printf '%-20s %s\n' "scanned" "$f (textual scan, not a JSON parse)")
 "
-  enab=$(LC_ALL=C awk '/"claude-jit-context(@[^"]*)?"[[:space:]]*:/ { n++ } END { print n + 0 }' "$f")
+  # TWO conditions, and the first draft had neither. `"claude-jit-context...":` alone
+  # matched the KEY and ignored the VALUE, so a plugin explicitly turned OFF --
+  # `"claude-jit-context@dpt-plugins": false` -- read as `the plugin cache serves the
+  # hooks`. That is the confident wrong answer this section's own header says is worse
+  # than none, in the one check the whole tool exists for.
+  #
+  # So the value must be `true`, and the file must mention `enabledPlugins` at all. The
+  # second is what scopes the first without a JSON parser: requiring `": true"` already
+  # rules out the plugin name appearing inside a hook COMMAND string, where it is part of
+  # a path and never a key with a boolean after it.
+  #
+  # Be honest about the residue, because this scan is textual and cannot be otherwise
+  # here: a `"claude-jit-context": true` sitting under some third key in a file that also
+  # carries an enabledPlugins block would still count. That is a shape nobody writes, and
+  # the alternative is brace-depth tracking in awk over minified JSON, which fails
+  # differently and more quietly. Everything this cannot establish falls through to
+  # `cannot tell`, which is the whole reason that verdict is a first-class one.
+  enab=0
+  if LC_ALL=C awk '/"enabledPlugins"[[:space:]]*:/ { found = 1 } END { exit !found }' "$f"; then
+    enab=$(LC_ALL=C awk '/"claude-jit-context(@[^"]*)?"[[:space:]]*:[[:space:]]*true/ { n++ } END { print n + 0 }' "$f")
+  fi
   hooksline=$(LC_ALL=C awk '/(pre-prompt|pre-tool|pre-path|session-start)-hook[.]sh/ { n++ } END { print n + 0 }' "$f")
   cacheline=$(LC_ALL=C awk '/(pre-prompt|pre-tool|pre-path|session-start)-hook[.]sh/ && (/CLAUDE_PLUGIN_ROOT/ || /plugins\/cache/) { n++ } END { print n + 0 }' "$f")
   [ "$enab" -gt 0 ] && CACHE_SIDE=1
@@ -512,9 +532,11 @@ for _dim in tools paths vocabulary; do
   fi
   jit_scan_layers "$BASE/$_dim" "$_dim"
   _read=" $JIT_LAYERS "
+  _rows=0
   for _d in "$BASE/$_dim"/*/; do
     [ -d "$_d" ] || continue
     _d="${_d%/}"
+    _rows=$((_rows + 1))
     _layer="${_d##*/}"
     _safe="$(jit_report_name "$_layer")"
     _idx="$_d/00-index.tsv"
@@ -525,7 +547,17 @@ for _dim in tools paths vocabulary; do
       _md_n=$((_md_n + 1))
       [ -f "$_idx" ] && [ "$_md" -nt "$_idx" ] && _stale=1
       _name="${_md##*/}"
-      _key="$_layer:$_name"
+      # THE LOG KEY IS NOT THE DISPLAY LABEL, and the two dimensions spell it differently.
+      # pre-path-hook.sh and the vocabulary half of pre-tool-hook.sh write `layer:file.md(`
+      # -- but the TOOLS half writes the literal `tool:file.md(` and never the layer name
+      # (pre-tool-hook.sh:535, 556, 577, 595). Keyed on the layer for all three, every
+      # tools entry came back with a fire count of zero and was reported `never fired`
+      # however often it had actually matched: an absence produced by this tool, reported
+      # as an absence in the world, in the section written to end exactly that.
+      case "$_dim" in
+        tools) _key="tool:$_name" ;;
+        *)     _key="$_layer:$_name" ;;
+      esac
       case "$_key" in *"$JIT_NL"*) _key="<unnameable>" ;; esac
       ENTRY_KEY[$ENTRY_N]="$_key"
       ENTRY_LABEL[$ENTRY_N]="$_dim/$_safe"
@@ -559,8 +591,16 @@ for _dim in tools paths vocabulary; do
     esac
     printf '  %-24s %3d entr(y/ies)  %s%s\n' "$_dim/$_safe" "$_md_n" "$_note" "$_loads"
   done
+  # A dimension directory that exists and holds no layer directory printed NOTHING: the
+  # glob stays literal with no nullglob, the `[ -d ]` drops it, and the loop body never
+  # runs. So the dimension simply did not appear under this heading -- which is what a
+  # scan that died halfway would also look like, and is the same collapsed pair the
+  # missing-dimension branch above was careful to keep apart.
+  if [ "$_rows" = 0 ]; then
+    printf '  %-24s %s\n' "$_dim/" "no layer directory under it -- there is nothing here to load"
+  fi
 done
-unset _dim _d _layer _safe _idx _md _md_n _stale _name _key _note _loads _read
+unset _dim _d _layer _safe _idx _md _md_n _stale _name _key _note _loads _read _rows
 if [ "$JIT_LAYERS_REFUSED_N" -gt 0 ]; then
   # By position and never by name, the rule the hooks own notice follows: a layer
   # directory name arrives with the clone.

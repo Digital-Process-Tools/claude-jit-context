@@ -90,7 +90,22 @@ IDX="00-index.tsv"
 # deterministic, and it keeps the suite off the wall clock.
 mk_tree() {
   local t="$1"
-  mkdir -p "$t/paths/00-manual" "$t/vocabulary/00-manual"
+  mkdir -p "$t/paths/00-manual" "$t/vocabulary/00-manual" "$t/tools/00-manual"
+  # tools/ is here because the FIRE-COUNT KEY is spelled differently for it: the hooks
+  # write `layer:file.md(` for paths and vocabulary and the literal `tool:file.md(` for
+  # tools. A fixture with no tools/ layer left that whole branch untested, and it was
+  # wrong -- every tools entry read as never-fired however often it had matched.
+  cat > "$t/tools/00-manual/guard.md" <<'MD'
+---
+title: A tools rule
+description: refuses a push to main
+tool: Bash
+match: git push
+mode: block
+---
+short body
+MD
+  printf 'Bash\tgit push\tguard.md\tblock\t\t\n' > "$t/tools/00-manual/$IDX"
   cat > "$t/paths/00-manual/rule.md" <<'MD'
 ---
 title: A path rule
@@ -111,8 +126,8 @@ MD
   printf 'billing\tvocab.md\ntotals\tvocab.md\n' > "$t/vocabulary/00-manual/$IDX"
   # Entries into the past, indexes left at now: current, by a margin no filesystem
   # timestamp granularity can erase.
-  touch -t 202001010000 "$t/paths/00-manual/rule.md" "$t/vocabulary/00-manual/vocab.md"
-  touch "$t/paths/00-manual/$IDX" "$t/vocabulary/00-manual/$IDX"
+  touch -t 202001010000 "$t/paths/00-manual/rule.md" "$t/vocabulary/00-manual/vocab.md" "$t/tools/00-manual/guard.md"
+  touch "$t/paths/00-manual/$IDX" "$t/vocabulary/00-manual/$IDX" "$t/tools/00-manual/$IDX"
 }
 
 mkdir -p "$TMP/home"
@@ -204,6 +219,43 @@ JSON
 mk_tree "$BOTHPROJ/.claude/jit-context"
 ST=0; run_doctor --base "$BOTHPROJ/.claude/jit-context" || ST=$?
 assert_has "both registrations are reported as both" "$OUT" "BOTH"
+
+# A plugin explicitly turned OFF must not read as one that is on. The key is there, the
+# value is `false`, and the first draft matched the key and ignored the value -- so the
+# tool printed its most confident line about the state it exists to report, backwards.
+OFFPROJ="$TMP/offproj"
+mkdir -p "$OFFPROJ/.claude/jit-context"
+cat > "$OFFPROJ/.claude/settings.json" <<'JSON'
+{
+  "enabledPlugins": {
+    "claude-jit-context@dpt-plugins": false
+  }
+}
+JSON
+mk_tree "$OFFPROJ/.claude/jit-context"
+ST=0; run_doctor --base "$OFFPROJ/.claude/jit-context" || ST=$?
+assert_lacks "enabledPlugins: false is not an install"  "$OUT" "the plugin cache"
+assert_has   "it declines instead"                      "$OUT" "cannot tell"
+
+# The plugin name inside a hook COMMAND PATH is not an enabledPlugins entry either. This
+# is the scoping half: without it, any mention of the name anywhere counted.
+PATHPROJ="$TMP/pathproj"
+mkdir -p "$PATHPROJ/.claude/jit-context"
+cat > "$PATHPROJ/.claude/settings.json" <<'JSON'
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "bash $HOME/.claude/plugins/cache/dpt/claude-jit-context/scripts/pre-prompt-hook.sh" } ] }
+    ]
+  }
+}
+JSON
+mk_tree "$PATHPROJ/.claude/jit-context"
+ST=0; run_doctor --base "$PATHPROJ/.claude/jit-context" || ST=$?
+# A cache PATH in a hand-wired hooks block is the cache serving them -- but by the command
+# string, not by a bare name match, and it must not be read as a checkout.
+assert_has   "a cache path in a hooks block is the cache" "$OUT" "the plugin cache"
+assert_lacks "and not the checkout"                       "$OUT" "this checkout"
 
 # A settings file that exists and says nothing about this plugin is NOT evidence that
 # nothing runs -- it is the third state again, one layer in.
@@ -383,6 +435,49 @@ assert_lacks "an entry that did fire is not named as never-fired" "$OUT" "vocab.
 # And with no log at all the check declines rather than reporting every entry dead.
 ST=0; run_doctor --base "$HEALTHY" || ST=$?
 assert_lacks "with no log, nothing is claimed about firing" "$OUT" "no record in the log"
+
+# =====================================================================================
+echo ""
+# No backticks in this heading: inside double quotes they are command substitution, and
+# the first draft of this line quietly ran `tool:` on every invocation of the suite.
+echo "=== a tools entry is keyed on the tool: prefix, not on its layer ==="
+# The hooks spell the log key two ways: `layer:file.md(` for paths and vocabulary,
+# and the literal `tool:file.md(` for tools (pre-tool-hook.sh:535, 556, 577, 595).
+# Keyed on the layer for all three, every tools entry read as never-fired.
+TOOLLOG="$TMP/toollog/.claude/jit-context"
+mkdir -p "$TMP/toollog"
+mk_tree "$TOOLLOG"
+mkdir -p "$TOOLLOG/.discovery/logs"
+{
+  echo "[10:00:00.001] pre-tool (Bash) 9ms | tool:guard.md(git push)[full:block] << git push origin main"
+  echo "[10:00:01.001] pre-path 9ms | 00-manual:rule.md((^|/)src/.*[.]php\$)[full] << src/Thing.php"
+} > "$TOOLLOG/.discovery/logs/hooks.log"
+ST=0; run_doctor --base "$TOOLLOG" || ST=$?
+# The control first: an entry that genuinely never fired in this log IS named, so a
+# doctor that reported nobody as never-fired cannot pass the assertion below for free.
+assert_has   "control: an entry with no record is still named" "$OUT" "vocab.md: no record in the log"
+assert_lacks "a tools entry that fired is not called never-fired" "$OUT" "guard.md: no record in the log"
+assert_lacks "and neither is the paths entry that fired"          "$OUT" "rule.md: no record in the log"
+
+# =====================================================================================
+echo ""
+echo "=== a dimension that exists with no layer under it says so ==="
+# The layer glob stays literal with no nullglob and the `[ -d ]` drops it, so the loop
+# body never ran and the dimension simply did not appear -- indistinguishable from a scan
+# that died. A missing dimension already had its own line; this one had none.
+BAREDIM="$TMP/baredim/.claude/jit-context"
+mkdir -p "$TMP/baredim"
+mk_tree "$BAREDIM"
+rm -rf "$BAREDIM/tools/00-manual"
+ST=0; run_doctor --base "$BAREDIM" || ST=$?
+assert_has  "an empty dimension is named"      "$OUT" "no layer directory under it"
+assert_lacks "and not as a missing one"        "$OUT" "tools/                   no such dimension"
+assert_exit "and an empty dimension is not a defect" 0 "$ST"
+# Positive control on the same code path: with the layer back, the layer row prints and
+# the empty-dimension line does not.
+ST=0; run_doctor --base "$HEALTHY" || ST=$?
+assert_lacks "a populated dimension is not called empty" "$OUT" "no layer directory under it"
+assert_has   "and its layer row prints"                  "$OUT" "tools/00-manual"
 
 # =====================================================================================
 echo ""
