@@ -786,7 +786,10 @@ It answers "which entries does this text call for", without touching the shown-s
 is marked delivered, and asking twice reports the same matches twice. It runs the real
 `pre-prompt-hook.sh` against the tree — the same `LC_ALL=C` pin, the same Latin-1 accent
 fold, the same fail-open-loudly behaviour on a malformed byte — rather than a second matcher
-that would drift from the first the next time only one of them got fixed.
+that would drift from the first the next time only one of them got fixed. It also does not
+touch the project's own `hooks.log`: this is a diagnostic probe, not a session, and its
+call is excluded from that log the same way `jit-dry-run.sh`'s own sample calls are (#217)
+— the log stays a clean record of genuine activity for `jit-misses.sh` to read.
 
 `--format text` (the default) prints one block per matched entry. `--format json` prints one
 object with `count`, `dropped`, `dropped_files`, a `matches` array of
@@ -796,12 +799,19 @@ only, for a caller assembling one prompt and unable to afford eight full entries
 keeps the first N verified matches and **names what it dropped** — a silent top-N would read as
 "nothing else applied".
 
-**A candidate is never counted just because the text splitter found it.** `.claude/jit-context/`
-is attacker-controlled input, and the hook's own join text can legitimately appear inside one
-entry's own body — so before anything is counted, its `(file, keyword)` pair is checked against
-the tree's own `00-index.tsv`. A real match's pair always exists as a row, so this can never
-turn a genuine match into a false refusal; a candidate that fails is printed once, separately,
-labelled `unverifiable`, never silently dropped and never silently trusted.
+**A candidate is never counted just because the text splitter found it — and, since #219,
+the splitter itself can no longer be fooled.** `.claude/jit-context/` is attacker-controlled
+input, and `pre-prompt-hook.sh` now prepends a manifest to its own output naming exactly how
+many blocks follow and each one byte length, built entirely from `length()` and never from
+anything an entry authored: `# JIT-CTX-BLOCKS <n> <len1> <len2> ...`. This tool walks the
+joined text by that byte count rather than by searching it for the `\n---\n` text an entry
+body can legitimately contain, so a body that quotes the join text verbatim is just bytes at
+that point — it rides along as part of the one real match it belongs to, rather than reading
+as a second, fabricated one. The narrower `(file, keyword)` cross-check against the tree's own
+`00-index.tsv` (#216) still runs on top of that, and a candidate that somehow fails it is
+still printed once, separately, labelled `unverifiable`, never silently dropped or trusted —
+kept deliberately as a second, cheap structural guard, even though it is no longer what
+stands between this and a fabricated match.
 
 It exits **1** when the hook also reported something it could not evaluate — a refused
 index row, a refused layer, a refused `config.env` line — printed as a notice rather than

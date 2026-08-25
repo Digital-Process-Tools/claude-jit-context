@@ -203,7 +203,11 @@ PAYLOAD="{\"prompt\":\"$(json_escape "$TEXT")\"}"
 jit_scan_layers "$BASE/vocabulary" vocabulary
 VOCAB_LAYERS="$JIT_LAYERS"
 
-HOOK_ENV=(CLAUDE_PROJECT_DIR="$PROJECT")
+# JIT_SAMPLE_CALL=1 tells common.sh this is a diagnostic probe, not a session, so the
+# real hook's own logging (_log_hook -> jit_log_write) is a no-op for this call and
+# hooks.log stays a clean record of genuine activity -- see the comment above the check
+# in common.sh for why a real session has no route to the same suppression (#217).
+HOOK_ENV=(CLAUDE_PROJECT_DIR="$PROJECT" JIT_SAMPLE_CALL=1)
 if [ "$SUMMARY" = 1 ]; then
   HOOK_ENV+=(JIT_CONTEXT_INJECT=summary)
 fi
@@ -372,6 +376,58 @@ END {
 
   nmatch = 0; nnotice = 0
   if (ctx != "") {
+    # --- Prefer the hook own manifest, which is VERIFIABLE, over searching for a
+    # separator an entry body can forge (#219) -------------------------------------------
+    #
+    # pre-prompt-hook.sh now prepends one line -- "# JIT-CTX-BLOCKS <n> <len1> <len2> ..."
+    # -- built entirely from length(), never from anything an entry authored, naming how
+    # many blocks follow and each one exact byte length, in order. A parser that trusts
+    # it walks the rest of ctx by BYTE COUNT rather than by searching it for "\n---\n",
+    # which is what closes the class rather than merely detecting it: a body that quotes
+    # the join text verbatim is just bytes at that point, because this already knows
+    # exactly where the block containing it ends.
+    #
+    # manifest_ok stays 0 (and the OLD index()-based splitter runs instead, unchanged
+    # below) for anything this cannot fully account for -- a hook output with no manifest
+    # at all, a header whose field count does not match its own declared block count, a
+    # negative or overrunning length, or trailing bytes after the last declared block. None
+    # of that should happen from THIS hook, which is the only backend this ever shells out
+    # to (#205 is the reasoning for why jit-dry-run.sh own --prompt sample call and this
+    # tool both run the real hook rather than a second matcher) -- but the fallback means a
+    # malformed manifest degrades to the pre-#219 behaviour rather than misreading it, and
+    # jit_index_verified() below still catches a genuinely fabricated pair either way.
+    manifest_ok = 0
+    if (substr(ctx, 1, 17) == "# JIT-CTX-BLOCKS ") {
+      nl_pos = index(ctx, "\n")
+      if (nl_pos > 0) {
+        header = substr(ctx, 1, nl_pos - 1)
+        body_rest = substr(ctx, nl_pos + 1)
+        hn = split(header, hf, " ")
+        declared_n = hf[3] + 0
+        if (hn == 3 + declared_n && declared_n >= 0 && hf[1] == "#" && hf[2] == "JIT-CTX-BLOCKS") {
+          manifest_ok = 1
+          pos = 1
+          for (bi = 1; bi <= declared_n; bi++) {
+            blen = hf[3 + bi] + 0
+            if (blen < 0 || pos + blen - 1 > length(body_rest)) { manifest_ok = 0; break }
+            blocks[bi] = substr(body_rest, pos, blen)
+            pos += blen
+            if (bi < declared_n) {
+              if (substr(body_rest, pos, 5) != "\n---\n") { manifest_ok = 0; break }
+              pos += 5
+            }
+          }
+          if (manifest_ok && pos - 1 != length(body_rest)) manifest_ok = 0
+          if (manifest_ok) nb = declared_n
+        }
+      }
+    }
+
+    if (!manifest_ok) {
+    # --- Fallback: the pre-#219 heuristic splitter, kept for a malformed or absent
+    # manifest -- see the comment above, and jit_index_verified() below, for why this
+    # degrading rather than misreading is the correct failure mode.
+    #
     # A block boundary is "\n---\n" ONLY when it is immediately followed by the start
     # of the next top-level block -- "# Vocabulary: " or "# JIT Context: " (the fixed
     # headers jit_refusal_notice()/jit_layers_notice()/jit_config_notice() and the vocab
@@ -397,6 +453,7 @@ END {
       nb++
       blocks[nb] = substr(rest, 1, p - 1)
       rest = substr(rest, p + 5)
+    }
     }
     for (b = 1; b <= nb; b++) {
       body = blocks[b]

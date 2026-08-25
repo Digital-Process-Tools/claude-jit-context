@@ -90,6 +90,51 @@ function jit_json_escape(s,   k, c) {
   }
   return s
 }
+# --- Blocks are tracked, not glued (#219) ------------------------------------------
+#
+# Until now, every matched entry and every refusal notice was appended straight into one
+# growing string, joined by the literal text "\n---\n". That text is prose, and the thing
+# it separates is arbitrary author-controlled markdown -- .claude/jit-context/ is
+# attacker-controlled input, not configuration (paths/00-manual/hooks.md). An entry whose
+# own FULL-MODE body happens to end in the same bytes -- "\n---\n# Vocabulary: " -- joins
+# with the next block in a way byte-identical to a genuine boundary, so no property of the
+# surrounding text can ever tell the two cases apart. Proven, not merely suspected:
+# reproduced on scripts/jit-match.sh before it grew a narrower, non-load-bearing mitigation
+# of its own (jit_index_verified() there, kept deliberately).
+#
+# The fix is not a cleverer separator -- nothing is structurally excluded from a body: an
+# entry is only refused for invalid UTF-8 or (in the INDEX ROW, not the body) a NUL byte,
+# see jit_bad_utf8()/jit_bad_bytes() in common.sh, so literally any printable byte sequence
+# can appear in author text, including whatever boundary text this hook might choose next.
+# What a consumer CAN verify instead is a LENGTH it did not have to search for: each block
+# below is pushed onto an array as it is built, so its own exact byte count is known at the
+# moment of construction rather than re-derived later by scanning the assembled text for a
+# separator an entry body can forge. The final assembly prepends one manifest line naming
+# how many blocks there are and each one byte length, in order -- "# JIT-CTX-BLOCKS <n>
+# <len1> <len2> ...\n" -- built entirely from length(), never from anything an entry
+# authored, so nothing a clone ships can forge it. A consumer that trusts the manifest
+# walks the rest of the string by BYTE COUNT, never by searching for "\n---\n" inside it,
+# which is what makes the class impossible rather than merely detected: a body that quotes
+# "\n---\n# Vocabulary: fake.md" verbatim is just bytes at that point, because the parser
+# already knows exactly where the block it is inside of ends.
+#
+# The human-readable shape is unchanged on purpose: the manifest is one machine-readable
+# line, and everything after it is the exact same "\n---\n"-joined prose a session already
+# saw, so a real user reading their own context sees nothing new but one line at the top.
+#
+# jit_blk_prepend() is the ONE ordering rule this hook has always had: a refused-row,
+# refused-layer or refused-config notice is added in FRONT of whatever already matched --
+# three call sites below, previously three copies of the same string-prepend. Written once
+# here instead, over the block array, so recording a length cannot be forgotten at a fourth
+# call site later. length(list) > 4096 is bytes, not characters, because this whole awk runs
+# under LC_ALL=C (see the T_START comment at the top of this file for why the pin is
+# scoped here) -- the same axis jit_refuse_add()/jit_unreached_add() already use for their
+# own 4096-byte caps.
+function jit_blk_prepend(text,   i) {
+  for (i = nblk; i >= 1; i--) blk[i + 1] = blk[i]
+  blk[1] = text
+  nblk++
+}
 { input = input $0 }
 END {
   # --- Parse JSON: extract prompt ---
@@ -168,7 +213,9 @@ END {
   # --- Load shown set ---
   jit_shown_load(shown_file, shown)
 
-  matched = ""
+  # nblk/blk[] are the ordered block list jit_blk_prepend() and the vocab loop below
+  # populate; the final matched string is assembled from them once, at the very end (#219).
+  nblk = 0
   log_matches = ""
   sep = ""
   refused = ""
@@ -268,8 +315,7 @@ END {
         if (layer ~ /00-manual/) vh = vh "\\n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
         log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent)
         sep = ", "
-        if (matched != "") matched = matched "\n---\n" vh "\n" vc
-        else matched = vh "\n" vc
+        nblk++; blk[nblk] = vh "\n" vc
       }
     }
   }
@@ -282,7 +328,7 @@ END {
     shown["jit-refused-vocab"] = 1
     jit_shown_mark(shown_file, "jit-refused-vocab")
     note = jit_refusal_notice(refused, n_refused)
-    matched = (matched == "") ? note : note "\n---\n" matched
+    jit_blk_prepend(note)
   }
 
   # --- A layer directory that could not be read is reported, once per session ---
@@ -295,7 +341,7 @@ END {
     shown["jit-refused-layers"] = 1
     jit_shown_mark(shown_file, "jit-refused-layers")
     lnote = jit_layers_notice(layers_refused, layers_refused_n)
-    matched = (matched == "") ? lnote : lnote "\n---\n" matched
+    jit_blk_prepend(lnote)
   }
 
   # --- A refused config.env line is reported, once per session ---
@@ -306,7 +352,7 @@ END {
     shown["jit-refused-config"] = 1
     jit_shown_mark(shown_file, "jit-refused-config")
     cnote = jit_config_notice(config_refused, config_refused_n)
-    matched = (matched == "") ? cnote : cnote "\n---\n" matched
+    jit_blk_prepend(cnote)
   }
   # --- Log info ---
   sc = 0; for (s in shown) sc++
@@ -326,6 +372,21 @@ END {
     jit_shown_flush(log_tmp)
     printf "%s\t%d\t%s\n", log_matches, sc, msg_short > log_tmp
     close(log_tmp)
+  }
+
+  # --- Assemble the manifest and join the blocks (#219) ---
+  # nblk/blk[] are populated above: once per real vocabulary match, and once more per
+  # refused-row/layer/config notice, in final display order. The manifest is built from
+  # length(blk[i]) alone -- never from anything an entry authored -- so a consumer that
+  # trusts it can walk the joined text by byte count instead of searching it for "\n---\n".
+  matched = ""
+  if (nblk > 0) {
+    manifest = "# JIT-CTX-BLOCKS " nblk
+    for (bi = 1; bi <= nblk; bi++) {
+      manifest = manifest " " length(blk[bi])
+      matched = (matched == "") ? blk[bi] : matched "\n---\n" blk[bi]
+    }
+    matched = manifest "\n" matched
   }
 
   # --- Output JSON ---
