@@ -138,8 +138,18 @@ echo "=== A2: the same shim against the UNFIXED code is red -- the check is new,
 # it against the tree BEFORE #195/#196, via git show, in a scratch copy -- never by
 # editing the working tree, which every other suite in this run still reads.
 ORIG_REBUILD="$WORK/rebuild-tsv.orig.sh"
-if git -C "$SCRIPT_DIR" show HEAD:scripts/rebuild-tsv.sh > "$ORIG_REBUILD" 2>/dev/null \
-   && git -C "$SCRIPT_DIR" show HEAD:scripts/common.sh > "$WORK/common.orig.sh" 2>/dev/null; then
+# NOT `HEAD` -- this test file is committed in the SAME commit as the fix it is meant to
+# prove red against, so `HEAD:scripts/rebuild-tsv.sh` is the FIXED file on every run after
+# that commit lands, and this section would silently stop proving anything while still
+# reporting PASS/FAIL as if it did. The commit this branch forked from is what "pre-fix"
+# actually means, found the same way a merge would resolve it: the merge-base against the
+# remote default branch, falling back to the parent commit only when that ref is not
+# available at all (a shallow clone, no "origin" remote).
+PRE_FIX_REF=$(git -C "$SCRIPT_DIR" merge-base HEAD origin/main 2>/dev/null) \
+  || PRE_FIX_REF=$(git -C "$SCRIPT_DIR" rev-parse HEAD~1 2>/dev/null)
+if [ -n "${PRE_FIX_REF:-}" ] \
+   && git -C "$SCRIPT_DIR" show "$PRE_FIX_REF:scripts/rebuild-tsv.sh" > "$ORIG_REBUILD" 2>/dev/null \
+   && git -C "$SCRIPT_DIR" show "$PRE_FIX_REF:scripts/common.sh" > "$WORK/common.orig.sh" 2>/dev/null; then
   # rebuild-tsv.sh sources "$(dirname "$0")/common.sh" -- give the scratch copy its own
   # common.sh right beside it so it does not pick up the FIXED one from scripts/.
   cp "$WORK/common.orig.sh" "$WORK/common.sh"
@@ -162,8 +172,9 @@ if git -C "$SCRIPT_DIR" show HEAD:scripts/rebuild-tsv.sh > "$ORIG_REBUILD" 2>/de
   fi
 else
   NOT_EVALUATED="$NOT_EVALUATED
-  - A2: could not read HEAD:scripts/rebuild-tsv.sh or HEAD:scripts/common.sh via git show
-    (not a git checkout, or no HEAD yet) -- the red/pre-fix comparison could not run"
+  - A2: could not resolve a pre-fix ref (no merge-base against origin/main and no HEAD~1)
+    or could not read scripts/rebuild-tsv.sh / scripts/common.sh from it via git show --
+    the red/pre-fix comparison could not run"
 fi
 
 # =============================================================================

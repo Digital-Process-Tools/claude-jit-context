@@ -879,9 +879,12 @@ jit_frontmatter() {
         # A POSIX class is byte-class-sensitive: in a single-byte locale [[:space:]] matches
         # 0xA0 -- the trailing byte of a-grave (C3 A0), S-caron (C5 A0) and the dagger
         # (E2 80 A0), and a character in its own right in ISO-8859-1. jit_clip() could argue
-        # no session reached that, because every caller pins LC_ALL=C. THIS function has no
-        # such argument: it pins nothing, and neither rebuild-tsv.sh nor jit-dry-run.sh pins
-        # it for the call, so the byte class is whatever the operator exported.
+        # no session reached that, because every caller pins LC_ALL=C. THIS function pins
+        # its own now too (#195, #196) -- rebuild-tsv.sh and jit-dry-run.sh used to call it
+        # unpinned, which is the same divergence class this trim was written to survive,
+        # one level up. The trim below is six ASCII bytes spelled out rather than a POSIX
+        # class, so the pin buys it nothing directly here -- but a caller no longer has to
+        # get its OWN locale right first for the guarantee this trim already made to hold.
         #
         # What the wide class cost was never invalid UTF-8 out of here, and the reason is
         # worth stating rather than re-deriving: v is only tested against ^"[^"]*"$, the trim
