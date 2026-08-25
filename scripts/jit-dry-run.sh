@@ -676,6 +676,15 @@ check_index_current() {
 # The mode/require/forbid columns are index text and are NOT echoed — `jit_log_name()`
 # and `jit_row_id()`, which pre-tool-hook.sh routes every refused row through, and #35,
 # are what a raw column 4 in a report costs. This row derives one bit from them.
+#
+# $4 and $5 (require, forbid) are read off a row that may now carry an 8th, unread
+# column past forbid -- requires: (#203) -- so a row where BOTH require and forbid are
+# empty and requires: is not is exactly the shape that exposed the bug the row reader
+# below works around: bash `read` treats tab as IFS WHITESPACE regardless of what IFS is
+# actually set to, so two consecutive empty tab-delimited fields collapse into one
+# separator and the value that should have landed in $6 (requires:, unread here) instead
+# lands in $4 (require). Before #203 nothing was ever written after two empty columns in
+# a tools row, so this never had a chance to fire; see the row reader below for the fix.
 check_bare_truncation() {
   # $1 layer label, $2 rule file, $3 mode column, $4 require column, $5 forbid column
   local label="$1" file="$2" mode="$3" require="$4" forbid="$5" disp
@@ -710,7 +719,24 @@ for tsv in "$BASE"/tools/*/00-index.tsv; do
   IDX_TOOLS=$((IDX_TOOLS + 1))
   label="tools/$(report_layer "$(basename "$(dirname "$tsv")")")"
   rown=0
-  while IFS=$'\t' read -r r_tool r_match r_file r_mode r_require r_forbid _rest; do
+  # `tr` to STX (0x02), not `IFS=$'"'"'\t'"'"'` directly (#203). bash `read` treats a tab in
+  # IFS as IFS WHITESPACE regardless of what IFS is actually set to, which COLLAPSES a run
+  # of consecutive tabs exactly the way unquoted word-splitting on the default IFS does --
+  # this row can now carry an 8th, unread column past forbid (requires:), so a row where
+  # BOTH require and forbid are empty and requires: is not had its requires: value land in
+  # $r_require instead of being discarded, misreporting an ordinary `remind` row as one
+  # that carries a `require:`. STX is not IFS whitespace to `read`, so a run of it is never
+  # collapsed -- see jit_missing_requires() in common.sh for the same fix, found first.
+  #
+  # STX, deliberately NOT SOH (0x01) or DEL (0x7f) -- driven, not reasoned. bash reserves
+  # both of those byte values internally (CTLESC/CTLNUL, its own quote-removal markers),
+  # so a field genuinely delimited by either one is silently NOT split at all: measured on
+  # this bash 3.2, `IFS=$'"'"'\x01'"'"' read -r a b c` on a\x01b\x01c produced a=[abc], not three
+  # fields -- a worse failure than the tab-collapse this fix exists to close, and it would
+  # have shipped invisibly, since every fixture in this suite happens to have a `forbid`
+  # column and never hits the empty-require-and-forbid shape that would have exposed it.
+  # 0x02 is not one of bash own reserved bytes and was driven clean at 0x02, 0x03 and 0x1f.
+  while IFS=$'\x02' read -r r_tool r_match r_file r_mode r_require r_forbid _rest; do
     rown=$((rown + 1))
     [ -n "${r_match:-}" ] || continue
     [ -n "${r_file:-}" ] || continue
@@ -725,7 +751,7 @@ for tsv in "$BASE"/tools/*/00-index.tsv; do
       *)    printf 'ok       %-18s %-30s substring, not a regex (tool %s)\n' "$label" "$(jit_report_name "$r_file")" "$(jit_report_name "$r_tool")"
             check_bare_truncation "$label" "$r_file" "$r_mode" "$r_require" "$r_forbid" ;;
     esac
-  done < "$tsv"
+  done < <(tr '\t' '\002' < "$tsv")
 done
 
 for tsv in "$BASE"/paths/*/00-index.tsv; do
