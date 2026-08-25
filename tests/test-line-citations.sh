@@ -96,18 +96,37 @@ ADVISORY=0
 pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; [ $# -gt 1 ] && echo "    $2"; }
 
+# Every "could not build the fixtures here" floor below exits 2, which run-all.sh maps
+# to SKIPPED rather than FAILED or passed -- correctly, for a floor that fires before
+# any control has run. But several floors in this script fire AFTER a control already
+# ran: the selector control before the enforced-sweep floor, and the enforced sweep
+# itself before the advisory-sweep floor. Exiting 2 at that point discards a recorded
+# failure -- `$FAIL` is only read at the very last line of this script, and every exit
+# between a `fail` call and that line leaves before the exit code is computed, so a
+# control that ran, failed, and printed its failure could still end the run green
+# (#201). skip_or_fail is the one place that decides between the two: if a failure was
+# already recorded, it exits 1 (this run failed) instead of 2 (this run could not be
+# evaluated) so `$FAIL` is never silently thrown away by a floor that runs after it.
+skip_or_fail() {
+  if [ "$FAIL" -gt 0 ]; then
+    echo "  ($FAIL control failure(s) recorded above take priority over this skip.)"
+    exit 1
+  fi
+  exit 2
+}
+
 if ! command -v git >/dev/null 2>&1; then
   echo "SKIPPED: no git on PATH, so the set of tracked files cannot be established"
   echo "  The needle set IS the tracked basenames, and the swept set is the tracked files."
   echo "  Neither can be read off whatever happens to be in the working directory."
-  exit 2
+  skip_or_fail
 fi
 if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
   echo "SKIPPED: $REPO is not a git working tree"
-  exit 2
+  skip_or_fail
 fi
 
-WORK=$(mktemp -d) || { echo "SKIPPED: could not create a scratch directory"; exit 2; }
+WORK=$(mktemp -d) || { echo "SKIPPED: could not create a scratch directory"; skip_or_fail; }
 trap 'rm -rf "$WORK"' EXIT
 
 # --- the needle ----------------------------------------------------------------------
@@ -116,7 +135,7 @@ trap 'rm -rf "$WORK"' EXIT
 # [A-Za-z0-9_-] is backslash-escaped rather than only the dot: a basename is whatever
 # somebody committed, and one unescaped metacharacter would silently widen the sweep.
 git -C "$REPO" ls-files -z > "$WORK/tracked0" || {
-  echo "SKIPPED: git ls-files failed"; exit 2; }
+  echo "SKIPPED: git ls-files failed"; skip_or_fail; }
 tr '\0' '\n' < "$WORK/tracked0" > "$WORK/tracked"
 
 SCANNED=$(awk 'END { print NR + 0 }' "$WORK/tracked")
@@ -124,14 +143,14 @@ if [ "$SCANNED" -lt 20 ]; then
   echo "SKIPPED: git ls-files reported only $SCANNED tracked file(s)"
   echo "  This repository has many more than that, so the list is wrong and a clean sweep"
   echo "  over it would mean nothing."
-  exit 2
+  skip_or_fail
 fi
 
 sed 's#.*/##' "$WORK/tracked" | sed '/^$/d' | sort -u > "$WORK/basenames"
 BASE_N=$(awk 'END { print NR + 0 }' "$WORK/basenames")
 if [ "$BASE_N" -lt 10 ]; then
   echo "SKIPPED: only $BASE_N tracked basename(s) survived the split"
-  exit 2
+  skip_or_fail
 fi
 
 ALT=$(sed 's/[^A-Za-z0-9_-]/\\&/g' "$WORK/basenames" | paste -sd'|' -)
@@ -141,6 +160,19 @@ ALT=$(sed 's/[^A-Za-z0-9_-]/\\&/g' "$WORK/basenames" | paste -sd'|' -)
 CITE_RE="(^|[^A-Za-z0-9_.-])([A-Za-z0-9_.-]+/)*($ALT):[0-9]"
 
 cites_in() { grep -nIE -- "$CITE_RE" "$1" 2>/dev/null; }
+
+# Distinguishes grep's own three outcomes -- 0 (a citation was found), 1 (no citation,
+# a genuinely clean read), 2+ (the file could not be read at all, an unreadable file
+# among the causes) -- because `cites_in` on its own only hands back stdout, and stdout
+# is empty in BOTH the "clean" and the "could not read it" cases. $RC is grep's raw
+# exit status, captured immediately after the command substitution so nothing runs
+# between the two and clobbers it. One helper, called at both of the sites that sweep
+# real tracked files (the enforced and the advisory loops below), so the exit-status
+# discipline lives in one place rather than two copies that can drift apart.
+read_citations() {
+  CITES=$(cites_in "$1")
+  RC=$?
+}
 
 # --- the bucket selectors ------------------------------------------------------------
 #
@@ -241,6 +273,28 @@ else
   pass "control: the recommended forms and a longer basename are NOT citations"
 fi
 
+# --- the control on UNREADABLE FILES --------------------------------------------------
+#
+# A tracked file that exists but cannot be read -- permission denied, or a gitlink/path
+# that vanished between `git ls-files` and this loop -- must not be mistaken for a clean
+# sweep: `grep` exits 2 for a read failure and 1 for "no match", and stdout is empty
+# either way. `chmod 000` cannot be driven here honestly: it is a no-op on Windows and
+# defeated by root on some CI images, so it would be green on two of three legs while
+# claiming to cover all three -- the exact trap #200 was filed to name. A path that is
+# fed straight to `read_citations` without existing on disk provokes the SAME grep exit
+# 2 everywhere: no platform, no root, no CI image changes what `grep` does when the path
+# it was handed is not there.
+read_citations "$WORK/does-not-exist-$$"
+if [ "$RC" -eq 1 ]; then
+  fail "control: a read failure is reported as a CLEAN sweep, not as unreadable" \
+       "grep exit 1 (no match) and grep exit 2+ (could not read it) must not collapse"
+elif [ "$RC" -ge 2 ]; then
+  pass "control: a read failure is distinguished from a clean sweep (grep exit $RC)"
+else
+  fail "control: reading a nonexistent path unexpectedly reported a citation" \
+       "grep exit $RC, expected 2 or more"
+fi
+
 # --- the control on the SELECTORS ----------------------------------------------------
 #
 # The three controls above prove the NEEDLE sees a citation. None of them proves that a
@@ -303,21 +357,29 @@ ENF_N=$(awk 'END { print NR + 0 }' "$WORK/enforced")
 if [ "$ENF_N" -lt 10 ]; then
   echo "SKIPPED: only $ENF_N enforced file(s) matched -- the list is wrong, and a clean"
   echo "  sweep over it would mean nothing."
-  exit 2
+  skip_or_fail
 fi
 echo "  ($ENF_N file(s), needle over $BASE_N tracked basename(s))"
 
 # A tracked path that is not a readable file is COUNTED, not skipped in silence: a
-# gitlink, or a path deleted between `ls-files` and this loop, would otherwise leave the
-# header above claiming a file count the sweep never reached.
+# gitlink, a path deleted between `ls-files` and this loop, OR a file that exists but
+# cannot be opened (permission denied) would otherwise leave the header above claiming
+# a file count the sweep never reached -- and the permission case is the one `-f` alone
+# cannot see, because `-f` is true for a file mode 000 forbids reading. `read_citations`
+# is what tells "no citation" (grep exit 1) apart from "could not be read" (grep exit
+# 2+), so RC is checked rather than only testing whether $CITES came back non-empty.
 hits=""
 unread=0
 while IFS= read -r file; do
   [ -n "$file" ] || continue
   if [ ! -f "$REPO/$file" ]; then unread=$((unread + 1)); continue; fi
-  found=$(cites_in "$REPO/$file")
-  [ -n "$found" ] && hits="$hits$file: $found
-"
+  read_citations "$REPO/$file"
+  case "$RC" in
+    0) hits="$hits$file: $CITES
+" ;;
+    1) : ;;
+    *) unread=$((unread + 1)) ;;
+  esac
 done < "$WORK/enforced"
 if [ "$unread" -gt 0 ]; then
   fail "$unread of $ENF_N enforced path(s) were not readable files -- that many went unswept"
@@ -349,7 +411,7 @@ ADV_N=$(awk 'END { print NR + 0 }' "$WORK/advisory")
 if [ "$ADV_N" -lt 10 ]; then
   echo "SKIPPED: only $ADV_N advisory file(s) matched -- the selector is wrong, and a"
   echo "  clean report over it would mean nothing."
-  exit 2
+  skip_or_fail
 fi
 
 adv=""
@@ -357,9 +419,13 @@ adv_unread=0
 while IFS= read -r file; do
   [ -n "$file" ] || continue
   if [ ! -f "$REPO/$file" ]; then adv_unread=$((adv_unread + 1)); continue; fi
-  found=$(cites_in "$REPO/$file")
-  [ -n "$found" ] && adv="$adv$file: $found
-"
+  read_citations "$REPO/$file"
+  case "$RC" in
+    0) adv="$adv$file: $CITES
+" ;;
+    1) : ;;
+    *) adv_unread=$((adv_unread + 1)) ;;
+  esac
 done < "$WORK/advisory"
 
 if [ -n "$adv" ]; then
