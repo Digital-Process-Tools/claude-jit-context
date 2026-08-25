@@ -32,7 +32,7 @@
 #
 # Enumeration turns "not in the list" into "must be driven", so a tool that legitimately
 # takes no flags needs an answer of its own. classify_script() gives every tracked file one
-# of five verdicts, read out of that file own bytes rather than off a skip list -- a skip
+# of six verdicts, read out of that file own bytes rather than off a skip list -- a skip
 # list being the typed list again, one indirection further out. "This tool has no flags to
 # test" and "this tool never ran" are different lines in the output below, and so are the
 # two ways a loop can yield nothing:
@@ -45,6 +45,15 @@
 #                       the parser rotted or the loop shape moved
 #   flags-elsewhere     no loop, but getopts / a `shift 2` / a dash case arm is present --
 #                       FAIL, because reporting it as a tool with no flags is the silence
+#   not-bash-script     the shebang is not bash -- FAIL, because this classifier only
+#                       reads bash argument-loop shapes (#193). CLAUDE.md permits
+#                       bash, awk AND perl under scripts/ -- this classifier is coupled
+#                       to something narrower, bash specifically, which is only true by
+#                       coincidence today because every tracked script happens to be
+#                       bash. An awk or perl tool would land in this same bucket the
+#                       moment one is added, and that is a real gap this classifier
+#                       cannot close on its own -- named loudly rather than read as
+#                       no-flags, which is the trade #193 chose.
 #
 # --- Why not `timeout` ---------------------------------------------------------------
 #
@@ -147,12 +156,29 @@ loop_consumes_value() {
     END { exit !found }' "$1"
 }
 
-# One of five verdicts for one file, read out of that file own bytes. There is no skip
+# The classifier below reads bash argument-loop shapes only. CLAUDE.md permits bash,
+# awk and perl under scripts/, so "every tracked script is bash" is not something that
+# rule guarantees -- it is true today only because every tracked script happens to be
+# bash. is_bash_script() is the one place that narrower assumption is checked rather
+# than silently relied on: a script whose shebang says otherwise (awk, perl, or
+# anything else) gets its own verdict instead of being read through a shape it was
+# never written in (#193).
+is_bash_script() {
+  local first
+  first=$(head -n 1 "$1" 2>/dev/null)
+  case "$first" in
+    '#!'*bash*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# One of six verdicts for one file, read out of that file own bytes. There is no skip
 # list anywhere in this suite: a skip list is the hand-written list #188 is about, one
 # indirection further out, and it goes stale in exactly the same silence.
 classify_script() {
   local f="$1"
   if [ ! -f "$f" ] || [ ! -r "$f" ]; then echo "unreadable-file"; return; fi
+  if ! is_bash_script "$f"; then echo "not-bash-script"; return; fi
   if has_arg_loop "$f"; then
     # To a file, not $( ): a captured variable silently drops NUL bytes.
     valued_flags "$f" > "$TMP/flags.txt" 2>/dev/null
@@ -400,6 +426,18 @@ done
 echo "ok $BASE"
 FIXTURE
 
+# #193: a non-bash tool under scripts/ matches none of the bash argument-loop shapes
+# above, so without this fixture it would quietly classify as no-flags and be reported
+# as having nothing to drive -- whatever its actual argument handling does. It is
+# CLAUDE.md, not this file, that says scripts/ is bash/awk/perl only today; this file
+# only assumes that rule, and this fixture is what makes the assumption fail loudly
+# rather than silently if a non-bash tool ever lands here.
+cat > "$META/scripts/not-bash.py" <<'FIXTURE'
+#!/usr/bin/env python3
+import sys
+print("ok", sys.argv[1:])
+FIXTURE
+
 META_READY=1
 ( cd "$META" && git init -q . && git add -A ) > /dev/null 2>&1 || META_READY=0
 if [ "$META_READY" -eq 1 ] && [ -z "$(cd "$META" && git ls-files -- scripts)" ]; then
@@ -426,7 +464,7 @@ if [ "$META_READY" -eq 0 ]; then
 else
   META_LIST="$(tracked_scripts "$META")"
   for want in scripts/jit-newtool.sh scripts/plain-hook.sh scripts/odd-parse.sh \
-              scripts/bool-only.sh scripts/hidden-value.sh; do
+              scripts/bool-only.sh scripts/hidden-value.sh scripts/not-bash.py; do
     if grep -qxF "$want" <<<"$META_LIST"; then
       ok "the enumeration finds $want, which is named nowhere in this file"
     else
@@ -446,6 +484,8 @@ else
            "$META/scripts/bool-only.sh" "boolean-flags-only"
   class_is "a loop that consumes \$2 with no 'shift 2' is the parser having rotted" \
            "$META/scripts/hidden-value.sh" "loop-no-flags"
+  class_is "a non-bash tool under scripts/ is refused rather than read as no-flags (#193)" \
+           "$META/scripts/not-bash.py" "not-bash-script"
 
   # The red, executed rather than reasoned about. An unlisted tool routes into
   # drive_script, which has no positive control for it and has to say so. Run in a subshell
@@ -536,6 +576,16 @@ while IFS= read -r script; do
       echo "=== $script ==="
       bad "$script could not be read at all" \
           "it is tracked under scripts/ and this suite could not open it to classify it" ;;
+    not-bash-script)
+      echo ""
+      echo "=== $script ==="
+      bad "$script is not a bash script, and this classifier only reads bash shapes" \
+          "CLAUDE.md permits bash, awk and perl under scripts/ -- this classifier is" \
+          "coupled to something narrower than that (bash specifically), which was only" \
+          "ever true because every tracked script happened to be bash. This suite needs" \
+          "to learn awk's or perl's argument-handling shape before it can sweep this file" \
+          "honestly; reading it as no-flags would report coverage this suite does not" \
+          "have (#193)." ;;
   esac
 done <<<"$SCRIPT_LIST"
 
