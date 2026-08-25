@@ -247,7 +247,7 @@ fi
 RESULT="$(printf '%s' "$HOOK_OUT" | LC_ALL=C awk \
   -v format="$FORMAT" -v limit="$LIMIT" \
   -v vocab_layers="$VOCAB_LAYERS" -v vocab_base="$BASE/vocabulary" \
-  "$JIT_AWK_JSON$JIT_AWK_ENTRY"'
+  "$JIT_AWK_JSON$JIT_AWK_ENTRY$JIT_AWK_BLOCKS"'
 function emit_json_str(s) {
   gsub(/\\/, "\\\\", s)
   gsub(/"/, "\\\"", s)
@@ -262,44 +262,10 @@ function emit_json_str(s) {
   }
   return s
 }
-# jit_unescape() (common.sh) never decodes \uXXXX -- it was written for a hook reading a
-# CLIENT-built prompt field, which this codebase own encoders never emit \u for. But
-# pre-prompt-hook.sh IS one of this codebases own encoders: its jit_json_escape() escapes
-# the whole 0x00-0x1F range (skipping \t \n \r, which get their own two-letter escape)
-# as \u00XX, exactly the range emit_json_str() above re-escapes on the way back out. Left
-# alone, jit_unescape() passes an unrecognised \u escape through as six literal
-# characters (see its own `else { o = o c nx; ...}` arm) -- syntactically harmless, but the
-# original control byte is gone, replaced by visible text that was never in the entry.
-# This reverses PRECISELY the range pre-prompt-hook.sh can produce and nothing wider: a
-# \uXXXX above 0x1F never comes from this hook, and decoding it here would need a UTF-8
-# assembly step no awk here is trusted to do (JIT_AWK_JSON own header comment says so of
-# an unrecognised escape generally).
-function jit_decode_u00(s,   out, i, n, c, hx, v) {
-  # No index()-based early-return guard here: a first version tried `index(s, "\u00") ==
-  # 0`, a PLAIN STRING LITERAL with an escape awk itself does not define ("\u" is not one
-  # of \n \t \r \\ \" and the rest) -- exactly the trap this repository already documents
-  # for a REGEX carrying \s \d \w, just relocated into a string constant instead. Measured
-  # on gawk 5.4.1: the guard fired on every call, "no marker found", and the byte was
-  # never restored, silently -- while the identical-looking loop below, whose \\u00 lives
-  # inside an ERE literal rather than a string literal, compiled and matched correctly on
-  # BOTH engines. So there is no guard: the walk below is O(length(s)) either way, and it
-  # is the one thing here proven to agree across engines.
-  out = ""; n = length(s); i = 1
-  while (i <= n) {
-    c = substr(s, i, 1)
-    if (c == "\\" && substr(s, i, 6) ~ /^\\u00[0-9a-fA-F][0-9a-fA-F]$/) {
-      hx = tolower(substr(s, i + 4, 2))
-      v = index("0123456789abcdef", substr(hx, 1, 1)) - 1
-      v = v * 16 + index("0123456789abcdef", substr(hx, 2, 1)) - 1
-      out = out sprintf("%c", v)
-      i += 6
-      continue
-    }
-    out = out c
-    i++
-  }
-  return out
-}
+# jit_decode_u00() moved to common.sh (JIT_AWK_BLOCKS) alongside jit_split_ctx_blocks()
+# (#223): jit-dry-run.sh report_hook() needs the identical \u00XX-back-to-byte reversal
+# before it can trust a decoded block header, and a second copy here is what let the
+# block-splitter drift out of step in the first place. See its own comment there.
 # --- The tree own index, loaded once, used only to VERIFY -------------------------------
 # This does NOT reimplement the matcher. It does not fold accents, does not apply the
 # LC_ALL=C keyword-lookup this whole design deliberately leaves to the real hook, and it
@@ -378,87 +344,17 @@ END {
 
   nmatch = 0; nnotice = 0
   if (ctx != "") {
-    # --- Prefer the hook own manifest, which is VERIFIABLE, over searching for a
-    # separator an entry body can forge (#219) -------------------------------------------
-    #
-    # pre-prompt-hook.sh now prepends one line -- "# JIT-CTX-BLOCKS <n> <len1> <len2> ..."
-    # -- built entirely from length(), never from anything an entry authored, naming how
-    # many blocks follow and each one exact byte length, in order. A parser that trusts
-    # it walks the rest of ctx by BYTE COUNT rather than by searching it for "\n---\n",
-    # which is what closes the class rather than merely detecting it: a body that quotes
-    # the join text verbatim is just bytes at that point, because this already knows
-    # exactly where the block containing it ends.
-    #
-    # manifest_ok stays 0 (and the OLD index()-based splitter runs instead, unchanged
-    # below) for anything this cannot fully account for -- a hook output with no manifest
-    # at all, a header whose field count does not match its own declared block count, a
-    # negative or overrunning length, or trailing bytes after the last declared block. None
-    # of that should happen from THIS hook, which is the only backend this ever shells out
-    # to (#205 is the reasoning for why jit-dry-run.sh own --prompt sample call and this
-    # tool both run the real hook rather than a second matcher) -- but the fallback means a
-    # malformed manifest degrades to the pre-#219 behaviour rather than misreading it, and
-    # jit_index_verified() below still catches a genuinely fabricated pair either way.
-    manifest_ok = 0
-    if (substr(ctx, 1, 17) == "# JIT-CTX-BLOCKS ") {
-      nl_pos = index(ctx, "\n")
-      if (nl_pos > 0) {
-        header = substr(ctx, 1, nl_pos - 1)
-        body_rest = substr(ctx, nl_pos + 1)
-        hn = split(header, hf, " ")
-        declared_n = hf[3] + 0
-        if (hn == 3 + declared_n && declared_n >= 0 && hf[1] == "#" && hf[2] == "JIT-CTX-BLOCKS") {
-          manifest_ok = 1
-          pos = 1
-          for (bi = 1; bi <= declared_n; bi++) {
-            blen = hf[3 + bi] + 0
-            if (blen < 0 || pos + blen - 1 > length(body_rest)) { manifest_ok = 0; break }
-            blocks[bi] = substr(body_rest, pos, blen)
-            pos += blen
-            if (bi < declared_n) {
-              if (substr(body_rest, pos, 5) != "\n---\n") { manifest_ok = 0; break }
-              pos += 5
-            }
-          }
-          if (manifest_ok && pos - 1 != length(body_rest)) manifest_ok = 0
-          if (manifest_ok) nb = declared_n
-        }
-      }
-    }
-
-    if (!manifest_ok) {
-    # --- Fallback: the pre-#219 heuristic splitter, kept for a malformed or absent
-    # manifest -- see the comment above, and jit_index_verified() below, for why this
-    # degrading rather than misreading is the correct failure mode.
-    #
-    # A block boundary is "\n---\n" ONLY when it is immediately followed by the start
-    # of the next top-level block -- "# Vocabulary: " or "# JIT Context: " (the fixed
-    # headers jit_refusal_notice()/jit_layers_notice()/jit_config_notice() and the vocab
-    # match loop write). A "---" INSIDE a matched entry is common and not a boundary: an
-    # entry injected in full mode carries its own frontmatter delimiters verbatim, and
-    # splitting blindly on "\n---\n" cut a one-entry match into three pieces the first
-    # time this was driven against a real fixture.
-    #
-    # index()-based scan, not split(FS): one-true-awk 20200816 (macOS) turned a single
-    # control-byte FS into "split on every embedded newline too" the moment the string
-    # being split carried a real newline anywhere in it -- reproduced in isolation, not
-    # reasoned about, and unrelated to whether the FS came from a literal or sprintf(%c).
-    # A manual walk over occurrences has no FS for that engine to reinterpret.
-    rest = ctx
-    nb = 0
-    while (1) {
-      p1 = index(rest, "\n---\n# Vocabulary: ")
-      p2 = index(rest, "\n---\n# JIT Context: ")
-      if (p1 == 0 && p2 == 0) { nb++; blocks[nb] = rest; break }
-      if (p1 == 0) p = p2
-      else if (p2 == 0) p = p1
-      else p = (p1 < p2) ? p1 : p2
-      nb++
-      blocks[nb] = substr(rest, 1, p - 1)
-      rest = substr(rest, p + 5)
-    }
-    }
+    # The manifest-vs-fallback block split is shared with jit-dry-run.sh report_hook()
+    # now (#223) -- jit_split_ctx_blocks() in common.sh (JIT_AWK_BLOCKS), carried over
+    # verbatim from here rather than reimplemented, so the two consumers cannot drift the
+    # way this one drifted out of step with #219 in the first place. It fills jit_blk_n
+    # and jit_blk_body[1..jit_blk_n]; jit_index_verified() below is the second, structural
+    # check this file still runs on top of it -- see its own comment for what it does and
+    # does not close.
+    jit_split_ctx_blocks(ctx)
+    nb = jit_blk_n
     for (b = 1; b <= nb; b++) {
-      body = blocks[b]
+      body = jit_blk_body[b]
       nl = index(body, "\n")
       header = (nl > 0) ? substr(body, 1, nl - 1) : body
       if (header !~ /^# Vocabulary: /) {

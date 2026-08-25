@@ -2114,6 +2114,124 @@ function jit_unescape(s,   n, i, c, nx, o) {
 }
 '
 
+# --- Splitting additionalContext into blocks without trusting its own separator (#219,
+#     #223) -------------------------------------------------------------------------------
+#
+# Two callers walk a hook decoded additionalContext looking for the blocks it joined:
+# jit-match.sh (pre-prompt-hook.sh only, so it only ever sees "# Vocabulary: " headers) and
+# jit-dry-run.sh report_hook() (all three hooks, so it sees "# JIT Context: " too). Both
+# used to search the text for "\n---\n" -- the literal bytes pre-prompt-hook.sh and
+# pre-tool-hook.sh/pre-path-hook.sh join blocks with -- and .claude/jit-context/ is
+# attacker-controlled input (paths/00-manual/hooks.md): an entry whose own body quotes that
+# same five-plus-header-byte sequence verbatim is indistinguishable, by any property of the
+# surrounding text, from a genuine join. #219 closed this for jit-match.sh alone by having
+# it trust a manifest line the hook now prepends -- "# JIT-CTX-BLOCKS <n> <len1> <len2> ...",
+# built entirely from length() over each block own bytes and therefore not forgeable from an
+# entry body -- and walk the rest of the string by BYTE COUNT instead of searching it. #223
+# is jit-dry-run.sh report_hook() carrying the pre-#219 grep, unfixed, so a tricky.md whose
+# body quoted a forged block header was reported as a real match at exit 0.
+#
+# This is that same walk, moved here so a THIRD copy cannot drift the way the second one did.
+# Fills jit_blk_n and jit_blk_body[1..jit_blk_n]; sets jit_blk_manifest_ok to 1 when the
+# manifest verified (every block accounted for, no negative or overrunning length, no
+# trailing bytes after the last one) and 0 when it fell back to the heuristic splitter below
+# -- absent manifest, malformed header, or a length that does not add up. None of that should
+# happen from either hook, which are the only backends either caller ever shells out to, but
+# degrading to the pre-#219 splitter on a malformed manifest is the correct failure mode
+# rather than misreading one (see jit-match.sh own header comment for the fuller argument).
+#
+# The fallback recognises EITHER "# Vocabulary: " or "# JIT Context: " as a block-opening
+# header -- jit-match.sh only ever sees the first, report_hook() sees both -- so one function
+# serves both callers rather than the vocabulary-only shape the original carried.
+#
+# jit_decode_u00() moved here alongside it (from jit-match.sh, where it was the only
+# caller until now) for the same reason: report_hook() needs the identical \u00XX-back-
+# to-byte reversal before it can trust a block header, and a second copy is what let this
+# one drift in the first place. jit_unescape() (above, in JIT_AWK_JSON) never decodes
+# \uXXXX -- it was written for a hook reading a CLIENT-built prompt field, which this
+# codebase own encoders never emit \u for. But pre-prompt-hook.sh, pre-tool-hook.sh and
+# pre-path-hook.sh ARE this codebase own encoders: their jit_json_escape() escapes the
+# whole 0x00-0x1F range (skipping \t \n \r, which get their own two-letter escape) as
+# \u00XX. Left alone, jit_unescape() passes an unrecognised \u escape through as six
+# literal characters -- syntactically harmless, but the original control byte is gone,
+# replaced by visible text that was never in the entry. This reverses PRECISELY the range
+# these hooks can produce and nothing wider: a \uXXXX above 0x1F never comes from any of
+# them, and decoding it here would need a UTF-8 assembly step no awk here is trusted to do.
+# shellcheck disable=SC2034
+JIT_AWK_BLOCKS='
+function jit_decode_u00(s,   out, i, n, c, hx, v) {
+  # No index()-based early-return guard here: a first version tried `index(s, "\u00") ==
+  # 0`, a PLAIN STRING LITERAL with an escape awk itself does not define ("\u" is not one
+  # of \n \t \r \\ \" and the rest) -- exactly the trap this repository already documents
+  # for a REGEX carrying \s \d \w, just relocated into a string constant instead. Measured
+  # on gawk 5.4.1: the guard fired on every call, "no marker found", and the byte was
+  # never restored, silently -- while the identical-looking loop below, whose \\u00 lives
+  # inside an ERE literal rather than a string literal, compiled and matched correctly on
+  # BOTH engines. So there is no guard: the walk below is O(length(s)) either way, and it
+  # is the one thing here proven to agree across engines.
+  out = ""; n = length(s); i = 1
+  while (i <= n) {
+    c = substr(s, i, 1)
+    if (c == "\\" && substr(s, i, 6) ~ /^\\u00[0-9a-fA-F][0-9a-fA-F]$/) {
+      hx = tolower(substr(s, i + 4, 2))
+      v = index("0123456789abcdef", substr(hx, 1, 1)) - 1
+      v = v * 16 + index("0123456789abcdef", substr(hx, 2, 1)) - 1
+      out = out sprintf("%c", v)
+      i += 6
+      continue
+    }
+    out = out c
+    i++
+  }
+  return out
+}
+function jit_split_ctx_blocks(ctx,   nl_pos, header, body_rest, hn, hf, declared_n, pos, bi, blen, rest, p1, p2, p) {
+  jit_blk_n = 0
+  jit_blk_manifest_ok = 0
+  delete jit_blk_body
+  if (substr(ctx, 1, 17) == "# JIT-CTX-BLOCKS ") {
+    nl_pos = index(ctx, "\n")
+    if (nl_pos > 0) {
+      header = substr(ctx, 1, nl_pos - 1)
+      body_rest = substr(ctx, nl_pos + 1)
+      hn = split(header, hf, " ")
+      declared_n = hf[3] + 0
+      if (hn == 3 + declared_n && declared_n >= 0 && hf[1] == "#" && hf[2] == "JIT-CTX-BLOCKS") {
+        jit_blk_manifest_ok = 1
+        pos = 1
+        for (bi = 1; bi <= declared_n; bi++) {
+          blen = hf[3 + bi] + 0
+          if (blen < 0 || pos + blen - 1 > length(body_rest)) { jit_blk_manifest_ok = 0; break }
+          jit_blk_body[bi] = substr(body_rest, pos, blen)
+          pos += blen
+          if (bi < declared_n) {
+            if (substr(body_rest, pos, 5) != "\n---\n") { jit_blk_manifest_ok = 0; break }
+            pos += 5
+          }
+        }
+        if (jit_blk_manifest_ok && pos - 1 != length(body_rest)) jit_blk_manifest_ok = 0
+        if (jit_blk_manifest_ok) jit_blk_n = declared_n
+      }
+    }
+  }
+  if (!jit_blk_manifest_ok) {
+    rest = ctx
+    jit_blk_n = 0
+    while (1) {
+      p1 = index(rest, "\n---\n# Vocabulary: ")
+      p2 = index(rest, "\n---\n# JIT Context: ")
+      if (p1 == 0 && p2 == 0) { jit_blk_n++; jit_blk_body[jit_blk_n] = rest; break }
+      if (p1 == 0) p = p2
+      else if (p2 == 0) p = p1
+      else p = (p1 < p2) ? p1 : p2
+      jit_blk_n++
+      jit_blk_body[jit_blk_n] = substr(rest, 1, p - 1)
+      rest = substr(rest, p + 5)
+    }
+  }
+}
+'
+
 # --- The log LINE is bounded; the information in it is not (#64) --------------
 # Hook log with timing + matches:
 #   _log_hook "pre-tool (Bash)" 42 "tool:git-push.md(git push)" "[shown:1] << git push"

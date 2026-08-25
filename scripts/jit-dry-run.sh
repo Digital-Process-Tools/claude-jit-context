@@ -1215,7 +1215,7 @@ injected_bytes() {
 
 report_hook() {
   # $1 hook script, $2 JSON payload, $3 project dir
-  local out names verdict errf annotated nm nmd seen fired summarised
+  local out names verdict errf annotated nm nmd seen fired summarised decoded refused
   # Phase 2 discarded stderr for the same reason phase 1 did, and lost the same thing with
   # it (#98): the hook that died mid-decision printed an awk diagnostic and no JSON, and
   # this read that as "no rule fired" -- which is indistinguishable from a rule that had
@@ -1251,17 +1251,97 @@ report_hook() {
     SKIPPED_READS=$((SKIPPED_READS + 1))
     out="$(printf '%s' "$2" | CLAUDE_PROJECT_DIR="$3" JIT_SAMPLE_CALL=1 bash "$SCRIPT_DIR/$1" 2>/dev/null)"
   fi
-  # Anchored on .md, because the refusal notice this same hook injects is headed
-  # "# JIT Context: N rule(s) could not be evaluated" — an unanchored read picks up N
-  # and prints it as a rule that fired, which is a non-match reading as a match.
-  names="$(printf '%s' "$out" | grep -o -E '(JIT Context|Vocabulary): [^ ]+\.md' | sed 's/^[^:]*: //' | tr '\n' ' ')"
+  # #223: this used to grep raw hook stdout for "(JIT Context|Vocabulary): X.md" text with
+  # no manifest awareness at all -- and .claude/jit-context/ is attacker-controlled input
+  # (paths/00-manual/hooks.md), so an entry whose own body quoted that header text verbatim
+  # was reported as a real match, at exit 0, indistinguishable from a genuine second entry.
+  # #219 had already closed the same class for jit-match.sh by trusting the hook own
+  # byte-length manifest -- "# JIT-CTX-BLOCKS <n> <len1> <len2> ..." -- instead of searching
+  # for the "\n---\n" separator an entry body can forge; this decodes $out the same way,
+  # through jit_split_ctx_blocks() in common.sh (JIT_AWK_BLOCKS), shared with jit-match.sh
+  # rather than carried as a second copy that could drift out of step with it again.
+  #
+  # jit_index_verified()'s cross-check in jit-match.sh (#216) is NOT ported here. That
+  # function needs a loaded vocabulary index and this hook covers three dimensions across
+  # however many layers a tree defines -- a materially bigger surface than one already-loaded
+  # vocabulary index -- and the manifest split alone closes the forgery class completely
+  # whenever the manifest verifies, which is every call against either shipped hook: a forged
+  # header inside another block own byte range is just bytes at that point, because the
+  # split already knows exactly where that block ends. On the (never-expected-from-either
+  # hook) fallback path this is the same posture jit-match.sh itself carried before #219 --
+  # a pre-existing residual, not a regression this port introduces. Said here, not silently
+  # narrowed, per the brief for #223.
+  #
+  # Anchored on .md and on " (matched:" immediately after it, because the refusal notice
+  # this same hook injects is headed "# JIT Context: N rule(s) could not be evaluated" -- an
+  # unanchored read picks up N and prints it as a rule that fired, which is a non-match
+  # reading as a match. A block whose header does not carry that exact shape is a NOTICE
+  # (a refused-row, refused-layer or refused-config message), not a match.
+  # A `block` decision reports through a DIFFERENT top-level field -- "reason", never
+  # "additionalContext" -- and carries exactly one header (pre-tool-hook.sh/pre-path-
+  # hook.sh build it as `header "\n" body`, never a multi-entry join): the refusing row
+  # own name, then the row own body. It CAN still carry a "\n---\n"-joined tail of
+  # refused-row/layer/config notices after that (block_tail), built from fixed template
+  # text the hook writes itself, never from an entry body -- so, unlike additionalContext,
+  # nothing there needs a manifest: only ONE header can ever be genuine, it is always the
+  # first line, and a forged second one an entry own body might quote lands after it,
+  # where this never looks. Taking the first line is therefore exact, not a narrower
+  # heuristic that happens to work.
+  decoded="$(printf '%s' "$out" | LC_ALL=C awk "$JIT_AWK_JSON$JIT_AWK_BLOCKS"'
+{ input = input $0 }
+END {
+  n = jit_json_fields(input, raw, fs, fe)
+  ctx = ""; rtext = ""
+  for (i = 1; i + 2 <= n; i++) {
+    if (fs[i] != fe[i]) continue
+    key = jit_field(raw, fs[i], fe[i])
+    if (key == "additionalContext" && ctx == "") {
+      ctx = jit_decode_u00(jit_unescape(jit_field(raw, fs[i+2], fe[i+2])))
+    } else if (key == "reason" && rtext == "") {
+      rtext = jit_decode_u00(jit_unescape(jit_field(raw, fs[i+2], fe[i+2])))
+    }
+  }
+  refused = 0
+  if (ctx != "") {
+    jit_split_ctx_blocks(ctx)
+    for (b = 1; b <= jit_blk_n; b++) {
+      body = jit_blk_body[b]
+      nl = index(body, "\n")
+      header = (nl > 0) ? substr(body, 1, nl - 1) : body
+      if (match(header, /^# (JIT Context|Vocabulary): [^ ]+\.md \(matched:/)) {
+        mfile = header
+        sub(/^# (JIT Context|Vocabulary): /, "", mfile)
+        sub(/ \(matched:.*$/, "", mfile)
+        print mfile
+      } else if (index(body, "could not be evaluated") > 0) {
+        refused = 1
+      }
+    }
+  }
+  if (rtext != "") {
+    nl = index(rtext, "\n")
+    rheader = (nl > 0) ? substr(rtext, 1, nl - 1) : rtext
+    if (match(rheader, /^# (JIT Context|Vocabulary): [^ ]+\.md \(matched:/)) {
+      mfile = rheader
+      sub(/^# (JIT Context|Vocabulary): /, "", mfile)
+      sub(/ \(matched:.*$/, "", mfile)
+      print mfile
+    }
+    if (index(rtext, "could not be evaluated") > 0) refused = 1
+  }
+  print "JIT-DRY-REFUSED\t" refused
+}
+'
+)"
+  names="$(printf '%s\n' "$decoded" | grep -v '^JIT-DRY-REFUSED	' | tr '\n' ' ')"
+  refused="$(printf '%s\n' "$decoded" | awk -F'\t' '/^JIT-DRY-REFUSED\t/ { print $2 }')"
   case "$out" in
     *'"decision":"block"'*) verdict="BLOCK  " ;;
     *) verdict="       " ;;
   esac
-  case "$out" in
-    *"could not be evaluated"*) printf '  NOTE   %-20s the hook injected a refusal notice — see the REFUSED rows above\n' "$1" ;;
-  esac
+  if [ "$refused" = "1" ]; then
+    printf '  NOTE   %-20s the hook injected a refusal notice — see the REFUSED rows above\n' "$1"
+  fi
   # A hook that matched nothing must not read as a hook that fired. That confusion is
   # the whole defect this script exists for; do not reintroduce it in its own output.
   #
