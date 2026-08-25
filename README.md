@@ -739,6 +739,7 @@ bash scripts/jit-dry-run.sh                                    # lint every patt
 bash scripts/jit-dry-run.sh --prompt "how do invoice totals work"
 bash scripts/jit-dry-run.sh --tool Bash --command "git push origin main"
 bash scripts/jit-dry-run.sh --file src/Billing/Total.php
+bash scripts/jit-dry-run.sh --tool Agent --agent claude-security:scan
 ```
 
 It prints a verdict per rule and which rule fired for the sample call, and exits **1**

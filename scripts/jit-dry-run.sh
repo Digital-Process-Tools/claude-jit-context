@@ -18,6 +18,7 @@
 #   bash scripts/jit-dry-run.sh [--base DIR] --tool Bash --command "git push origin main"
 #   bash scripts/jit-dry-run.sh [--base DIR] --file src/Billing/Total.php
 #   bash scripts/jit-dry-run.sh [--base DIR] --prompt "how do invoice totals work"
+#   bash scripts/jit-dry-run.sh [--base DIR] --tool Agent --agent claude-security:scan
 #
 # --base defaults to ./.claude/jit-context — the tree you are standing in, deliberately
 # not $CLAUDE_PROJECT_DIR, which is the thing that cannot be tested from here.
@@ -42,12 +43,13 @@ SAMPLE_TOOL=""
 SAMPLE_COMMAND=""
 SAMPLE_FILE=""
 SAMPLE_PROMPT=""
+SAMPLE_AGENT=""
 
 usage() {
   # Through the end of the Exit: block, which is where --help says what a WARN row does
   # to the exit code. A line added above this shifts it and truncates silently, so
   # tests/test-jit-dry-run.sh asserts on the last sentence rather than on the range.
-  sed -n '2,32p' "$0"
+  sed -n '2,33p' "$0"
   exit "${1:-0}"
 }
 
@@ -75,6 +77,7 @@ while [ $# -gt 0 ]; do
     --command) [ $# -ge 2 ] || need_value "$1"; SAMPLE_COMMAND="$2"; shift 2 ;;
     --file)    [ $# -ge 2 ] || need_value "$1"; SAMPLE_FILE="$2"; shift 2 ;;
     --prompt)  [ $# -ge 2 ] || need_value "$1"; SAMPLE_PROMPT="$2"; shift 2 ;;
+    --agent)   [ $# -ge 2 ] || need_value "$1"; SAMPLE_AGENT="$2"; shift 2 ;;
     -h|--help) usage 0 ;;
     *) echo "unknown argument: $1" >&2; usage 2 ;;
   esac
@@ -894,7 +897,7 @@ NODESC=0
 WHOLE_LINES=""
 list_whole() {
   # $1 layer dir, $2 label
-  local dir="$1" label="$2" md name inj eff why size desc pin
+  local dir="$1" label="$2" md name inj raw_inj eff why size desc pin
   [ -d "$dir" ] || return 0
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -906,7 +909,8 @@ list_whole() {
     # was refused, which is a report that argues with itself.
     [ -L "$md" ] && continue
     [ "${JIT_SYMLINKS_ALL:-}" = "1" ] && continue
-    inj="$(jit_frontmatter inject "$md" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    raw_inj="$(jit_frontmatter inject "$md")"
+    inj="$(printf '%s' "$raw_inj" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
     desc="$(jit_frontmatter description "$md")"
     why=""
     # `pin` mirrors jit_entry_load() in common.sh: the mode was decided by the ENTRY, not
@@ -947,18 +951,24 @@ list_whole() {
         # how #134 got broken.
         #
         # The VALUE is tree text: `.claude/jit-context/` arrives with the clone, so it goes
-        # through the one name policy (#124, #113, #35) rather than being echoed raw. It is
-        # the normalised value -- lowercased with whitespace removed, which is what the
-        # comparison above used -- so the row says so. It is printed at the END of its line
-        # for the same reason the pattern rows print their pattern last: nothing this tool
-        # says in its own voice follows attacker-chosen text on the same line.
+        # through the one name policy (#124, #113, #35) rather than being echoed raw. #160:
+        # it goes through that policy on the RAW frontmatter value, never the normalised
+        # one. The normalised value ($inj) exists only to compare against full/summary --
+        # lowercased, whitespace deleted -- and handing THAT to the guard instead of the
+        # author's own text let normalisation shrink an over-length or space-carrying
+        # value into something under jit_report_name()'s 64-byte, no-space shape before
+        # the guard ever saw it, which is backwards: every other site in this file guards
+        # the value as written and only jit_report_name() decides what a reader gets. It
+        # is printed at the END of its line for the same reason the pattern rows print
+        # their pattern last: nothing this tool says in its own voice follows
+        # attacker-chosen text on the same line.
         BADMODE=$((BADMODE + 1))
         printf 'ADVISORY %-18s %-30s inject: value not recognised, so the project default applied\n' \
           "$label" "$(jit_report_name "$name")"
         # Continuation carries no name, like check_bare_truncation's: a claim split across
         # two rows would otherwise be read with a rule file name in the middle of it (#52).
         printf '         %-18s %-30s it arrives as %s -- spell it inject: full or inject: summary; value read: %s\n' \
-          "" "" "$eff" "$(jit_report_name "$inj")"
+          "" "" "$eff" "$(jit_report_name "$raw_inj")"
       fi
       [ -z "$why" ] && why="the project default"
     fi
@@ -1288,7 +1298,7 @@ report_hook() {
   fi
 }
 
-if [ -n "$SAMPLE_TOOL$SAMPLE_COMMAND$SAMPLE_FILE$SAMPLE_PROMPT" ]; then
+if [ -n "$SAMPLE_TOOL$SAMPLE_COMMAND$SAMPLE_FILE$SAMPLE_PROMPT$SAMPLE_AGENT" ]; then
   echo ""
   case "$BASE" in
     */.claude/jit-context)
@@ -1311,8 +1321,17 @@ if [ -n "$SAMPLE_TOOL$SAMPLE_COMMAND$SAMPLE_FILE$SAMPLE_PROMPT" ]; then
         report_hook pre-tool-hook.sh "$payload" "$PROJECT"
         report_hook pre-path-hook.sh "$payload" "$PROJECT"
       fi
-      if [ -n "$SAMPLE_TOOL" ] && [ -z "$SAMPLE_COMMAND$SAMPLE_FILE$SAMPLE_PROMPT" ]; then
-        echo "  SKIPPED: --tool needs a target. Add --command or --file."
+      # #187. An Agent dispatch carries subagent_type, and pre-tool-hook.sh reads that
+      # key as its subject when tool_name is Agent (#182). It is routed to pre-tool-hook.sh
+      # ONLY: pre-path-hook.sh matches file_path or a Bash command, neither of which an
+      # Agent dispatch carries, so calling it here would print nothing but a "no rule
+      # fired" line that names no absence this sample ever had.
+      if [ -n "$SAMPLE_AGENT" ]; then
+        payload="{\"tool_name\":\"${SAMPLE_TOOL:-Agent}\",\"tool_input\":{\"subagent_type\":\"$(json_quote "$SAMPLE_AGENT")\"}}"
+        report_hook pre-tool-hook.sh "$payload" "$PROJECT"
+      fi
+      if [ -n "$SAMPLE_TOOL" ] && [ -z "$SAMPLE_COMMAND$SAMPLE_FILE$SAMPLE_PROMPT$SAMPLE_AGENT" ]; then
+        echo "  SKIPPED: --tool needs a target. Add --command, --file or --agent."
       fi
       ;;
     *)
