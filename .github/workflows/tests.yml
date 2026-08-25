@@ -40,7 +40,15 @@ jobs:
       - name: Let the checkout carry symbolic links (Windows)
         if: runner.os == 'Windows'
         run: git config --global core.symlinks true
+      # fetch-depth: 0 (full history), not the default shallow depth-1 clone -- #212's A2
+      # control resolves "pre-fix" by walking scripts/rebuild-tsv.sh's own git history for
+      # the commit that introduced the fix (git log -S), then takes that commit's parent.
+      # A depth-1 checkout has no history to walk: git log -S can only see the commit it
+      # already has, A2 falls through to its NOT_EVALUATED branch on every run, and the
+      # control this suite exists to prove is red never actually evaluates in CI at all.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Show interpreter versions
         run: |
           bash --version | head -1

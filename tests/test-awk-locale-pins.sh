@@ -182,9 +182,11 @@ if [ -n "${PRE_FIX_REF:-}" ] \
   fi
 else
   NOT_EVALUATED="$NOT_EVALUATED
-  - A2: could not resolve a pre-fix ref (no merge-base against origin/main and no HEAD~1)
-    or could not read scripts/rebuild-tsv.sh / scripts/common.sh from it via git show --
-    the red/pre-fix comparison could not run"
+  - A2: could not resolve a pre-fix ref -- scripts/rebuild-tsv.sh's own history carries no
+    commit introducing \"$FIX_MARKER\" (a shallow clone is the ordinary cause: git log -S
+    can only see commits the clone actually fetched), or that commit's parent could not be
+    resolved, or scripts/rebuild-tsv.sh / scripts/common.sh could not be read from it via
+    git show -- the red/pre-fix comparison could not run"
 fi
 
 # =============================================================================
