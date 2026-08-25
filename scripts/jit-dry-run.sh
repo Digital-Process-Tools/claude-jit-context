@@ -597,7 +597,7 @@ check_index_current() {
   # newline. That is the forgery half of #124: `forged<NL>REFUSED  paths/00-manual ...`
   # printed its tail on its own line, in the voice of this tool. jit_report_name() closes
   # it, and the STALE row keeps its layer, which is what an author `ls` next.
-  local dir="$1" dim="$2" label="$3" md name disp want tool mode require forbid row
+  local dir="$1" dim="$2" label="$3" md name disp want tool mode require forbid requires row
   [ -d "$dir" ] || return 0
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -613,10 +613,17 @@ check_index_current() {
       mode="$(jit_frontmatter mode "$md")"
       require="$(jit_frontmatter require "$md")"
       forbid="$(jit_frontmatter forbid "$md")"
+      # (#203) The same normalisation build_tool_tsv() applies, or a requires: value
+      # carrying a stray tab or newline would make this comparison find drift that is
+      # not there -- the rebuilt row and the committed one would both be "wrong" and
+      # agree with neither.
+      requires="$(jit_frontmatter requires "$md")"
+      requires="${requires//$'\t'/ }"
+      requires="${requires//$'\n'/ }"
     fi
     want="$(jit_expand_match "$want" "$dim" "$label/$name" 2>/dev/null)"
     if [ "$dim" = tools ]; then
-      row="$(printf '%s\t%s\t%s\t%s\t%s\t%s' "$tool" "$want" "$name" "${mode:-remind}" "$require" "$forbid")"
+      row="$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s' "$tool" "$want" "$name" "${mode:-remind}" "$require" "$forbid" "$requires")"
     else
       row="$(printf '%s\t%s' "$want" "$name")"
     fi

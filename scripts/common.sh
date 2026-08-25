@@ -1797,7 +1797,38 @@ function jit_badmode_note(e) {
 # and not from this, and an entry that can refuse reads its body whatever the mode says, so
 # a bad inject: changes nothing there to report.
 function jit_inject_text(e, rel,   out) {
-  if (e["mode"] == "full") return e["body"] jit_badmode_note(e)
+  if (e["mode"] == "full") {
+    # A file with NO frontmatter is pinned to full (see jit_entry_load() above), and
+    # body is then the WHOLE FILE. A file of nothing but blank lines reads back as "\n"
+    # or "\n\n", which is not "" -- so the guard the caller applies on the RETURN of this
+    # function (content != "") passed it through, and an advisory rule with nothing to
+    # say injected a header with nothing under it (#170). The comment beside that guard
+    # already states its intent -- content == "" is what keeps an advisory rule with
+    # nothing to say silent -- and this is that same intent, widened from the empty
+    # string to whitespace, the same distinction #135 drew for the refusal substitute.
+    #
+    # REPORTED here, not silenced: going silent would make this indistinguishable from a
+    # row that never matched at all, which is the defect class this whole project exists
+    # to name (#170s own argument). It would also undo #165 one call site up, whose
+    # header-bound test still expects a header for exactly this fixture -- silencing the
+    # body would silence the header too, since the callers guard is on this return
+    # value. Reporting keeps #165s decision intact and only fixes what #170 is about:
+    # what is UNDER the header.
+    #
+    # Frontmatter, when present, is never whitespace-only (a title: or description:
+    # line is not blank), so this can only fire for the no-frontmatter case #165 already
+    # names -- an entry WITH frontmatter and a blank body still returns that body, however
+    # short, because its author wrote something under the closing --- on purpose.
+    # NON-empty whitespace, not empty. A truly empty file (one blank line, which reads
+    # back as the empty string -- see jit_entry_load() above) already returns "" through
+    # the line below, and the callers own guard (content != "") already keeps THAT case
+    # silent, which is tested and deliberate (SECTION 8 of test-inject-mode.sh, "an
+    # advisory rule with nothing to say injects nothing"). Matching the empty string here
+    # too would report on a file that already behaved correctly, and is not what #170 is
+    # about.
+    if (e["body"] != "" && e["body"] ~ /^[[:space:]]*$/) return "[jit] The entry file has no text to inject." jit_badmode_note(e)
+    return e["body"] jit_badmode_note(e)
+  }
   out = ""
   if (e["title"] != "") out = jit_clip(e["title"], 160)
   if (e["desc"] != "") out = out (out == "" ? "" : "\n") jit_clip(e["desc"], 400)
@@ -2399,4 +2430,82 @@ jit_report_keyword() {
   while [ "$rest" != "${rest#* }" ]; do rest="${rest#* }"; n=$((n + 1)); done
   [ "$n" -gt 4 ] && { printf '%s' "$JIT_KEYWORD_WITHHELD"; return 0; }
   printf '%s' "$s"
+}
+
+# --- requires: presence probe (#203) -------------------------------------------
+# A tools rule can carry `requires: <binary>` in its frontmatter, naming a binary its OWN
+# remedy depends on -- `mode: block` naming supertool, unconditionally, with no way to say
+# "and if supertool is not installed" is the case that was filed. A rule that fires for a
+# user with no route to comply is not a guard, it is an outage with an explanation
+# attached.
+#
+# This has to run in BASH, before the awk process starts, and cannot be pushed down into
+# the row loop that reads everything else off the index: grep this file for `system(` and
+# find nothing, on purpose, everywhere -- every awk program here parses untrusted JSON and
+# untrusted index text, and a program that can exec is a program that can be made to exec
+# something else. So the answer is computed once, out here, and handed to the row loop as
+# one more -v value beside the ones it already reads off an untrusted TSV.
+#
+# `command -v`, not a hand-rolled PATH walk: a POSIX shell builtin already used elsewhere
+# in this tree (jit-dry-run.sh, several test suites), so this introduces no new runtime
+# dependency and starts no new external process per lookup.
+#
+# DEDUPED, not probed once per row. A tree can carry many rules naming the same binary and
+# the probe count must not grow with the rule count -- only with the number of DISTINCT
+# binaries named. The caller only tests set membership, never position, so a "have we
+# already asked this one" guard is enough and needs no sort.
+#
+# Reads the SAME committed index files the row loop below reads through getline, one bash
+# pass ahead of the one awk pass -- both are the tree as committed, so nothing this probe
+# sees is a byte the row loop will not also see. A row with fewer than seven columns
+# yields an empty 7th field on its own, which is exactly the "no requires: on this row"
+# case and needs no extra handling.
+#
+# `awk -F` with a tab, deliberately, and NOT `read` with IFS set to a literal tab. Driven, not
+# reasoned: bash `read` treats tab as an IFS WHITESPACE character regardless of what IFS
+# is actually set to, which means it COLLAPSES adjacent delimiters exactly the way
+# unquoted word-splitting on the default IFS does -- `a\tb\t\t\tc` read into four
+# variables lands `c` in the SECOND one, not the fourth, because the three consecutive
+# tabs between `b` and `c` are folded into one separator. This is not a bash-3.2 bug, it
+# is documented POSIX `read` behaviour for space, tab and newline specifically, and it is
+# invisible on a two- or three-column fixture where every field happens to be non-empty --
+# which is exactly why the first version of this function passed its own ad hoc check and
+# still misread a 7-column tools row with two empty columns before requires:, taking
+# "absentbin" for r_require instead of r_requires and reporting no missing binary at all.
+# `awk -F` treats the delimiter literally and never collapses a run of it, which a
+# comma-or-pipe-separated field would not have exposed either -- tab is the one delimiter
+# this shell cannot be trusted to split on the naive way. `NF >= 7` guards a row with
+# fewer than seven columns: awk prints an empty $7 for one of those anyway, but the guard
+# says so rather than leaning on that as an accident of how awk handles a field past NF.
+# `LC_ALL=C`, the same pin every other awk invocation in this file carries and for the
+# same reason (#68, #195): this reads bytes out of a committed index, not characters.
+#
+# awk, not `cut -f7`: cut would work here too, but it is a tool this tree has never
+# needed before, where awk is already the one dependency every hook in scripts/ already
+# requires. Reaching for a second external splitter to answer the same question the one
+# already on the machine can answer is the wrong new dependency to add.
+#
+# ONE awk process per file, not one per row: it walks every line of the tsv in a single
+# pass and this loop only reads its stdout back, so the process count here does not
+# grow with the row count of a layer, only with the number of layers.
+#
+# `--`, not a bare name, on the presence check: a requires: value is free text out of a
+# committed file, and a value starting with a hyphen must not be read as an OPTION to the
+# `command` builtin itself.
+jit_missing_requires() {
+  # $1 tools dimension base directory, $2 space-separated layer names (JIT_TOOL_LAYERS)
+  local base="$1" layers="$2" layer tsv bin seen=" " missing=" "
+  local LC_ALL=C
+  for layer in $layers; do
+    tsv="$base/$layer/00-index.tsv"
+    [ -f "$tsv" ] || continue
+    while IFS= read -r bin; do
+      [ -z "$bin" ] && continue
+      case "$seen" in *" $bin "*) continue ;; esac
+      seen="$seen$bin "
+      command -v -- "$bin" >/dev/null 2>&1 && continue
+      missing="$missing$bin "
+    done < <(LC_ALL=C awk -F "$(printf '\t')" '{ print (NF >= 7) ? $7 : "" }' "$tsv")
+  done
+  printf '%s' "$missing"
 }

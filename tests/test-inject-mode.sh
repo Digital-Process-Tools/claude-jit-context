@@ -634,13 +634,18 @@ assert_blocked  "the requirement is absent, so the call is refused" "$OUT"
 assert_contains "and the refusal names the requirement" "$OUT" "Missing required: --safe"
 assert_contains "with the substitute where the body would be" "$OUT" "was not delivered"
 
-# The other direction on that row: satisfy the requirement and it must not refuse. Asserted
-# as "the rule fired and did not block" rather than as silence, because a whitespace-only
-# body is not empty and the advisory branch still injects it -- which is pre-existing
-# behaviour of an advisory rule and not what this change is about.
+# The other direction on that row: satisfy the requirement and it must not refuse. A
+# whitespace-only body is not the empty string, so the advisory branch still injects a
+# header -- and until #170, nothing under it: content != "" was the only guard, and a
+# file of blank lines reads back as "\n", which passes that test. #135 drew this exact
+# distinction seventy lines up for the refusal substitute and it was never applied here.
+# This is the retirement of the "pre-existing behaviour ... not what this change is
+# about" scoping a prior lane wrote at #165 -- deliberately, per #170s own framing.
 OUT=$(run_tool "git haul the thing --safe")
 assert_contains     "control: the same row still fires when satisfied" "$OUT" "JIT Context: wsrequire.md"
 assert_not_contains "and does not refuse"                              "$OUT" '"decision":"block"'
+assert_contains     "and says the entry has no text, rather than a bare header (#170)" \
+                    "$OUT" "has no text to inject"
 
 # =============================================
 # SECTION 9: the pull is observable
@@ -993,6 +998,11 @@ assert_contains     "and the head of the pattern identifies it" \
                     "$OUT" "matched: ~git shunt|LONGPATSTART"
 assert_contains     "and the header says it was cut"          "$OUT" "[clipped]"
 assert_not_contains "the rest of the pattern does not arrive" "$OUT" "LONGPATEND"
+# The same fixture is #170s: a bare header with nothing under it, because content is
+# "\n\n" rather than "". Paired with the wsrequire.md leg in SECTION 8 so the report is
+# not tied to one call site of the guard.
+assert_contains     "and what IS under the header says the entry is empty (#170)" \
+                    "$OUT" "has no text to inject"
 
 # The control that makes the four above mean anything, and the only one that isolates the
 # BODY as the cause: the same row, the same command, the same 60,000-byte pattern, with

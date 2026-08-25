@@ -66,6 +66,12 @@ JIT_TOOL_LAYERS="$JIT_LAYERS"
 jit_scan_layers "$JIT_BASE/vocabulary" vocabulary
 JIT_VOCAB_LAYERS="$JIT_LAYERS"
 
+# #203: computed once, in bash, before the row loop below ever opens a tools index --
+# see jit_missing_requires() in common.sh for why this cannot be an awk-side check.
+# Space-padded on both ends so the row loop can test membership with a plain index()
+# call, the same shape jit_layers_notice()'s caller already uses for a bash-built list.
+JIT_MISSING_REQUIRES="$(jit_missing_requires "$JIT_BASE/tools" "$JIT_TOOL_LAYERS")"
+
 cat | LC_ALL=C awk \
   -v tool_layers="$JIT_TOOL_LAYERS" \
   -v vocab_layers="$JIT_VOCAB_LAYERS" \
@@ -76,6 +82,7 @@ cat | LC_ALL=C awk \
   -v home="$HOME" \
   -v project="${CLAUDE_PROJECT_DIR:-.}" \
   -v log_tmp="$JIT_TMP" \
+  -v missing_bins="$JIT_MISSING_REQUIRES" \
   "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
@@ -335,7 +342,7 @@ END {
 
       split(tline, tf, "\t")
       r_tool = tf[1]; r_match = tf[2]; r_file = tf[3]
-      r_modes = tf[4]; r_require = tf[5]; r_forbid = tf[6]
+      r_modes = tf[4]; r_require = tf[5]; r_forbid = tf[6]; r_requires = tf[7]
 
       # Containment first: r_file is concatenated onto tools_dir below, and a row of
       # ../../../x made this hook read that file and inject it. jit_bad_entry_file lives in
@@ -348,7 +355,26 @@ END {
       # it is settled before the entry file is named, let alone opened. Three later decisions
       # turn on it: whether `once` may suppress the row (#139), whether an unreadable file
       # name still costs the call (#140), and whether the body is worth reading at all.
-      can_refuse = (index(r_modes, "block") > 0 || r_require != "" || r_forbid != "")
+      #
+      # would_refuse is that same test with NOTHING taken off it yet -- what this row asks
+      # for before #203 is asked whether it can actually have it. missing_bins is built in
+      # BASH, once, before this awk process starts (see jit_missing_requires() in common.sh
+      # for why): a space-padded list of every requires: value this tools tree names that
+      # did not resolve on PATH at fire time. requires_missing is a property of the ROW,
+      # not of the call -- it does not depend on r_match, so it is settled here beside
+      # would_refuse rather than re-derived at each of the three refusal sites below.
+      #
+      # A rule with no requires: column reads "" here, index(missing_bins, " " "" " ") is
+      # always > 0 on a non-empty missing_bins (the empty string is a substring of
+      # anything), so the r_requires != "" guard is load-bearing and not decoration: an
+      # ORDINARY block rule -- nothing already written asks for a requires: column at all
+      # -- must keep blocking whether or not this tree happens to carry OTHER rows naming
+      # an absent binary. #203s own scope note -- "not a request to stop blocking where
+      # supertool IS installed" -- generalised to every rule that never asked to be
+      # conditional in the first place.
+      requires_missing = (r_requires != "" && index(missing_bins, " " r_requires " ") > 0)
+      would_refuse = (index(r_modes, "block") > 0 || r_require != "" || r_forbid != "")
+      can_refuse = would_refuse && !requires_missing
 
       # The row itself. The match column is echoed back in the (matched: ...) header and the
       # require and forbid columns are echoed in a block reason, so a byte the JSON string
@@ -642,8 +668,29 @@ END {
         key = ""
       }
 
-      # Check require
-      if (r_require != "") {
+      # A row that WOULD refuse but may not, because the binary its requires: column
+      # names is not on PATH, says so out loud (#203) -- "a check that cannot be
+      # satisfied must say so and degrade" is the sentence #203 itself settles on, and a
+      # degrade nobody is told about is this repositorys own defect class with the sign
+      # flipped: a rule that reads as enforced in the tree and is not, on this machine.
+      #
+      # would_refuse, not can_refuse: can_refuse is already false on this path -- it is
+      # would_refuse && !requires_missing, computed where r_modes was first read -- so
+      # testing it here would never fire. requires_missing alone is not enough either: a
+      # `remind` row may carry requires: for reasons of its own that have nothing to do
+      # with refusing, and #203 is about a check that stops ENFORCING, not about naming a
+      # dependency on an ordinary advisory row that was never going to block anything.
+      if (requires_missing && would_refuse) {
+        degrade_note = "[jit] This rule would normally refuse this call, but `" r_requires "` was not found on PATH, so it has degraded to advisory instead of blocking. Install `" r_requires "` to restore enforcement."
+        content = (content == "") ? degrade_note : degrade_note "\n" content
+      }
+
+      # Check require. Gated on !requires_missing (#203): a require: refusal whose whole
+      # point is a binary that is not on PATH is a remedy the reader cannot perform, and
+      # this row degraded to advisory back where can_refuse was computed -- this branch
+      # must agree with that, or a `mode: remind, require: --safe, requires: absentbin`
+      # row would still refuse here despite can_refuse already having said it may not.
+      if (r_require != "" && !requires_missing) {
         nr = split(r_require, reqs, "|")
         for (ri = 1; ri <= nr; ri++) {
           # Folded on both sides (#76): `require: validé` must be satisfied by `VALIDÉ`.
@@ -664,8 +711,8 @@ END {
         if (blocked != "") break
       }
 
-      # Check forbid
-      if (r_forbid != "" && blocked == "") {
+      # Check forbid. Gated on !requires_missing, same reasoning as require above (#203).
+      if (r_forbid != "" && blocked == "" && !requires_missing) {
         nfb = split(r_forbid, forbs, "|")
         for (fi = 1; fi <= nfb; fi++) {
           # Folded on both sides (#76). This is the half that failed OPEN: `forbid:
@@ -692,7 +739,12 @@ END {
       #
       # `body` can no longer be blank here: it is the entry text, the substitute for a body
       # that could not be read, or the substitute for a file with nothing but whitespace in it.
-      if (index(r_modes, "block") > 0 && blocked == "") {
+      #
+      # Gated on !requires_missing (#203), same as require and forbid above: a `mode:
+      # block` row naming a `requires:` binary that is not on PATH cannot enforce its own
+      # remedy, so it falls through to the advisory branch below, which is where the
+      # degrade is actually said out loud -- see degrade_note.
+      if (index(r_modes, "block") > 0 && !requires_missing && blocked == "") {
         log_matches = log_matches sep "tool:" r_logname "(" r_match ")[full:block]"
         sep = ", "
         # Marks nothing (#139). This was the line that disarmed `mode: once, block`: the
@@ -785,7 +837,16 @@ END {
         #
         # ent[] is safe to read here: the only branch that leaves it stale is file_why != "",
         # which keeps `content` empty and therefore never reaches this line.
-        if (ent["mode"] == "full" && why == "" && content !~ /^[[:space:]]*$/) adv_header = header
+        #
+        # `body`, not `content` (#170). jit_inject_text() no longer returns a whitespace-
+        # only full body as-is -- it substitutes a report line, "the entry file has no
+        # text to inject", so that an advisory rule with nothing to say no longer prints a
+        # bare header with nothing under it. That substitute is NOT whitespace, so testing
+        # `content` here would now read a report-only row as a row whose body was
+        # genuinely delivered and hand it the unbounded header #165 built this exemption
+        # to withhold. `body` is the raw entry text this row actually holds, read two
+        # branches up, and is exactly what #165s comment already reasons about.
+        if (ent["mode"] == "full" && why == "" && body !~ /^[[:space:]]*$/) adv_header = header
         else adv_header = "# JIT Context: " jit_clip(r_header_name, 255) " (matched: " jit_clip(r_match, 160) ")"
 
         if (matched != "") matched = matched "\n---\n" adv_header "\n" content

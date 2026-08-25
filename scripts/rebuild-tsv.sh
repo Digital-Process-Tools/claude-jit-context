@@ -252,7 +252,7 @@ truncate_index() {
 }
 
 # --- Tool rules: parse frontmatter from .md files ---
-# Extracts tool, match, mode, require, forbid from YAML frontmatter
+# Extracts tool, match, mode, require, forbid, requires from YAML frontmatter
 build_tool_tsv() {
   local dir="$1"
   local tsv="$2"
@@ -270,12 +270,20 @@ build_tool_tsv() {
     [ "$filename" = "00-README.md" ] && continue
 
     # Parse frontmatter fields
-    local tool match mode require forbid
+    local tool match mode require forbid requires
     tool=$(jit_frontmatter tool "$md")
     match=$(jit_frontmatter match "$md")
     mode=$(jit_frontmatter mode "$md")
     require=$(jit_frontmatter require "$md")
     forbid=$(jit_frontmatter forbid "$md")
+    # (#203) The binary a mode: block / require: / forbid: rule depends on for its OWN
+    # remedy. A single bare name, never a list -- one binary is the case #203 was filed
+    # about, and a list opens a policy question (all of them? any of them?) nothing has
+    # asked for yet. Read here so a stray trailing tab or newline in the value cannot
+    # widen the row past the 7th TSV column pre-tool-hook.sh reads it back as.
+    requires=$(jit_frontmatter requires "$md")
+    requires="${requires//$'\t'/ }"
+    requires="${requires//$'\n'/ }"
 
     if [ -z "$tool" ] || [ -z "$match" ]; then
       # Not `[ -z x ] || [ -z y ] && continue`: that is one AND-OR list evaluated left to
@@ -297,7 +305,7 @@ build_tool_tsv() {
     # writing the row through -- see common.sh for why the row is not dropped.
     match=$(jit_expand_match "$match" tools "$label/$(jit_report_name "$filename")") || jit_rc 1
 
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$tool" "$match" "$filename" "${mode:-remind}" "$require" "$forbid" >> "$tsv"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$tool" "$match" "$filename" "${mode:-remind}" "$require" "$forbid" "$requires" >> "$tsv"
   done
 
   COUNT=$(wc -l < "$tsv" | tr -d ' ')

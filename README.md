@@ -346,13 +346,14 @@ forbid: --coverage-html
 Coverage runs take 8 minutes locally and are produced by CI anyway.
 ```
 
-| Field     | Required | Meaning                                                           |
-| --------- | -------- | ----------------------------------------------------------------- |
-| `tool`    | yes      | Tool name: `Bash`, `Read`, `Edit`, `Skill`, `Agent`, … — pipe-separated for several, and see [which tools a rule can name](#which-tools-a-rule-can-name) |
-| `match`   | yes      | Substring, a regex when prefixed with `~`, or an [invocation macro](#anchoring-on-an-invocation) |
-| `mode`    | no       | `remind` (default), `block`, `once` — comma-separated, composable |
-| `require` | no       | Pipe-separated strings that MUST appear, else the call is blocked |
-| `forbid`  | no       | Pipe-separated strings that must NOT appear, else blocked         |
+| Field       | Required | Meaning                                                           |
+| ----------- | -------- | ----------------------------------------------------------------- |
+| `tool`      | yes      | Tool name: `Bash`, `Read`, `Edit`, `Skill`, `Agent`, … — pipe-separated for several, and see [which tools a rule can name](#which-tools-a-rule-can-name) |
+| `match`     | yes      | Substring, a regex when prefixed with `~`, or an [invocation macro](#anchoring-on-an-invocation) |
+| `mode`      | no       | `remind` (default), `block`, `once` — comma-separated, composable |
+| `require`   | no       | Pipe-separated strings that MUST appear, else the call is blocked |
+| `forbid`    | no       | Pipe-separated strings that must NOT appear, else blocked         |
+| `requires`  | no       | A single binary name this rule cannot enforce without — see [When the rule itself depends on a binary](#when-the-rule-itself-depends-on-a-binary) |
 
 | Mode     | Effect                                                  |
 | -------- | ------------------------------------------------------- |
@@ -367,6 +368,36 @@ That holds for the entry **file name** too, which was the remaining hole (#140).
 **`once` bounds the injection, never the refusal.** `mode: once, block` refuses **every** matching call of the session, not the first one (#139). The two words are still composable and still mean what they say separately — the entry text is injected at most once, and the call is stopped every time — because an injection is knowledge the agent now has and repeating it is waste, while a refusal is a decision, and a decision that expires was never enforced. The same holds for a `once` rule carrying `require` or `forbid`.
 
 `mode` and `inject` are different axes and it is worth not confusing them: `mode` decides *what the hook does* — remind, refuse, once — and `inject` decides *how much of the entry comes with it*.
+
+### When the rule itself depends on a binary
+
+`mode: block` (and `require:`/`forbid:`) is unconditional by default: it fires whether or not the tool the entry is *about* is installed. That is correct for most rules — a rule about `git` names something the reader can always fix — and wrong for exactly one shape: a rule whose own remedy is a specific binary that this machine might not have. A `block` rule that tells the reader to run a tool that does not resolve on `PATH` is not a guard, it is an outage with an explanation attached (#203).
+
+`requires:` names that binary:
+
+```markdown
+---
+tool: Read|Edit|Write
+match: ~.*
+mode: block
+requires: supertool
+---
+```
+
+Probed with `command -v` **in bash, before the hook's one awk process starts** — the awk half of every hook here never shells out, on purpose, so the presence check cannot live inside the row loop that reads everything else off the index. When the named binary is not on `PATH`, `mode: block` (and a `require:`/`forbid:` refusal on the same row) **degrades to advisory**: the call goes through, and the injected text says which binary was missing and that the rule normally refuses:
+
+```text
+# JIT Context: supertool-required.md (matched: ~.*)
+[jit] This rule would normally refuse this call, but `supertool` was not found on PATH,
+so it has degraded to advisory instead of blocking. Install `supertool` to restore
+enforcement.
+```
+
+Three things worth being exact about:
+
+- **A rule with no `requires:` is unaffected**, whether or not this session's tree names some *other* binary that is missing. `requires:` is opt-in per row, not a global switch.
+- **An ordinary `remind` row naming `requires:` is unaffected too.** The degrade is about a check that stops *enforcing* — a row that was never going to block anything has nothing to degrade, and fires exactly as it always did, with the entry text and no mention of a binary.
+- **This is one binary, never a list.** `requires: a|b` is read as the single literal string `a|b`, which is not what an author who wrote it meant — a list opens a policy question ("all of them? any of them?") this field does not answer.
 
 ### What a tool rule is tested against
 
