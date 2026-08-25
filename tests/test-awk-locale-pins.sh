@@ -141,12 +141,22 @@ ORIG_REBUILD="$WORK/rebuild-tsv.orig.sh"
 # NOT `HEAD` -- this test file is committed in the SAME commit as the fix it is meant to
 # prove red against, so `HEAD:scripts/rebuild-tsv.sh` is the FIXED file on every run after
 # that commit lands, and this section would silently stop proving anything while still
-# reporting PASS/FAIL as if it did. The commit this branch forked from is what "pre-fix"
-# actually means, found the same way a merge would resolve it: the merge-base against the
-# remote default branch, falling back to the parent commit only when that ref is not
-# available at all (a shallow clone, no "origin" remote).
-PRE_FIX_REF=$(git -C "$SCRIPT_DIR" merge-base HEAD origin/main 2>/dev/null) \
-  || PRE_FIX_REF=$(git -C "$SCRIPT_DIR" rev-parse HEAD~1 2>/dev/null)
+# reporting PASS/FAIL as if it did. NOT `merge-base HEAD origin/main` either (#212): that
+# resolves to HEAD once this branch's fix commit IS origin/main's tip -- true the moment it
+# merges -- so the "pre-fix" tree it loads is actually the fixed one, and the control passes
+# on a branch and silently proves nothing once run on main itself.
+#
+# "Pre-fix" instead means: walk this file's own history (independent of which branch HEAD
+# sits on) for the commit that introduced a string only the fix writes, then take THAT
+# commit's parent. This is correct on a branch forked before the fix, on a branch forked
+# after it, and on main once the fix has landed there too, because the fix commit is found
+# by what it changed rather than by where it sits relative to a moving remote ref.
+FIX_MARKER='the index is not this run'
+FIX_COMMIT=$(git -C "$SCRIPT_DIR" log -1 --format=%H -S"$FIX_MARKER" -- scripts/rebuild-tsv.sh 2>/dev/null)
+PRE_FIX_REF=""
+if [ -n "$FIX_COMMIT" ]; then
+  PRE_FIX_REF=$(git -C "$SCRIPT_DIR" rev-parse "${FIX_COMMIT}~1" 2>/dev/null)
+fi
 if [ -n "${PRE_FIX_REF:-}" ] \
    && git -C "$SCRIPT_DIR" show "$PRE_FIX_REF:scripts/rebuild-tsv.sh" > "$ORIG_REBUILD" 2>/dev/null \
    && git -C "$SCRIPT_DIR" show "$PRE_FIX_REF:scripts/common.sh" > "$WORK/common.orig.sh" 2>/dev/null; then
