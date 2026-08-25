@@ -6,7 +6,7 @@
 # `while [ $# -gt 0 ]` spins forever. Driven at e800067:
 #
 #   timeout 5 bash scripts/jit-init.sh --base     -> exit 124, 0 bytes out, 0 bytes err
-#   timeout 4 bash scripts/jit-dry-run.sh --base  -> exit 124   (also --tool/--command/--prompt)
+#   timeout 4 bash scripts/jit-dry-run.sh --base  -> exit 124   (also --tool/--command/--prompt/--agent)
 #   timeout 4 bash scripts/jit-dry-run.sh --path  -> exit 2     (an UNKNOWN flag is fine)
 #
 # That contrast is the whole finding: the loud path was already right, and the quiet one
@@ -259,6 +259,7 @@ positive_argv() {
         --command) printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--command" "git status" ;;
         --file)    printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--file" "src/Billing/Total.php" ;;
         --prompt)  printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--prompt" "how do totals work" ;;
+        --agent)   printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--agent" "explore" ;;
       esac ;;
     jit-misses.sh)
       case "$2" in
