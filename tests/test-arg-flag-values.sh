@@ -271,6 +271,13 @@ positive_argv() {
       case "$2" in
         --base) printf '%s\n%s\n' "--base" "$TREE" ;;
       esac ;;
+    jit-match.sh)
+      case "$2" in
+        --base)   printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--text" "anything" ;;
+        --text)   printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--text" "anything" ;;
+        --format) printf '%s\n%s\n%s\n%s\n%s\n%s\n' "--base" "$TREE" "--text" "anything" "--format" "json" ;;
+        --limit)  printf '%s\n%s\n%s\n%s\n%s\n%s\n' "--base" "$TREE" "--text" "anything" "--limit" "3" ;;
+      esac ;;
   esac
 }
 
