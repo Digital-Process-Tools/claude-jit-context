@@ -696,9 +696,13 @@ out=$(
         b = 0; first = 1
         while ((rc = (getline line < path)) > 0) { b += length(line) + 1; first = 0 }
         close(path)
-        # A row naming a file this run could not open (raced away, or a bad row) counts as
-        # 0 bytes rather than aborting the report -- ADVISORY, like everything else here.
-        if (rc < 0 && first) { bcache[path] = 0; return 0 }
+        # -1, NOT 0: a file this run could not open (raced away, or a bad row) is a
+        # different fact from a file that opened and read zero bytes, and folding the two
+        # into the same 0 is the defect CLAUDE.md opens this repository with -- an absence
+        # this report produced would read as an absence in the world (a small collision)
+        # rather than what it actually is (an unmeasured one). The caller below keeps the
+        # two apart rather than clamping here.
+        if (rc < 0 && first) { bcache[path] = -1; return -1 }
         bcache[path] = b
         return b
       }
@@ -707,29 +711,48 @@ out=$(
       }
     ' "$tsv"
   done | LC_ALL=C awk -F'\t' -v floor="$COLLISION_BYTES_FLOOR" "$JIT_AWK_REPORT_KEYWORD"'
-    function isort(v, cn, fl, n,   i, j, tv, tc, tf) {
+    # EVERY parallel array moves together on a swap -- kw included. Leaving kw out of the
+    # argument list is silent: awk still runs, the report still prints, and every row is
+    # simply paired with the WRONG keyword the moment the sort actually reorders anything.
+    # This is the exact mistake the isort() a few hundred lines below this one warns about
+    # in its own comment ("Every parallel array moves together") -- and the reason that one
+    # is correct is that its own four arrays are ALL passed in.
+    function isort(v, kw, cn, fl, n,   i, j, tv, tk, tc, tf) {
       for (i = 2; i <= n; i++) {
-        tv = v[i]; tc = cn[i]; tf = fl[i]; j = i - 1
-        while (j >= 1 && v[j] < tv) { v[j+1] = v[j]; cn[j+1] = cn[j]; fl[j+1] = fl[j]; j-- }
-        v[j+1] = tv; cn[j+1] = tc; fl[j+1] = tf
+        tv = v[i]; tk = kw[i]; tc = cn[i]; tf = fl[i]; j = i - 1
+        while (j >= 1 && v[j] < tv) {
+          v[j+1] = v[j]; kw[j+1] = kw[j]; cn[j+1] = cn[j]; fl[j+1] = fl[j]; j--
+        }
+        v[j+1] = tv; kw[j+1] = tk; cn[j+1] = tc; fl[j+1] = tf
       }
     }
     {
       if (!($1 in cnt)) { n++; ord[n] = $1 }
       cnt[$1]++
-      bytes[$1] += $2
+      if ($2 == -1) { miss[$1]++ } else { bytes[$1] += $2 }
       files[$1] = (files[$1] == "" ? $3 : files[$1] "," $3)
     }
     END {
+      # A keyword with an unmeasured file is reported even under the floor: its real total
+      # is UNKNOWN, not small, and dropping it silently would be exactly the sentinel
+      # collapse bytesof() above was written to avoid -- one level up.
+      #
+      # cnt[k] >= 2: a keyword only ONE file carries is not a COLLISION, whatever it
+      # weighs -- nothing else loads alongside it. That fat-single-entry cost belongs to
+      # jit-doctor.sh, whose fat-entry advisory already covers it, not to this report.
       m = 0
       for (i = 1; i <= n; i++) {
         k = ord[i]
-        if (bytes[k] > floor) { m++; bv[m] = bytes[k]; bc[m] = cnt[k]; bk[m] = k; bf[m] = files[k] }
+        if (cnt[k] >= 2 && (bytes[k] > floor || (k in miss))) {
+          m++; bv[m] = bytes[k]; bk[m] = k; bc[m] = cnt[k]; bf[m] = files[k]
+        }
       }
       if (m == 0) exit
-      isort(bv, bc, bf, m)
-      for (i = 1; i <= m; i++)
-        printf "%8d\t%4d entr(ies)\t\"%s\"\n\t  files: %s\n", bv[i], bc[i], jit_report_keyword(bk[i]), bf[i]
+      isort(bv, bk, bc, bf, m)
+      for (i = 1; i <= m; i++) {
+        note = (bk[i] in miss) ? sprintf(" -- %d file(s) could not be measured, total is a MINIMUM", miss[bk[i]]) : ""
+        printf "%8d\t%4d entr(ies)\t\"%s\"%s\n\t  files: %s\n", bv[i], bc[i], jit_report_keyword(bk[i]), note, bf[i]
+      }
     }
   '
 )

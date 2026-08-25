@@ -52,6 +52,33 @@ assert_lacks() {
   fi
 }
 
+# The report is TWO lines per collision -- a header naming the keyword, then an indented
+# files: line -- and sorting them by bytes without keeping the two lines PAIRED is exactly
+# how a keyword ends up printed beside somebody else's files (found live in review: an
+# isort() call that reordered bytes/count/files but left the keyword array out of its own
+# argument list, so every row after the first swap was labelled with the wrong term).
+# jit-drive: none -- these two take a KEYWORD and a WANT/NOPE needle, both against a
+# derived slice of the file (the line right after the keyword's own header), not a single
+# needle against the whole file or a capture -- outside the shapes this harness drives.
+assert_block_has() {
+  local desc="$1" file="$2" kwtext="$3" want="$4" got
+  got=$(LC_ALL=C grep -A1 -F "\"$kwtext\"" "$file" | tail -n1)
+  case "$got" in
+    *"$want"*) ok "$desc" ;;
+    *) bad "$desc" "the files: line right after \"$kwtext\" was expected to contain: $want"
+       echo "    got: $got" ;;
+  esac
+}
+assert_block_lacks() {
+  local desc="$1" file="$2" kwtext="$3" nope="$4" got
+  got=$(LC_ALL=C grep -A1 -F "\"$kwtext\"" "$file" | tail -n1)
+  case "$got" in
+    *"$nope"*) bad "$desc" "the files: line right after \"$kwtext\" was expected NOT to contain: $nope"
+       echo "    got: $got" ;;
+    *) ok "$desc" ;;
+  esac
+}
+
 PROJ=$(mktemp -d)
 BASE="$PROJ/.claude/jit-context"
 LAYER_A="$BASE/vocabulary/00-manual"
@@ -115,6 +142,65 @@ rm -f "$ERR2"
 
 rm -f "$ERR"
 rm -rf "$PROJ"
+
+# ============================================================================
+# A DEDICATED fixture for the pairing itself: two collisions, deliberately inserted in
+# BYTE-ASCENDING order (small keyword first, because its file sorts first alphabetically)
+# so that printing byte-DESCENDING requires a real reorder -- the exact case an isort()
+# call missing an array from its argument list gets right on a single-item report and
+# wrong the moment there is a second item to swap past.
+# ============================================================================
+echo ""
+echo "=== #204: sorted output keeps each keyword paired with ITS OWN bytes and files ==="
+SPROJ=$(mktemp -d)
+SBASE="$SPROJ/.claude/jit-context/vocabulary/00-manual"
+mkdir -p "$SBASE"
+printf -- '---\ntitle: t\nkeywords: aaa small kw\n---\n\n%s' "$(pad 100)" > "$SBASE/aaa-one.md"
+printf -- '---\ntitle: t\nkeywords: aaa small kw\n---\n\n%s' "$(pad 100)" > "$SBASE/aaa-two.md"
+printf -- '---\ntitle: t\nkeywords: zzz big kw\n---\n\n%s' "$(pad 3000)" > "$SBASE/zzz-one.md"
+printf -- '---\ntitle: t\nkeywords: zzz big kw\n---\n\n%s' "$(pad 3000)" > "$SBASE/zzz-two.md"
+
+SERR=$(mktemp)
+JIT_CONTEXT_COLLISION_BYTES=50 CLAUDE_PROJECT_DIR="$SPROJ" bash "$REBUILD" >/dev/null 2>"$SERR"
+
+assert_block_has  "the small (alphabetically-first, byte-ascending) keyword keeps its OWN files" \
+  "$SERR" "aaa small kw" "aaa-one.md"
+assert_block_lacks "not the big keyword's files" "$SERR" "aaa small kw" "zzz-one.md"
+assert_block_has  "the big keyword keeps ITS OWN files" "$SERR" "zzz big kw" "zzz-one.md"
+assert_block_lacks "not the small keyword's files" "$SERR" "zzz big kw" "aaa-one.md"
+
+# The bigger collision is printed FIRST (descending by bytes), even though its keyword was
+# inserted SECOND (zzz sorts after aaa alphabetically, and files are globbed in that
+# order) -- so this line only passes if a real reorder happened, not merely if insertion
+# order and byte order already agreed.
+BIGLINE=$(grep -n '"zzz big kw"' "$SERR" | cut -d: -f1)
+SMALLLINE=$(grep -n '"aaa small kw"' "$SERR" | cut -d: -f1)
+if [ -n "$BIGLINE" ] && [ -n "$SMALLLINE" ] && [ "$BIGLINE" -lt "$SMALLLINE" ]; then
+  ok "the bigger collision prints before the smaller one, despite the opposite insertion order"
+else
+  bad "the bigger collision prints before the smaller one, despite the opposite insertion order" \
+    "zzz big kw at line ${BIGLINE:-?}, aaa small kw at line ${SMALLLINE:-?}"
+fi
+
+rm -f "$SERR"
+rm -rf "$SPROJ"
+
+# ============================================================================
+# A keyword only ONE file carries is not a COLLISION -- nothing else loads alongside it.
+# ============================================================================
+echo ""
+echo "=== #204: a keyword with only ONE file is not reported as a collision ==="
+OPROJ=$(mktemp -d)
+OBASE="$OPROJ/.claude/jit-context/vocabulary/00-manual"
+mkdir -p "$OBASE"
+printf -- '---\ntitle: t\nkeywords: solo fat entry\n---\n\n%s' "$(pad 3000)" > "$OBASE/solo.md"
+
+OERR=$(mktemp)
+JIT_CONTEXT_COLLISION_BYTES=50 CLAUDE_PROJECT_DIR="$OPROJ" bash "$REBUILD" >/dev/null 2>"$OERR"
+assert_lacks "a single fat entry, however far over the floor, is not an ambiguity finding" \
+  "$OERR" "solo fat entry"
+rm -f "$OERR"
+rm -rf "$OPROJ"
 
 echo ""
 echo "$PASS passed, $FAIL failed"
