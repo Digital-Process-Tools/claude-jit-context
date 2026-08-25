@@ -2169,6 +2169,21 @@ function jit_decode_u00(s,   out, i, n, c, hx, v) {
   # inside an ERE literal rather than a string literal, compiled and matched correctly on
   # BOTH engines. So there is no guard: the walk below is O(length(s)) either way, and it
   # is the one thing here proven to agree across engines.
+  #
+  # v <= 31 is not a style choice, it is the whole fix for a defect an auditor found in
+  # this exact function during #223 review. The encoder (jit_json_escape() in each hook)
+  # only ever WRITES this shape for k in 0..31 excluding 9/10/13, which get \t \n \r
+  # instead -- so codepoints 32 and above can never be a genuine escape this codebase
+  # produced. Before this guard, a literal 6-byte ASCII sequence sitting in an entry own
+  # body -- ordinary prose about JSON escaping could easily carry "A" verbatim -- was
+  # decoded exactly like a real escaped control byte, shrinking it from 6 bytes to 1 and
+  # silently desyncing the decoded length from the hook own byte-length manifest (#219),
+  # which was computed on the PRE-escape bytes and therefore still counts all 6. That
+  # mismatch fails jit_split_ctx_blocks() own manifest check and falls back to the
+  # pre-#219/#223 "\n---\n"-search splitter -- reopening, via ordinary prose rather than
+  # an adversarial payload, the exact class this whole file exists to close. Reproduced
+  # against `# Vocabulary: tricky.md` carrying "Some docs mention JSON A escapes." in
+  # its own body, on all three awk engines this repository tests against.
   out = ""; n = length(s); i = 1
   while (i <= n) {
     c = substr(s, i, 1)
@@ -2176,9 +2191,11 @@ function jit_decode_u00(s,   out, i, n, c, hx, v) {
       hx = tolower(substr(s, i + 4, 2))
       v = index("0123456789abcdef", substr(hx, 1, 1)) - 1
       v = v * 16 + index("0123456789abcdef", substr(hx, 2, 1)) - 1
-      out = out sprintf("%c", v)
-      i += 6
-      continue
+      if (v <= 31) {
+        out = out sprintf("%c", v)
+        i += 6
+        continue
+      }
     }
     out = out c
     i++

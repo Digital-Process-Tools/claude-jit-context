@@ -1272,11 +1272,20 @@ report_hook() {
   # a pre-existing residual, not a regression this port introduces. Said here, not silently
   # narrowed, per the brief for #223.
   #
-  # Anchored on .md and on " (matched:" immediately after it, because the refusal notice
+  # Anchored on .md and on " (matched" immediately after it, because the refusal notice
   # this same hook injects is headed "# JIT Context: N rule(s) could not be evaluated" -- an
   # unanchored read picks up N and prints it as a rule that fired, which is a non-match
   # reading as a match. A block whose header does not carry that exact shape is a NOTICE
   # (a refused-row, refused-layer or refused-config message), not a match.
+  #
+  # Two spellings of the parenthetical, not one: pre-path-hook.sh own vocabulary-by-path
+  # branch writes "(matched path: X)" (scripts/pre-path-hook.sh, vheader) where every other
+  # header -- tool rows, path rows, and vocabulary-by-keyword rows in pre-prompt-hook.sh and
+  # pre-tool-hook.sh -- writes "(matched: X)". The regex anchored on the first spelling
+  # alone silently dropped every genuine vocabulary-by-path match: found in review, not in
+  # the reproduction the issue shipped with, because that fixture never drove --file against
+  # a tree with a vocabulary path row. `(matched( path)?:` accepts both, and the sub() below
+  # that strips the parenthetical off the extracted name is widened the same way.
   # A `block` decision reports through a DIFFERENT top-level field -- "reason", never
   # "additionalContext" -- and carries exactly one header (pre-tool-hook.sh/pre-path-
   # hook.sh build it as `header "\n" body`, never a multi-entry join): the refusing row
@@ -1308,10 +1317,10 @@ END {
       body = jit_blk_body[b]
       nl = index(body, "\n")
       header = (nl > 0) ? substr(body, 1, nl - 1) : body
-      if (match(header, /^# (JIT Context|Vocabulary): [^ ]+\.md \(matched:/)) {
+      if (match(header, /^# (JIT Context|Vocabulary): [^ ]+\.md \(matched( path)?:/)) {
         mfile = header
         sub(/^# (JIT Context|Vocabulary): /, "", mfile)
-        sub(/ \(matched:.*$/, "", mfile)
+        sub(/ \(matched( path)?:.*$/, "", mfile)
         print mfile
       } else if (index(body, "could not be evaluated") > 0) {
         refused = 1
@@ -1321,10 +1330,10 @@ END {
   if (rtext != "") {
     nl = index(rtext, "\n")
     rheader = (nl > 0) ? substr(rtext, 1, nl - 1) : rtext
-    if (match(rheader, /^# (JIT Context|Vocabulary): [^ ]+\.md \(matched:/)) {
+    if (match(rheader, /^# (JIT Context|Vocabulary): [^ ]+\.md \(matched( path)?:/)) {
       mfile = rheader
       sub(/^# (JIT Context|Vocabulary): /, "", mfile)
-      sub(/ \(matched:.*$/, "", mfile)
+      sub(/ \(matched( path)?:.*$/, "", mfile)
       print mfile
     }
     if (index(rtext, "could not be evaluated") > 0) refused = 1
