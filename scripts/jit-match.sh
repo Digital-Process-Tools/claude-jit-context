@@ -23,13 +23,38 @@
 # long enough that a caller would rather pipe it than quote it.
 #
 # --format text (default) prints one block per matched entry, human-readable. --format
-# json prints one JSON object with `count`, `dropped` and a `matches` array of
-# {"file","keywords","mode","text"} -- no jq, no Python: hand-built by the same awk that
-# reads the hook's own output. --summary forces the project default to `summary` for this
-# call only (an entry pinned `inject: full` still renders full -- the same override
-# JIT_CONTEXT_INJECT=summary gets in config.env, reachable per call instead of per project).
-# --limit N keeps the first N matched entries and REPORTS what it dropped, by name -- a
-# silent top-N reads as "nothing else applied" (#205's own words for why this exists).
+# json prints one JSON object with `count`, `dropped`, a `matches` array of
+# {"file","keywords","mode","text"}, and an `unverifiable` array of the same shape minus
+# `mode` -- no jq, no Python: hand-built by the same awk that reads the hook's own output.
+# --summary forces the project default to `summary` for this call only (an entry pinned
+# `inject: full` still renders full -- the same override JIT_CONTEXT_INJECT=summary gets
+# in config.env, reachable per call instead of per project). --limit N keeps the first N
+# VERIFIED matched entries and REPORTS what it dropped, by name -- a silent top-N reads as
+# "nothing else applied" (#205's own words for why this exists).
+#
+# --- Why a match can come back "unverifiable" instead of counted ------------------------
+#
+# .claude/jit-context/ is attacker-controlled input (paths/00-manual/hooks.md), and the
+# hook's own output joins matched entries with a literal "\n---\n# Vocabulary: " text
+# boundary that an entry own author-controlled body can legitimately contain -- so the
+# splitter below cannot always tell a genuine join from the same bytes sitting inside one
+# entry, and a crafted entry can make this tool print a fabricated match with an
+# attacker-chosen file name and keyword list otherwise. Proven, not merely suspected: the
+# hook joins two real matches with exactly the same five-plus-header bytes an entry own
+# raw body can end in, so no property of the surrounding text can ever tell the two cases
+# apart from ctx alone (see the comment above jit_index_verified() for the full argument).
+#
+# So every candidate match is checked against the tree's own 00-index.tsv before it is
+# counted: does the (file, keyword) pair it claims actually exist as a row? A real match
+# always does, by construction, so this never turns a genuine match into a false refusal
+# -- and a candidate that fails is reported once, separately, labelled unverifiable rather
+# than silently dropped or silently trusted. This is a structural existence check, not a
+# reimplementation of the matcher: it does not fold accents, does not decide that a match
+# fired, and does not close the narrower residual where a forged entry names ANOTHER real,
+# already-indexed (file, keyword) pair from the same tree -- that gap needs the hook own
+# match count, which only a protocol change (a structured separator, out of scope here)
+# reaches. Added in response to a maintainer override on PR #216, over a reviewer finding
+# (block-splitter fabricates a phantom match) this file first filed rather than fixed.
 #
 # --- Why this shells out to pre-prompt-hook.sh instead of reimplementing the match ------
 #
@@ -55,10 +80,12 @@
 #
 # Exit: 0 every row could be evaluated (a match, or cleanly none) | 1 ran, but the hook
 #       also reported something it could not evaluate -- a refused index row, a refused
-#       layer, a refused config.env line, or the hook wrote to stderr, which its own
-#       contract (paths/00-manual/hooks.md) says it must never do. Matches, if any, are
-#       still printed. | 2 could not evaluate at all: a bad argument, --base not a project
-#       tree, or no text from either --text or stdin.
+#       layer, a refused config.env line, the hook wrote to stderr (which its own contract,
+#       paths/00-manual/hooks.md, says it must never do), or at least one candidate match
+#       could not be verified against the tree's own index and was reported unverifiable
+#       instead of counted. Verified matches, if any, are still printed. | 2 could not
+#       evaluate at all: a bad argument, --base not a project tree, or no text from either
+#       --text or stdin.
 
 set -uo pipefail
 
@@ -170,6 +197,12 @@ json_escape() {
 
 PAYLOAD="{\"prompt\":\"$(json_escape "$TEXT")\"}"
 
+# --- What the tree's own index actually says fired -- used ONLY to VERIFY a candidate
+# match, never to derive one. See the big comment above the verification block in the
+# awk program below for why this exists and what it does and does not close.
+jit_scan_layers "$BASE/vocabulary" vocabulary
+VOCAB_LAYERS="$JIT_LAYERS"
+
 HOOK_ENV=(CLAUDE_PROJECT_DIR="$PROJECT")
 if [ "$SUMMARY" = 1 ]; then
   HOOK_ENV+=(JIT_CONTEXT_INJECT=summary)
@@ -207,7 +240,8 @@ fi
 # a second channel to keep in sync with the report above it.
 RESULT="$(printf '%s' "$HOOK_OUT" | LC_ALL=C awk \
   -v format="$FORMAT" -v limit="$LIMIT" \
-  "$JIT_AWK_JSON"'
+  -v vocab_layers="$VOCAB_LAYERS" -v vocab_base="$BASE/vocabulary" \
+  "$JIT_AWK_JSON$JIT_AWK_ENTRY"'
 function emit_json_str(s) {
   gsub(/\\/, "\\\\", s)
   gsub(/"/, "\\\"", s)
@@ -259,6 +293,66 @@ function jit_decode_u00(s,   out, i, n, c, hx, v) {
     i++
   }
   return out
+}
+# --- The tree own index, loaded once, used only to VERIFY -------------------------------
+# This does NOT reimplement the matcher. It does not fold accents, does not apply the
+# LC_ALL=C keyword-lookup this whole design deliberately leaves to the real hook, and it
+# never DECIDES that a match fired -- it only answers a narrower, purely structural
+# question: does a (file, keyword) pair the hook claims fired actually exist as a row in
+# this tree own 00-index.tsv? A row that does not exist could not have caused a real
+# match, whatever the hook output claims.
+#
+# Why this exists (#202/#205/#189 review, maintainer override on PR #216): the
+# index()-based block splitter above cannot tell a genuine hook-emitted join from the
+# same literal bytes appearing inside one entry own author-controlled body -- paths/00-
+# manual/hooks.md says plainly that .claude/jit-context/ is attacker-controlled input.
+# Proven unsolvable from ctx alone: `matched = matched "\n---\n" vh "\n" vc` in
+# pre-prompt-hook.sh produces a BYTE-IDENTICAL join to an entry whose own full-mode body
+# (raw file content, no fixed ending) happens to end in the same five-plus-header bytes,
+# so no property of the SURROUNDING text can ever distinguish the two cases -- reasoned
+# through and confirmed against the real hook source, not assumed.
+#
+# What this DOES close: the specific reproduction that motivated it -- an entry naming a
+# file/keyword pair that does not exist anywhere in the tree own index at all. That is a
+# decidable, false-positive-free question: every REAL match necessarily corresponds to a
+# real index row, by construction, so this can never flag a genuine match.
+#
+# What this does NOT close, said once rather than reasoned about twice: a forged entry
+# that instead names another file own REAL keyword already indexed elsewhere in the SAME
+# tree would pass this check too -- verifying existence is not verifying that THIS TEXT
+# caused THAT row to fire, and closing that gap needs the hook own match count, which
+# only the protocol change the maintainer accepted as out-of-scope reaches. Said in the
+# report, not silently narrowed here.
+function jit_index_load(   nl, li, layer, lookup, vl, why, vf) {
+  if (jit_idx_loaded) return
+  jit_idx_loaded = 1
+  nl = split(vocab_layers, jit_idx_layers, " ")
+  for (li = 1; li <= nl; li++) {
+    layer = jit_idx_layers[li]
+    lookup = vocab_base "/" layer "/00-index.tsv"
+    while ((getline vl < lookup) > 0) {
+      why = jit_bad_bytes(vl, "the index row")
+      if (why != "") continue
+      split(vl, vf, "\t")
+      if (vf[1] == "" || vf[2] == "") continue
+      jit_idx[vf[2] "\t" vf[1]] = 1
+    }
+    close(lookup)
+  }
+}
+# mkw may carry more than one keyword, "|"-joined (jit_inject_text/vmatch join multiple
+# keywords that matched the same file that way -- see the vmatch[vfile] build in
+# pre-prompt-hook.sh). Verified when AT LEAST ONE of them is a real row for mfile: that is
+# the OR a real match would satisfy, since any one of them firing is what puts the file in
+# vmatch to begin with.
+function jit_index_verified(mfile, mkw,   nk, ki, kws) {
+  jit_index_load()
+  if (mkw == "") return 0
+  nk = split(mkw, kws, "|")
+  for (ki = 1; ki <= nk; ki++) {
+    if ((mfile "\t" kws[ki]) in jit_idx) return 1
+  }
+  return 0
 }
 { input = input $0 }
 END {
@@ -313,7 +407,6 @@ END {
         notice[nnotice] = body
         continue
       }
-      nmatch++
       mfile = header
       sub(/^# Vocabulary: /, "", mfile)
       sub(/ \(matched:.*$/, "", mfile)
@@ -325,10 +418,22 @@ END {
       if (match(header, /\(matched: [^)]*\)/)) {
         mkw = substr(header, RSTART + 10, RLENGTH - 11)
       }
-      mtext[nmatch] = body
-      mname[nmatch] = mfile
-      mkwlist[nmatch] = mkw
-      mmode[nmatch] = (index(body, "\n[jit] Summary only") > 0) ? "summary" : "full"
+      # jit_index_verified() -- see its own comment above -- is the ONLY thing standing
+      # between "the splitter cut here" and "this is reported as a real match". A
+      # candidate whose claimed (file, keyword) has no row in the tree own index is not
+      # counted, not put in matches[], and not silent either: it goes to its own bucket.
+      if (jit_index_verified(mfile, mkw)) {
+        nmatch++
+        mtext[nmatch] = body
+        mname[nmatch] = mfile
+        mkwlist[nmatch] = mkw
+        mmode[nmatch] = (index(body, "\n[jit] Summary only") > 0) ? "summary" : "full"
+      } else {
+        nunverified++
+        utext[nunverified] = body
+        uname[nunverified] = mfile
+        ukwlist[nunverified] = mkw
+      }
     }
   }
 
@@ -347,6 +452,13 @@ END {
     }
     out = out "],\"dropped_files\":["
     for (m = kept + 1; m <= nmatch; m++) out = out (m > kept + 1 ? "," : "") "\"" emit_json_str(mname[m]) "\""
+    out = out "],\"unverifiable\":["
+    for (u = 1; u <= nunverified; u++) {
+      out = out (u > 1 ? "," : "") \
+        "{\"file\":\"" emit_json_str(uname[u]) "\"" \
+        ",\"keywords\":\"" emit_json_str(ukwlist[u]) "\"" \
+        ",\"text\":\"" emit_json_str(utext[u]) "\"}"
+    }
     out = out "]}"
     print out
   } else {
@@ -355,14 +467,19 @@ END {
       out = out ", " dropped " dropped by --limit " limit ":"
       for (m = kept + 1; m <= nmatch; m++) out = out " " mname[m]
     }
+    if (nunverified > 0) out = out ", " nunverified " unverifiable"
     print out
     for (m = 1; m <= kept; m++) print "\n---\n" mtext[m]
+    if (nunverified > 0) {
+      print "\n--- unverifiable (claimed file/keyword has no row in this tree own index -- NOT counted as a match) ---"
+      for (u = 1; u <= nunverified; u++) print "\n" utext[u]
+    }
     if (nnotice > 0) {
       print "\n--- notices (not counted as matches) ---"
       for (nt = 1; nt <= nnotice; nt++) print "\n" notice[nt]
     }
   }
-  print "JIT-MATCH-STATUS\t" (nnotice > 0 ? 1 : 0)
+  print "JIT-MATCH-STATUS\t" ((nnotice > 0 || nunverified > 0) ? 1 : 0)
 }
 '
 )"

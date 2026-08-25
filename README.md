@@ -758,17 +758,25 @@ fold, the same fail-open-loudly behaviour on a malformed byte — rather than a 
 that would drift from the first the next time only one of them got fixed.
 
 `--format text` (the default) prints one block per matched entry. `--format json` prints one
-object with `count`, `dropped`, `dropped_files` and a `matches` array of
-`{"file","keywords","mode","text"}` — hand-built by this plugin's own JSON reader, so still
-no `jq`. `--summary` renders `title:` + `description:` only, for a caller assembling one
-prompt and unable to afford eight full entries. `--limit N` keeps the first N matches and
-**names what it dropped** — a silent top-N would read as "nothing else applied".
+object with `count`, `dropped`, `dropped_files`, a `matches` array of
+`{"file","keywords","mode","text"}` and an `unverifiable` array of the same shape — hand-built
+by this plugin's own JSON reader, so still no `jq`. `--summary` renders `title:` + `description:`
+only, for a caller assembling one prompt and unable to afford eight full entries. `--limit N`
+keeps the first N verified matches and **names what it dropped** — a silent top-N would read as
+"nothing else applied".
+
+**A candidate is never counted just because the text splitter found it.** `.claude/jit-context/`
+is attacker-controlled input, and the hook's own join text can legitimately appear inside one
+entry's own body — so before anything is counted, its `(file, keyword)` pair is checked against
+the tree's own `00-index.tsv`. A real match's pair always exists as a row, so this can never
+turn a genuine match into a false refusal; a candidate that fails is printed once, separately,
+labelled `unverifiable`, never silently dropped and never silently trusted.
 
 It exits **1** when the hook also reported something it could not evaluate — a refused
 index row, a refused layer, a refused `config.env` line — printed as a notice rather than
-folded silently into the match count, and **2** when it could not evaluate the call at all:
-a bad argument, `--base` not shaped like `<project>/.claude/jit-context`, or no text from
-either `--text` or stdin.
+folded silently into the match count, or when a candidate match came back unverifiable, and
+**2** when it could not evaluate the call at all: a bad argument, `--base` not shaped like
+`<project>/.claude/jit-context`, or no text from either `--text` or stdin.
 
 ### Verify an entry actually fires
 
