@@ -348,9 +348,25 @@ build_vocab_tsv() {
     filename=$(basename "$md")
     [ "$filename" = "00-README.md" ] && continue
 
-    # Extract keywords line from frontmatter (between first --- and second ---)
-    local kw_line
-    kw_line=$(awk '/^---$/{n++; next} n==1 && /^keywords:/{sub(/^keywords: */, ""); print; exit}' "$md")
+    # Extract keywords line from frontmatter (between first --- and second ---).
+    #
+    # `LC_ALL=C` (#195): this regex matches every line of the file, so under a UTF-8
+    # locale one-true-awk aborts the whole program the first time it lands on a line
+    # carrying an invalid byte, anywhere in the file -- not necessarily the keywords:
+    # line itself. Before this pin, kw_line came back empty either way, so an entry
+    # whose frontmatter WAS readable was reported with the wrong reason: "no keywords:
+    # in its frontmatter" when the truth was "an unrelated line killed the reader".
+    # Pinning removes the abort; the exit-status check below is the second, independent
+    # half -- an awk that dies for some OTHER reason must not read as a clean miss.
+    local kw_line kw_rc
+    kw_line=$(LC_ALL=C awk '/^---$/{n++; next} n==1 && /^keywords:/{sub(/^keywords: */, ""); print; exit}' "$md")
+    kw_rc=$?
+
+    if [ "$kw_rc" -ne 0 ]; then
+      jit_unindexed "$label" "$filename" "the frontmatter could not be read (awk exited $kw_rc) -- treated as unindexed rather than silently skipped"
+      jit_rc 2
+      continue
+    fi
 
     if [ -z "$kw_line" ]; then
       jit_unindexed "$label" "$filename" "no keywords: in its frontmatter"
@@ -363,7 +379,14 @@ build_vocab_tsv() {
     # from `detail`. Both hooks fold their subject with the same table (#31). Once per
     # file rather than once per keyword -- the fold is per character and leaves the commas
     # this line is about to be split on alone.
-    kw_line=$(printf '%s\n' "$kw_line" | awk "$JIT_AWK_FOLD"'{ print jit_fold_latin1($0) }')
+    #
+    # `LC_ALL=C` (#195): jit_fold_latin1() itself is index()/substr() only, so the pin
+    # buys it nothing directly -- the invariant this run's table-of-sites lives by is
+    # that only a REGEX matched against a record can abort. What is NOT locale-safe is a
+    # byte this fold table does not know, which survives untouched into the tr/sed below;
+    # pinning here is what makes "untouched" mean the same bytes on all three engines
+    # rather than whatever each one's default decoding of the awk PROGRAM SOURCE does.
+    kw_line=$(printf '%s\n' "$kw_line" | LC_ALL=C awk "$JIT_AWK_FOLD"'{ print jit_fold_latin1($0) }')
 
     # Split on ", " and write each keyword → filename.
     #
@@ -376,13 +399,27 @@ build_vocab_tsv() {
     # frontmatter. Reporting one reason for both would name a pattern that never saw the
     # word -- a confident wrong answer, which is worse here than no report at all.
     local kw_split kw_written=0 kw_black=0 kw_empty=0
-    kw_split=$(printf '%s\n' "$kw_line" | tr ',' '\n')
+    # `LC_ALL=C` (#195): kw_line still carries any byte the fold above did not know, and
+    # under the caller's own locale a bare `tr` refuses an invalid multibyte sequence
+    # outright rather than splitting around it -- the same failure the per-keyword tr/sed
+    # below was pinned against.
+    kw_split=$(printf '%s\n' "$kw_line" | LC_ALL=C tr ',' '\n')
     while IFS= read -r kw; do
       # Normalize IDENTICALLY to the matcher (pre-prompt-hook.sh): lowercase, then
       # map any char outside [a-z0-9 -] to a space, collapse, trim. A keyword authored
       # with dots/slashes ("docs.dp.tools", "security/dast") would otherwise be DEAD —
       # the matcher strips those from the prompt, so a dotted keyword can never match.
-      kw=$(echo "$kw" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9 -]/ /g; s/  */ /g; s/^ *//; s/ *$//')
+      #
+      # `LC_ALL=C` on both (#195, found while driving section B of its own test): the
+      # matcher does this same fold INSIDE one LC_ALL=C awk pipeline, but this half used
+      # bare `tr`/`sed`, which read the caller's locale rather than pinning their own. A
+      # keywords: line surviving the (now-pinned) extraction awk with an invalid byte
+      # still carried it into these two -- and under a UTF-8 locale, BSD `tr` refuses an
+      # invalid multibyte sequence outright ("Illegal byte sequence", nonzero exit),
+      # which this capture never checked either, so the keyword silently became "no
+      # keywords: normalised to nothing" for a reason that had nothing to do with the
+      # normaliser. `LC_ALL=C` makes both read bytes, matching the awk half's own fix.
+      kw=$(echo "$kw" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sed 's/[^a-z0-9 -]/ /g; s/  */ /g; s/^ *//; s/ *$//')
       if [ -z "$kw" ]; then kw_empty=$((kw_empty + 1)); continue; fi
       # Skip overly generic single words — they collide with op flags and path tokens.
       # Skipped, and now SAID: the row is not written, so the entry never fires on this
@@ -444,12 +481,27 @@ build_vocab_path_tsv() {
 
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
-    local filename
+    local filename mod_rc
     filename=$(basename "$md")
     [ "$filename" = "00-README.md" ] && continue
 
     # Body of the "## Modules" section: everything until the next heading or EOF.
-    awk -v file="$filename" -v prefix="$MODULE_PREFIX" '
+    #
+    # `LC_ALL=C` (#195, #196): every regex here -- the heading match, the heading-exit
+    # match and the gsub -- runs against $0, so a body line carrying an invalid byte
+    # (a Latin-1 save, a paste that clipped a multibyte character) makes one-true-awk
+    # abort the whole program under a UTF-8 locale. Under `C` the same byte is simply
+    # outside [A-Za-z0-9], so the gsub folds it into a space like any other punctuation
+    # and the line's honest module names still get written.
+    #
+    # The exit status is now checked (#195): this is the site #195 was filed about --
+    # output was appended with `>>` and nothing checked whether awk actually finished,
+    # so a mid-file abort (from this byte or from anything else) left the append having
+    # written a PARTIAL set of rows for this file, or none, while the run reported
+    # success. A FATAL line plus jit_rc 2 makes that loud instead, matching this file's
+    # own three-outcome contract: an index that is missing rows is not one this run can
+    # vouch for.
+    LC_ALL=C awk -v file="$filename" -v prefix="$MODULE_PREFIX" '
       /^## Modules[[:space:]]*$/ { inmod = 1; next }
       inmod && /^#/ { inmod = 0 }
       inmod {
@@ -465,6 +517,11 @@ build_vocab_path_tsv() {
         }
       }
     ' "$md" >> "$tsv"
+    mod_rc=$?
+    if [ "$mod_rc" -ne 0 ]; then
+      echo "FATAL    $label/${tsv##*/}: $(jit_report_name "$filename"): awk exited $mod_rc while reading its \"## Modules\" section -- rows for this file may be missing or partial, and the index is not this run" >&2
+      jit_rc 2
+    fi
   done
 
   COUNT=$(wc -l < "$tsv" | tr -d ' ')
@@ -535,9 +592,12 @@ done
 # Nothing above validates bytes, and it cannot: every column reaches printf through a
 # $( ) capture, which is also why a NUL can never get this far (bash drops them out of
 # command substitution) and why #78 needed no change here. A non-UTF-8 byte DOES get
-# through -- under LC_ALL=C the awk in jit_frontmatter() has nothing to decode and copies
-# it out verbatim, which was measured, and under a UTF-8 locale that awk aborts loudly
-# and the entry is dropped instead. Neither reading tells the author what happened.
+# through -- jit_frontmatter() pins LC_ALL=C on its own awk (#195, #196), so it has
+# nothing to decode and copies the byte out verbatim on all three engines. Before that
+# pin, one-true-awk aborted the whole program under a UTF-8 locale the first time it
+# matched a regex against a record carrying the byte, and the entry vanished from the
+# index instead of being written through and reported below -- silently, and the reader
+# had no way to tell "no bad byte" from "the reader never got that far".
 #
 # It matters most for the one column nobody looks at twice: a `forbid:` value saved in
 # ISO-8859-1 indexes fine, and the hook then refuses the whole row -- so a block rule goes
@@ -581,8 +641,18 @@ done
 for dir in "$VOCAB_BASE"/*/; do
   [ -d "$dir" ] || continue
   _jit_vlabel="vocabulary/$(jit_report_name "$(basename "${dir%/}")")"
-  report_bad_bytes "${dir%/}/00-index.tsv" "$_jit_vlabel" 2
-  report_bad_bytes "${dir%/}/01-paths.tsv" "$_jit_vlabel" 2
+  # The LEAF, unlike the tools and paths calls above (#162): this is the one dimension
+  # that calls report_bad_bytes() twice for one layer, once per index, and both calls
+  # used to pass the SAME bare `vocabulary/<layer>` label -- so a row could not be traced
+  # to 00-index.tsv (keywords) or 01-paths.tsv (module paths) without opening both files.
+  # `$_jit_vlabel/${...##*/}` is the same leaf-qualified string build_vocab_path_tsv's own
+  # FATAL and success lines already use above, for the identical reason (#153): this is
+  # the only dimension where the layer name alone is ambiguous. tools/ and paths/ write
+  # one index per layer and stay bare on purpose -- appending a leaf there would invent a
+  # path component nothing on disk has, the exact mistake #153 fixed in the other
+  # direction.
+  report_bad_bytes "${dir%/}/00-index.tsv" "$_jit_vlabel/00-index.tsv" 2
+  report_bad_bytes "${dir%/}/01-paths.tsv" "$_jit_vlabel/01-paths.tsv" 2
 done
 unset _jit_vlabel
 

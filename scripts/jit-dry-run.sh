@@ -488,7 +488,20 @@ check_paths_fragment() {
   #
   # index() rather than a bracket expression of our own for the final test: a `/` inside
   # an awk regex literal is exactly the kind of thing spelled differently across awks.
-  JIT_PAT="$pat" awk '
+  #
+  # `LC_ALL=C` (#196): both gsubs decode $ENVIRON["JIT_PAT"], and a pattern carrying an
+  # invalid byte diverged two ways without this pin -- gawk under a UTF-8 locale let
+  # `gsub(/\\./)` eat the escaped backslash plus the WHOLE multibyte character, where `C`
+  # eats the backslash plus the lead byte only and leaves a stray continuation byte behind
+  # in `p`; one-true-awk aborted `rc=2` instead, which this call never checked, so the
+  # `&&` fell through to an unconditional WARN for a pattern that carries a bad byte at
+  # all -- correct by accident, and for a reason unrelated to what the pattern says.
+  # `C` removes both: the byte is opaque, so it either survives the strip untouched or
+  # gets removed as ordinary punctuation, and no engine decodes it enough to abort. It
+  # also silences the "Invalid multibyte data" runtime warning gawk wrote straight into
+  # this linter's own report on stderr, uninvited and unredirected, for the identical
+  # reason -- noise this file exists to remove, not add.
+  LC_ALL=C JIT_PAT="$pat" awk '
     BEGIN {
       p = ENVIRON["JIT_PAT"]
       gsub(/\\./, "", p)

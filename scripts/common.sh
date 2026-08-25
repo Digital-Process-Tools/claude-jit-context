@@ -836,9 +836,18 @@ _log() {
 # both of those read as "the tree is fine".
 #
 # Only the first `---` block, only the first occurrence of the field.
+#
+# `LC_ALL=C` on the invocation (#195, #196): this awk matches a regex against every line
+# of an entry file, and neither caller pinned the locale before now -- the comment that
+# used to claim otherwise, in rebuild-tsv.sh's bad-bytes section, was describing a pin
+# that did not exist. Under a UTF-8 locale, one-true-awk aborts the whole program the
+# first time that match lands on a record carrying an invalid byte, so a `match:` saved
+# in ISO-8859-1 made the entry vanish from the index instead of being written through and
+# refused at load. Under `C` the same awk has nothing to decode and copies the byte out
+# verbatim on all three engines, which is what lets report_bad_bytes() catch it downstream.
 jit_frontmatter() {
   # $1 field name, $2 entry file
-  awk -v f="$1" '
+  LC_ALL=C awk -v f="$1" '
     /^---$/ { n++; next }
     n == 1 && index($0, f ":") == 1 {
       sub("^" f ": *", "")
