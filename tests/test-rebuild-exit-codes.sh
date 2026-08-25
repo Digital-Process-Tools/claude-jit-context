@@ -176,7 +176,10 @@ write_entry tools/00-manual/nodesc.md \
   "tool: Bash" \
   "match: some-literal-substring" \
   "mode: remind"
-rebuild
+# #204: the ambiguity report floors on BYTES pulled in one match now, and six entries at a
+# few dozen bytes each are nowhere near the 4096b default -- lower the floor so this
+# fixture still trips it, same as it always has.
+JIT_CONTEXT_COLLISION_BYTES=1 rebuild
 assert_rc "an ambiguous keyword and a missing description: still exit 0" 0 "$RC"
 assert_contains "the ambiguity report still fired" "$(cat "$ERR")" "sharedterm"
 # The no-description report belongs to the injection budget (#1) and is not on this

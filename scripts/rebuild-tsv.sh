@@ -656,38 +656,88 @@ for dir in "$VOCAB_BASE"/*/; do
 done
 unset _jit_vlabel
 
-# --- Ambiguity report: kw appearing in >5 files (vocab only) ---
-THRESHOLD=5
+# --- Ambiguity report: keyword collisions, cross-layer, ranked by bytes (#204) --------
+# This used to group per LAYER and threshold on FILE COUNT (>5). Neither survives a real
+# tree. The dominant shape is one concept restated ACROSS 00-manual/10-auto/20-grouped/
+# 30-crosscutting -- invisible to a per-layer tally, since no single layer's own count
+# need ever cross the threshold. And a 2-entry collision between two fat entries costs
+# more per match than a 9-entry collision between stubs -- invisible to a file-count
+# threshold, which cannot tell a fat entry from a thin one. Report what a match actually
+# costs instead: every keyword's collision summed across every vocabulary layer, ranked by
+# bytes, with a BYTE floor rather than an entry-count one -- the same "how big is big"
+# shape jit-doctor.sh's fat-entry advisory already uses (JIT_CONTEXT_DOCTOR_MAX_BYTES),
+# though the two are independently configured; nothing here reaches into jit-doctor.sh,
+# which is a hook-adjacent report of its own.
+#
+# Two awk passes, not one, and not `sort` on the printed report: the FIRST pass runs once
+# per layer (bytesof() is memoised per-process, so a file is measured once even if it
+# shares several keywords) and emits plain `keyword<TAB>bytes<TAB>display` rows; the SECOND
+# aggregates those rows across every layer and sorts in memory with the same insertion sort
+# `isort()` uses two sections below, for the reason given there: a report entry here is TWO
+# printed lines (a header line and an indented files: line), and `sort` sorts each line of
+# its input independently, which would separate a header from its own files: line the
+# moment two collisions differ in file-list length. Sorting the STRUCTURE before printing
+# it avoids that rather than working around it after the fact.
+COLLISION_BYTES_FLOOR="${JIT_CONTEXT_COLLISION_BYTES:-${DYNAMIC_RULES_COLLISION_BYTES:-4096}}"
 echo "" >&2
-echo "=== Ambiguous vocabulary keywords (>$THRESHOLD files) ===" >&2
-echo "Each match loads ALL listed files into context. Prune \`keywords:\` frontmatter where the term isn't central." >&2
+echo "=== Ambiguous vocabulary keywords (>${COLLISION_BYTES_FLOOR}b pulled in one match, every layer) ===" >&2
+echo "Each match loads ALL listed files into context, across every layer the keyword appears in." >&2
+echo "Prune \`keywords:\` frontmatter where the term isn't central, or merge entries that share it." >&2
 echo "" >&2
-HAS_AMBIG=0
-for tsv in "$VOCAB_BASE"/*/00-index.tsv; do
-  [ -f "$tsv" ] || continue
-  # Dimension included, like every other layer label this script prints (#150). This
-  # report is vocabulary-only, so the dimension carries no information the section header
-  # does not -- but a reader greps `[vocabulary/00-manual]` out of one report and expects
-  # it in the next, and a rule with one exception is a rule nobody keeps.
-  layer="vocabulary/$(jit_report_name "$(basename "$(dirname "$tsv")")")"
-  # LC_ALL=C so jit_report_name() decides on BYTES, the same as the bash half. The file
-  # names here are the index column rebuild-tsv.sh just wrote from a basename, so they
-  # carry whatever the clone chose to call its entries (#113). A withheld one cannot be
-  # confused with the comma this list is joined on -- the comma is outside the kept set.
-  # The keyword in column 1 is repository-chosen text too, and #113 stopped at the file
-  # names (#126). It is guarded on the way OUT rather than in the aggregation, so entries
-  # sharing one long keyword are still counted as one keyword rather than collapsing into
-  # a single withheld bucket with somebody else's tally.
-  out=$(LC_ALL=C awk -F'\t' -v layer="$layer" -v th="$THRESHOLD" "$JIT_AWK_REPORT_NAME$JIT_AWK_REPORT_KEYWORD"'
-    {c[$1]++; f=jit_report_name($2); files[$1]=(files[$1]==""?f:files[$1]","f)}
-    END{for(k in c) if(c[k]>th) printf "%4d\t[%s] \"%s\"\n\t  files: %s\n", c[k], layer, jit_report_keyword(k), files[k]}
-  ' "$tsv" | sort -rn)
-  if [ -n "$out" ]; then
-    echo "$out" >&2
-    HAS_AMBIG=1
-  fi
-done
-[ "$HAS_AMBIG" = "0" ] && echo "(none — all keywords appear in ≤$THRESHOLD files)" >&2
+out=$(
+  for tsv in "$VOCAB_BASE"/*/00-index.tsv; do
+    [ -f "$tsv" ] || continue
+    layerdir="$(dirname "$tsv")"
+    # Dimension included, like every other layer label this script prints (#150).
+    layer="vocabulary/$(jit_report_name "$(basename "$layerdir")")"
+    LC_ALL=C awk -F'\t' -v layerdir="$layerdir" -v layer="$layer" "$JIT_AWK_REPORT_NAME"'
+      function bytesof(path,    b, line, rc, first) {
+        if (path in bcache) return bcache[path]
+        b = 0; first = 1
+        while ((rc = (getline line < path)) > 0) { b += length(line) + 1; first = 0 }
+        close(path)
+        # A row naming a file this run could not open (raced away, or a bad row) counts as
+        # 0 bytes rather than aborting the report -- ADVISORY, like everything else here.
+        if (rc < 0 && first) { bcache[path] = 0; return 0 }
+        bcache[path] = b
+        return b
+      }
+      $1 != "" && $2 != "" {
+        printf "%s\t%d\t%s[%s]\n", $1, bytesof(layerdir "/" $2), jit_report_name($2), layer
+      }
+    ' "$tsv"
+  done | LC_ALL=C awk -F'\t' -v floor="$COLLISION_BYTES_FLOOR" "$JIT_AWK_REPORT_KEYWORD"'
+    function isort(v, cn, fl, n,   i, j, tv, tc, tf) {
+      for (i = 2; i <= n; i++) {
+        tv = v[i]; tc = cn[i]; tf = fl[i]; j = i - 1
+        while (j >= 1 && v[j] < tv) { v[j+1] = v[j]; cn[j+1] = cn[j]; fl[j+1] = fl[j]; j-- }
+        v[j+1] = tv; cn[j+1] = tc; fl[j+1] = tf
+      }
+    }
+    {
+      if (!($1 in cnt)) { n++; ord[n] = $1 }
+      cnt[$1]++
+      bytes[$1] += $2
+      files[$1] = (files[$1] == "" ? $3 : files[$1] "," $3)
+    }
+    END {
+      m = 0
+      for (i = 1; i <= n; i++) {
+        k = ord[i]
+        if (bytes[k] > floor) { m++; bv[m] = bytes[k]; bc[m] = cnt[k]; bk[m] = k; bf[m] = files[k] }
+      }
+      if (m == 0) exit
+      isort(bv, bc, bf, m)
+      for (i = 1; i <= m; i++)
+        printf "%8d\t%4d entr(ies)\t\"%s\"\n\t  files: %s\n", bv[i], bc[i], jit_report_keyword(bk[i]), bf[i]
+    }
+  '
+)
+if [ -n "$out" ]; then
+  echo "$out" >&2
+else
+  echo "(none — no keyword pulls more than ${COLLISION_BYTES_FLOOR}b in one match)" >&2
+fi
 echo "" >&2
 
 # --- Dropped keywords: listed in frontmatter, not in the index (#95) ---
