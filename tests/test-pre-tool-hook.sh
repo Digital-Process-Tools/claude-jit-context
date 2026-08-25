@@ -69,7 +69,7 @@ run_hook() {
 # jit-drive: assert_blocked blocked capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -q "$expected" <<<"$output"; then
+  if grep -q -- "$expected" <<<"$output"; then
     PASS=$((PASS + 1)); echo "  PASS: $desc"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
@@ -80,7 +80,7 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -q "$unexpected" <<<"$output"; then
+  if grep -q -- "$unexpected" <<<"$output"; then
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
   else
