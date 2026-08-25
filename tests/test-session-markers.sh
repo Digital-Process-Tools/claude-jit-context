@@ -33,7 +33,7 @@ FAIL=0
 # jit-drive: assert_contains contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF "$expected" <<<"$output"; then
+  if grep -qF -- "$expected" <<<"$output"; then
     PASS=$((PASS + 1)); echo "  PASS: $desc"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"

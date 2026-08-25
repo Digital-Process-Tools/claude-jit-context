@@ -85,7 +85,7 @@ run_path() { echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PATH_HOOK" 2>/dev
 # jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF "$expected" <<<"$output"; then
+  if grep -qF -- "$expected" <<<"$output"; then
     PASS=$((PASS + 1)); echo "  PASS: $desc"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
@@ -96,7 +96,7 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF "$unexpected" <<<"$output"; then
+  if grep -qF -- "$unexpected" <<<"$output"; then
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: $(echo "$output" | cut -c1-300)"

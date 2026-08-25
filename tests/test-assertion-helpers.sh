@@ -139,6 +139,20 @@ BIGBLOCKFILE="$WORK/bigblock.out"
 printf '%s\n' "$BIG" > "$BIGFILE"
 printf '%s\n' "$BIGBLOCK" > "$BIGBLOCKFILE"
 
+# --- The #214 payload: a needle grep parses as an option -----------------------------
+#
+# `grep -qF "$expected" <<<"$output"` with no `--` separator treats a needle beginning
+# with `--` as an option rather than a pattern. grep exits non-zero with a usage error,
+# and a helper that branches only on exit status cannot tell that apart from a genuine
+# no-match. assert_not_contains is the dangerous direction: it reports PASS having
+# compared nothing. DASHBIG puts the flag-shaped needle on line 1, same as BIG does for
+# NEEDLE, so this drives the identical code path the SIGPIPE payload already drives.
+DASHNEEDLE="--dashneedle"
+DASHBIG="$DASHNEEDLE
+$BIG"
+DASHBIGFILE="$WORK/dashbig.out"
+printf '%s\n' "$DASHBIG" > "$DASHBIGFILE"
+
 # --- Driving a real helper ----------------------------------------------------------
 #
 # Extract every function definition from a suite into a file we can source. Line-range
@@ -238,10 +252,14 @@ drive_declared() {
   case "$src:$sem" in
     capture:contains)
       check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIG" "$NEEDLE"
-      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIG" "$ABSENT" ;;
+      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIG" "$ABSENT"
+      check "$suite" "$funcs" "$fn" PASS "" "" "d" "$DASHBIG" "$DASHNEEDLE"
+      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIG" "$DASHNEEDLE" ;;
     capture:not_contains)
       check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIG" "$ABSENT"
-      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIG" "$NEEDLE" ;;
+      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIG" "$NEEDLE"
+      check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIG" "$DASHNEEDLE"
+      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$DASHBIG" "$DASHNEEDLE" ;;
     capture:token_row)
       check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIGROW" "$TOKEN" ;;
     capture:no_token_row)
@@ -253,10 +271,14 @@ drive_declared() {
 
     file:*:contains)
       check "$suite" "$funcs" "$fn" PASS "$var" "$BIGFILE" "d" "$NEEDLE"
-      check "$suite" "$funcs" "$fn" FAIL "$var" "$BIGFILE" "d" "$ABSENT" ;;
+      check "$suite" "$funcs" "$fn" FAIL "$var" "$BIGFILE" "d" "$ABSENT"
+      check "$suite" "$funcs" "$fn" PASS "$var" "$DASHBIGFILE" "d" "$DASHNEEDLE"
+      check "$suite" "$funcs" "$fn" FAIL "$var" "$BIGFILE" "d" "$DASHNEEDLE" ;;
     file:*:not_contains)
       check "$suite" "$funcs" "$fn" PASS "$var" "$BIGFILE" "d" "$ABSENT"
-      check "$suite" "$funcs" "$fn" FAIL "$var" "$BIGFILE" "d" "$NEEDLE" ;;
+      check "$suite" "$funcs" "$fn" FAIL "$var" "$BIGFILE" "d" "$NEEDLE"
+      check "$suite" "$funcs" "$fn" PASS "$var" "$BIGFILE" "d" "$DASHNEEDLE"
+      check "$suite" "$funcs" "$fn" FAIL "$var" "$DASHBIGFILE" "d" "$DASHNEEDLE" ;;
     file:*:blocked)
       check "$suite" "$funcs" "$fn" PASS "$var" "$BIGBLOCKFILE" "d" "$NEEDLE"
       check "$suite" "$funcs" "$fn" FAIL "$var" "$BIGBLOCKFILE" "d" "$ABSENT" ;;
@@ -266,10 +288,14 @@ drive_declared() {
 
     path-arg:contains)
       check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIGFILE" "$NEEDLE"
-      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIGFILE" "$ABSENT" ;;
+      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIGFILE" "$ABSENT"
+      check "$suite" "$funcs" "$fn" PASS "" "" "d" "$DASHBIGFILE" "$DASHNEEDLE"
+      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIGFILE" "$DASHNEEDLE" ;;
     path-arg:not_contains)
       check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIGFILE" "$ABSENT"
-      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIGFILE" "$NEEDLE" ;;
+      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIGFILE" "$NEEDLE"
+      check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIGFILE" "$DASHNEEDLE"
+      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$DASHBIGFILE" "$DASHNEEDLE" ;;
 
     *)
       fail "$suite: $fn declares a semantic this harness cannot drive" \
