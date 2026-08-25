@@ -1225,9 +1225,19 @@ report_hook() {
   # honest tree this file is empty on every engine. Anything in it is a hook that broke its
   # first contract, and it is reported whether or not a rule also fired: a diagnostic beside
   # a firing rule still means some other row went unevaluated.
+  # JIT_SAMPLE_CALL=1 -- this is the ONE FUNNEL every --prompt/--tool/--path sample call
+  # in this script passes through, so it is the one place this needs saying (#217). A
+  # diagnostic call is not a session: reproduced against a fixture project with no
+  # .discovery/ directory, a hooks.log appeared after one call, built from whatever text
+  # this script happened to be asked to check -- and that file is the record
+  # jit-misses.sh reads to report genuine vocabulary gaps. Setting the flag here rather
+  # than at each of the three call sites is what makes it apply to all of them at once,
+  # rather than needing the next sample-call site to remember it too. See the comment
+  # above the check itself in common.sh for why a real session has no route to the same
+  # suppression.
   errf="$(mktemp "${TMPDIR:-/tmp}/claude-jit-dry-XXXXXXXX" 2>/dev/null)" || errf=""
   if [ -n "$errf" ]; then
-    out="$(printf '%s' "$2" | CLAUDE_PROJECT_DIR="$3" bash "$SCRIPT_DIR/$1" 2>"$errf")"
+    out="$(printf '%s' "$2" | CLAUDE_PROJECT_DIR="$3" JIT_SAMPLE_CALL=1 bash "$SCRIPT_DIR/$1" 2>"$errf")"
     if [ -s "$errf" ]; then
       SKIPPED_READS=$((SKIPPED_READS + 1))
       printf '  SKIPPED %-19s the hook wrote to stderr — it did not evaluate this call cleanly\n' "$1"
@@ -1239,7 +1249,7 @@ report_hook() {
     # half of it: this is the linter, and a linter that quietly checks less is #98 again.
     printf '  SKIPPED %-19s no temp file available, so this hook stderr was not checked\n' "$1"
     SKIPPED_READS=$((SKIPPED_READS + 1))
-    out="$(printf '%s' "$2" | CLAUDE_PROJECT_DIR="$3" bash "$SCRIPT_DIR/$1" 2>/dev/null)"
+    out="$(printf '%s' "$2" | CLAUDE_PROJECT_DIR="$3" JIT_SAMPLE_CALL=1 bash "$SCRIPT_DIR/$1" 2>/dev/null)"
   fi
   # Anchored on .md, because the refusal notice this same hook injects is headed
   # "# JIT Context: N rule(s) could not be evaluated" — an unanchored read picks up N

@@ -288,6 +288,28 @@ for _jit_p in "${JIT_BASE%/*}" "$JIT_BASE" "$JIT_BASE/.discovery" "$LOG_DIR"; do
   if [ -L "$_jit_p" ]; then JIT_LOG_DISABLED=1; fi
 done
 unset _jit_p
+# --- A sample call is not a session (#217) -------------------------------------------
+#
+# scripts/jit-match.sh and scripts/jit-dry-run.sh both shell out to the REAL hook to
+# answer "what would fire", rather than reimplementing the matcher -- the same reason
+# #205 gives for jit-match.sh, and jit-dry-run.sh set the precedent first. But logging is
+# a side effect of the real hook doing its job, and a diagnostic call is not a session:
+# reproduced against a fixture project with no .discovery/ directory at all, a hooks.log
+# appears after one jit-match.sh or jit-dry-run.sh --prompt/--tool/--path call, built from
+# whatever text the caller happened to pass it. That file is the record jit-misses.sh
+# reads to report genuine vocabulary gaps, and a diagnostic probe writes exactly the shape
+# of record jit-misses.sh counts as a real miss.
+#
+# JIT_SAMPLE_CALL is the suppression, and its safety rests on WHO can set it. This is a
+# plain environment variable the calling SCRIPT exports before it execs the hook
+# subprocess -- never a value read out of config.env, the JSON payload, or anything else
+# that arrives with a cloned repository. A real Claude Code session invokes the hook
+# through its own mechanism, which has no route to set an arbitrary env var for it; only
+# jit-match.sh and jit-dry-run.sh, the two callers that ARE sample calls by construction,
+# ever set this one. So a real session has no path to the same suppression -- the
+# property #217 asks for by name -- and a hook that can be told not to log stays a hook
+# whose log proves less only for the caller that is deliberately not a session.
+if [ "${JIT_SAMPLE_CALL:-}" = "1" ]; then JIT_LOG_DISABLED=1; fi
 # The mkdir is what MATERIALISES a directory through a link, so it is gated too, not just
 # the append. `2>/dev/null` because a read-only or unwritable tree is a reason to say
 # nothing, never a reason to print to a session's stderr.

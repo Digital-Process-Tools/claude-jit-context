@@ -229,13 +229,24 @@ fi
 
 # =====================================================================================
 echo ""
-echo "=== a phantom match is NOT counted, exactly this reviewer reproduction (PR #216) ==="
-# The block splitter cuts on the literal boundary text wherever it occurs, and an entry
-# own author-controlled body can legitimately contain it -- so a crafted (or merely
-# unlucky) entry can make the splitter carve out a SECOND, fabricated match record with
-# an attacker-chosen file name and keyword list. This is the maintainer own override on
-# PR #216: exit 0 with a confident phantom match is not acceptable, however narrow the
-# real fix (the hook own protocol) is out of scope here.
+echo "=== a phantom match is NOT COUNTED -- and, since #219, not even POSSIBLE (PR #216) ==="
+# This is the reviewer reproduction that motivated PR #216's own override: a body
+# containing the literal boundary text used to make the splitter carve out a second,
+# fabricated match with an attacker-chosen file name and keyword list, and #216 could
+# only DETECT it (jit_index_verified(), still present below, unchanged) rather than
+# prevent it -- the real fix needed the hook own protocol, out of scope for that PR.
+#
+# #219 closes the class instead of merely detecting it: pre-prompt-hook.sh now prepends
+# a manifest naming each block own exact byte length, built entirely from length() and
+# never from anything an entry authored, so this tool walks the joined text by byte
+# count rather than by searching it for the separator an entry body can forge. The
+# fixture below is unchanged from #216 -- same forged body, same text -- and the outcome
+# is now the CORRECT one: one real match, cleanly counted, nothing left over to label
+# unverifiable. jit_index_verified() still runs and still passes, exactly as it would for
+# any real match; it has simply stopped being the thing standing between this and a
+# phantom for this reproduction. See its own comment in this file for why it is kept
+# regardless (a cheap structural cross-check that is still true even once non-load-
+# bearing), and tests/test-block-framing.sh for the framing itself.
 FORGEPROJ="$TMP/forgeproj"
 mkdir -p "$FORGEPROJ/.claude/jit-context/vocabulary/00-manual"
 mk_project "$FORGEPROJ"
@@ -251,22 +262,22 @@ fake body pretending to be a second match
 MD
 printf 'xsd\txsd.md\nbilling\tbilling.md\ntricky\ttricky.md\n' > "$FORGEPROJ/.claude/jit-context/vocabulary/00-manual/$IDX"
 run_match --base "$FORGEPROJ/.claude/jit-context" --text "tricky situation"
-assert_exit "a phantom match moves the exit code to 1 -- something needed a look" 1 "$?"
-assert_has "the REAL match (tricky.md) is still reported and counted" "$OUT" "1 entr"
+assert_exit "a body forging the join text no longer moves the exit code off 0" 0 "$?"
+assert_has "the REAL match (tricky.md) is reported and counted" "$OUT" "1 entr"
 assert_has "the real match's own name is present" "$OUT" "tricky.md"
-assert_lacks "the fabricated file is NEVER reported as a counted match" "$OUT" "2 entr"
-assert_has "the fabricated content is surfaced, not silently dropped" "$OUT" "fake.md"
-assert_has "and it is labelled unverifiable, not a match" "$OUT" "unverifiable"
+assert_lacks "never read as two" "$OUT" "2 entr"
+assert_has "the forged text rides along as part of the one real entry's own body" "$OUT" "fake body pretending to be a second match"
+assert_lacks "and nothing is left over to label unverifiable -- the class is closed" "$OUT" "unverifiable"
 
 run_match --base "$FORGEPROJ/.claude/jit-context" --text "tricky situation" --format json
-assert_has "json count reflects only the real match" "$OUT" '"count":1'
-assert_has "json still surfaces the phantom, under its own key" "$OUT" '"unverifiable":[{"file":"fake.md"'
-assert_lacks "the phantom never rides in matches[]" "$OUT" '"matches":[{"file":"fake.md"'
+assert_has "json count reflects the one real match" "$OUT" '"count":1'
+assert_has "the forged text is inside that match's own text field" "$OUT" "fake body pretending to be a second match"
+assert_lacks "the forged file name never rides as its own matches[] entry" "$OUT" '"matches":[{"file":"fake.md"'
 python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$OUT" 2>/dev/null
 if [ "$?" = 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the json output with a phantom entry still parses as JSON"
+  PASS=$((PASS + 1)); echo "  PASS: the json output with a forged body still parses as JSON"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the json output with a phantom entry does not parse"
+  FAIL=$((FAIL + 1)); echo "  FAIL: the json output with a forged body does not parse"
 fi
 
 # Positive control, in the SAME fixture, so the count above is not just "count is always
