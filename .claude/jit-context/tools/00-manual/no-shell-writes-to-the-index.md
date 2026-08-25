@@ -21,5 +21,20 @@ So this rule does not try. It names the three write forms that actually get type
 Three consequences worth knowing rather than discovering:
 
 - A write form outside the list is not refused. `cp x 00-index.tsv`, a heredoc, and a python one-liner all go through.
-- A `>` inside a quoted argument that also names the index — `git commit -m "wrote > 00-index.tsv"` — is refused, because a regex over a command string cannot see that the quote is still open.
+- A `>` inside a quoted argument that also names the index — `git commit -m "wrote > 00-index.tsv"` — is refused, because a regex over a command string cannot see that the quote is still open. #76, #79 and #92 priced this as a rare, hand-typed commit message. It no longer is: since every sanctioned write in this repository goes through a `supertool 'paste:@-'`/`'edit:@-'` payload, and that payload carries the whole file's content on the command line, any fixture whose content merely discusses this rule pays the same cost on every payload that mentions it (#215). The remedy below is how to pay it once instead of every time.
 - The redirect alternative excludes a `>` preceded by `-`, so `old.tsv->00-index.tsv` is prose rather than a write. The cost is that `--flag>00-index.tsv`, which no one writes, is not caught.
+
+## Working around a payload refused by its own content
+
+A `paste`/`edit:@-` call can be refused when the file it writes is not the index at all, but its
+*content* names the index near a redirect character — a fixture demonstrating this very rule is the
+common case. Split the literal so the two halves never sit adjacent on the command line:
+
+```sh
+IDXNAME="00-index"; IDXNAME="$IDXNAME.tsv"
+```
+
+— then build the offending text with `$IDXNAME` rather than typing the name whole. This is a routing
+workaround, not a fix: the rule still cannot tell a real write from a mention inside a payload, for
+the reason described above, so pay it once per fixture rather than typing the redirect and the name
+adjacently.
