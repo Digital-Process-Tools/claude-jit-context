@@ -268,6 +268,34 @@ assert_allows "a write to another tsv"    "$(bash_payload "echo x > docs/my00-in
 # would be worse than the hole it closes.
 assert_allows "the rebuild script itself" "$(bash_payload "bash scripts/rebuild-tsv.sh")"
 
+# #215: the payload channel. Every sanctioned write now goes through a supertool
+# paste:@-/edit:@- payload, which carries the whole file's CONTENT on the command line --
+# so a fixture whose content merely DISCUSSES this rule is refused for writing a totally
+# different file, because its content names the index near a redirect character. This is
+# not fixed here: the rule body's own argument against anchoring on the file name still
+# holds, and a regex over a command string cannot see that a heredoc/TOML string is not a
+# real redirect. What changed is that the refusal now names the split-literal workaround,
+# so an author pays this once per fixture instead of every time (see the rule body).
+IDXNAME_215="00-index"; IDXNAME_215="$IDXNAME_215.tsv"
+PAYLOAD_CMD="supertool 'paste:@-' path=docs/other.md content='see > $IDXNAME_215 for details'"
+PAYLOAD_OUT="$(hook_verdict "$(bash_payload "$PAYLOAD_CMD")")"
+if grep -qF '"decision":"block"' <<<"$PAYLOAD_OUT" && grep -qF "$SHELL_RULE" <<<"$PAYLOAD_OUT"; then
+  PASS=$((PASS + 1)); echo "  PASS: a payload writing an unrelated file is still refused (#215, known FP)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: expected this payload to still be refused (the known false positive)"
+  echo "    got: ${PAYLOAD_OUT:0:200}"
+fi
+if grep -qF "Split the literal" <<<"$PAYLOAD_OUT"; then
+  PASS=$((PASS + 1)); echo "  PASS: the refusal names the split-literal workaround (#215)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the refusal does not name the split-literal workaround"
+  echo "    got: ${PAYLOAD_OUT:0:400}"
+fi
+# The workaround itself must actually escape the rule -- proof, not just a claim in prose.
+# The two halves of the index name are never adjacent in THIS command string, unlike above.
+WORKAROUND_CMD="IDXNAME_215=\"00-index\"; IDXNAME_215=\"\$IDXNAME_215.tsv\"; supertool 'paste:@-' path=docs/other.md content=\"see > \$IDXNAME_215 for details\""
+assert_allows "the split-literal workaround is not refused" "$(bash_payload "$WORKAROUND_CMD")"
+
 echo ""
 echo "=== the vocabulary dimension: the one entry that explains this plugin ==="
 # The other half of #93. `vocabulary/00-manual/jit-context.md` fires today and had no
