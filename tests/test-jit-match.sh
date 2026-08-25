@@ -185,6 +185,50 @@ assert_lacks "no --limit: nothing reads as dropped" "$OUT" "dropped"
 
 # =====================================================================================
 echo ""
+echo "=== --format json escapes the full control-byte range, not just tab/CR/LF (#audit) ==="
+# common.sh's own jit_json_escape() (used by every hook) escapes the WHOLE 0x00-0x1F
+# range, documented there as the reason a strict JSON reader is entitled to reject the
+# whole object over a single raw control byte. jit-match.sh's two hand-rolled escapers
+# (building the outbound payload, and building --format json output) must not cover a
+# narrower set than that -- a form feed or vertical tab riding through an entry body or
+# --text unescaped produces output that LOOKS like JSON and is not.
+CTRLPROJ="$TMP/ctrlproj"
+mkdir -p "$CTRLPROJ/.claude/jit-context/tools/00-manual" "$CTRLPROJ/.claude/jit-context/paths/00-manual" "$CTRLPROJ/.claude/jit-context/vocabulary/00-manual"
+: > "$CTRLPROJ/.claude/jit-context/tools/00-manual/$IDX"
+: > "$CTRLPROJ/.claude/jit-context/paths/00-manual/$IDX"
+printf -- '---\ntitle: Control byte entry\ndescription: carries a form feed.\n---\nbefore\x0cafter\n' \
+  > "$CTRLPROJ/.claude/jit-context/vocabulary/00-manual/ctrl.md"
+printf 'ctrlword\tctrl.md\n' > "$CTRLPROJ/.claude/jit-context/vocabulary/00-manual/$IDX"
+run_match --base "$CTRLPROJ/.claude/jit-context" --text "ctrlword trouble" --format json
+if command -v python3 >/dev/null 2>&1; then
+  python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$OUT" 2>/dev/null
+  if [ "$?" = 0 ]; then
+    PASS=$((PASS + 1)); echo "  PASS: a raw form-feed byte in an entry body still yields parseable JSON"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: a raw form-feed byte in an entry body broke the JSON output"
+    echo "    got: $(cut -c1-400 "$OUT" | tr '\n' '|')"
+  fi
+  # Parseable is a weaker claim than correct: a JSON string that spells out the six
+  # visible characters for the escape, rather than carrying the byte itself, still
+  # parses cleanly -- and that is exactly what shipped first. The real claim is that
+  # the decoded string contains the actual control character.
+  python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+sys.exit(0 if chr(12) in d['matches'][0]['text'] else 1)
+" "$OUT" 2>/dev/null
+  if [ "$?" = 0 ]; then
+    PASS=$((PASS + 1)); echo "  PASS: the form feed round-trips as the real byte, not as visible escape text"
+  else
+    FAIL=$((FAIL + 1)); echo "  FAIL: the form feed did not round-trip as a real byte"
+    echo "    got: $(cut -c1-400 "$OUT" | tr '\n' '|')"
+  fi
+else
+  echo "  SKIPPED: no python3 on PATH to parse the json output"
+fi
+
+# =====================================================================================
+echo ""
 echo "=== a refused index row is a NOTICE, not silently folded into the match count ==="
 BADPROJ="$TMP/badproj"
 mkdir -p "$BADPROJ/.claude/jit-context"
@@ -224,6 +268,22 @@ if [ -d "$BASE/.discovery/state" ] && [ -n "$STATE_HIT" ]; then
 else
   PASS=$((PASS + 1)); echo "  PASS: no shown-state file was ever written"
 fi
+
+# =====================================================================================
+echo ""
+echo "=== a stderr check that could not run must never read as a violation found (#audit) ==="
+# TMPDIR pointed at a non-writable directory makes mktemp fail inside jit-match.sh, the
+# same shape run_bounded()-style fixtures elsewhere use to force the "no temp file"
+# branch. A hook that behaved perfectly must not be reported as having violated its
+# never-write-to-stderr contract just because the check itself could not run.
+NOTMPDIR="$TMP/no-write-tmpdir"
+mkdir -p "$NOTMPDIR"
+chmod 000 "$NOTMPDIR"
+ST=0
+TMPDIR="$NOTMPDIR" bash "$MATCH" --base "$BASE" --text "xsd trouble" > "$OUT" 2> "$ERR" || ST=$?
+chmod 755 "$NOTMPDIR"
+assert_exit "a real match still exits 0 even when the stderr check itself could not run" 0 "$ST"
+assert_lacks "and it is never reported as the hook having violated its own contract" "$ERR" "wrote to stderr"
 
 # =====================================================================================
 echo ""

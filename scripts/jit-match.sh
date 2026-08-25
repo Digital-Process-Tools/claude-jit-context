@@ -175,14 +175,23 @@ if [ "$SUMMARY" = 1 ]; then
   HOOK_ENV+=(JIT_CONTEXT_INJECT=summary)
 fi
 
+# HOOK_STDERR_CHECKED is its own flag rather than a sentinel packed into HOOK_STDERR: an
+# earlier version used a non-empty placeholder string for "could not check" and the exit
+# logic below tested `[ -n "$HOOK_STDERR" ]`, which is true for BOTH a real violation and
+# a check that never ran -- a hook that behaved perfectly was reported as having broken
+# its own never-write-to-stderr contract, on any platform where mktemp happens to fail.
+# Third state, own variable: "found a violation", "checked and clean" and "could not
+# check" must not collapse to two.
+HOOK_STDERR_CHECKED=0
 ERRF="$(mktemp "${TMPDIR:-/tmp}/claude-jit-match-XXXXXXXX" 2>/dev/null)" || ERRF=""
 if [ -n "$ERRF" ]; then
   HOOK_OUT="$(printf '%s' "$PAYLOAD" | env "${HOOK_ENV[@]}" bash "$SCRIPT_DIR/pre-prompt-hook.sh" 2>"$ERRF")"
   HOOK_STDERR="$(cat "$ERRF" 2>/dev/null)"
+  HOOK_STDERR_CHECKED=1
   rm -f "$ERRF"
 else
   HOOK_OUT="$(printf '%s' "$PAYLOAD" | env "${HOOK_ENV[@]}" bash "$SCRIPT_DIR/pre-prompt-hook.sh" 2>/dev/null)"
-  HOOK_STDERR="(stderr not checked: no temp file available here)"
+  HOOK_STDERR=""
 fi
 
 # --- Decode the hook's own JSON, and split additionalContext into blocks -----------------
@@ -205,7 +214,51 @@ function emit_json_str(s) {
   gsub(/\t/, "\\t", s)
   gsub(/\n/, "\\n", s)
   gsub(/\r/, "\\r", s)
+  for (jit_c00 = 0; jit_c00 <= 31; jit_c00++) {
+    if (jit_c00 == 9 || jit_c00 == 10 || jit_c00 == 13) continue
+    jit_c00_ch = sprintf("%c", jit_c00)
+    if (length(jit_c00_ch) == 0) continue
+    if (index(s, jit_c00_ch) > 0) gsub(jit_c00_ch, sprintf("\\u%04x", jit_c00), s)
+  }
   return s
+}
+# jit_unescape() (common.sh) never decodes \uXXXX -- it was written for a hook reading a
+# CLIENT-built prompt field, which this codebase own encoders never emit \u for. But
+# pre-prompt-hook.sh IS one of this codebases own encoders: its jit_json_escape() escapes
+# the whole 0x00-0x1F range (skipping \t \n \r, which get their own two-letter escape)
+# as \u00XX, exactly the range emit_json_str() above re-escapes on the way back out. Left
+# alone, jit_unescape() passes an unrecognised \u escape through as six literal
+# characters (see its own `else { o = o c nx; ...}` arm) -- syntactically harmless, but the
+# original control byte is gone, replaced by visible text that was never in the entry.
+# This reverses PRECISELY the range pre-prompt-hook.sh can produce and nothing wider: a
+# \uXXXX above 0x1F never comes from this hook, and decoding it here would need a UTF-8
+# assembly step no awk here is trusted to do (JIT_AWK_JSON own header comment says so of
+# an unrecognised escape generally).
+function jit_decode_u00(s,   out, i, n, c, hx, v) {
+  # No index()-based early-return guard here: a first version tried `index(s, "\u00") ==
+  # 0`, a PLAIN STRING LITERAL with an escape awk itself does not define ("\u" is not one
+  # of \n \t \r \\ \" and the rest) -- exactly the trap this repository already documents
+  # for a REGEX carrying \s \d \w, just relocated into a string constant instead. Measured
+  # on gawk 5.4.1: the guard fired on every call, "no marker found", and the byte was
+  # never restored, silently -- while the identical-looking loop below, whose \\u00 lives
+  # inside an ERE literal rather than a string literal, compiled and matched correctly on
+  # BOTH engines. So there is no guard: the walk below is O(length(s)) either way, and it
+  # is the one thing here proven to agree across engines.
+  out = ""; n = length(s); i = 1
+  while (i <= n) {
+    c = substr(s, i, 1)
+    if (c == "\\" && substr(s, i, 6) ~ /^\\u00[0-9a-fA-F][0-9a-fA-F]$/) {
+      hx = tolower(substr(s, i + 4, 2))
+      v = index("0123456789abcdef", substr(hx, 1, 1)) - 1
+      v = v * 16 + index("0123456789abcdef", substr(hx, 2, 1)) - 1
+      out = out sprintf("%c", v)
+      i += 6
+      continue
+    }
+    out = out c
+    i++
+  }
+  return out
 }
 { input = input $0 }
 END {
@@ -219,7 +272,7 @@ END {
   for (i = 1; i + 2 <= n; i++) {
     if (fs[i] != fe[i]) continue
     if (jit_field(raw, fs[i], fe[i]) != "additionalContext") continue
-    ctx = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
+    ctx = jit_decode_u00(jit_unescape(jit_field(raw, fs[i+2], fe[i+2])))
     break
   }
 
@@ -318,12 +371,22 @@ AWK_STATUS="$(printf '%s\n' "$RESULT" | awk -F'\t' '/^JIT-MATCH-STATUS\t/ { s = 
 printf '%s\n' "$RESULT" | grep -v '^JIT-MATCH-STATUS'"$(printf '\t')"
 
 EXIT=0
-if [ -n "$HOOK_STDERR" ]; then
+if [ "$HOOK_STDERR_CHECKED" = 1 ] && [ -n "$HOOK_STDERR" ]; then
   echo "" >&2
   echo "jit-match: NOTE -- pre-prompt-hook.sh wrote to stderr, which its own contract says" >&2
   echo "  it must never do. What matched above, if anything, is not the whole answer:" >&2
   printf '%s\n' "$HOOK_STDERR" | sed 's/^/  /' >&2
   EXIT=1
+elif [ "$HOOK_STDERR_CHECKED" = 0 ]; then
+  # Not promoted to exit 1: nothing was FOUND wrong, only left unverified, and jit-doctor.sh
+  # already sets the precedent for that distinction -- its own "cannot tell" answers are
+  # real, first-class outcomes that do not move an exit code, because a confident claim of
+  # a defect that was never actually observed is worse than saying plainly it was not
+  # checked. Always printed, on stderr, so this state is never silent either.
+  echo "" >&2
+  echo "jit-match: NOTE -- no temp file was available to check pre-prompt-hook.sh's stderr." >&2
+  echo "  This is not a clean result: whether it kept its never-write-to-stderr contract" >&2
+  echo "  was not checked, one way or the other. What matched above is not verified against it." >&2
 fi
 [ "$AWK_STATUS" = "1" ] && EXIT=1
 
