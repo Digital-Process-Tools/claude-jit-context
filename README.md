@@ -673,7 +673,7 @@ Entries do nothing until they are indexed:
 bash .claude/claude-jit-context/scripts/rebuild-tsv.sh
 ```
 
-This parses the frontmatter of every `.md` file into `00-index.tsv` files, which is what the hooks actually read. It also prints an **ambiguity report** — keywords appearing in more than five entries. Those are worth pruning: every match loads the whole entry, so a keyword like `user` in twelve files means one stray mention drags twelve files into context.
+This parses the frontmatter of every `.md` file into `00-index.tsv` files, which is what the hooks actually read. It also prints an **ambiguity report** — keywords whose collision, summed *across every layer*, pulls more than a configurable byte floor (`JIT_CONTEXT_COLLISION_BYTES`, default 4096) into one match. Cross-layer and by bytes on purpose: the same concept restated in `00-manual` and `10-auto` costs exactly as much as restating it twice in one layer, and a two-entry collision between two fat entries can cost more than a nine-entry collision between stubs — a file-count threshold cannot tell those apart, and this report does not use one.
 
 The exit code says which of three things happened, so a script or a pre-commit hook can tell them apart:
 

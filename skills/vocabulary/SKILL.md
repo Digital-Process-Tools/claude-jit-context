@@ -45,7 +45,7 @@ Vocabulary entries use `keywords:` instead of `match:`.
 
 - **One word that is also ordinary English will fire constantly.** `time`, `file`, `count`, `name`, `output` are already blacklisted; `folder`, `setup`, `property` should have been.
 - Prefer multi-word keys and product nouns: `gl-mr`, `changelog fragment`, `poller identity`.
-- After building, read the ambiguity report. **A keyword in >5 files means every match loads all of them.** Prune.
+- After building, read the ambiguity report. **A keyword whose collision pulls more than the configured byte floor into one match, summed across EVERY layer, is reported** (#204) — a keyword restated in two layers costs the same as restating it twice in one, and two fat entries sharing a keyword can cost more than six thin ones. File count alone is no longer the signal. Prune.
 - Keywords are normalised — lowercased, anything outside `[a-z0-9 -]` becomes a space. A keyword written `docs.dp.tools` is **dead on arrival**.
 
 ## 4. Content rules

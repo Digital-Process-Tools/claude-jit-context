@@ -9,7 +9,8 @@
 #                                                           -- one entry carrying a
 #                                                              blacklisted keyword is the
 #                                                              whole trigger
-#   ambiguity           files: <name>,<name>,...            -- behind >5 files per keyword
+#   ambiguity           files: <name>[<layer>],...          -- behind a keyword pulling more
+#                                                          than the configured byte floor (#204)
 #   what a match costs  largest/median/no-description lists -- added by #54, same exposure
 #   bad bytes           ", written from <name>"             -- behind a non-UTF-8 row
 #
@@ -129,7 +130,12 @@ mkdir -p "$FATALDIR/00-index.tsv"
 entry "$FATALDIR/plain.md" "file" "Body."
 
 OUT="$WORK/rebuild.out"
-CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh" > "$OUT" 2>&1
+# #204: the ambiguity tally now floors on BYTES pulled in one match, not file count, and
+# every fixture entry here is a few dozen bytes -- nowhere near the 4096b default even six
+# deep. A floor of 1 keeps this fixture's trigger the same as before #204 (six entries
+# sharing a keyword), without asserting anything about the DEFAULT floor's value, which is
+# tests/test-keyword-collision-bytes.sh's job.
+JIT_CONTEXT_COLLISION_BYTES=1 CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh" > "$OUT" 2>&1
 RC=$?
 
 echo "=== rebuild-tsv.sh report names (#113) ==="
@@ -461,7 +467,9 @@ for i in 1 2 3 4 5 6; do
 done
 
 LOUT="$WORK/labels.out"
-CLAUDE_PROJECT_DIR="$LPROJ" bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh" > "$LOUT" 2>&1
+# #204: see the comment on the first rebuild-tsv.sh invocation above -- the byte floor
+# needs lowering for a fixture this small to trigger it at all.
+JIT_CONTEXT_COLLISION_BYTES=1 CLAUDE_PROJECT_DIR="$LPROJ" bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh" > "$LOUT" 2>&1
 LRC=$?
 
 # 2, for the reason the first fixture asserts it: a change that stopped the FATAL branch
@@ -481,8 +489,12 @@ assert_has "the unindexed report names the vocabulary dimension" \
   "$LOUT" "[vocabulary/10-shared] note.md: no keywords:"
 assert_has "the dropped-keyword report names it too" \
   "$LOUT" '[vocabulary/10-shared] drop.md: "file"'
-assert_has "and so does the ambiguity tally" \
-  "$LOUT" '[vocabulary/10-shared] "widget"'
+# #204: the layer used to sit in the HEADER, one per keyword, because a keyword's
+# collision was tallied per layer. It is cross-layer now, so a keyword can span several
+# layers in one collision -- the layer moved to the FILES line, one bracket per file,
+# which is where it stays correct even when a keyword pulls files from two layers at once.
+assert_has "and so does the ambiguity tally, once per file it names" \
+  "$LOUT" "amb1.md[vocabulary/10-shared]"
 
 # --- The paths half: the direction that was already right, and must stay. -------------
 assert_has "the paths FATAL line still names its dimension" \
