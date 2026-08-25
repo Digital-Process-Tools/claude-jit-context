@@ -29,9 +29,6 @@
     ]
   },
   "milestones": [],
-  "ci": {
-    "required_checks": 5
-  },
   "release": {
     "tag_pattern": "v{version}",
     "merge_method": "squash",
