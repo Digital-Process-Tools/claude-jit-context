@@ -76,6 +76,34 @@ than from a release commit.
 A bare `65` does not count, and `#38` does not satisfy issue 3 — the number is compared,
 not searched for as a substring.
 
+## A `removed` fragment has to declare compatibility
+
+A `removed` fragment must say whether the removal breaks anything, as an ordinary bullet
+in the body:
+
+```markdown
+- Compatibility: breaking|compatible - <reason>
+```
+
+The release number is proposed from these fragments, and the `oss` plugin's
+`release_version.py` reads that bullet to propose it. A `removed` fragment that declares
+nothing **stops the proposal** rather than defaulting quietly — a patch bump over a
+breaking change is indistinguishable in the tag from a considered one. A word that is
+neither `breaking` nor `compatible` stops it too, so a value nothing recognises never
+grades as compatible.
+
+The reason after the verdict is required. A bare flag is the same unsourced verdict one
+field further along, and the sentence is the part worth having.
+
+Only `removed` is required to carry one. Every other section may, and a fragment that says
+nothing is read as compatible with the count of such fragments reported out loud. A field
+on every fragment is a field on every fragment to get wrong, so it is required exactly
+where the question is genuinely open.
+
+It is a plain bullet rather than frontmatter, so the assembler needs no special case and
+the claim ships into `CHANGELOG.md` where a user reads it, instead of being metadata
+deleted at the fold.
+
 ## A fragment is bullets and prose, and the guard is a CommonMark parser
 
 A fragment is inserted into `CHANGELOG.md` **verbatim**, so a line here that CommonMark
