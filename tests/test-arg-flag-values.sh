@@ -32,7 +32,7 @@
 #
 # Enumeration turns "not in the list" into "must be driven", so a tool that legitimately
 # takes no flags needs an answer of its own. classify_script() gives every tracked file one
-# of six verdicts, read out of that file own bytes rather than off a skip list -- a skip
+# of seven verdicts, read out of that file own bytes rather than off a skip list -- a skip
 # list being the typed list again, one indirection further out. "This tool has no flags to
 # test" and "this tool never ran" are different lines in the output below, and so are the
 # two ways a loop can yield nothing:
@@ -45,6 +45,10 @@
 #                       the parser rotted or the loop shape moved
 #   flags-elsewhere     no loop, but getopts / a `shift 2` / a dash case arm is present --
 #                       FAIL, because reporting it as a tool with no flags is the silence
+#   unreadable-file     the tracked path is not a readable regular file -- FAIL, for the
+#                       same reason #200 gives in test-line-citations.sh: a file this
+#                       suite cannot open must never read the same as one with nothing
+#                       to drive
 #   not-bash-script     the shebang is not bash -- FAIL, because this classifier only
 #                       reads bash argument-loop shapes (#193). CLAUDE.md permits
 #                       bash, awk AND perl under scripts/ -- this classifier is coupled
@@ -172,7 +176,7 @@ is_bash_script() {
   esac
 }
 
-# One of six verdicts for one file, read out of that file own bytes. There is no skip
+# One of seven verdicts for one file, read out of that file own bytes. There is no skip
 # list anywhere in this suite: a skip list is the hand-written list #188 is about, one
 # indirection further out, and it goes stale in exactly the same silence.
 classify_script() {
@@ -343,12 +347,15 @@ EOF
 # claim about a file which does not exist yet. Watching it pass on today tree says nothing
 # about that claim: today tree is exactly the tree the old hand-written list already
 # covered. So the enumeration and the classifier are driven here against a throwaway git
-# repository holding five scripts this suite has never heard of, one per verdict.
+# repository holding six scripts this suite has never heard of, one per verdict.
 #
-# The five verdicts are listed at the top of this file. Each of them prints a line naming
+# The seven verdicts are listed at the top of this file. Each of them prints a line naming
 # the script, so "this tool has no flags to test" and "this tool never ran" are different
-# sentences in the output rather than the same silence -- and each of the five has a
-# fixture here, because a verdict nothing ever reaches is a branch nobody has tested.
+# sentences in the output rather than the same silence -- and six of the seven have a
+# fixture here, because a verdict nothing ever reaches is a branch nobody has tested. The
+# seventh, unreadable-file, has none: driving it honestly wants the same portable-but-not-
+# permission-based route #200 took in test-line-citations.sh, and nothing here has needed
+# it yet.
 
 echo "=== the sweep itself: a script named nowhere in this file ==="
 
@@ -536,12 +543,16 @@ if ! grep -qxF "scripts/jit-dry-run.sh" <<<"$SCRIPT_LIST"; then
   exit 1
 fi
 
-DRIVEN_LIST=""
-N_DRIVEN=0
-N_NOFLAG=0
-while IFS= read -r script; do
-  [ -n "$script" ] || continue
-  case "$(classify_script "$REPO/$script")" in
+# One printer per verdict, shared between the real sweep loop below and a META-fixture
+# check driven right after it -- so the MESSAGE a verdict prints is under test, not just
+# the label classify_script() returns. Before this split, not-bash-script's classifier
+# return had a positive control (class_is, above) but the arm that actually prints its
+# message on a real CI run had none: every tracked script in THIS repository is bash, so
+# that arm has never executed against a live tree here. Reviewer finding, fixed rather
+# than filed: same file, one sentence of blast radius.
+handle_verdict() {
+  local script="$1" verdict="$2"
+  case "$verdict" in
     drive)
       N_DRIVEN=$((N_DRIVEN + 1))
       DRIVEN_LIST="$DRIVEN_LIST$script
@@ -587,7 +598,28 @@ while IFS= read -r script; do
           "honestly; reading it as no-flags would report coverage this suite does not" \
           "have (#193)." ;;
   esac
+}
+
+DRIVEN_LIST=""
+N_DRIVEN=0
+N_NOFLAG=0
+while IFS= read -r script; do
+  [ -n "$script" ] || continue
+  handle_verdict "$script" "$(classify_script "$REPO/$script")"
 done <<<"$SCRIPT_LIST"
+
+# The not-bash-script arm above has no fixture in THIS repository's own scripts/ --
+# every tracked script here is bash, so the loop just above has never actually exercised
+# it. Driven directly, in a subshell so its own PASS/FAIL and N_DRIVEN/N_NOFLAG stay out
+# of this run's totals, the same pattern already used for jit-newtool.sh's drive path.
+( handle_verdict "scripts/not-bash.py" "not-bash-script" ) > "$TMP/meta-notbash.txt" 2>&1
+if grep -qF "FAIL: scripts/not-bash.py is not a bash script" "$TMP/meta-notbash.txt"; then
+  ok "the not-bash-script verdict's own printed message is exercised, not just its classifier return (#193)"
+else
+  bad "the not-bash-script verdict's own printed message is exercised, not just its classifier return (#193)" \
+      "handle_verdict() did not print the expected FAIL line" \
+      "$(head -5 "$TMP/meta-notbash.txt")"
+fi
 
 echo ""
 echo "=== the sweep covered every tracked script: $N_DRIVEN driven, $N_NOFLAG with no flags ==="
