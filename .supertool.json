@@ -6,7 +6,14 @@
   "rtk": false,
   "allow_outside_cwd": false,
   "allow_vim_shell": false,
-  "presets": ["github", "git"],
+  "presets": ["github", "git", "watch"],
+  "ops": {
+    "radar": {
+      "radar_tiers": {
+        "gh-prs": {}
+      }
+    }
+  },
   "validators": {
     "bash-check": {
       "cmd": "{python} {supertool_dir}/validators/bash-check/bash-check.py {file}",
