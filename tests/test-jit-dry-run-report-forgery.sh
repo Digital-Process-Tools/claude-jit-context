@@ -141,6 +141,16 @@ echo "=== a vocabulary entry matched by path (pre-path-hook.sh) is still named =
 # header in this codebase, "(matched: Y)". A regex anchored on the single-word spelling
 # alone silently dropped every genuine match of this shape, reading as "no rule fired" --
 # found in review, pinned here so it cannot regress silently a second time.
+#
+# #227 review found a SEPARATE, pre-existing fact: pre-path-hook.sh (like
+# pre-tool-hook.sh) never builds a "# JIT-CTX-BLOCKS" manifest for its own
+# additionalContext at all -- only pre-prompt-hook.sh does. jit_blk_manifest_seen
+# (common.sh) is the flag that keeps that fact from moving this section's exit code: it
+# is 0 whenever no manifest was ever attempted, and #227's own desync detection in both
+# consumers is gated on jit_blk_manifest_seen && !jit_blk_manifest_ok, never on
+# !jit_blk_manifest_ok alone. Filed separately -- closing the actual gap means extending
+# #219's manifest-producer mechanism to two more hooks, a materially bigger change than
+# this fix, and this section stays the control that the distinction holds.
 PROOT=$(mktemp -d)
 PBASE="$PROOT/.claude/jit-context"
 for l in 00-manual 10-auto 20-grouped 30-crosscutting; do
@@ -153,7 +163,7 @@ printf 'secret.txt\treal-path-vocab.md\n' > "$PBASE/vocabulary/00-manual/01-path
 printf 'real vocabulary content matched by path\n' > "$PBASE/vocabulary/00-manual/real-path-vocab.md"
 
 OUT=$(JIT_CONTEXT_VOCAB_PATHS=1 CLAUDE_PROJECT_DIR="$PROOT" bash "$DRYRUN" --base "$PBASE" --file "config.secret.txt" 2>&1) && ST=0 || ST=$?
-assert_status "the sample call evaluates cleanly" "$ST" "0"
+assert_status "the sample call evaluates cleanly (no manifest was ever attempted here, #227)" "$ST" "0"
 assert_contains "the path-matched vocabulary entry is named" "$OUT" "real-path-vocab.md"
 assert_not_contains "and does not read as no rule fired" "$OUT" "pre-path-hook.sh     no rule fired"
 rm -rf "$PROOT"

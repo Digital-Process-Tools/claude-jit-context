@@ -814,9 +814,10 @@ kept deliberately as a second, cheap structural guard, even though it is no long
 stands between this and a fabricated match.
 
 It exits **1** when the hook also reported something it could not evaluate — a refused
-index row, a refused layer, a refused `config.env` line — printed as a notice rather than
-folded silently into the match count, or when a candidate match came back unverifiable, and
-**2** when it could not evaluate the call at all: a bad argument, `--base` not shaped like
+index row, a refused layer, a refused `config.env` line, or a block manifest that failed
+to verify (#226, #227) — printed as a notice rather than folded silently into the match
+count, or when a candidate match came back unverifiable, and **2** when it could not
+evaluate the call at all: a bad argument, `--base` not shaped like
 `<project>/.claude/jit-context`, or no text from either `--text` or stdin.
 
 ### Verify an entry actually fires
@@ -846,6 +847,16 @@ indistinguishable from a genuine entry. It now decodes the hook's own byte-lengt
 the same way `jit-match.sh` does (below), so a body that quotes the join text verbatim is
 just bytes at that point, part of the one real match it belongs to rather than a fabricated
 second one.
+
+**Ordinary prose could desync that same manifest, and a failed manifest used to degrade
+silently (#226, #227).** The decoder used to run in two passes, and an entry body carrying
+ordinary prose about JSON escaping could land on the identical bytes a genuine encoder
+escape produces once the first pass had run, shrinking the block and desyncing it from
+the hook's own byte count — reopening the class above through prose, no adversarial intent
+needed. Fixed by fusing the two passes into one walk. Separately, the flag that records
+whether the manifest verified was computed and never read: a failed verification now
+prints a `NOTE` naming the degrade and moves this tool off exit 0, the same way an
+unverifiable match already does.
 
 **The report says which of it came from the tree.** A pattern is printed verbatim, because
 a linter that will not show you your own pattern is no use — but `.claude/` arrives with the

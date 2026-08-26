@@ -262,10 +262,14 @@ function emit_json_str(s) {
   }
   return s
 }
-# jit_decode_u00() moved to common.sh (JIT_AWK_BLOCKS) alongside jit_split_ctx_blocks()
-# (#223): jit-dry-run.sh report_hook() needs the identical \u00XX-back-to-byte reversal
-# before it can trust a decoded block header, and a second copy here is what let the
-# block-splitter drift out of step in the first place. See its own comment there.
+# jit_unescape_blocks() (common.sh, JIT_AWK_BLOCKS) is what this file calls below to
+# decode a block-carrying field instead of jit_unescape() alone -- it moved here (#223)
+# alongside jit_split_ctx_blocks() for the same reason as that function: jit-dry-run.sh
+# report_hook() needs the identical decode before it can trust a block header, and a
+# second copy here is what let the two drift out of step in the first place. It replaced
+# the two-pass jit_decode_u00(jit_unescape(...)) idiom in #226, fusing both into one walk
+# so an entry own escaped backslash can never be mistaken for a genuine \u00XX escape
+# once jit_unescape() has already run on it. See its own comment in common.sh.
 # --- The tree own index, loaded once, used only to VERIFY -------------------------------
 # This does NOT reimplement the matcher. It does not fold accents, does not apply the
 # LC_ALL=C keyword-lookup this whole design deliberately leaves to the real hook, and it
@@ -338,7 +342,7 @@ END {
   for (i = 1; i + 2 <= n; i++) {
     if (fs[i] != fe[i]) continue
     if (jit_field(raw, fs[i], fe[i]) != "additionalContext") continue
-    ctx = jit_decode_u00(jit_unescape(jit_field(raw, fs[i+2], fe[i+2])))
+    ctx = jit_unescape_blocks(jit_field(raw, fs[i+2], fe[i+2]))
     break
   }
 
@@ -352,6 +356,18 @@ END {
     # check this file still runs on top of it -- see its own comment for what it does and
     # does not close.
     jit_split_ctx_blocks(ctx)
+    # #227: jit_blk_manifest_ok is set (0 or 1) by jit_split_ctx_blocks() above and was
+    # read by nobody -- 0 means the manifest failed to verify and the split fell back to
+    # the pre-#219/#223 heuristic splitter, which an entry body can forge. This tool must
+    # never fail hard, so the degrade is named in the injected context instead of an
+    # exception -- the same register the "N rule(s) could not be evaluated" notice
+    # already uses (common.sh, jit_refusal_notice()) -- and it still counts as a notice
+    # below, which already moves this tool off exit 0 the same way an unverifiable match
+    # or a refused row does.
+    if (jit_blk_manifest_seen && !jit_blk_manifest_ok) {
+      nnotice++
+      notice[nnotice] = "# JIT Context: the block manifest could not be evaluated, so this call fell back to a splitter an entry body can forge"
+    }
     nb = jit_blk_n
     for (b = 1; b <= nb; b++) {
       body = jit_blk_body[b]

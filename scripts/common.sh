@@ -2144,69 +2144,92 @@ function jit_unescape(s,   n, i, c, nx, o) {
 # header -- jit-match.sh only ever sees the first, report_hook() sees both -- so one function
 # serves both callers rather than the vocabulary-only shape the original carried.
 #
-# jit_decode_u00() moved here alongside it (from jit-match.sh, where it was the only
-# caller until now) for the same reason: report_hook() needs the identical \u00XX-back-
-# to-byte reversal before it can trust a block header, and a second copy is what let this
-# one drift in the first place. jit_unescape() (above, in JIT_AWK_JSON) never decodes
-# \uXXXX -- it was written for a hook reading a CLIENT-built prompt field, which this
-# codebase own encoders never emit \u for. But pre-prompt-hook.sh, pre-tool-hook.sh and
-# pre-path-hook.sh ARE this codebase own encoders: their jit_json_escape() escapes the
-# whole 0x00-0x1F range (skipping \t \n \r, which get their own two-letter escape) as
-# \u00XX. Left alone, jit_unescape() passes an unrecognised \u escape through as six
-# literal characters -- syntactically harmless, but the original control byte is gone,
-# replaced by visible text that was never in the entry. This reverses PRECISELY the range
-# these hooks can produce and nothing wider: a \uXXXX above 0x1F never comes from any of
-# them, and decoding it here would need a UTF-8 assembly step no awk here is trusted to do.
+# jit_decode_u00() used to live here as a SECOND pass over the string, run after
+# jit_unescape() had already turned every escaped backslash back into a literal one --
+# and that ordering is #226. Once the escaping is gone, an entry body carrying the
+# literal six-byte ASCII text (ordinary prose about JSON escaping -- the
+# encoder escapes the body's own backslash to two backslash characters on the wire, and
+# jit_unescape() collapses that pair straight back to one, landing on the same six bytes
+# a genuine encoder-emitted ESC escape lands on) is byte-identical to that genuine
+# escape at this point: jit_unescape() never touches u-escapes at all, so a real escape
+# survives its own pass unchanged. Nothing left in the string can tell the two apart,
+# because the fact that distinguished them -- whether the leading backslash was itself
+# escaped -- is exactly what the first pass discarded. jit_decode_u00() then collapsed
+# the prose's six bytes down to one exactly as it would a genuine escape, shrinking the
+# block by five bytes and desyncing it from the hook's own byte-length manifest
+# (computed on the PRE-escape bytes, which still count all six) -- falling back to the
+# pre-#219/#223 heuristic splitter an entry body can forge. Reproduced against the
+# shipped tricky.md fixture from tests/test-block-framing.sh plus one added line of
+# ordinary prose containing that six-byte sequence, on all three awk engines this
+# repository tests against.
+#
+# jit_unescape_blocks() below is jit_unescape() and jit_decode_u00() fused into ONE
+# left-to-right walk, the shape jit_unescape() already used for its two-letter escapes.
+# It cannot make this mistake: when it sees an escaped backslash, it consumes BOTH
+# bytes as a single literal backslash and moves on, so the letters that follow are
+# scanned as plain, unescaped prose one byte at a time and never presented to the
+# u00-escape branch as a fresh candidate to decode. A genuine u00-escape -- never
+# preceded by an escaping backslash of its own, because the encoder never emits one
+# before it -- is still the very next thing this walk sees when it reaches a bare
+# backslash followed by "u00", and decodes exactly as jit_decode_u00() did. Moved here
+# (from jit-match.sh, where the un-fused pair was the only caller until #223) for the
+# reason the comment above jit_split_ctx_blocks() already gives: report_hook() needs
+# the identical reversal before it can trust a block header, and a second copy is what
+# let the ordering drift in the first place.
+#
+# jit_unescape() (above, in JIT_AWK_JSON) is UNCHANGED and still the right function for
+# every other field this codebase decodes (prompt, command, file_path, ...): those are
+# CLIENT-built fields this codebase's own encoders never emit u-escapes for, so folding
+# that branch into the shared function would risk decoding one a client legitimately
+# sent as literal text. Only additionalContext and reason -- built by THIS codebase's
+# own jit_json_escape() -- get the fused decode, through this function instead.
 # shellcheck disable=SC2034
 JIT_AWK_BLOCKS='
-function jit_decode_u00(s,   out, i, n, c, hx, v) {
-  # No index()-based early-return guard here: a first version tried `index(s, "\u00") ==
-  # 0`, a PLAIN STRING LITERAL with an escape awk itself does not define ("\u" is not one
-  # of \n \t \r \\ \" and the rest) -- exactly the trap this repository already documents
-  # for a REGEX carrying \s \d \w, just relocated into a string constant instead. Measured
-  # on gawk 5.4.1: the guard fired on every call, "no marker found", and the byte was
-  # never restored, silently -- while the identical-looking loop below, whose \\u00 lives
-  # inside an ERE literal rather than a string literal, compiled and matched correctly on
-  # BOTH engines. So there is no guard: the walk below is O(length(s)) either way, and it
-  # is the one thing here proven to agree across engines.
-  #
-  # v <= 31 is not a style choice, it is the whole fix for a defect an auditor found in
-  # this exact function during #223 review. The encoder (jit_json_escape() in each hook)
-  # only ever WRITES this shape for k in 0..31 excluding 9/10/13, which get \t \n \r
-  # instead -- so codepoints 32 and above can never be a genuine escape this codebase
-  # produced. Before this guard, a literal 6-byte ASCII sequence sitting in an entry own
-  # body -- ordinary prose about JSON escaping could easily carry "A" verbatim -- was
-  # decoded exactly like a real escaped control byte, shrinking it from 6 bytes to 1 and
-  # silently desyncing the decoded length from the hook own byte-length manifest (#219),
-  # which was computed on the PRE-escape bytes and therefore still counts all 6. That
-  # mismatch fails jit_split_ctx_blocks() own manifest check and falls back to the
-  # pre-#219/#223 "\n---\n"-search splitter -- reopening, via ordinary prose rather than
-  # an adversarial payload, the exact class this whole file exists to close. Reproduced
-  # against `# Vocabulary: tricky.md` carrying "Some docs mention JSON A escapes." in
-  # its own body, on all three awk engines this repository tests against.
-  out = ""; n = length(s); i = 1
-  while (i <= n) {
+function jit_unescape_blocks(s,   n, i, c, nx, hx, v, o) {
+  if (index(s, "\\") == 0) return s
+  n = length(s); o = ""
+  for (i = 1; i <= n; i++) {
     c = substr(s, i, 1)
-    if (c == "\\" && substr(s, i, 6) ~ /^\\u00[0-9a-fA-F][0-9a-fA-F]$/) {
+    if (c != "\\" || i == n) { o = o c; continue }
+    nx = substr(s, i + 1, 1)
+    if (nx == "n") { o = o "\n"; i++; continue }
+    if (nx == "t") { o = o "\t"; i++; continue }
+    if (nx == "r") { o = o "\r"; i++; continue }
+    if (nx == "b") { o = o "\b"; i++; continue }
+    if (nx == "f") { o = o "\f"; i++; continue }
+    if (nx == "\"") { o = o "\""; i++; continue }
+    if (nx == "/") { o = o "/"; i++; continue }
+    if (nx == "\\") { o = o "\\"; i++; continue }
+    # v <= 31 is not a style choice, it is the whole fix for a defect an auditor found
+    # in the predecessor of this function during #223 review. The encoder
+    # (jit_json_escape() in each hook) only ever WRITES this shape for k in 0..31
+    # excluding 9/10/13, which get two-letter escapes instead -- so codepoints 32 and
+    # above can never be a genuine escape this codebase produced, and are left as text.
+    if (nx == "u" && substr(s, i, 6) ~ /^\\u00[0-9a-fA-F][0-9a-fA-F]$/) {
       hx = tolower(substr(s, i + 4, 2))
       v = index("0123456789abcdef", substr(hx, 1, 1)) - 1
       v = v * 16 + index("0123456789abcdef", substr(hx, 2, 1)) - 1
-      if (v <= 31) {
-        out = out sprintf("%c", v)
-        i += 6
-        continue
-      }
+      if (v <= 31) { o = o sprintf("%c", v); i += 5; continue }
     }
-    out = out c
-    i++
+    o = o c nx; i++; continue
   }
-  return out
+  return o
 }
 function jit_split_ctx_blocks(ctx,   nl_pos, header, body_rest, hn, hf, declared_n, pos, bi, blen, rest, p1, p2, p) {
   jit_blk_n = 0
   jit_blk_manifest_ok = 0
+  # jit_blk_manifest_seen: a hook that never emits a "# JIT-CTX-BLOCKS " header at all --
+  # pre-tool-hook.sh and pre-path-hook.sh, today, never do -- is not the same finding as
+  # one that emits a manifest and then fails to verify. Both fall back to the same
+  # heuristic splitter below, but a consumer that moves its exit code on
+  # jit_blk_manifest_ok alone cannot tell "this hook was never manifest-protected" (a
+  # separate, pre-existing gap, filed on its own) from "the manifest here is broken",
+  # which is issue #226 own class. This flag is the difference: 0 means no manifest was
+  # even attempted, 1 means one was and jit_blk_manifest_ok says whether it verified.
+  jit_blk_manifest_seen = 0
   delete jit_blk_body
   if (substr(ctx, 1, 17) == "# JIT-CTX-BLOCKS ") {
+    jit_blk_manifest_seen = 1
     nl_pos = index(ctx, "\n")
     if (nl_pos > 0) {
       header = substr(ctx, 1, nl_pos - 1)

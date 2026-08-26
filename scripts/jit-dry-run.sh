@@ -258,6 +258,13 @@ BYTES_REFUSED=0
 # died partway through an index checked an unknown number of rows and found nothing, which
 # is not the same claim and must never be printed as one.
 SKIPPED_READS=0
+# #227: jit_blk_manifest_ok (common.sh) is set by jit_split_ctx_blocks() on every call and
+# was read by nobody -- a manifest that failed to verify degraded silently to the
+# pre-#219/#223 heuristic splitter, at exit 0, in the one tool whose job is failing loudly
+# on anything it could not evaluate. report_hook() below reads it and counts a desync
+# here; this moves the exit code the same way SKIPPED_READS already does, at the bottom
+# of this file.
+BLOCKS_DESYNC=0
 VOCAB_REFUSED=0
 VOCAB_KEYS=0
 VOCAB_FILES=0
@@ -1305,14 +1312,21 @@ END {
     if (fs[i] != fe[i]) continue
     key = jit_field(raw, fs[i], fe[i])
     if (key == "additionalContext" && ctx == "") {
-      ctx = jit_decode_u00(jit_unescape(jit_field(raw, fs[i+2], fe[i+2])))
+      ctx = jit_unescape_blocks(jit_field(raw, fs[i+2], fe[i+2]))
     } else if (key == "reason" && rtext == "") {
-      rtext = jit_decode_u00(jit_unescape(jit_field(raw, fs[i+2], fe[i+2])))
+      rtext = jit_unescape_blocks(jit_field(raw, fs[i+2], fe[i+2]))
     }
   }
   refused = 0
+  desync = 0
   if (ctx != "") {
     jit_split_ctx_blocks(ctx)
+    # #227: jit_blk_manifest_ok is set (0 or 1) by jit_split_ctx_blocks() on every call
+    # where ctx is non-empty -- it was already being computed, just never read. 0 means
+    # the manifest failed to verify and the split fell back to the pre-#219/#223
+    # heuristic splitter, which an entry body can forge; this tool must fail loudly on
+    # anything it could not evaluate, so that degrade has to move the exit code.
+    if (jit_blk_manifest_seen && !jit_blk_manifest_ok) desync = 1
     for (b = 1; b <= jit_blk_n; b++) {
       body = jit_blk_body[b]
       nl = index(body, "\n")
@@ -1339,17 +1353,26 @@ END {
     if (index(rtext, "could not be evaluated") > 0) refused = 1
   }
   print "JIT-DRY-REFUSED\t" refused
+  print "JIT-DRY-DESYNC\t" desync
 }
 '
 )"
-  names="$(printf '%s\n' "$decoded" | grep -v '^JIT-DRY-REFUSED	' | tr '\n' ' ')"
+  names="$(printf '%s\n' "$decoded" | grep -v '^JIT-DRY-REFUSED	' | grep -v '^JIT-DRY-DESYNC	' | tr '\n' ' ')"
   refused="$(printf '%s\n' "$decoded" | awk -F'\t' '/^JIT-DRY-REFUSED\t/ { print $2 }')"
+  desync="$(printf '%s\n' "$decoded" | awk -F'\t' '/^JIT-DRY-DESYNC\t/ { print $2 }')"
   case "$out" in
     *'"decision":"block"'*) verdict="BLOCK  " ;;
     *) verdict="       " ;;
   esac
   if [ "$refused" = "1" ]; then
     printf '  NOTE   %-20s the hook injected a refusal notice — see the REFUSED rows above\n' "$1"
+  fi
+  if [ "$desync" = "1" ]; then
+    # #227: the block manifest failed to verify and the split fell back to the
+    # pre-#219/#223 heuristic splitter, which an entry body can forge. Named here rather
+    # than left to render as a clean report, and counted below so it moves the exit code.
+    printf '  NOTE   %-20s the block manifest failed to verify — this call fell back to the forgeable splitter, could not evaluate\n' "$1"
+    BLOCKS_DESYNC=$((BLOCKS_DESYNC + 1))
   fi
   # A hook that matched nothing must not read as a hook that fired. That confusion is
   # the whole defect this script exists for; do not reintroduce it in its own output.
@@ -1477,7 +1500,10 @@ fi
 # (#47), and a tree the linter could not evaluate must not be reported to CI as a tree with
 # nothing wrong with it. It is a 1 rather than the 2 above, deliberately -- a 2 means
 # NOTHING was checked, and something was.
+# BLOCKS_DESYNC is in this list for the same reason as SKIPPED_READS above (#227): a
+# call whose block manifest failed to verify fell back to a splitter an entry body can
+# forge, and that is a could-not-evaluate this tool must not report at exit 0.
 [ "$REFUSED" -eq 0 ] && [ "$VOCAB_REFUSED" -eq 0 ] && [ "$STALE" -eq 0 ] \
   && [ "$CONFIG_REFUSED" -eq 0 ] && [ "$BYTES_REFUSED" -eq 0 ] \
-  && [ "$SKIPPED_READS" -eq 0 ] || exit 1
+  && [ "$SKIPPED_READS" -eq 0 ] && [ "$BLOCKS_DESYNC" -eq 0 ] || exit 1
 exit 0
