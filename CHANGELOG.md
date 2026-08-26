@@ -7,6 +7,351 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-26
+
+### Added
+
+- **`/jit-context:doctor` reaches `jit-doctor.sh` without a version number** (#202). The
+  only way to run it used to be `bash ~/.claude/plugins/cache/dpt-plugins/claude-jit-context/<version>/scripts/jit-doctor.sh`
+  — a path that changes on every plugin update, for the one diagnostic built to catch a
+  failure that is silent by construction (#183: hooks served from the plugin cache while
+  `JIT_BASE` resolves against `$CLAUDE_PROJECT_DIR`, so entries and code point at different
+  trees). A diagnostic for a silent failure that is itself hard to reach does not get run.
+
+  `commands/doctor.md` resolves the script through `${CLAUDE_PLUGIN_ROOT}`, the same
+  template `hooks/hooks.json` already uses for every hook. `$ARGUMENTS` passes `--base
+  <tree>` through unchanged, so pointing the diagnostic at another project's
+  `.claude/jit-context/` still works. Exit-code semantics are unchanged — this is a
+  reachability change, not a behaviour change.
+
+- **A `tools` rule can now say it depends on a binary, and the hook degrades to advisory rather than blocking a user with no route to comply** (#203). `mode: block` (and `require:`/`forbid:`) has always been unconditional — right for a rule about `git`, which the reader can always fix, and wrong for a rule whose own remedy is a specific binary this machine might not have. Filed against a downstream repository whose generated `supertool-required.md` ships `mode: block` on every `Read`/`Edit`/`Write`/`Glob`/`Grep` with no presence check: installing this plugin without `supertool` blocked every file operation, with a remedy naming a binary the user did not have and no fallback arm.
+
+  The new frontmatter field, `requires: <binary>`, is probed with `command -v` in bash, once, before the hook's single awk process starts — the awk half of every hook here never shells out, on purpose, so the presence check could not live inside the row loop that reads everything else off the index. `jit_missing_requires()` in `scripts/common.sh` computes the set of `requires:` binaries this tree names that are not on `PATH`, and `pre-tool-hook.sh` reads it as one more untrusted-shaped value beside the ones the row loop already reads off the index.
+
+  When the named binary is missing, a `mode: block` row (and a `require:`/`forbid:` refusal on the same row) degrades to advisory: the call goes through, and the injected text says which binary was missing and that the rule normally refuses — "a check that cannot be satisfied must say so and degrade, rather than blocking with a remedy the reader cannot perform." A row with no `requires:` is unaffected regardless of what else this tree names, and an ordinary `remind` row naming `requires:` is unaffected too — the degrade is about a check that stops enforcing, and an advisory row was never enforcing anything.
+
+  Driven while writing `jit_missing_requires()`: bash `read` with `IFS` set to a literal tab still treats tab as an IFS *whitespace* character and collapses a run of it, so a naive `while IFS=$'\''\t'\'' read` over a 7-column row with two empty columns before `requires:` silently took the wrong field. The presence probe reads the column with `awk -F` instead, which treats the delimiter literally.
+
+  `rebuild-tsv.sh` writes `requires:` as the tools index's 7th TSV column, and `jit-dry-run.sh`'s stale-row check (`check_index_current()`) was updated to rebuild the same 7-column row from frontmatter, or every `requires:`-carrying entry would read as permanently drifted from its own index.
+
+  The other half of the reporter's own two proposals — narrowing the shipped `supertool-required.md` rule itself — is not ours to fix: that file is generated into managed trees by the `oss` plugin and is not part of this repository (we ship `tools/00-manual` only). Filed there as `Digital-Process-Tools/claude-oss#524`.
+
+- **`scripts/jit-match.sh` answers "which entries does this text call for?" from outside a
+  session** (#205). A headless run (`claude -p`) sends exactly one prompt, usually built
+  from paths rather than prose, so the vocabulary dimension used to match almost nothing on
+  the runs that would benefit most from it — the run usually has prose available (the issue
+  or ticket it was launched for), just never in a form `UserPromptSubmit` sees, and there
+  was no supported way to ask the plugin what that prose calls for.
+
+  `jit-match.sh --base <tree> --text "..."` (or piped on stdin) shells out to the real
+  `pre-prompt-hook.sh`, the exact pattern `jit-dry-run.sh --prompt` already used for its own
+  sample calls, rather than reimplementing the match — a second matcher reading the same
+  index would drift from the first the next time only one of them got fixed. The payload it
+  builds carries no `session_id`, so the shown-set is never touched and there is no
+  `--session-id` flag to touch it with, exactly as asked. `--format json` is hand-built by
+  an `awk` block reusing this plugin's own JSON reader — still no `jq`, no Python, no Node.
+  `--summary` forces the per-call default without editing `config.env`. `--limit N` keeps
+  the first N matched entries and reports what it dropped, by name, in both formats — a
+  silent top-N would have been this repository's own defect class in the tool built to fix
+  it.
+
+  Two self-review findings landed with it. A control byte outside tab, CR and LF (a form
+  feed, say) inside an entry body used to survive the round trip as six visible characters
+  spelling out its own escape sequence, rather than as the byte itself, because the shared
+  unescape helper in `common.sh` was never asked to decode that escape before — nothing in
+  this plugin previously needed to read one of its own hooks' own JSON back. `jit-match.sh`
+  now reverses precisely the escape range `pre-prompt-hook.sh`'s own encoder can produce.
+  And a stderr check that could not run at all (no writable temp directory available) used
+  to be reported identically to a real violation of the hook's own never-write-to-stderr
+  contract — the two are now a real third state rather than one collapsed into the other.
+
+  A third finding, from the same reviewer, changed the shape of the output. `.claude/jit-context/`
+  is attacker-controlled input, and the hook's own join text — a literal `\n---\n# Vocabulary: `
+  — can legitimately appear inside one matched entry's own body, so the block splitter could not
+  always tell a genuine hook-emitted join from the same bytes sitting inside one entry: a crafted
+  entry could make this tool print a fabricated second match with an attacker-chosen file name
+  and keyword list, at exit 0. Every candidate is now checked against the tree's own
+  `00-index.tsv` before it is counted — a real match's `(file, keyword)` pair always exists as a
+  row, so this can never turn a genuine match into a false refusal — and a candidate that fails
+  is reported once, separately, labelled `unverifiable` rather than silently dropped or silently
+  trusted.
+
+### Changed
+
+- **`CLAUDE.md` now says what `jit-doctor.sh`'s "not decidable from here" is, and is not**
+  (#189). The enumeration half of this issue had already shipped with `jit-doctor.sh`
+  itself (#183) — it names every installed plugin cache copy and states plainly that the
+  cache, not the checkout, serves the hooks. What was open was narrower: is the resolution
+  rule documented anywhere a script can read, and if not, does `CLAUDE.md` say which copy
+  wins.
+
+  It does not exist in the form a cold, standalone script could use: nothing durable
+  records which cache copy last served a hook. It does exist in a weaker form — every hook
+  already computes its own `SCRIPT_DIR` from `$0` while it runs, which resolves to that
+  invocation's own plugin root, and nothing today writes that fact anywhere `jit-doctor.sh`
+  could later read. `CLAUDE.md` now says both halves: `jit-doctor.sh`'s "not decidable from
+  here" is the honest answer to the question it can actually ask, and having a hook leave a
+  trace of its own `$0` for the diagnostic to read afterward is a real, separate, larger
+  change — touching every hook and `common.sh`, not just the diagnostic — that this
+  repository has not made as of `0.5.0`.
+
+- **`rebuild-tsv.sh`'s ambiguity report now tallies keyword collisions cross-layer and ranks them by bytes, with a byte floor instead of a per-layer file-count threshold** (#204). It used to group each vocabulary layer separately and flag a keyword only once one layer alone saw it in more than five files -- so the dominant real-tree shape (one concept restated across `00-manual` + `10-auto` + `20-grouped` + `30-crosscutting`) never crossed the threshold in any single layer, and a 2-entry collision between two fat entries never crossed it either, however many bytes it cost per match. The report now sums a keyword's collision across every layer, ranks by bytes pulled in one match, and floors on bytes (`JIT_CONTEXT_COLLISION_BYTES`, default 4096, matching the shape jit-doctor.sh's fat-entry advisory already uses) rather than file count. Each listed file now carries its own `[layer]` tag, since a collision can span more than one. Still advisory: it never moves the exit code.
+
+- **`no-shell-writes-to-the-index.md`'s accepted false-positive cost is repriced for the
+  payload channel** (#215). The rule's own body already documented, deliberately, that a
+  quoted mention of the index near a redirect character is refused along with a real write
+  — its example was an occasional hand-typed commit message. Since every sanctioned write
+  in this repository goes through a `supertool 'paste:@-'`/`'edit:@-'` payload carrying the
+  whole file's content on the command line, the same false positive now lands on any
+  fixture whose content merely discusses this rule, on every payload that mentions it. The
+  pattern is unchanged — the rule's own argument against anchoring on the file name still
+  holds, and a regex over a command string genuinely cannot tell a real redirect from a
+  mention inside a heredoc or TOML string. This is a documentation change, not a fix: the
+  false positive still fires (`tests/test-dogfood-entries.sh` asserts it does). What
+  changed: the rule body now names the channel accurately and documents the split-literal
+  workaround (splitting the literal so its two halves never sit adjacent) so an author
+  pays it once per
+  fixture instead of every time, and the same test asserts the refusal names the remedy.
+
+### Fixed
+
+- **`jit-dry-run.sh`'s two `config.env` symlink-refusal rows are now driven by a suite** (#159). Both columns of that print were literals, so a static coverage enumeration already passed them; what nothing drove was the branch itself — that the rows appear when `config.env` is a symbolic link, and that they do not appear when it is an ordinary file. `tests/test-dry-run-symlink-config.sh` builds both fixtures and asserts both directions, gated the same way the other symlink suites are: it probes for real symbolic-link support (a write through the link surviving, not just `[ -L ]`), and exits `2` naming what went untested on a platform that cannot build one, rather than folding the gap into a pass. No code changed — the branch was already correct; only the coverage was missing.
+
+- **`jit-dry-run.sh` now guards an `inject:` value as the author wrote it, not the shape normalisation reduced it to** (#160). The withholding policy that decides what a report may print, `jit_report_name()`, used to see the value only after it was lowercased and stripped of whitespace for the separate `full`/`summary` comparison — so an over-length or space-carrying value could be shrunk into something under the guard's 64-byte, no-space shape before the guard ever looked at it. That was not a live escape (an English sentence still cannot forge a report line), but it was backwards: every other site in this file guards the value it was handed, and only `jit_report_name()` decides what a reader sees.
+
+  The fix keeps the normalised value for the `full`/`summary` comparison, where it belongs, and guards the raw frontmatter value for display. A new fixture pins the class this closes: a 79-byte value that reads as 20 words joined by spaces normalises to 60 bytes of plain lowercase letters — a shape the old guard accepted and would have printed verbatim; guarded against the raw value, it is withheld like anything else the policy cannot vouch for.
+
+- **A vocabulary bad-bytes row now names which of its two indexes it came from** (#162). `rebuild-tsv.sh` calls `report_bad_bytes()` twice per vocabulary layer -- once for the keyword index, once for the module-paths index -- and both calls passed the identical bare `vocabulary/<layer>` label, so a row reading `rebuild-tsv: vocabulary/00-manual row N:` could not be traced to either file without opening both.
+
+  Vocabulary is the one dimension that writes two indexes out of one layer directory, which is the same reason its FATAL and success lines already carry the leaf filename (#153). The bad-bytes label now matches theirs -- each call names its own leaf. `tools/` and `paths/` write one index per layer each and stay bare on purpose -- appending a leaf there would invent a path component nothing on disk has, the exact mistake #153 fixed in the other direction, so this is scoped to the one dimension where the layer name alone is genuinely ambiguous.
+
+- **A whitespace-only advisory entry no longer injects a bare header with nothing under it** (#170). `content == ""` was the guard that kept an advisory rule with nothing to say silent, and a file of blank lines reads back as `"\n"`, which is not `""` — so the row injected `# JIT Context: <name> (matched: ...)` and nothing underneath it, the exact shape this repository exists to refuse: silence indistinguishable from a rule that never matched.
+
+  `jit_inject_text()` now reports rather than stays silent when a `full`-mode entry's whole body is non-empty whitespace: `[jit] The entry file has no text to inject.` A truly empty file (a single blank line, which reads back as the literal empty string) is unaffected and stays silent, exactly as `tests/test-inject-mode.sh`'s own positive control already asserts.
+
+  `#165`'s header-bound test for the same fixture (`blankfull.md`) is preserved by testing the raw entry body rather than the transformed content at the header-selection site in `pre-tool-hook.sh` — the report text is not whitespace, and reading `content` there instead of `body` would have wrongly exempted a report-only row from the summary-mode header budget.
+
+  `tests/test-inject-mode.sh`'s `wsrequire.md` section previously asserted the old behaviour and named it "pre-existing behaviour of an advisory rule and not what this change is about" — a prior lane (#165) scoped this out on purpose. This issue retires that scoping deliberately.
+
+- **`jit-dry-run.sh` can now dry-run a `tool: Agent` rule** (#187). `--tool Agent` used to answer `SKIPPED: --tool needs a target. Add --command or --file.` and could never move off it — `--command` and `--file` cover the `Bash` and path subjects, and nothing carried a `subagent_type`, the one key `pre-tool-hook.sh` reads as an Agent dispatch's subject (#182). A new `--agent` flag supplies it: `bash scripts/jit-dry-run.sh --tool Agent --agent claude-security:scan` builds the same `tool_input.subagent_type` shape the real hook sees and reports which rule fired, exactly as `--command` and `--file` already do for their subjects.
+
+  `--agent` follows the flag-per-subject shape `--command` and `--file` already established, rather than a generic `--subject` interpreted by `--tool` — the tool set this script can dry-run is not closed (an MCP server defines its own input schema at connect time), so a flag added when a subject becomes reachable reads better than a mechanism built to cover subjects nobody can name yet. The sample is routed to `pre-tool-hook.sh` only: `pre-path-hook.sh` matches `file_path` or a Bash command, neither of which an Agent dispatch carries, so calling it would only print a "no rule fired" line naming no absence the sample ever had.
+
+- **`test-arg-flag-values.sh` refuses a non-bash tool under `scripts/` instead of silently reading it as having no flags to drive** (#193). `classify_script()` reads bash argument-loop shapes only, which was correct by coincidence rather than by rule -- CLAUDE.md permits bash, awk and perl under `scripts/`, and only "every tracked script happens to be bash today" made the classifier's assumption hold. A new `not-bash-script` verdict, driven by a shebang check, now fails loudly on any tracked script the classifier cannot read, and CLAUDE.md states the coupling explicitly so a future change to the language rule is not the thing that silently reopens this gap.
+
+- **`rebuild-tsv.sh` no longer writes a silently-incomplete index when `awk` dies mid-file, and its `awk` sites no longer misreport a real bad byte as an empty field** (#195). Three of `rebuild-tsv.sh`'s `awk` invocations matched a regex against a record that could carry an invalid byte with no `LC_ALL=C` pin: the keywords: extraction, the `## Modules` path-mapping builder, and the per-keyword `tr`/`sed` normalise chain found while driving this fix's own test. Under a UTF-8 locale, one-true-awk aborts the whole program the first time such a match lands on the byte, and under the same locale a bare `tr` refuses an invalid multibyte sequence outright; neither failure was checked, so an entry whose frontmatter carried one bad byte anywhere in the file could lose keywords that had nothing wrong with them, reported as "no keywords: in its frontmatter" -- the right loudness, the wrong reason.
+
+  The `## Modules` builder's output is appended with `>> "$tsv"`, and that append's exit status was never checked at all -- a second, independent defect: an `awk` that dies for *any* reason, not only this one, wrote a partial file while the run still reported success. It now checks, and prints a `FATAL` line naming the entry file when the append does not complete, raising the run's exit code to `2` -- this file's own "the index was not written, or not completely" outcome, per its documented 0/1/2 contract.
+
+  `LC_ALL=C` is what removes the divergence: under it, none of the three `awk` engines this repository measures (one-true-awk, gawk, mawk) decodes the byte, so all three treat it the same way the byte-based `report_bad_bytes()` reporter already does downstream.
+
+- **The four remaining `awk` sites #177 measured as divergent by locale are now pinned to `LC_ALL=C`, and `paths/00-manual/tooling.md` states the invariant once instead of re-deriving it per site** (#196). `jit_frontmatter()` in `common.sh` -- the one reader every `match:`, `tool:`, `mode:`, `require:` and `forbid:` value goes through -- did not pin its own `awk`, so a `match:` saved with one invalid byte made one-true-awk abort under a UTF-8 locale and the entry vanish from the index instead of being written through and refused at load, the way an ordinary unhonourable rule is. `jit-dry-run.sh`'s `check_paths_fragment()` had the same gap, plus a second one: an unpinned `gsub()` folded a multibyte character differently between gawk and `C`, and neither of those was reachable without the abort path also silencing the caller's own "was this pattern refused" check via an unchecked `&&`.
+
+  This was blocked on #195 landing first, on purpose: pinning these sites without a working bad-bytes reporter downstream would have traded a loud one-engine abort (one-true-awk) for a quiet pass-through on mawk, the default `awk` on `ubuntu-latest` CI.
+
+  The invariant behind all nine `awk` sites this repository has ever measured is now one paragraph in `tooling.md`: an `awk` diverges by locale exactly when it matches a regex against a record that can carry an invalid byte, and a site doing only `index()`, `substr()` and `==` never needed the pin at all. It had been re-derived per site four times before (#116, #163, #169, #177) — this is the last time.
+
+- **`test-line-citations.sh` no longer reads an unreadable tracked file as clean** (#200). Both real-file sweeps called `cites_in()` and only checked whether its output was non-empty, which is the same result grep gives for "no citation" and for "could not read this file" (permission denied, or a path that vanished between `git ls-files` and the read). A new `read_citations()` helper checks grep's own exit status instead — 0 a citation, 1 genuinely clean, 2+ could not be read — and both sweeps now count an unreadable file as unswept rather than silently passing over it. The unreadable case is driven with a portable control (`read_citations` against a path that never existed, which every grep implementation exits 2 on) rather than `chmod 000`, which is a no-op on Windows and defeated by root on some CI images.
+
+- **A recorded control failure in `test-line-citations.sh` no longer disappears behind a later `exit 2`** (#201). The suite's exit code was computed only at its last line, so any of the "could not build fixtures here" floors between a failed control and that line left the script before `$FAIL` was ever read — and `run-all.sh` maps exit 2 to SKIPPED, rendering a run that had already recorded a failure as green. Every such floor now goes through one `skip_or_fail()` helper: it still exits 2 when nothing failed, but exits 1 instead whenever `$FAIL` is already non-zero, so a control that ran, failed and printed its failure can no longer be discarded by a floor that runs after it.
+
+- **A `removed` changelog fragment has to declare compatibility, and `changelog.d/README.md` now says so** (#207). The release number is proposed from the fragments, and the `oss` plugin's `release_version.py` stops that proposal outright when a `removed` fragment declares nothing — deliberately, because a patch bump over a breaking change is indistinguishable in the tag from a considered one. Nothing in this repository said the requirement existed.
+
+  The gap was the timing rather than the rule. `--check` does not ask for the bullet on a pull request, so a fragment written without it is reviewed, merged, and sits on `main` looking correct for a whole release cycle; the first anyone hears is the maintainer cutting the tag, by which point the contributor who could say whether the removal breaks anything is the person least likely to be asked. We have shipped no `removed` fragment since the assembler swap, which is the only reason it has not been paid for yet.
+
+  The section names the bullet, that a word which is neither `breaking` nor `compatible` stops the proposal too, and that the reason after the verdict is required — a bare flag is the same unsourced verdict one field further along. It also states where the requirement does *not* apply: only `removed` must carry one, every other section may, and a fragment that says nothing is read as compatible with the count of such fragments reported out loud.
+
+  `changelog.d/README.md` is a scaffold *default* rather than an owned file — `/oss:scaffold` writes it once and never replaces it — so the section would not have arrived on its own at any plugin version. The canonical text is in `scripts/scaffold.py --show`, and it is adapted rather than pasted, because this repository's copy is a different document: it carries the `no-changelog` escape hatch, the fragment-reference guard and the upstream receipts, and the canonical ordering has none of that.
+
+  Making `--check` refuse the omission on the pull request, so the finding lands where it can still be answered, belongs upstream: the assembler is scaffold-owned and an edit here is lost at the next apply.
+
+- **`test-awk-locale-pins.sh`'s A2 pre-fix control no longer turns red once its own fix lands on `main`** (#212). A2 proved section A's FATAL-on-dying-awk check was new (not vacuous) by re-running the fixture against the tree from before #195/#196/#211. It found "pre-fix" via `merge-base HEAD origin/main`, which is correct on a branch but resolves to `HEAD` itself once that branch *is* `origin/main` -- so on `main`, A2 loaded the already-fixed `rebuild-tsv.sh`, got the post-fix FATAL it was asserting the absence of, and failed. It now finds the fix commit by walking `scripts/rebuild-tsv.sh`'s own history for the string only the fix writes (`git log -S`), independent of branch topology, and resolves "pre-fix" as that commit's parent. Passes both on `main` and on a branch forked from `main`.
+
+- **`assert_contains`/`assert_not_contains` no longer report a false verdict for a needle beginning with `--`** (#214). The duplicated helper shape across 16 suites in `tests/` ran `grep -qF "$expected" <<<"$output"` with no `--` separator, so grep parsed a `--`-leading needle as an option, exited non-zero on a usage error, and the helper -- which branches only on exit status -- could not tell that apart from a genuine no-match. `assert_not_contains` was the dangerous direction: it reported PASS having compared nothing. Every affected suite now runs `grep -qF -- "$expected"` (or `grep -q --` where the call was not fixed-string). `tests/test-assertion-helpers.sh`, which already drives every suite's real helpers structurally, now also drives a `--`-prefixed needle in both directions for `contains`/`not_contains` sources, so a reintroduction is caught rather than waiting to be tripped over again.
+
+- **A sample call no longer writes a synthetic record into the target project real
+  `hooks.log`** (#217). `scripts/jit-match.sh` and `scripts/jit-dry-run.sh`
+  (`--prompt`/`--tool`/`--path`) both shell out to the real hook to answer "what would
+  fire", rather than reimplementing the matcher — deliberately, since a second matcher
+  reading the same index would drift the next time only one of them got fixed. But
+  logging is a side effect of the real hook doing its job, and a diagnostic probe is not
+  a session: reproduced against a fixture project with no `.discovery/` directory at all,
+  a `hooks.log` appeared after one call, built from whatever text the caller happened to
+  pass. That file is the record `jit-misses.sh` reads to report genuine vocabulary gaps,
+  and a diagnostic call wrote exactly the shape of record it counts as a real miss.
+
+  Both callers now set `JIT_SAMPLE_CALL=1` on the hook subprocess own environment, and
+  `common.sh` treats that the same as a symlinked log path — logging disabled for the
+  call, everything else unchanged. The safety is in who can set it: it is a plain
+  environment variable the calling *script* exports before it execs the hook, never a
+  value read out of `config.env`, the JSON payload, or anything else that arrives with a
+  cloned repository, so a real Claude Code session — which invokes the hook through its
+  own mechanism — has no route to the same suppression.
+
+  **Compatibility:** this changes shipped behaviour. `jit-dry-run.sh --prompt` has logged
+  every sample call since it existed; some project `hooks.log` may already carry these
+  records, and will not gain any more of them. Treated here as the bug #217 says it is,
+  not a documented characteristic being preserved — a hook that can be told not to log
+  stays a hook whose log proves less only for the caller that is deliberately not a
+  session, and until this change nothing prevented a real session from reaching the same
+  route by accident.
+
+- **The hook own joined `additionalContext` stream can no longer be forged into a
+  fabricated match** (#219). Matched entries and refusal notices used to be glued with
+  the literal text `\n---\n# Vocabulary: ` (and `\n---\n# JIT Context: `), and
+  `.claude/jit-context/` is attacker-controlled input, not configuration — it arrives
+  with the repository, before anyone has read the code they cloned. An entry whose own
+  full-mode body happened to end in that exact text joined with the next block in a way
+  byte-identical to a genuine boundary, so a crafted (or merely unlucky) entry could make
+  a downstream consumer report a fabricated match with an attacker-chosen file name and
+  keyword list. Reproduced on `scripts/jit-match.sh` before it grew a narrower mitigation
+  of its own (#216).
+
+  `pre-prompt-hook.sh` now prepends one manifest line to its own output naming how many
+  blocks follow and each one exact byte length, built entirely from `length()` and never
+  from anything an entry authored — `# JIT-CTX-BLOCKS <n> <len1> <len2> ...`. A consumer
+  that trusts it, as `jit-match.sh` now does, walks the joined text by byte count instead
+  of searching it for a separator an entry body can forge, which closes the class rather
+  than merely detecting it: the same reproduction that used to read as one real match plus
+  one "unverifiable" phantom now reads as exactly one clean match, with the forged text
+  simply part of that entry's own body. `jit-match.sh`'s existing `jit_index_verified()`
+  structural cross-check (#216) is unchanged and kept deliberately, as a second, cheap
+  guard that stops being load-bearing for this class without stopping being true.
+
+  The human-readable shape is unchanged: the manifest is one machine-readable line, and
+  everything after it is the exact same `\n---\n`-joined prose a session already saw, so a
+  real user reading their own context sees nothing new but one extra line at the top.
+
+  **Compatibility:** the raw shape of `additionalContext` changes for any consumer that
+  parses it directly rather than through `jit-match.sh` — `pre-tool-hook.sh` and
+  `pre-path-hook.sh` are unaffected (their own block joins and the shared
+  `jit_refusal_notice()`/`jit_layers_notice()`/`jit_config_notice()` functions in
+  `common.sh` are untouched); only `pre-prompt-hook.sh`'s own assembly changed.
+  `jit-dry-run.sh` does not search `additionalContext` for `\n---\n` either, but it turned
+  out to carry the equivalent defect by a different route — a raw grep for header text with
+  no manifest awareness at all, closed separately in #223 once this fragment had already
+  shipped, so read that one alongside this if you are auditing consumers of this stream. A
+  downstream tool that hand-parses `pre-prompt-hook.sh`'s raw output before this change
+  should either read the new manifest line or skip past it (it always ends at the first
+  `\n`).
+
+- **`jit-dry-run.sh`'s `report_hook()` can no longer be tricked into reporting a
+  fabricated vocabulary/path/tool match** (#223). Its `--prompt`/`--tool`/`--path` sample
+  calls used to `grep` the hook's raw JSON stdout for `# Vocabulary: X.md` / `# JIT
+  Context: X.md` header text, with no manifest awareness at all — and
+  `.claude/jit-context/` is attacker-controlled input, not configuration, so an entry
+  whose own body quoted that header text verbatim was reported as a real second match, at
+  exit 0, indistinguishable from a genuine entry. #219 had already closed the equivalent
+  class in `jit-match.sh` by trusting `pre-prompt-hook.sh`'s own byte-length manifest
+  (`# JIT-CTX-BLOCKS <n> <len1> <len2> ...`) instead of searching the joined text for a
+  separator an entry body can forge; `report_hook()` was simply never taught to read it.
+
+  `jit_split_ctx_blocks()` — the manifest-plus-fallback walk `jit-match.sh` carried — moved
+  to `common.sh` (`JIT_AWK_BLOCKS`, alongside `jit_decode_u00()`) so both consumers share
+  one reader rather than two copies that can drift out of step again, which is what let
+  this one go unfixed the first time. `report_hook()` now decodes a hook's
+  `additionalContext` the same way `jit-match.sh` does. A `block` decision reports through
+  a different field (`reason`) that carries exactly one genuine header, always its first
+  line, never a multi-entry join — so extracting that line, rather than searching the
+  whole field, is exact there too, with no manifest needed.
+
+  `jit_index_verified()`'s structural cross-check (#216) is deliberately **not** ported:
+  it needs a loaded vocabulary index, and this hook spans three dimensions across however
+  many layers a tree defines. The manifest split alone closes the forgery class completely
+  whenever it verifies — true of every call against either shipped hook — and the
+  never-expected fallback path carries the same residual `jit-match.sh` itself carried
+  before #219, not a new one.
+
+  Two spellings of the header parenthetical had to be recognised, not one: `pre-path-hook.sh`'s
+  own vocabulary-by-path branch writes `# Vocabulary: X.md (matched path: Y)`, where every
+  other header in this codebase writes `(matched: Y)`. The first version of this fix
+  anchored on the single spelling and silently dropped every genuine vocabulary-by-path
+  match as "no rule fired" — a review finding, fixed in the same change, now pinned by its
+  own test section.
+
+  A second, more subtle review finding, in `jit_decode_u00()` itself: it reversed the
+  `\u00XX` escape shape the hooks own encoder produces for a control byte (0..31 excluding
+  `\t`/`\n`/`\r`) regardless of the decoded value, so ordinary entry prose that happens to
+  spell out that same 6-byte ASCII shape — describing JSON escaping, say — decoded exactly
+  like a genuine escaped control byte and shrank from 6 bytes to 1. That desynced the
+  decoded length from the hook's own byte-length manifest, computed on the pre-escape
+  bytes, which still counted all 6 — failing the manifest check and falling back to the
+  pre-#219/#223 `"\n---\n"`-search splitter via ordinary prose, no adversarial payload
+  needed. The `v <= 31` guard added here narrows `jit_decode_u00()` to the range the
+  encoder can actually produce, and closes the case where the prose spells out a value
+  above 31 — but **this entry's own claim that the class was closed was wrong**: the
+  guard runs after `jit_unescape()` has already collapsed an entry's own escaped
+  backslash back to one literal backslash, so a value in that 0..31 range reached
+  through THAT route — ordinary prose containing the escaped-backslash-plus-u00XX shape
+  verbatim — is still byte-identical to a genuine escape by the time this guard runs,
+  and still desyncs the manifest. That is #226, fixed by fusing the two passes into one
+  left-to-right walk (`jit_unescape_blocks()`) so the ambiguity this guard could not
+  resolve never arises. See `changelog.d/226.fixed.md` and `changelog.d/227.fixed.md`.
+
+- **`jit_decode_u00()` ran as a second pass after `jit_unescape()`, so ordinary entry
+  prose could desync the block manifest and drop both consumers to the forgeable
+  splitter #219/#223 exist to close** (#226). `jit_json_escape()` maps a literal
+  backslash to two backslash characters; `jit_unescape()` maps that pair back to one.
+  After that pass, an entry body carrying the literal six-byte ASCII text an author
+  might type while describing JSON escaping is byte-identical to a genuine
+  encoder-emitted control-byte escape — nothing left in the string says which one it
+  was. `jit_decode_u00()` then collapsed both cases the same way, shrinking the
+  prose's six bytes to one and desyncing the block from the hook's own byte-length
+  manifest, which was computed on the pre-escape bytes and still counted all six.
+  That failed `jit_split_ctx_blocks()`'s manifest check and fell back to the
+  pre-#219/#223 `"\n---\n"`-search splitter — reopening the forgery class through
+  ordinary prose, no adversarial payload required. Reproduced on the shipped
+  `tricky.md` fixture from `tests/test-block-framing.sh`, unmodified, plus one added
+  line of prose, on all three awk engines this repository tests against.
+
+  `jit_unescape_blocks()` replaces the two-pass `jit_decode_u00(jit_unescape(...))`
+  idiom with a single left-to-right walk — the shape `jit_unescape()` already used for
+  its two-letter escapes — so a backslash that is itself escaped is consumed as one
+  literal backslash and the text after it is never re-presented to the escape decoder
+  as a fresh candidate. `jit_unescape()` is unchanged and still the right function for
+  every client-built field (`prompt`, `command`, `file_path`, ...); only
+  `additionalContext`/`reason`, built by this codebase's own encoder, get the fused
+  decode. `changelog.d/223.fixed.md` claimed this class was already closed; it was
+  not, and that entry has been corrected in the same change.
+
+- **`jit_blk_manifest_ok` was set by `common.sh` and read by nobody, so a block manifest
+  that failed to verify degraded to the forgeable splitter silently, in both consumers**
+  (#227). The flag's own header comment promised the degrade was observable — it names
+  exactly when `jit_split_ctx_blocks()` fell back — but `grep -rn 'jit_blk_manifest_ok'
+  scripts/ tests/` found seven hits, all inside `common.sh` itself, none in
+  `jit-match.sh`, `jit-dry-run.sh` or any test. That silence is why #226 shipped green:
+  a check that could not run rendered as a check that found nothing, inside the
+  mechanism `#219`/`#223` built to close that exact class.
+
+  Each consumer now reads the flag and answers in its own register.
+  `jit-match.sh` runs inside a design that must never fail hard, so a failed manifest is
+  named as a notice in the injected context — the same register the "N rule(s) could
+  not be evaluated" notice already uses — and it counts toward the existing notice/exit
+  logic, moving this tool off exit 0 the same way an unverifiable match already does.
+  `jit-dry-run.sh` is a tool that must fail loudly, so a failed manifest is now a
+  `NOTE` naming the degrade and a new `BLOCKS_DESYNC` counter that moves the exit code
+  off 0, alongside `SKIPPED_READS` and the rest of the could-not-evaluate tally.
+
+  A genuine desync was forced (a scratch copy of `common.sh` with the manifest-ok
+  branch overridden) and both consumers were confirmed to name it rather than stay
+  silent, before this shipped — and pinned as `tests/test-manifest-desync-227.sh`, the
+  same scratch-copy technique, so a later edit that breaks either consumer's reading of
+  the flag is caught rather than only checked once by hand.
+
+  **A distinct fact turned up in review and is scoped out of this fix on purpose:**
+  `pre-tool-hook.sh` and `pre-path-hook.sh` never build a `"# JIT-CTX-BLOCKS "` manifest
+  for their own `additionalContext` at all — only `pre-prompt-hook.sh` does — so
+  `jit_split_ctx_blocks()` always takes the fallback path for those two hooks, by
+  design today, not by failure. Naively moving the exit code on `!jit_blk_manifest_ok`
+  alone would have reported every genuine tool/path match as "could not evaluate,"
+  drowning the real signal this fix exists to surface — caught by a cascade of newly
+  red tests before this shipped. `jit_blk_manifest_seen` (`common.sh`) is the
+  distinction: 0 means no manifest was ever attempted, 1 means one was and
+  `jit_blk_manifest_ok` says whether it verified. Both consumers gate on
+  `jit_blk_manifest_seen && !jit_blk_manifest_ok`, never on the bare flag. The deeper
+  gap — extending #219's manifest-producer mechanism to the other two hooks — is filed
+  separately; it is a materially bigger change than this one.
+
 ## [0.5.0] - 2026-08-18
 
 ### Added
@@ -2074,7 +2419,8 @@ and publishes it.
 
 Initial internal version: tool and path rules, configured through `config.json`.
 
-[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.4.0
 [0.3.5]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.3.5
