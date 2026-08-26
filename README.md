@@ -838,6 +838,15 @@ as clean. An index in one dimension is enough: a tree carrying only vocabulary r
 result, and the report names the dimensions that had nothing in them rather than implying
 nothing was checked.
 
+**The entry name a sample call reports cannot be forged from an entry body (#223).**
+`.claude/jit-context/` is attacker-controlled input, and the sample call used to `grep` the
+hook's raw output for header text with no manifest awareness at all — so an entry whose own
+body quoted that header text verbatim was reported as a real second match, at exit 0,
+indistinguishable from a genuine entry. It now decodes the hook's own byte-length manifest
+the same way `jit-match.sh` does (below), so a body that quotes the join text verbatim is
+just bytes at that point, part of the one real match it belongs to rather than a fabricated
+second one.
+
 **The report says which of it came from the tree.** A pattern is printed verbatim, because
 a linter that will not show you your own pattern is no use — but `.claude/` arrives with the
 repository, so it goes on a line of its own, prefixed `untrusted>`, with none of the tool's
