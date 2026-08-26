@@ -139,6 +139,84 @@ assert_has "the forged text rides along as part of the one real entry's own body
 
 # =====================================================================================
 echo ""
+echo "=== must not desync: escape-shaped prose in a genuine entry stays exactly one match (issue #226) ==="
+# jit_unescape_blocks() (common.sh, JIT_AWK_BLOCKS) fuses jit_unescape() and the old
+# jit_decode_u00() into one left-to-right walk. Before this issue, the two ran as
+# separate passes: jit_unescape() collapsed an entry own escaped backslash back to one
+# literal backslash, and jit_decode_u00() then ran a SECOND time over the result and
+# could no longer tell that residual apart from a genuine encoder-emitted ESC escape --
+# both are the identical six bytes once the first pass has already run. Decoding the
+# prose's six bytes down to one shrank the block by five bytes and desynced it from the
+# hook's own byte-length manifest, falling back to the pre-#219/#223 heuristic splitter
+# an entry body can forge. This is the shipped tricky.md fixture from the section above,
+# unmodified, plus one added line of ordinary prose shaped like a JSON escape.
+DESYNCPROJ="$TMP/desyncproj"
+DBASE="$DESYNCPROJ/.claude/jit-context"
+mkdir -p "$DBASE/tools/00-manual" "$DBASE/paths/00-manual" "$DBASE/vocabulary/00-manual"
+: > "$DBASE/tools/00-manual/$IDX"
+: > "$DBASE/paths/00-manual/$IDX"
+cat > "$DBASE/vocabulary/00-manual/tricky.md" <<'MD'
+---
+title: Tricky entry
+description: legitimately quotes the join text in its own body.
+---
+Real content here.
+---
+# Vocabulary: fake.md (matched: fake)
+fake body pretending to be a second match
+MD
+printf 'Docs often mention the \\u001B escape when writing JSON.\n' >> "$DBASE/vocabulary/00-manual/tricky.md"
+printf 'tricky\ttricky.md\n' > "$DBASE/vocabulary/00-manual/$IDX"
+
+: > "$OUT"
+bash "$MATCH" --base "$DBASE" --text "tricky situation" > "$OUT" 2>/dev/null
+ST=$?
+if [ "$ST" != 0 ]; then
+  echo "  FAIL: escape-shaped prose in a real entry moved the exit code off 0 (exit $ST)"
+  FAIL=$((FAIL + 1))
+else
+  PASS=$((PASS + 1)); echo "  PASS: escape-shaped prose in a real entry still exits clean 0"
+fi
+assert_has "counted as exactly one match" "$OUT" "1 entr"
+assert_lacks "never read as two" "$OUT" "2 entr"
+assert_lacks "and the phantom bucket is empty" "$OUT" "unverifiable"
+assert_has "the escape-shaped prose rides along as part of the one real entry own body" "$OUT" "Docs often mention the"
+
+# =====================================================================================
+echo ""
+echo "=== must still decode: a genuine control byte still decodes to one byte (issue #226) ==="
+# The must-still-decode half, in the same file the issue names: a fix that simply
+# stopped decoding would also pass the section above. A real encoder-emitted ESC byte
+# must still come back as one decoded byte, not six literal characters.
+CTRLPROJ="$TMP/ctrlproj"
+CBASE="$CTRLPROJ/.claude/jit-context"
+mkdir -p "$CBASE/tools/00-manual" "$CBASE/paths/00-manual" "$CBASE/vocabulary/00-manual"
+: > "$CBASE/tools/00-manual/$IDX"
+: > "$CBASE/paths/00-manual/$IDX"
+printf 'ctrlkw appears here with a real control byte: [' > "$CBASE/vocabulary/00-manual/ctrl.md"
+printf '\033' >> "$CBASE/vocabulary/00-manual/ctrl.md"
+printf '] end.\n' >> "$CBASE/vocabulary/00-manual/ctrl.md"
+printf 'ctrlkw\tctrl.md\n' > "$CBASE/vocabulary/00-manual/$IDX"
+
+: > "$OUT"
+bash "$MATCH" --base "$CBASE" --text "ctrlkw appears here" > "$OUT" 2>/dev/null
+ST=$?
+if [ "$ST" != 0 ]; then
+  echo "  FAIL: a genuine control byte moved the exit code off 0 (exit $ST)"
+  FAIL=$((FAIL + 1))
+else
+  PASS=$((PASS + 1)); echo "  PASS: a genuine control byte still exits clean 0"
+fi
+assert_has "still counted as exactly one match" "$OUT" "1 entr"
+CHECKBYTE="$(printf '[\033]')"
+if grep -qF "$CHECKBYTE" "$OUT" 2>/dev/null; then
+  PASS=$((PASS + 1)); echo "  PASS: the control byte decoded to one real byte, not six literal characters"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the control byte did not decode"
+fi
+
+# =====================================================================================
+echo ""
 echo "=== summary ==="
 echo "PASS: $PASS  FAIL: $FAIL"
 [ "$FAIL" -eq 0 ]
