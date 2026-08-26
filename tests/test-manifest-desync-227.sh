@@ -13,8 +13,8 @@
 # manifest header parses) so the manifest that would otherwise verify is reported as
 # broken. This exercises the actual notice/NOTE/exit-code wiring in both consumers
 # against a real hook run, on real fixtures, rather than asserting against a hand-built
-# string -- see changelog.d/227.fixed.md for the same check run by hand before this
-# suite existed.
+# string -- see CHANGELOG.md for the same check, once run by hand before this suite
+# existed.
 #
 # A second section is the control this repository keeps needing: #227's own review
 # found that pre-tool-hook.sh and pre-path-hook.sh never build a manifest header at all,
