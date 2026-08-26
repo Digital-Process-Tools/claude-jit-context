@@ -262,10 +262,14 @@ function emit_json_str(s) {
   }
   return s
 }
-# jit_decode_u00() moved to common.sh (JIT_AWK_BLOCKS) alongside jit_split_ctx_blocks()
-# (#223): jit-dry-run.sh report_hook() needs the identical \u00XX-back-to-byte reversal
-# before it can trust a decoded block header, and a second copy here is what let the
-# block-splitter drift out of step in the first place. See its own comment there.
+# jit_unescape_blocks() (common.sh, JIT_AWK_BLOCKS) is what this file calls below to
+# decode a block-carrying field instead of jit_unescape() alone -- it moved here (#223)
+# alongside jit_split_ctx_blocks() for the same reason as that function: jit-dry-run.sh
+# report_hook() needs the identical decode before it can trust a block header, and a
+# second copy here is what let the two drift out of step in the first place. It replaced
+# the two-pass jit_decode_u00(jit_unescape(...)) idiom in #226, fusing both into one walk
+# so an entry own escaped backslash can never be mistaken for a genuine \u00XX escape
+# once jit_unescape() has already run on it. See its own comment in common.sh.
 # --- The tree own index, loaded once, used only to VERIFY -------------------------------
 # This does NOT reimplement the matcher. It does not fold accents, does not apply the
 # LC_ALL=C keyword-lookup this whole design deliberately leaves to the real hook, and it
