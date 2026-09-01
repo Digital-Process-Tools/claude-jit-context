@@ -185,6 +185,66 @@ else
 fi
 
 echo ""
+echo "=== E. cwd is not inside any git tree: the guard cannot evaluate, and says so (#240) ==="
+# JIT_CWD_TOP comes back empty here -- not "no git worktree", just no git tree at all under
+# cwd. That is #240's own shape: the guard's [ -n ... ] && [ -n ... ] precondition is false,
+# so section B's FATAL never fires, and nothing before this issue said the check itself
+# never ran. A caller sees the same silence whether the check ran and agreed or could not
+# run at all -- this asserts the run now tells those two apart on stderr.
+NOTGIT="$ROOT/notgit"
+mkdir -p "$NOTGIT"
+ERR="$ROOT/notgit.err"
+( cd "$NOTGIT" && CLAUDE_PROJECT_DIR="$MAIN" bash "$REBUILD" >/dev/null 2>"$ERR" )
+RC=$?
+assert_rc "a cwd with no git tree at all still writes CLAUDE_PROJECT_DIR's tree" 0 "$RC"
+if [ -f "$MAIN_TSV" ]; then
+  ok "and CLAUDE_PROJECT_DIR's own index was written (the guard did not block this)"
+else
+  bad "and CLAUDE_PROJECT_DIR's own index was written" "no file at $MAIN_TSV"
+fi
+assert_contains "and stderr names the check as unable to run, not silent" "$(cat "$ERR")" \
+  "cross-tree check"
+assert_contains "and says which side could not resolve a git tree" "$(cat "$ERR")" \
+  "cwd is not inside a git tree"
+rm -f "$MAIN_TSV" "$WT_TSV"
+
+echo ""
+echo "=== F. CLAUDE_PROJECT_DIR does not resolve to a git tree: the other empty side (#240) ==="
+# Section E left cwd empty and CLAUDE_PROJECT_DIR resolvable; this is the other half of the
+# elif in rebuild-tsv.sh -- cwd resolvable, CLAUDE_PROJECT_DIR empty -- so the message text
+# for that branch is exercised too, not just traced by reading the code.
+ERR="$ROOT/notgit-proj.err"
+( cd "$WT" && CLAUDE_PROJECT_DIR="$NOTGIT" bash "$REBUILD" >/dev/null 2>"$ERR" )
+RC=$?
+assert_rc "a CLAUDE_PROJECT_DIR with no git tree at all is a FATAL, not a silent write" 2 "$RC"
+assert_contains "and stderr names the check as unable to run" "$(cat "$ERR")" \
+  "cross-tree check"
+assert_contains "and says CLAUDE_PROJECT_DIR's side, not cwd's" "$(cat "$ERR")" \
+  "CLAUDE_PROJECT_DIR does not resolve to a git tree"
+if [ -f "$WT_TSV" ]; then
+  bad "and the worktree's own index was NOT rewritten" "found $WT_TSV"
+else
+  ok "and the worktree's own index was NOT rewritten"
+fi
+
+echo ""
+echo "=== G. both sides fail to resolve a git tree: the combined message (#240) ==="
+# Sections E and F each left one side resolvable. This is the third and last branch of the
+# elif in rebuild-tsv.sh -- neither side resolves -- so its own combined-message text is
+# exercised too, per the auditor review of the first commit: reading the code says the
+# branch is correct, only a passing assertion proves it stayed correct.
+NOTGIT2="$ROOT/notgit2"
+mkdir -p "$NOTGIT2"
+ERR="$ROOT/notgit-both.err"
+( cd "$NOTGIT" && CLAUDE_PROJECT_DIR="$NOTGIT2" bash "$REBUILD" >/dev/null 2>"$ERR" )
+RC=$?
+assert_rc "neither side resolving a git tree is a FATAL, not a silent write" 2 "$RC"
+assert_contains "and stderr names the check as unable to run" "$(cat "$ERR")" \
+  "cross-tree check"
+assert_contains "and says both sides, not just one" "$(cat "$ERR")" \
+  "cwd is not inside a git tree, and CLAUDE_PROJECT_DIR does not resolve to one either"
+
+echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))
 echo "  $PASS/$TOTAL passed, $FAIL failed"
