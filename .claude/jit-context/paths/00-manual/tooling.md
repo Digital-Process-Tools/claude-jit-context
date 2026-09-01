@@ -115,7 +115,6 @@ bash tests/test-silent-drops.sh       # rebuild-tsv.sh: what it discarded while 
 bash tests/test-invocation-macro.sh   # rebuild-tsv.sh: macro expansion, and refusal
 bash tests/test-frontmatter-quotes.sh # rebuild-tsv.sh: frontmatter parsing
 bash tests/test-changelog-fragment-refs.sh # nothing names a fragment the next tag deletes
-bash tests/test-changelog-workflow-untagged.sh # the local edit in an owned workflow is still there
 bash tests/test-dogfood-entries.sh    # this repo's own rules, both directions
 bash tests/run-all.sh                 # non-zero on any failure
 ```
