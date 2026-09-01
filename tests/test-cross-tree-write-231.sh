@@ -228,6 +228,23 @@ else
 fi
 
 echo ""
+echo "=== G. both sides fail to resolve a git tree: the combined message (#240) ==="
+# Sections E and F each left one side resolvable. This is the third and last branch of the
+# elif in rebuild-tsv.sh -- neither side resolves -- so its own combined-message text is
+# exercised too, per the auditor review of the first commit: reading the code says the
+# branch is correct, only a passing assertion proves it stayed correct.
+NOTGIT2="$ROOT/notgit2"
+mkdir -p "$NOTGIT2"
+ERR="$ROOT/notgit-both.err"
+( cd "$NOTGIT" && CLAUDE_PROJECT_DIR="$NOTGIT2" bash "$REBUILD" >/dev/null 2>"$ERR" )
+RC=$?
+assert_rc "neither side resolving a git tree is a FATAL, not a silent write" 2 "$RC"
+assert_contains "and stderr names the check as unable to run" "$(cat "$ERR")" \
+  "cross-tree check"
+assert_contains "and says both sides, not just one" "$(cat "$ERR")" \
+  "cwd is not inside a git tree, and CLAUDE_PROJECT_DIR does not resolve to one either"
+
+echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))
 echo "  $PASS/$TOTAL passed, $FAIL failed"
