@@ -202,7 +202,21 @@ assert_contains "the overflow past the cap is named, not silently dropped" "$OUT
 
 echo ""
 echo "=========================================="
-echo "Results: $PASS passed, $FAIL failed"
+if [ "$D_SKIPPED" -eq 0 ]; then
+  echo "Results: $PASS passed, $FAIL failed"
+else
+  # The same third state this whole file exists to test for, one level up: a section
+  # that could not run must not render as a suite that ran clean. `run-all.sh` already
+  # gives exit 2 its own bucket -- "SKIPPED suites (could not build their fixtures
+  # here)" -- distinct from a run of all-green suites, the same convention
+  # test-session-markers.sh/test-marker-degradation.sh/test-hook-tmpfile.sh/
+  # test-log-containment.sh already use for a chmod that could not bite (root, or a
+  # filesystem without POSIX modes). Followed here rather than invented: D_SKIPPED
+  # existed with nothing reading it, which is the identical defect class section D is
+  # itself about, one layer up.
+  echo "Results: $PASS passed, $FAIL failed, 1 section(s) SKIPPED"
+fi
 echo "=========================================="
 [ "$FAIL" -eq 0 ] || exit 1
+[ "$D_SKIPPED" -eq 0 ] || exit 2
 exit 0
