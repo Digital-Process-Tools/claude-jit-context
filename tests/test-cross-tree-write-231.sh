@@ -136,7 +136,7 @@ ERR="$ROOT/stale.err"
 ( cd "$WT" && CLAUDE_PROJECT_DIR="$MAIN" bash "$REBUILD" >/dev/null 2>"$ERR" )
 RC=$?
 assert_rc "a stale CLAUDE_PROJECT_DIR from inside the worktree is refused" 2 "$RC"
-assert_contains "and says why" "$(cat "$ERR")" "different git worktree"
+assert_contains "and says why" "$(cat "$ERR")" "cwd's git tree is not CLAUDE_PROJECT_DIR's"
 assert_contains "and names the escape hatch" "$(cat "$ERR")" "JIT_CONTEXT_ALLOW_CROSS_TREE"
 if [ -f "$MAIN_TSV" ]; then
   bad "the clone's index was NOT written" "found $MAIN_TSV"
@@ -166,6 +166,23 @@ else
 fi
 assert_contains "and the receipt line says which tree, even under the escape hatch" \
   "$(cat "$ERR")" "writing JIT_BASE=$MAIN/.claude/jit-context"
+rm -f "$MAIN_TSV" "$WT_TSV"
+
+echo ""
+echo "=== D. the escape hatch is compared by VALUE, not by presence ==="
+# =0 is a plausible spelling for "leave the guard ON" (the opposite of =1). A check that
+# merely asked [ -z ... ] would treat any non-empty value as "disable", including this
+# one, and silently defeat the guard on the spelling most likely to be tried by someone
+# who means the opposite.
+ERR="$ROOT/zero.err"
+( cd "$WT" && JIT_CONTEXT_ALLOW_CROSS_TREE=0 CLAUDE_PROJECT_DIR="$MAIN" bash "$REBUILD" >/dev/null 2>"$ERR" )
+RC=$?
+assert_rc "JIT_CONTEXT_ALLOW_CROSS_TREE=0 still refuses" 2 "$RC"
+if [ -f "$MAIN_TSV" ]; then
+  bad "and the clone's index was NOT written" "found $MAIN_TSV"
+else
+  ok "and the clone's index was NOT written"
+fi
 
 echo ""
 echo "========================"
