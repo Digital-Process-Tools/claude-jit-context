@@ -435,6 +435,52 @@ VOCAB_KEYWORD_BLACKLIST="${JIT_CONTEXT_KEYWORD_BLACKLIST:-${DYNAMIC_RULES_KEYWOR
 # than a special case inside it.
 GENERIC_WORDS_FILE="${JIT_CONTEXT_GENERIC_WORDS:-${DYNAMIC_RULES_GENERIC_WORDS:-$(dirname "$0")/../data/generic-words.txt}}"
 
+# --- Generic-word wordlist health, read ONCE for the whole run (#255) ---------------
+# Until now the classifier forked one `grep -Fxq` PER KEYWORD against this file --
+# #251 grew it from 196 words/~4KB to 103,776 words/~1.0MB, measured at ~4.5ms per
+# call, amortized, so a rebuild over a few hundred keywords spent seconds re-scanning
+# the same file from scratch for every one of them. The fix (below, in
+# build_vocab_tsv) batches every keyword a run actually needs classified through ONE
+# awk process that reads this file exactly once, rather than one process per keyword.
+#
+# That move changes WHERE a broken wordlist is discovered: the old per-keyword call
+# gated on `[ -f "$GENERIC_WORDS_FILE" ]` and swallowed a permission-denied or
+# zero-byte read with `2>/dev/null`, so an existing-but-unreadable or existing-but-
+# empty file silently classified every keyword as non-generic and nothing said so --
+# this repo's own defect class, in the tool built to name it. `paths/00-manual/
+# tooling.md` binds this script to fail loudly rather than degrade silently, so the
+# three states below are distinguished and only one of them is silent:
+#
+#   unset / no file at all  -- the documented degrade: an index built before this
+#                              feature landed, or a project that opted out by setting
+#                              JIT_CONTEXT_GENERIC_WORDS="" -- every keyword reads as
+#                              specific, exactly pre-#232 behaviour. Not an error.
+#   exists, unreadable/empty -- a configuration defect: something IS configured and
+#                              present but cannot be used. Loud: named on stderr,
+#                              jit_rc 2 (this run is not one the classifier column can
+#                              be trusted on), same degrade as above so the rest of
+#                              the index still gets written.
+#   exists, readable, words -- classify runs; GENERIC_WORDS_OK gates the batch call in
+#                              build_vocab_tsv so a broken file is read only once,
+#                              here, never once per vocabulary layer.
+GENERIC_WORDS_OK=0
+if [ -z "$GENERIC_WORDS_FILE" ]; then
+  : # opted out -- not an error
+elif [ ! -e "$GENERIC_WORDS_FILE" ]; then
+  : # nothing configured/shipped -- the documented degrade, not an error
+elif [ ! -r "$GENERIC_WORDS_FILE" ]; then
+  echo "FATAL    generic-word classifier: $GENERIC_WORDS_FILE exists but is not readable -- every keyword this run will read as non-generic (the pre-#232 degrade), which would otherwise be silent. Fix its permissions or unset JIT_CONTEXT_GENERIC_WORDS to accept the degrade on purpose." >&2
+  jit_rc 2
+else
+  GENERIC_WORDS_LINES=$(LC_ALL=C awk 'END{print NR+0}' "$GENERIC_WORDS_FILE" 2>/dev/null)
+  if [ -z "$GENERIC_WORDS_LINES" ] || [ "$GENERIC_WORDS_LINES" -eq 0 ]; then
+    echo "FATAL    generic-word classifier: $GENERIC_WORDS_FILE exists and is readable but is empty -- every keyword this run will read as non-generic (the pre-#232 degrade), which would otherwise be silent." >&2
+    jit_rc 2
+  else
+    GENERIC_WORDS_OK=1
+  fi
+fi
+
 # Source-root prefix used when mapping a "## Modules" section to path triggers.
 # Projects that keep modules somewhere other than src/ override this in config.env.
 MODULE_PREFIX="${JIT_CONTEXT_MODULE_PREFIX:-${DYNAMIC_RULES_MODULE_PREFIX:-src/}}"
@@ -475,6 +521,17 @@ build_vocab_tsv() {
   fi
 
   truncate_index "$tsv" "$label/${tsv##*/}" || return
+
+  # --- Deferred generic-word classification (#255) -----------------------------------
+  # Every non-blacklisted keyword this call writes a row for lands in ALL_KW (flat, one
+  # slot per row, across every file in $dir) instead of being classified immediately --
+  # ENTRY_FILENAME/ENTRY_START/ENTRY_COUNT remember which slice of ALL_KW belongs to
+  # which file, in file-iteration order, so the classify-and-write pass below can still
+  # apply the all-generic fallback and write rows in exactly today's order. This is what
+  # lets the whole directory's keywords be classified in ONE awk process (see below)
+  # instead of one grep per keyword.
+  local ALL_KW=()
+  local ENTRY_FILENAME=() ENTRY_START=() ENTRY_COUNT=()
 
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -532,7 +589,7 @@ build_vocab_tsv() {
     # JIT_CONTEXT_KEYWORD_BLACKLIST, a term that normalised to nothing sends them to the
     # frontmatter. Reporting one reason for both would name a pattern that never saw the
     # word -- a confident wrong answer, which is worse here than no report at all.
-    local kw_split kw_written=0 kw_black=0 kw_empty=0 kw_generic=0
+    local kw_split kw_written=0 kw_black=0 kw_empty=0
     # Buffered rather than appended straight to $tsv (as every other counter here is a
     # plain integer): the all-generic fallback below (#232, the half PR #250 left owed)
     # cannot decide until every keyword on THIS entry has been classified, so the row for
@@ -616,48 +673,24 @@ build_vocab_tsv() {
           JIT_IDCOLLISION_N=$((JIT_IDCOLLISION_N + 1))
         fi
       fi
-      # --- Generic-word verdict (#232), third TSV column -------------------------
-      # "generic" for an exact hit in the bundled wordlist, empty for everything else --
-      # including a multi-word keyword, which can never match a one-word wordlist line,
-      # and a keyword absent from the list, which is the documented degrade-to-specific
-      # case. Never consulted at prompt time -- this is the ONE place the file is read.
-      verdict=""
-      if [ -n "$GENERIC_WORDS_FILE" ] && [ -f "$GENERIC_WORDS_FILE" ] \
-        && LC_ALL=C grep -Fxq -- "$kw" "$GENERIC_WORDS_FILE" 2>/dev/null; then
-        verdict="generic"
-        kw_generic=$((kw_generic + 1))
-      fi
-      kw_rows+=("$(printf '%s\t%s\t%s' "$kw" "$filename" "$verdict")")
+      # --- Generic-word candidate (#232 classifies it; #255 defers the classify) -----
+      # The verdict itself ("generic"/empty, third TSV column) is no longer decided
+      # here, per keyword -- $kw just joins ALL_KW, and the whole directory's candidates
+      # are classified in ONE awk process after this file loop ends (below). Never
+      # consulted at prompt time either way -- this is still the only place the
+      # wordlist is read.
+      kw_rows+=("$kw")
       kw_written=$((kw_written + 1))
     done <<< "$kw_split"
-    # --- All-generic fallback (#232, the half PR #250 shipped without) ---------
-    # Step 3 downgrades a match on a "generic" keyword to title+description and leaves
-    # the entry unmarked, banking on a LATER specific match to deliver the full body.
-    # An entry that owns no specific keyword at all never gets that later match -- it
-    # sits at description-only for the rest of the session, which is the exact failure
-    # #232's own body names as the thing the whole proposal exists to avoid.
-    #
-    # Decided here, at rebuild time, rather than in the hook's hot path: this is the one
-    # place that already reads the wordlist, the hook contract in hooks.md is absolute
-    # about never touching it, and the fallback is representable as "write no 'generic'
-    # verdict for this entry's rows at all" -- which needs no new hook logic, because a
-    # row with an empty third column is already the documented degrade-to-specific case
-    # (an index built before this feature landed, or a keyword absent from the list). An
-    # entry that fails this gate degrades to EXACTLY today's pre-#232 behaviour: full
-    # body, marked shown, on any match -- no worse than before this issue existed, which
-    # is the standard the issue's own reopened design question asks for.
-    if [ "$kw_written" -gt 0 ] && [ "$kw_generic" -eq "$kw_written" ]; then
-      local ri kwx filex
-      for ri in "${!kw_rows[@]}"; do
-        IFS=$'\t' read -r kwx filex _ <<< "${kw_rows[$ri]}"
-        kw_rows[$ri]="$(printf '%s\t%s\t' "$kwx" "$filex")"
-      done
-      JIT_ALLGENERIC="$JIT_ALLGENERIC    [$label] $(jit_report_name "$filename")
-"
-      JIT_ALLGENERIC_N=$((JIT_ALLGENERIC_N + 1))
-    fi
+    # Hand this file's keywords to the deferred classify pass (#255): remember which
+    # slice of ALL_KW is this file's so the fallback below can be recomputed once every
+    # row in ALL_KW has a real verdict, in the same file-iteration order as before.
     if [ "$kw_written" -gt 0 ]; then
-      printf '%s\n' "${kw_rows[@]}" >> "$tsv"
+      local _entry_i=${#ENTRY_FILENAME[@]}
+      ENTRY_FILENAME[_entry_i]="$filename"
+      ENTRY_START[_entry_i]=${#ALL_KW[@]}
+      ENTRY_COUNT[_entry_i]=$kw_written
+      ALL_KW+=("${kw_rows[@]}")
     fi
     # An entry whose every keyword was blacklisted has a `keywords:` line and no row: the
     # drops above are each reported, but nothing said the ENTRY went dark as a result, and
@@ -676,6 +709,76 @@ build_vocab_tsv() {
           "every keywords: term normalised to nothing -- the normaliser maps every byte outside [a-z0-9 -] to a space"
       fi
     fi
+  done
+
+  # --- Batch-classify every deferred keyword in ONE awk process, then write (#255) ----
+  # ALL_KW now holds every non-blacklisted keyword this whole directory needs a verdict
+  # for. Classifying them one process for the LOT -- instead of one grep per keyword --
+  # is the entire fix: an awk that reads the wordlist once and holds it in a hash beats
+  # a fork that re-scans the file from scratch on every call, and #251 made that file
+  # 260x bigger. GENERIC_WORDS_OK (computed once, at the top of this script) gates it: a
+  # missing/unset wordlist is the documented degrade, and a configured-but-broken one
+  # was already reported loudly there -- either way every flag here comes back "0" and
+  # every keyword below reads as non-generic, exactly the same safe default the old
+  # per-keyword `-f`-gated grep produced.
+  #
+  # Read back over a pipe/process substitution, never through `$(...)`: command
+  # substitution strips ALL trailing newlines from a captured string, which would lose
+  # trailing blank OUTPUT lines and misalign VERDICT_FLAGS against ALL_KW by however many
+  # of the last keywords happened to be non-generic. `1`/`0` (never an empty line) is a
+  # second, independent guard against the same class of bug -- awk's own last line is
+  # then never blank either, so nothing here depends on which readback method survives a
+  # future edit.
+  local VERDICT_FLAGS=()
+  if [ "${#ALL_KW[@]}" -gt 0 ] && [ "$GENERIC_WORDS_OK" -eq 1 ]; then
+    while IFS= read -r _vflag; do
+      VERDICT_FLAGS+=("$_vflag")
+    done < <(printf '%s\n' "${ALL_KW[@]}" | LC_ALL=C awk -v wf="$GENERIC_WORDS_FILE" '
+      BEGIN { while ((getline w < wf) > 0) seen[w] = 1 }
+      { print ($0 in seen) ? 1 : 0 }
+    ')
+  fi
+
+  local _ei
+  for _ei in "${!ENTRY_FILENAME[@]}"; do
+    local _efile="${ENTRY_FILENAME[$_ei]}" _estart="${ENTRY_START[$_ei]}" _ecount="${ENTRY_COUNT[$_ei]}"
+    local _entry_rows=() _kw_generic=0 _j _ekw _everdict
+    for ((_j = _estart; _j < _estart + _ecount; _j++)); do
+      _ekw="${ALL_KW[$_j]}"
+      if [ "${VERDICT_FLAGS[_j]:-0}" = "1" ]; then
+        _everdict="generic"
+        _kw_generic=$((_kw_generic + 1))
+      else
+        _everdict=""
+      fi
+      _entry_rows+=("$(printf '%s\t%s\t%s' "$_ekw" "$_efile" "$_everdict")")
+    done
+    # --- All-generic fallback (#232, the half PR #250 shipped without) ---------
+    # Step 3 downgrades a match on a "generic" keyword to title+description and leaves
+    # the entry unmarked, banking on a LATER specific match to deliver the full body.
+    # An entry that owns no specific keyword at all never gets that later match -- it
+    # sits at description-only for the rest of the session, which is the exact failure
+    # #232's own body names as the thing the whole proposal exists to avoid.
+    #
+    # Decided here, at rebuild time, rather than in the hook's hot path: this is the one
+    # place that already reads the wordlist, the hook contract in hooks.md is absolute
+    # about never touching it, and the fallback is representable as "write no 'generic'
+    # verdict for this entry's rows at all" -- which needs no new hook logic, because a
+    # row with an empty third column is already the documented degrade-to-specific case
+    # (an index built before this feature landed, or a keyword absent from the list). An
+    # entry that fails this gate degrades to EXACTLY today's pre-#232 behaviour: full
+    # body, marked shown, on any match -- no worse than before this issue existed, which
+    # is the standard the issue's own reopened design question asks for.
+    if [ "$_kw_generic" -eq "$_ecount" ]; then
+      _entry_rows=()
+      for ((_j = _estart; _j < _estart + _ecount; _j++)); do
+        _entry_rows+=("$(printf '%s\t%s\t' "${ALL_KW[$_j]}" "$_efile")")
+      done
+      JIT_ALLGENERIC="$JIT_ALLGENERIC    [$label] $(jit_report_name "$_efile")
+"
+      JIT_ALLGENERIC_N=$((JIT_ALLGENERIC_N + 1))
+    fi
+    printf '%s\n' "${_entry_rows[@]}" >> "$tsv"
   done
 
   COUNT=$(wc -l < "$tsv" | tr -d ' ')
