@@ -453,6 +453,15 @@ JIT_DROPPED=""
 JIT_IDCOLLISION=""
 JIT_IDCOLLISION_N=0
 
+# Every entry whose keywords classified ALL-generic and had the verdict cleared back to
+# empty on every row (#232, the fallback PR #250 shipped without). Reported the same way
+# JIT_IDCOLLISION is -- accumulated globally, printed once at the end, beside the other
+# advisory tallies. Advisory because the fallback already fixed the behaviour; this is
+# visibility into WHICH entries are relying on it, since each one is a candidate for a
+# specific keyword an author could add instead.
+JIT_ALLGENERIC=""
+JIT_ALLGENERIC_N=0
+
 # --- Vocabulary: parse frontmatter from .md files ---
 build_vocab_tsv() {
   local dir="$1"
@@ -523,7 +532,13 @@ build_vocab_tsv() {
     # JIT_CONTEXT_KEYWORD_BLACKLIST, a term that normalised to nothing sends them to the
     # frontmatter. Reporting one reason for both would name a pattern that never saw the
     # word -- a confident wrong answer, which is worse here than no report at all.
-    local kw_split kw_written=0 kw_black=0 kw_empty=0
+    local kw_split kw_written=0 kw_black=0 kw_empty=0 kw_generic=0
+    # Buffered rather than appended straight to $tsv (as every other counter here is a
+    # plain integer): the all-generic fallback below (#232, the half PR #250 left owed)
+    # cannot decide until every keyword on THIS entry has been classified, so the row for
+    # keyword 1 cannot be written before keyword 3 is seen. A bash array survives past the
+    # loop because this is a here-string, not a pipe -- the same reason JIT_DROPPED does.
+    local kw_rows=()
     # `LC_ALL=C` (#195): kw_line still carries any byte the fold above did not know, and
     # under the caller's own locale a bare `tr` refuses an invalid multibyte sequence
     # outright rather than splitting around it -- the same failure the per-keyword tr/sed
@@ -610,10 +625,40 @@ build_vocab_tsv() {
       if [ -n "$GENERIC_WORDS_FILE" ] && [ -f "$GENERIC_WORDS_FILE" ] \
         && LC_ALL=C grep -Fxq -- "$kw" "$GENERIC_WORDS_FILE" 2>/dev/null; then
         verdict="generic"
+        kw_generic=$((kw_generic + 1))
       fi
-      printf '%s\t%s\t%s\n' "$kw" "$filename" "$verdict"
+      kw_rows+=("$(printf '%s\t%s\t%s' "$kw" "$filename" "$verdict")")
       kw_written=$((kw_written + 1))
-    done <<< "$kw_split" >> "$tsv"
+    done <<< "$kw_split"
+    # --- All-generic fallback (#232, the half PR #250 shipped without) ---------
+    # Step 3 downgrades a match on a "generic" keyword to title+description and leaves
+    # the entry unmarked, banking on a LATER specific match to deliver the full body.
+    # An entry that owns no specific keyword at all never gets that later match -- it
+    # sits at description-only for the rest of the session, which is the exact failure
+    # #232's own body names as the thing the whole proposal exists to avoid.
+    #
+    # Decided here, at rebuild time, rather than in the hook's hot path: this is the one
+    # place that already reads the wordlist, the hook contract in hooks.md is absolute
+    # about never touching it, and the fallback is representable as "write no 'generic'
+    # verdict for this entry's rows at all" -- which needs no new hook logic, because a
+    # row with an empty third column is already the documented degrade-to-specific case
+    # (an index built before this feature landed, or a keyword absent from the list). An
+    # entry that fails this gate degrades to EXACTLY today's pre-#232 behaviour: full
+    # body, marked shown, on any match -- no worse than before this issue existed, which
+    # is the standard the issue's own reopened design question asks for.
+    if [ "$kw_written" -gt 0 ] && [ "$kw_generic" -eq "$kw_written" ]; then
+      local ri kwx filex
+      for ri in "${!kw_rows[@]}"; do
+        IFS=$'\t' read -r kwx filex _ <<< "${kw_rows[$ri]}"
+        kw_rows[$ri]="$(printf '%s\t%s\t' "$kwx" "$filex")"
+      done
+      JIT_ALLGENERIC="$JIT_ALLGENERIC    [$label] $(jit_report_name "$filename")
+"
+      JIT_ALLGENERIC_N=$((JIT_ALLGENERIC_N + 1))
+    fi
+    if [ "$kw_written" -gt 0 ]; then
+      printf '%s\n' "${kw_rows[@]}" >> "$tsv"
+    fi
     # An entry whose every keyword was blacklisted has a `keywords:` line and no row: the
     # drops above are each reported, but nothing said the ENTRY went dark as a result, and
     # one dropped word out of three is a very different thing from all three.
@@ -975,6 +1020,24 @@ if [ -n "$JIT_IDCOLLISION" ]; then
   echo "$JIT_IDCOLLISION_N keyword(s) -- see the comment above the check in this script for what it does and does not catch." >&2
 else
   echo "(none — no keyword's normalised spelling silently dropped its casing)" >&2
+fi
+echo "" >&2
+
+# --- Entries relying on the all-generic fallback (#232) ----------------------
+# Advisory, like the sections above, worded the same way for the same reason: a quiet
+# line that reads like every other quiet line here is how a check that never ran passes
+# for a check that found nothing.
+echo "=== Entries whose keywords are ALL generic (fallback applied -- full body every match) ===" >&2
+echo "Every keyword on these entries classified as an ordinary word, so the generic-only" >&2
+echo "downgrade was cleared: they behave as before #232 -- full body, one shot spent, on" >&2
+echo "any match. Add a specific keyword to any of these to get the downgrade's benefit." >&2
+echo "" >&2
+if [ -n "$JIT_ALLGENERIC" ]; then
+  printf '%s' "$JIT_ALLGENERIC" >&2
+  echo "" >&2
+  echo "$JIT_ALLGENERIC_N entry/entries -- see the comment above the check in this script for why this degrades safely." >&2
+else
+  echo "(none — every entry on the tree owns at least one specific keyword)" >&2
 fi
 echo "" >&2
 
