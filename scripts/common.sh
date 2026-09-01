@@ -1208,10 +1208,12 @@ function jit_row_id(layer, rown) {
 }
 # #233: looks up the age jit_scan_entry_ages() (bash half, above) already read for
 # "<layer>/<file>" and returns it as a whole number of days, or "" when the table has
-# nothing for that key -- an entry outside 00-manual, a JIT_ENTRY_AGES table capped
-# mid-line, or a perl this platform could not run. "" is a real answer, not a defect:
-# every caller treats it as "say nothing", never as "0 days old", so a platform where
-# this could not be measured degrades to the footer exactly as it read before #233.
+# nothing for that key -- an entry outside 00-manual, a whole line jit_scan_entry_ages()
+# dropped once JIT_ENTRY_AGES was already over its cap (the cap never truncates a line
+# mid-flight, only refuses the next one), or a perl this platform could not run. "" is a
+# real answer, not a defect: every caller treats it as "say nothing", never as "0 days
+# old", so a platform where this could not be measured degrades to the footer exactly as
+# it read before #233.
 #
 # Parsed ONCE per awk process, on the first call, into jit_age[] -- not once per row.
 # ENVIRON["JIT_ENTRY_AGES"] is "<layer>/<file>\t<days>" lines, exactly what the bash
@@ -2682,6 +2684,13 @@ jit_scan_entry_ages() {
       opendir(my $h, $d) or exit 0;
       while (defined(my $e = readdir $h)) {
         next if $e eq "." || $e eq "..";
+        # A tab or a newline in the filename would land inside the very bytes this
+        # table uses as its own field and record separators, and jit_entry_age() (the
+        # awk half) has no way to tell "a filename that happens to contain a tab" from
+        # a genuine second row -- it would either fold two files onto the one key that
+        # stops at the first tab, or split one row into two. Refused here, before
+        # either byte ever reaches the table, rather than tolerated downstream.
+        next if $e =~ /[\t\n]/;
         my $f = "$d/$e";
         next if -l $f;
         next unless -f $f;

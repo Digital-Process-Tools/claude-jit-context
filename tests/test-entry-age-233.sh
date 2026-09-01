@@ -95,5 +95,41 @@ assert_contains "shows the matched keyword" "$OUT3" "matched: bridgekw"
 assert_contains "shows the real on-disk age" "$OUT3" "last edited ${EXPECT_DAYS}d ago"
 
 echo ""
+echo "=== a filename with a literal tab in a 00-manual layer never reaches the age table (#233 review finding) ==="
+# jit_scan_entry_ages()'s table uses TAB and NEWLINE as its own field/record separators.
+# A directory entry whose NAME contains one of those bytes -- reachable via an ordinary
+# `git clone`, the same threat model the symlink guards above jit_scan_layers() already
+# name -- would fold onto, or split, a genuine neighbour's row if it ever reached the
+# table at all. Checked directly against the table jit_scan_entry_ages() builds, rather
+# than through a full hook round trip: which row wins a collision depends on this
+# filesystem's own readdir() order, which this suite does not control and must not rely
+# on, but whether the poisoned name is EXCLUDED from the table in the first place does
+# not depend on that order at all.
+TABPROJ="$TMP/tabproj"
+TABBASE="$TABPROJ/.claude/jit-context/vocabulary"
+mkdir -p "$TABBASE/00-manual"
+IDXNAME="00-index"; IDXNAME="$IDXNAME.tsv"
+printf 'bridgekw\tbridge.md\n' > "$TABBASE/00-manual/$IDXNAME"
+echo "bridge entry body" > "$TABBASE/00-manual/bridge.md"
+touch -t 202001010000 "$TABBASE/00-manual/bridge.md"
+# The adversarial neighbour: a name that starts with the legitimate one's bytes plus a
+# real TAB, so a naive first-tab split would fold this row onto "bridge.md"'s key.
+perl -e 'my $n = "bridge.md" . "\t" . "1"; open(my $fh, ">", "'"$TABBASE"'/00-manual/$n") or exit 0; print $fh "poisoned\n"; close $fh;' 2>/dev/null
+
+TABLE="$(bash -c '
+  set -u
+  CLAUDE_PROJECT_DIR="$1"
+  export CLAUDE_PROJECT_DIR
+  SCRIPT_DIR="$2"
+  # shellcheck source=/dev/null
+  source "$SCRIPT_DIR/common.sh"
+  jit_scan_layers "$3" vocabulary
+  jit_scan_entry_ages "$3"
+  printf "%s" "$JIT_ENTRY_AGES"
+' _ "$TABPROJ" "$REPO/scripts" "$TABBASE")"
+assert_not_contains "the tab-poisoned name does not reach the age table at all" "$TABLE" "$(printf 'bridge.md\t1\t')"
+assert_contains "the genuine entry is still in the table, once, with its real age" "$TABLE" "00-manual/bridge.md	"
+
+echo ""
 echo "== Results: $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

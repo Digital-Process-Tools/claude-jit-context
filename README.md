@@ -1084,7 +1084,7 @@ It reads and prints. No file is written, no entry is created, no hook fires and 
 
 `--log PATH` reads a log elsewhere, `--min N` changes how many misses make a recurrence (default 2), `--top N` caps the list, `--help` carries the grouping rule.
 
-**`session-start-hook.sh` runs this for you now.** A session that opens on a project whose log already holds a real recurring miss says so before anything else competes for attention: `recurring misses: "preprod deploy" x5, "rector rules" x3`. A quiet project, or one with no log yet, opens exactly as it always has — SKIPPED and "nothing recurs" are both silence here too.
+**`session-start-hook.sh` runs this for you now.** A session that opens on a project whose log already holds a real recurring miss says so before anything else competes for attention: `recurring misses: "preprod" x5, "deploy" x5, "rector" x3`. Each entry here is one token, the same unit `jit-misses.sh` itself ranks -- a shared *phrase* across prompts still shows up as its separate words, each with its own count, never glued back into the phrase. A quiet project, or one with no log yet, opens exactly as it always has — SKIPPED and "nothing recurs" are both silence here too.
 
 **A `00-manual` entry's own age rides along in the footer it already carries.** `[vocab-upkeep]` used to be the same sentence on every match; now the header above it says how long the entry has gone untouched — `# Vocabulary: bridge.md (matched: bridge · last edited 170d ago)` — read once per hook call over the whole `00-manual` layer directory, not once per match. An entry leaned on for months without a touch is the highest-probability stale rule in the shelf, and this is the one moment nothing else is competing to say so.
 
