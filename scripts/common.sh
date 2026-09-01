@@ -2134,6 +2134,11 @@ function jit_unescape(s,   n, i, c, nx, o) {
 #
 # nblk/blk[] are plain awk globals, uninitialised (0/empty) at the start of every END
 # block by awk's own rules -- no explicit reset needed before the first `nblk++`.
+#
+# Consumed by the hook awk programs (pre-prompt-hook.sh, pre-tool-hook.sh,
+# pre-path-hook.sh), which shellcheck cannot see -- same reason every other JIT_AWK_*
+# variable above carries this directive.
+# shellcheck disable=SC2034
 JIT_AWK_BLK_BUILD='
 function jit_blk_prepend(text,   i) {
   for (i = nblk; i >= 1; i--) blk[i + 1] = blk[i]
