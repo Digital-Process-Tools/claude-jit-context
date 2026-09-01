@@ -209,6 +209,25 @@ assert_contains "and says which side could not resolve a git tree" "$(cat "$ERR"
 rm -f "$MAIN_TSV" "$WT_TSV"
 
 echo ""
+echo "=== F. CLAUDE_PROJECT_DIR does not resolve to a git tree: the other empty side (#240) ==="
+# Section E left cwd empty and CLAUDE_PROJECT_DIR resolvable; this is the other half of the
+# elif in rebuild-tsv.sh -- cwd resolvable, CLAUDE_PROJECT_DIR empty -- so the message text
+# for that branch is exercised too, not just traced by reading the code.
+ERR="$ROOT/notgit-proj.err"
+( cd "$WT" && CLAUDE_PROJECT_DIR="$NOTGIT" bash "$REBUILD" >/dev/null 2>"$ERR" )
+RC=$?
+assert_rc "a CLAUDE_PROJECT_DIR with no git tree at all is a FATAL, not a silent write" 2 "$RC"
+assert_contains "and stderr names the check as unable to run" "$(cat "$ERR")" \
+  "cross-tree check"
+assert_contains "and says CLAUDE_PROJECT_DIR's side, not cwd's" "$(cat "$ERR")" \
+  "CLAUDE_PROJECT_DIR does not resolve to a git tree"
+if [ -f "$WT_TSV" ]; then
+  bad "and the worktree's own index was NOT rewritten" "found $WT_TSV"
+else
+  ok "and the worktree's own index was NOT rewritten"
+fi
+
+echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))
 echo "  $PASS/$TOTAL passed, $FAIL failed"
