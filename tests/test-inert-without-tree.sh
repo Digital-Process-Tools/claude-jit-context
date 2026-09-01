@@ -81,8 +81,8 @@ assert_absent() {
   fi
 }
 
-# Every hook, with a payload each one recognises. A change that leaves one of the four
-# still creating the tree is the same bug with a smaller blast radius, so all four run.
+# Every hook, with a payload each one recognises. A change that leaves one of the six
+# still creating the tree is the same bug with a smaller blast radius, so all six run.
 run_all_hooks() {
   local proj="$1"
   printf '{"prompt":"hello there","session_id":"sessI"}' \
@@ -93,6 +93,12 @@ run_all_hooks() {
     | CLAUDE_PROJECT_DIR="$proj" bash "$SCRIPTS/pre-path-hook.sh" 2>/dev/null
   printf '{"session_id":"sessI"}' \
     | CLAUDE_PROJECT_DIR="$proj" bash "$SCRIPTS/session-start-hook.sh" 2>/dev/null
+  # #244: PostToolUse and Stop are the two hooks that read/write the edit signal --
+  # neither is exempt from the tree-less contract this whole suite exists to pin.
+  printf '{"session_id":"sessI","tool_name":"Edit","tool_input":{"file_path":"/x/y/a.php"}}' \
+    | CLAUDE_PROJECT_DIR="$proj" bash "$SCRIPTS/post-tool-hook.sh" 2>/dev/null
+  printf '{"session_id":"sessI","hook_event_name":"Stop"}' \
+    | CLAUDE_PROJECT_DIR="$proj" bash "$SCRIPTS/stop-hook.sh" 2>/dev/null
 }
 
 echo "=== A: the positive control -- with a tree, the same hooks DO write ==="
@@ -116,13 +122,13 @@ echo "=== B: a project with no .claude at all gets nothing ==="
 
 PROJ="$(mktemp -d "$TMPROOT/bare-XXXXXX")"
 OUT="$(run_all_hooks "$PROJ")"
-# The hooks ran and answered. Four `{}` bodies, one per hook: this is what stops the
+# The hooks ran and answered. Six `{}` bodies, one per hook: this is what stops the
 # absence below from being an absence of hooks.
 assert_contains "B the hooks answered" "$OUT" "{}"
-if [ "$(grep -c '{}' <<<"$OUT")" -ge 4 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: B all four hooks answered"
+if [ "$(grep -c '{}' <<<"$OUT")" -ge 6 ]; then
+  PASS=$((PASS + 1)); echo "  PASS: B all six hooks answered"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: B fewer than four hooks answered -- the absence below proves nothing"
+  FAIL=$((FAIL + 1)); echo "  FAIL: B fewer than six hooks answered -- the absence below proves nothing"
   echo "    got: $OUT"
 fi
 assert_absent "B no .claude directory is materialised" "$PROJ/.claude"
