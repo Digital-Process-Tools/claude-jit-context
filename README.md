@@ -1088,6 +1088,8 @@ It reads and prints. No file is written, no entry is created, no hook fires and 
 
 **A `00-manual` entry's own age rides along in the footer it already carries.** `[vocab-upkeep]` used to be the same sentence on every match; now the header above it says how long the entry has gone untouched — `# Vocabulary: bridge.md (matched: bridge · last edited 170d ago)` — read once per hook call over the whole `00-manual` layer directory, not once per match. An entry leaned on for months without a touch is the highest-probability stale rule in the shelf, and this is the one moment nothing else is competing to say so.
 
+**The age is a filesystem mtime, not a commit date, and a fresh `git clone` resets it.** A new contributor's first clone, a CI leg, or a fresh plugin install all see "last edited 0d ago" on entries nobody has touched in months, because checkout — not the last commit — is what set the mtime. Reading commit history instead would fix this and is a materially bigger change; it is not done here.
+
 ## Tests
 
 ```bash

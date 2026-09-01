@@ -2660,6 +2660,18 @@ export JIT_ENTRY_AGES=""
 # just scanned by jit_scan_layers() (its vetted, already-validated $JIT_LAYERS is what
 # this reads -- never a fresh glob of its own, so a layer name jit_scan_layers() refused
 # is never opened here either).
+#
+# KNOWN LIMITATION, NOT FIXED HERE (#233 review): -M reads the FILESYSTEM mtime, and a
+# fresh `git clone` sets every file's mtime to checkout time, not its last commit time.
+# So the very sessions this footer is aimed at -- a new contributor's first clone, a CI
+# leg, a fresh plugin install -- see "last edited 0d ago" on entries that have not been
+# touched in months, which is the opposite of the signal #233 asks for. Fixing this
+# properly means reading commit history instead of the filesystem (`git log`), which is
+# a materially different mechanism -- slower, requires a `.git` to exist at all, and is
+# its own portability question across the three CI platforms -- so it is reported rather
+# than silently patched in. A checkout whose mtimes were deliberately preserved (an
+# archive extracted with `tar --touch`, a filesystem that keeps birth time) is unaffected
+# either way, since this only ever reads the mtime it is given.
 jit_scan_entry_ages() {
   # $1 dimension base directory -- the same one just passed to jit_scan_layers()
   local base="$1" layer d out
