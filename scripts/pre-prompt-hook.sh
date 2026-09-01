@@ -50,6 +50,10 @@ jit_tmp_open
 # Enumerated, never a literal (#176). See jit_scan_layers() in common.sh: a layer name
 # outside the four this used to hardcode was indexed by the rebuild and read by nothing.
 jit_scan_layers "$JIT_BASE/vocabulary" vocabulary
+# #233: reads the on-disk age of every 00-manual vocabulary entry, once, before awk
+# ever runs -- see jit_scan_entry_ages() in common.sh for why this is a bash-side scan
+# and not a per-row stat.
+jit_scan_entry_ages "$JIT_BASE/vocabulary"
 
 cat | LC_ALL=C awk \
   -v vocab_layers="$JIT_LAYERS" \
@@ -310,7 +314,12 @@ END {
       if (vc != "") {
         shown[vfile] = 1
         jit_shown_mark(shown_file, vfile)
-        vh = "# Vocabulary: " vfile " (matched: " vmatch[vfile] ")"
+        # #233: age is looked up by "layer/vfile", the same key jit_scan_entry_ages()
+        # (common.sh) wrote it under. "" means no age was measured for this file --
+        # outside 00-manual, or a platform this could not run perl on -- and the header
+        # then reads exactly as it did before #233, never claiming a false "0d ago".
+        vage = (layer ~ /00-manual/) ? jit_entry_age(layer "/" vfile) : ""
+        vh = "# Vocabulary: " vfile " (matched: " vmatch[vfile] (vage != "" ? " · last edited " vage "d ago" : "") ")"
         if (layer ~ /00-manual/) vh = vh "\\n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
         log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent)
         sep = ", "

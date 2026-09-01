@@ -64,6 +64,9 @@ jit_tmp_open
 jit_scan_layers "$JIT_BASE/tools" tools
 JIT_TOOL_LAYERS="$JIT_LAYERS"
 jit_scan_layers "$JIT_BASE/vocabulary" vocabulary
+# #233: see the same call and comment in pre-prompt-hook.sh -- read once here too, since
+# this hook carries its own copy of the vocabulary match loop and its own footer.
+jit_scan_entry_ages "$JIT_BASE/vocabulary"
 JIT_VOCAB_LAYERS="$JIT_LAYERS"
 
 # #203: computed once, in bash, before the row loop below ever opens a tools index --
@@ -1036,7 +1039,10 @@ END {
           }
           shown[vfile] = 1
           jit_shown_mark(shown_file, vfile)
-          vh = "# Vocabulary: " vfile " (matched: " vmatch[vfile] ")"
+          # #233: same lookup and same "" fallback as pre-prompt-hook.sh -- see the
+          # comment there.
+          vage = (layer ~ /00-manual/) ? jit_entry_age(layer "/" vfile) : ""
+          vh = "# Vocabulary: " vfile " (matched: " vmatch[vfile] (vage != "" ? " · last edited " vage "d ago" : "") ")"
           if (layer ~ /00-manual/) vh = vh "\\n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
           log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent)
           sep = ", "
