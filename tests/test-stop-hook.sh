@@ -178,6 +178,29 @@ else
 fi
 
 echo ""
+echo "=== H: the dedup scan is bounded, not quadratic in an untrusted marker file ==="
+# The collection pass re-scans its own accumulator on every line (a plain `case`, no
+# associative array -- bash 3.2 has none); left unbounded that is quadratic in the
+# number of distinct names two marker files can hold. This does not prove the bound
+# fires at exactly the right count -- it proves a marker file bigger than any real
+# session produces still answers, and answers with every name accounted for one way
+# or the other (listed, or named in the overflow line).
+
+P="$(new_project h)"
+mkdir -p "$(state_of "$P")"
+JIT_HI=600
+_jit_seq=1
+: > "$(state_of "$P")/vocab-shown-sess-h.txt"
+while [ "$_jit_seq" -le "$JIT_HI" ]; do
+  printf 'entry-%s.md\n' "$_jit_seq" >> "$(state_of "$P")/vocab-shown-sess-h.txt"
+  _jit_seq=$((_jit_seq + 1))
+done
+OUT="$(run_stop "$P" "sess-h")"; RC=$?
+assert_rc0 "the hook exits 0 on 600 distinct fired entries" "$RC"
+assert_contains "the reported total accounts for all 600" "$OUT" "$JIT_HI entries injected"
+assert_contains "the overflow past the cap is named, not silently dropped" "$OUT" "more past this hook's own"
+
+echo ""
 echo "=========================================="
 echo "Results: $PASS passed, $FAIL failed"
 echo "=========================================="

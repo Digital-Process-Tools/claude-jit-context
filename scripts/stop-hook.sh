@@ -76,8 +76,19 @@ EDIT_MARK="$JIT_STATE_DIR/edited-$SESSION_ID.txt"
 # Excluded here the same way jit_shown_apply() already validates a mark line: only a
 # bare name survives, everything else (a slash, a backslash, one of the known
 # sentinels) is dropped rather than reported as an entry nobody wrote.
+#
+# THE DEDUP SCAN IS BOUNDED, the same shape JIT_LAYERS_MAX and JIT_ENTRY_AGES_MAX
+# already give a table an untrusted-in-size tree can grow (common.sh): the `case`
+# below re-scans the WHOLE accumulator on every line, so an unbounded accumulator is
+# quadratic in the number of distinct names two marker files can hold. In the ordinary
+# case each hook already dedups before it ever marks an entry (it loads its own
+# `shown` set from this same file before matching), so this cap is never reached by a
+# real session; it exists so a two-file union this hook did not write itself cannot
+# choose how long Stop takes to answer.
+JIT_FIRED_MAX=500
 JIT_FIRED=""
 JIT_FIRED_N=0
+JIT_FIRED_OVERFLOW=0
 for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
   [ -f "$_jit_mf" ] && [ ! -L "$_jit_mf" ] || continue
   while IFS= read -r _jit_name || [ -n "$_jit_name" ]; do
@@ -85,6 +96,15 @@ for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
       ''|*/*|*\\*) continue ;;
       jit-refused-*|jit-no-subject) continue ;;
     esac
+    if [ "$JIT_FIRED_N" -ge "$JIT_FIRED_MAX" ]; then
+      # Past the cap, a name is counted but not deduped or stored -- the accumulator
+      # stays at its capped size instead of growing, which is the whole point, and the
+      # displayed count below may over-count a genuine repeat as a result. That is the
+      # same trade-off the codebase already makes elsewhere: bounded cost, not exact
+      # accounting, past a size no real session reaches.
+      JIT_FIRED_OVERFLOW=$((JIT_FIRED_OVERFLOW + 1))
+      continue
+    fi
     case "$JIT_NL$JIT_FIRED$JIT_NL" in
       *"$JIT_NL$_jit_name$JIT_NL"*) continue ;;
     esac
@@ -171,4 +191,12 @@ $JIT_FIRED
 EOF_FIRED
 unset _jit_name _jit_age _jit_shown
 
-printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"%s entries injected this session, none updated. Fired:%s"}}\n' "$JIT_FIRED_N" "$JIT_LIST"
+# JIT_FIRED_OVERFLOW is 0 in the ordinary case (see the cap comment above) -- named
+# explicitly only when the collection pass above actually hit it, so the count in the
+# ordinary sentence stays exact rather than always carrying a caveat nobody needs.
+JIT_TOTAL=$((JIT_FIRED_N + JIT_FIRED_OVERFLOW))
+if [ "$JIT_FIRED_OVERFLOW" -gt 0 ]; then
+  JIT_LIST="$JIT_LIST\\n  ... plus $JIT_FIRED_OVERFLOW more past this hook's own $JIT_FIRED_MAX-entry cap, not deduplicated or listed"
+fi
+
+printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"%s entries injected this session, none updated. Fired:%s"}}\n' "$JIT_TOTAL" "$JIT_LIST"
