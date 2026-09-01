@@ -714,6 +714,8 @@ The exit code says which of three things happened, so a script or a pre-commit h
 | **1** | the index was written, and at least one rule will be **refused** by the matcher — an invocation macro that could not be expanded. That rule is on disk and will never fire |
 | **2** | the index was not built: no `tools/`, `paths/` or `vocabulary/` where it looked, or a `00-index.tsv` it could not write. What is on disk is not what this run built |
 
+`JIT_BASE` resolves against `CLAUDE_PROJECT_DIR`, never the working directory — so an agent working a branch in a `git worktree` inherits whatever `CLAUDE_PROJECT_DIR` the session started with, which keeps pointing at the main clone after the session's cwd moves into the worktree. A worktree and its clone share one `.git`, so a rebuild run from inside the worktree with that stale value used to write the **clone's** index and report success. Every successful run now prints the tree it is about to write — `rebuild-tsv: writing JIT_BASE=... (CLAUDE_PROJECT_DIR=..., cwd=...)` — and when the current directory's own git worktree differs from `CLAUDE_PROJECT_DIR`'s, the script refuses (exit `2`) instead of guessing which one you meant. Deliberately rebuilding a tree other than the one your shell is standing in is a flag: `JIT_CONTEXT_ALLOW_CROSS_TREE=1`.
+
 The ambiguity report is advisory and never moves the code — those entries are indexed and fire.
 
 It also names, every run, the entries it read and wrote **no row** for:
