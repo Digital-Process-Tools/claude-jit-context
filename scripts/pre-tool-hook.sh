@@ -968,6 +968,8 @@ END {
       # The row a matched file was FIRST seen at, so a body this pass cannot deliver is
       # named by position -- the loop below walks files, not rows.
       delete vmrow
+      # #232: same tracking as pre-prompt-hook.sh -- see the comment there.
+      delete vspecific
       vrown = 0
       while ((getline vl < lookup) > 0) {
         vrown++
@@ -983,7 +985,7 @@ END {
         }
 
         split(vl, vf, "\t")
-        kw = vf[1]; vfile = vf[2]
+        kw = vf[1]; vfile = vf[2]; kwverdict = vf[3]
         why = jit_bad_entry_file(vfile, vocab_base "/" layer)
         if (why != "") {
           # Same concatenation, same refusal. Keyed on the name so one bad row is counted
@@ -1003,16 +1005,21 @@ END {
           if (vfile in vmatch) {
             if (index("|" vmatch[vfile] "|", "|" kw "|") == 0) vmatch[vfile] = vmatch[vfile] "|" kw
           } else { vmatch[vfile] = kw; vmrow[vfile] = vrown }
+          # #232: same tracking as pre-prompt-hook.sh -- see the comment there.
+          if (kwverdict != "generic") vspecific[vfile] = 1
         }
       }
       close(lookup)
 
       for (vfile in vmatch) {
+        # #232: same downgrade as pre-prompt-hook.sh -- see the comment there.
+        generic_only = !(vfile in vspecific)
         # Read first, mark only what was delivered -- see the same loop in
         # pre-prompt-hook.sh for why the old order marked entries nothing had injected.
         vc = ""
         vpath = vocab_base "/" layer "/" vfile
         if (jit_entry_load(vpath, inject_default, 0, vent)) {
+          if (generic_only) vent["mode"] = "summary"
           vc = jit_inject_text(vent, ".claude/jit-context/vocabulary/" layer "/" vfile)
         } else if (vent["why"] != "") {
           why = vent["why"]
@@ -1037,14 +1044,16 @@ END {
             wsep = ", "
             continue
           }
-          shown[vfile] = 1
-          jit_shown_mark(shown_file, vfile)
+          if (!generic_only) {
+            shown[vfile] = 1
+            jit_shown_mark(shown_file, vfile)
+          }
           # #233: same lookup and same "" fallback as pre-prompt-hook.sh -- see the
           # comment there.
           vage = (layer ~ /00-manual/) ? jit_entry_age(layer "/" vfile) : ""
           vh = "# Vocabulary: " vfile " (matched: " vmatch[vfile] (vage != "" ? " · last edited " vage "d ago" : "") ")"
           if (layer ~ /00-manual/) vh = vh "\\n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
-          log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent)
+          log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent) (generic_only ? ":generic-only" : "")
           sep = ", "
           nblk++; blk[nblk] = vh "\n" vc
         }

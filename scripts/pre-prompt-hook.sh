@@ -239,6 +239,11 @@ END {
     # The row a matched file was FIRST seen at, so a body this loop cannot deliver is
     # named by position like every other refusal -- the loop below walks files, not rows.
     delete vmrow
+    # #232: whether AT LEAST ONE keyword that matched this file was specific (the 3rd
+    # TSV column is anything but "generic", including missing -- the documented
+    # degrade-to-specific case). A file with no key here matched on generic keywords
+    # only, and is downgraded to summary and left unmarked below.
+    delete vspecific
     vrown = 0
     while ((getline vl < lookup) > 0) {
       vrown++
@@ -257,7 +262,7 @@ END {
       }
 
       split(vl, vf, "\t")
-      kw = vf[1]; vfile = vf[2]
+      kw = vf[1]; vfile = vf[2]; kwverdict = vf[3]
       # vfile is concatenated onto the layer directory below. A row of ../../../x made
       # this hook read that file and inject it into the very first message of a session;
       # jit_bad_entry_file in common.sh carries the reproduction. Counted once per row,
@@ -282,11 +287,20 @@ END {
         if (vfile in vmatch) {
           if (index("|" vmatch[vfile] "|", "|" kw "|") == 0) vmatch[vfile] = vmatch[vfile] "|" kw
         } else { vmatch[vfile] = kw; vmrow[vfile] = vrown }
+        # #232: ANY specific keyword hitting this file is enough to keep it full-mode.
+        # A missing or empty 3rd column degrades to specific -- the documented fallback
+        # for an index built before this landed.
+        if (kwverdict != "generic") vspecific[vfile] = 1
       }
     }
     close(lookup)
 
     for (vfile in vmatch) {
+      # #232: a file reached ONLY through generic keywords this turn. Downgraded to
+      # title+description below and left OUT of `shown`, so the full body still arrives
+      # the moment a specific keyword hits later in the session -- the entry one shot
+      # is never spent on an ordinary-word match.
+      generic_only = !(vfile in vspecific)
       # The entry is read BEFORE anything is marked shown. A row whose entry file will not
       # open was marked delivered anyway, which is exactly what a NUL-truncated row looks
       # like to one-true-awk (#78), and an entry the JSON channel cannot carry is refused
@@ -301,6 +315,13 @@ END {
       vc = ""
       vpath = vocab_base "/" layer "/" vfile
       if (jit_entry_load(vpath, inject_default, 0, vent)) {
+        # Overridden AFTER load, never passed in: jit_entry_load own default/pin
+        # logic (project setting, an entry inject: line, a frontmatter-less file
+        # pinned to full) is exactly what a generic-only match must NOT honour --
+        # #232 asks for summary regardless of what the entry or the project would
+        # otherwise choose, precisely because nothing here changed how the entry
+        # itself is configured.
+        if (generic_only) vent["mode"] = "summary"
         vc = jit_inject_text(vent, ".claude/jit-context/vocabulary/" layer "/" vfile)
       } else if (vent["why"] != "") {
         why = vent["why"]
@@ -312,8 +333,10 @@ END {
       }
 
       if (vc != "") {
-        shown[vfile] = 1
-        jit_shown_mark(shown_file, vfile)
+        if (!generic_only) {
+          shown[vfile] = 1
+          jit_shown_mark(shown_file, vfile)
+        }
         # #233: age is looked up by "layer/vfile", the same key jit_scan_entry_ages()
         # (common.sh) wrote it under. "" means no age was measured for this file --
         # outside 00-manual, or a platform this could not run perl on -- and the header
@@ -321,7 +344,7 @@ END {
         vage = (layer ~ /00-manual/) ? jit_entry_age(layer "/" vfile) : ""
         vh = "# Vocabulary: " vfile " (matched: " vmatch[vfile] (vage != "" ? " · last edited " vage "d ago" : "") ")"
         if (layer ~ /00-manual/) vh = vh "\\n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
-        log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent)
+        log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent) (generic_only ? ":generic-only" : "")
         sep = ", "
         nblk++; blk[nblk] = vh "\n" vc
       }

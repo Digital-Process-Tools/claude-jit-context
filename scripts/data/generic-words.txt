@@ -1,0 +1,230 @@
+# Generic-word list consulted by rebuild-tsv.sh (#232) to classify a vocabulary
+# keyword as an ordinary word rather than a project-specific identifier. One
+# lowercase token per line; blank lines and lines starting with "#" are ignored.
+# Consulted only at rebuild time -- never at prompt time -- so this file changes
+# nothing about the runtime dependency list scripts/*-hook.sh is held to.
+#
+# PROVENANCE, AND WHERE THIS FALLS SHORT OF WHAT #232 ASKS FOR.
+#
+# #232's own research recommends SCOWL size 35 (English) and Dicollecte/Grammalecte
+# (French) for their explicit, redistributable licenses. This session could not
+# fetch and verify a license-clean, well-formed snapshot of either within its own
+# time budget: the obvious mirrors either 404 (en-wl/wordlist's packaged archives)
+# or are single-author GitHub repos with no stated license this classifier's
+# determinism requirement can lean on sight-unseen. Rather than vendor an
+# unverified list under a name that implies SCOWL/Dicollecte pedigree, this file
+# is a small, hand-curated substitute: unambiguous closed-class English words
+# (articles, prepositions, pronouns, common auxiliaries) plus the specific
+# ordinary-word false positives #232's own measurement names by name (content,
+# context, manager, super, talk, time, file, name, branch, issue, documents,
+# files, discovery, count, output, input, fast, start, before, comment), plus a
+# modest set of everyday nouns/verbs/adjectives one call step short of that list.
+# A handful of common French function words and content words are included for
+# the same reason, without claiming Dicollecte's coverage.
+#
+# This is reported as a `report-for-filing` item in the pull request that adds
+# it: swapping this file for a verified SCOWL-35 + Dicollecte-stems export is
+# follow-up work, not something this pass closes. Nothing about the mechanism in
+# rebuild-tsv.sh or pre-prompt-hook.sh changes when that swap happens -- only the
+# bytes in this file and its French sibling below the marker.
+#
+# --- closed-class / function words ---
+a
+about
+after
+again
+all
+also
+an
+and
+any
+are
+as
+at
+back
+be
+before
+being
+between
+but
+by
+can
+comment
+content
+context
+could
+count
+detection
+discovery
+documents
+down
+extension
+fast
+file
+files
+for
+from
+had
+has
+have
+here
+how
+if
+in
+input
+into
+is
+issue
+it
+its
+just
+manager
+may
+more
+most
+name
+new
+no
+not
+now
+of
+off
+on
+one
+or
+other
+out
+output
+over
+own
+same
+so
+some
+start
+super
+talk
+than
+that
+the
+their
+them
+then
+there
+these
+they
+this
+those
+through
+time
+to
+too
+under
+up
+very
+was
+we
+were
+what
+when
+where
+which
+while
+who
+why
+will
+with
+would
+you
+your
+# --- everyday nouns / verbs / adjectives ---
+big
+call
+change
+check
+comment
+day
+discuss
+discussion
+end
+example
+fix
+good
+group
+help
+info
+information
+list
+look
+make
+manage
+module
+need
+note
+number
+page
+part
+place
+problem
+project
+question
+report
+run
+security
+send
+show
+small
+step
+system
+task
+team
+template
+test
+thing
+try
+update
+use
+user
+view
+week
+work
+year
+# --- French (closed-class + a handful of common content words) ---
+au
+aux
+avec
+ce
+ces
+dans
+de
+des
+du
+elle
+en
+est
+et
+il
+je
+la
+le
+les
+leur
+mais
+même
+nous
+ou
+par
+pas
+pour
+qui
+sans
+se
+ses
+son
+sur
+sont
+un
+une
+vous
+détail
+projet
+équipe

@@ -711,7 +711,15 @@ scan_short_keywords() {
     while IFS= read -r row; do
       [ -n "$row" ] || continue
       kw="${row%%	*}"
+      # #232 added a third column (the generic/specific verdict) to this same TSV, so
+      # "everything after the first tab" -- what this line read until now -- has grown
+      # a trailing "\tgeneric" or a bare trailing tab on any 3-column row. That extra
+      # tab is exactly the byte jit_report_name() below refuses on sight, so this
+      # advisory silently started printing "<withheld: not a plain name>" for every
+      # short keyword in a rebuilt tree instead of the file it actually lives in.
+      # Second field only, whatever the row's total column count is now or grows to.
       ent="${row#*	}"
+      ent="${ent%%	*}"
       [ "${#kw}" -lt "$MIN_KEYWORD" ] || continue
       advise "$(printf '%-18s %-24s %s' "short keyword" "$dim/$safe" "$(jit_report_name "$ent"): keyword '$(jit_report_keyword "$kw")' is ${#kw} bytes, minimum $MIN_KEYWORD")"
     done < <(LC_ALL=C awk 'NF { print }' "$d/00-index.tsv")

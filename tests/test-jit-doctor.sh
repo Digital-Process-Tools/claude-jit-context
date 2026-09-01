@@ -422,6 +422,27 @@ assert_has "a clean tree states that there are none" "$OUT" "advisory"
 
 # =====================================================================================
 echo ""
+echo "=== a #232 3-column vocabulary index still names the entry, not <withheld> ==="
+# #232 added a third TSV column (the generic/specific verdict) to every vocabulary
+# 00-index.tsv. scan_short_keywords() used to take EVERYTHING after the first tab as
+# the entry name -- correct at two columns, and on a rebuilt three-column row it took
+# "vocab.md<TAB>generic" instead, which jit_report_name() then withheld outright for
+# containing a tab. Reproduced directly: this fixture writes the row rebuild-tsv.sh
+# now produces, not the pre-#232 two-column shape the section above still uses.
+V232PROJ="$TMP/v232proj/.claude/jit-context"
+mkdir -p "$TMP/v232proj"
+mk_tree "$V232PROJ"
+printf 'js\tvocab.md\tgeneric\n' > "$V232PROJ/vocabulary/00-manual/$IDX"
+touch -t 202001010000 "$V232PROJ/vocabulary/00-manual/vocab.md"
+touch "$V232PROJ/vocabulary/00-manual/$IDX"
+ST=0; run_doctor --base "$V232PROJ" || ST=$?
+assert_has   "the short keyword is still flagged"     "$OUT" "js"
+assert_has   "the entry file is named"                "$OUT" "vocab.md"
+assert_lacks "and not withheld for carrying a tab"     "$OUT" "withheld"
+assert_exit  "and it does not move the exit code"      0 "$ST"
+
+# =====================================================================================
+echo ""
 echo "=== an entry that never appears in the log ==="
 # Reported WITHOUT a day threshold, and the reason is in the data: hooks.log timestamps
 # carry no date at all, and an entry mtime is rewritten by every clone. "never fired in
