@@ -1,7 +1,7 @@
 #!/bin/bash
 # #251: data/generic-words.txt must never carry a row that cannot survive
 # jit_fold_latin1() -- the classifier folds a KEYWORD before comparing it against this
-# file (scripts/rebuild-tsv.sh:610-611, `LC_ALL=C grep -Fxq -- "$kw" "$GENERIC_WORDS_FILE"`),
+# file (scripts/rebuild-tsv.sh, the `LC_ALL=C grep -Fxq -- "$kw" "$GENERIC_WORDS_FILE"` call),
 # but never folds the file itself. A row stored with an accent, or with anything outside
 # [a-z], can therefore never be reached by any normalised keyword -- it is a permanently
 # dead row. #232 found three such rows in the PR #250 stand-in this file replaced (meme,
