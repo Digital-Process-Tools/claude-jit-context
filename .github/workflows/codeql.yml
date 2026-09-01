@@ -1,0 +1,54 @@
+# CodeQL, scoped to GitHub Actions workflows and nothing else.
+#
+# WHY ONLY `actions`. This repository is 1.5 MB of Shell and CodeQL has no shell
+# analyser -- the product itself is not scannable by this tool, and `shellcheck`
+# in tests.yml is what covers it. The only other language present is Python, and
+# 100% of that is `.oss/`, which is vendored from the oss plugin and rewritten
+# wholesale by `/oss:scaffold --apply`. Scanning it would report findings against
+# somebody else's code that nobody here can fix without the edit being lost at the
+# next scaffold run -- see .claude/jit-context/paths/00-manual/vendored-oss.md.
+#
+# So `actions` is not a reduced scope, it is the whole of what this tool can
+# usefully say about this repository. Re-measure before widening it:
+#
+#   gh api repos/<owner>/<repo>/languages
+#
+# A supported language arriving OUTSIDE `.oss/` is the condition for adding one.
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly. Advisories land after the code stops changing, so a scan that only
+    # runs on a push cannot find one that was published since the last commit.
+    - cron: '17 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (actions)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: actions
+          build-mode: none
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:actions
