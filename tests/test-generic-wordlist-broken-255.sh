@@ -127,5 +127,34 @@ assert_contains "an unlisted keyword degrades to specific (empty 3rd column)" \
   "$(cat "$BASE/vocabulary/00-manual/00-index.tsv")" "$(printf 'uniquespecifictoken255\twidget.md\t')"
 
 echo ""
+echo "=== F. a wordlist path carrying a raw carriage return cannot forge the FATAL line (audit finding) ==="
+# config.env arrives with the clone, and JIT_CONTEXT_GENERIC_WORDS is one of the settings
+# it may set (jit_load_config() strips only a TRAILING \r, the CRLF-checkout case, and
+# leaves an interior one alone). Printed raw, a bare CR resets the terminal cursor to
+# column 0 and lets an attacker-chosen suffix overwrite the FATAL text before it -- the
+# same class this repo already closed for entry/file names via jit_report_name(), reopened
+# here at a new site outside its reach (jit_report_name() refuses any `/`, which every real
+# path this variable holds has). Most filesystems permit a raw CR byte inside a filename
+# (unlike NUL or `/`), so this builds one for real rather than asserting on a string.
+CRNAME="$(printf 'crfile%bFORGED-SUFFIX.txt' '\r')"
+CRPATH="$ROOT/$CRNAME"
+printf 'context\n' > "$CRPATH"
+chmod 000 "$CRPATH" 2>/dev/null
+if [ -r "$CRPATH" ]; then
+  echo "  SKIP-NOTE: chmod did not remove read permission here (running as root). Section F tested nothing."
+else
+  rebuild "$CRPATH"
+  assert_rc "a CR-carrying unreadable wordlist path still exits 2" 2 "$RC"
+  if LC_ALL=C grep -qF "$(printf '\r')" "$ERR"; then
+    bad "the FATAL line must not carry a raw carriage return" \
+      "found one in: $(cat "$ERR" | tr '\r' '?' | tr '\n' ' ' | cut -c1-300)"
+  else
+    ok "the FATAL line carries no raw carriage return (the path is sanitised before printing)"
+  fi
+  assert_contains "and the FATAL line still shows the readable part of the path" "$(cat "$ERR")" "crfile"
+fi
+chmod 644 "$CRPATH" 2>/dev/null
+
+echo ""
 echo "== Results: $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

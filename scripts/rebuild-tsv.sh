@@ -464,17 +464,28 @@ GENERIC_WORDS_FILE="${JIT_CONTEXT_GENERIC_WORDS:-${DYNAMIC_RULES_GENERIC_WORDS:-
 #                              build_vocab_tsv so a broken file is read only once,
 #                              here, never once per vocabulary layer.
 GENERIC_WORDS_OK=0
+# GENERIC_WORDS_FILE can be config.env's JIT_CONTEXT_GENERIC_WORDS, and config.env
+# arrives with the clone (common.sh: "config.env is the same trust boundary as the
+# log"). jit_load_config() only strips a TRAILING carriage return (the CRLF-checkout
+# case) and leaves an interior one alone, so a hostile config.env can smuggle a bare
+# CR into this value -- printed raw, that resets the terminal cursor to column 0 and
+# lets whatever follows overwrite the FATAL line before it (review finding, #255).
+# Neither jit_report_name() nor jit_report_keyword() fits here: both refuse anything
+# with a `/` outright, which is every real path this variable ever holds. Stripping
+# only the C0 control range (and DEL) keeps the path printable -- and debuggable --
+# while closing the one channel that can forge terminal output.
+GENERIC_WORDS_FILE_SAFE=$(printf '%s' "$GENERIC_WORDS_FILE" | LC_ALL=C tr -d '\000-\037\177')
 if [ -z "$GENERIC_WORDS_FILE" ]; then
   : # opted out -- not an error
 elif [ ! -e "$GENERIC_WORDS_FILE" ]; then
   : # nothing configured/shipped -- the documented degrade, not an error
 elif [ ! -r "$GENERIC_WORDS_FILE" ]; then
-  echo "FATAL    generic-word classifier: $GENERIC_WORDS_FILE exists but is not readable -- every keyword this run will read as non-generic (the pre-#232 degrade), which would otherwise be silent. Fix its permissions or unset JIT_CONTEXT_GENERIC_WORDS to accept the degrade on purpose." >&2
+  echo "FATAL    generic-word classifier: $GENERIC_WORDS_FILE_SAFE exists but is not readable -- every keyword this run will read as non-generic (the pre-#232 degrade), which would otherwise be silent. Fix its permissions or unset JIT_CONTEXT_GENERIC_WORDS to accept the degrade on purpose." >&2
   jit_rc 2
 else
   GENERIC_WORDS_LINES=$(LC_ALL=C awk 'END{print NR+0}' "$GENERIC_WORDS_FILE" 2>/dev/null)
   if [ -z "$GENERIC_WORDS_LINES" ] || [ "$GENERIC_WORDS_LINES" -eq 0 ]; then
-    echo "FATAL    generic-word classifier: $GENERIC_WORDS_FILE exists and is readable but is empty -- every keyword this run will read as non-generic (the pre-#232 degrade), which would otherwise be silent." >&2
+    echo "FATAL    generic-word classifier: $GENERIC_WORDS_FILE_SAFE exists and is readable but is empty -- every keyword this run will read as non-generic (the pre-#232 degrade), which would otherwise be silent." >&2
     jit_rc 2
   else
     GENERIC_WORDS_OK=1
@@ -737,6 +748,21 @@ build_vocab_tsv() {
       BEGIN { while ((getline w < wf) > 0) seen[w] = 1 }
       { print ($0 in seen) ? 1 : 0 }
     ')
+    # A dead or truncated awk (review finding, #255) would otherwise leave VERDICT_FLAGS
+    # shorter than ALL_KW and say nothing: every unclassified keyword past the shortfall
+    # then reads "${VERDICT_FLAGS[_j]:-0}" -- the exact same bytes a genuinely non-generic
+    # keyword produces, so a real classify failure would be indistinguishable from a
+    # clean, boring result. `tooling.md`'s own rule for this file -- "check the exit
+    # status of anything that writes to an index, not only the awk that might abort on
+    # [the LC_ALL=C] invariant" (#195) -- applies here even though this pipeline writes
+    # to an array rather than $tsv directly: the array feeds every row this call is about
+    # to write. A count mismatch is the check: it catches a crash AND a truncation alike,
+    # without depending on how reliably PIPESTATUS survives a process substitution across
+    # bash versions.
+    if [ "${#VERDICT_FLAGS[@]}" -ne "${#ALL_KW[@]}" ]; then
+      echo "FATAL    $label/${tsv##*/}: the generic-word classifier returned ${#VERDICT_FLAGS[@]} verdict(s) for ${#ALL_KW[@]} keyword(s) -- the classify pass did not finish, so every keyword past what it did return defaulted to non-generic and this run's third column is not one to trust." >&2
+      jit_rc 2
+    fi
   fi
 
   local _ei
