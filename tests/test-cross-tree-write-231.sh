@@ -185,6 +185,28 @@ else
 fi
 
 echo ""
+echo "=== E. cwd is not inside any git tree: the guard cannot evaluate, and says so (#240) ==="
+# JIT_CWD_TOP comes back empty here -- not "no git worktree", just no git tree at all under
+# cwd. That is #240's own shape: the guard's [ -n ... ] && [ -n ... ] precondition is false,
+# so section B's FATAL never fires, and nothing before this issue said the check itself
+# never ran. A caller sees the same silence whether the check ran and agreed or could not
+# run at all -- this asserts the run now tells those two apart on stderr.
+NOTGIT="$ROOT/notgit"
+mkdir -p "$NOTGIT"
+ERR="$ROOT/notgit.err"
+( cd "$NOTGIT" && CLAUDE_PROJECT_DIR="$MAIN" bash "$REBUILD" >/dev/null 2>"$ERR" )
+RC=$?
+assert_rc "a cwd with no git tree at all still writes CLAUDE_PROJECT_DIR's tree" 0 "$RC"
+if [ -f "$MAIN_TSV" ]; then
+  ok "and CLAUDE_PROJECT_DIR's own index was written (the guard did not block this)"
+else
+  bad "and CLAUDE_PROJECT_DIR's own index was written" "no file at $MAIN_TSV"
+fi
+assert_contains "and stderr names the check as unable to run, not silent" "$(cat "$ERR")"   "cross-tree check"
+assert_contains "and says which side could not resolve a git tree" "$(cat "$ERR")"   "cwd is not inside a git tree"
+rm -f "$MAIN_TSV" "$WT_TSV"
+
+echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))
 echo "  $PASS/$TOTAL passed, $FAIL failed"

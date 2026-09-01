@@ -59,6 +59,28 @@ if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ "${JIT_CONTEXT_ALLOW_CROSS_TREE:-}" != 
     echo "         JIT_CONTEXT_ALLOW_CROSS_TREE=1 and run this again." >&2
     exit 2
   fi
+  # #240: the precondition above is [ -n ] && [ -n ], so either side coming back empty --
+  # no git on PATH, cwd not inside a work tree, or CLAUDE_PROJECT_DIR not resolving to one
+  # -- takes this same branch and the FATAL above never fires. Until now that read as "the
+  # check ran and found nothing to refuse", which is the wrong read: the check could not
+  # run at all, and the two are not the same claim. The receipt line printed further down
+  # shows raw cwd= and CLAUDE_PROJECT_DIR= strings either way, but only a reader who
+  # already suspects a mismatch would go compare them by eye -- this says outright that the
+  # comparison this run depends on did not happen.
+  if [ -z "$JIT_CWD_TOP" ] || [ -z "$JIT_PROJ_TOP" ]; then
+    if [ -z "$JIT_CWD_TOP" ] && [ -z "$JIT_PROJ_TOP" ]; then
+      JIT_SKIP_WHY="cwd is not inside a git tree, and CLAUDE_PROJECT_DIR does not resolve to one either"
+    elif [ -z "$JIT_CWD_TOP" ]; then
+      JIT_SKIP_WHY="cwd is not inside a git tree"
+    else
+      JIT_SKIP_WHY="CLAUDE_PROJECT_DIR does not resolve to a git tree"
+    fi
+    echo "note:    cross-tree check (#231) could not run -- $JIT_SKIP_WHY." >&2
+    echo "         This run cannot tell whether it is about to write the tree this shell" >&2
+    echo "         is standing in. Compare cwd= and CLAUDE_PROJECT_DIR= in the receipt" >&2
+    echo "         line below by eye." >&2
+    unset JIT_SKIP_WHY
+  fi
   unset JIT_CWD_TOP JIT_PROJ_TOP
 fi
 
