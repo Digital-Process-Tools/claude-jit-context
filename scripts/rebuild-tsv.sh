@@ -404,6 +404,37 @@ done
 # Override per project with DYNAMIC_RULES_KEYWORD_BLACKLIST (an extended regex).
 VOCAB_KEYWORD_BLACKLIST="${JIT_CONTEXT_KEYWORD_BLACKLIST:-${DYNAMIC_RULES_KEYWORD_BLACKLIST:-^(extension|detection|count|output|input|name|branch|issue|documents|files|file)$}}"
 
+# --- Generic-word classifier (#232) ------------------------------------------
+# Different axis from the blacklist above: the blacklist DROPS a term outright, so the
+# entry never fires on it at all. This classifies a term that DID make it into the
+# index -- an ordinary English/French word gets a third TSV column saying so, and
+# pre-prompt-hook.sh/pre-tool-hook.sh downgrade a match on it to title+description and
+# leave the entry unmarked, so a later SPECIFIC match still delivers the full body
+# (#232's own argument against deleting/qualifying generic keywords: recall must not
+# move, only the payload a generic match delivers).
+#
+# Bundled rather than detected, for the same determinism reason #232 gives: if the
+# verdict depended on which machine ran the rebuild, two contributors would produce
+# different TSVs from identical sources and every rebuild would show phantom diffs.
+# data/generic-words.txt (repo root, a sibling of scripts/, NOT scripts/data/ -- see
+# below) carries its own provenance note and the reason it is a hand-curated substitute
+# for the SCOWL/Dicollecte artifact #232 recommends rather than that artifact itself --
+# read it before touching this variable.
+#
+# Consulted here, in rebuild-tsv.sh, and NOWHERE under scripts/*-hook.sh: the runtime
+# constraint in hooks.md is absolute, and this column is the mechanism that keeps the
+# dictionary out of the hot path -- the hook reads a byte that says "generic", never a
+# wordlist.
+#
+# Deliberately NOT scripts/data/: tests/test-arg-flag-values.sh sweeps every file
+# `git ls-files -- scripts` returns and asks classify_script() what kind of BASH ARGUMENT
+# PARSER it is -- a plain wordlist is neither bash nor a script, so it landed in the
+# same "not-bash-script" bucket a stray Python tool would, which that suite treats as a
+# hard failure by design (a shape it cannot read is a FAILURE, not a silent skip). A
+# top-level data/ directory, one level up, is outside that sweep's scope entirely rather
+# than a special case inside it.
+GENERIC_WORDS_FILE="${JIT_CONTEXT_GENERIC_WORDS:-${DYNAMIC_RULES_GENERIC_WORDS:-$(dirname "$0")/../data/generic-words.txt}}"
+
 # Source-root prefix used when mapping a "## Modules" section to path triggers.
 # Projects that keep modules somewhere other than src/ override this in config.env.
 MODULE_PREFIX="${JIT_CONTEXT_MODULE_PREFIX:-${DYNAMIC_RULES_MODULE_PREFIX:-src/}}"
@@ -414,6 +445,13 @@ MODULE_PREFIX="${JIT_CONTEXT_MODULE_PREFIX:-${DYNAMIC_RULES_MODULE_PREFIX:-src/}
 # (#95). Accumulated globally rather than printed inline so it lands in the report block
 # beside the ambiguity tally, where someone is already looking.
 JIT_DROPPED=""
+
+# Every keyword whose PRE-normalisation spelling reads as a deliberately-cased
+# identifier and whose POST-normalisation spelling lost that casing entirely (#232's
+# "separate bug": `jsOn` -> `json`). Reported the same way JIT_DROPPED is -- accumulated
+# globally, printed once at the end, beside the other advisory tallies.
+JIT_IDCOLLISION=""
+JIT_IDCOLLISION_N=0
 
 # --- Vocabulary: parse frontmatter from .md files ---
 build_vocab_tsv() {
@@ -492,6 +530,11 @@ build_vocab_tsv() {
     # below was pinned against.
     kw_split=$(printf '%s\n' "$kw_line" | LC_ALL=C tr ',' '\n')
     while IFS= read -r kw; do
+      # The pre-normalisation spelling, trimmed the same way the normaliser trims --
+      # kept only for the identifier-collision check below, which needs to compare a
+      # case-FOLD of the raw token against the fully-normalised one. Everything else in
+      # this loop keeps using $kw exactly as it always has.
+      kw_raw=$(printf '%s' "$kw" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
       # Normalize IDENTICALLY to the matcher (pre-prompt-hook.sh): lowercase, then
       # map any char outside [a-z0-9 -] to a space, collapse, trim. A keyword authored
       # with dots/slashes ("docs.dp.tools", "security/dast") would otherwise be DEAD —
@@ -517,7 +560,58 @@ build_vocab_tsv() {
         kw_black=$((kw_black + 1))
         continue
       fi
-      printf '%s\t%s\n' "$kw" "$filename"
+      # --- Identifier-collision check (#232's "separate bug") -------------------
+      # A raw token with an internal capital -- not just a leading one, which is
+      # ordinary title-casing -- reads as deliberately cased: an author writing
+      # `jsOn` meant the identifier, not the sentence-initial word "json" is not.
+      # Flagged only when normalising did NOTHING but fold that case away (no
+      # digit/punctuation was stripped, no multi-word split happened) and the
+      # collapsed spelling is short enough that it plausibly reads as an ordinary
+      # word to a later author -- `SiProjectModule` collapsing to
+      # `siprojectmodule` is still obviously an identifier and is not reported;
+      # `jsOn` collapsing to `json` is not, and #232 is explicit that a
+      # dictionary lookup cannot tell the two apart (`json` is not a dictionary
+      # word either) -- so this is a length heuristic, not a wordlist lookup, and
+      # is documented here as exactly that rather than as a completed
+      # dictionary-backed classifier.
+      #
+      # `[a-z0-9]+`, not `[a-z0-9]*` (review finding): a `*` let a raw token of
+      # nothing but capitals -- `API`, `HTML`, `URL` -- through, because zero
+      # lowercase/digit characters between the leading letter and the next
+      # capital is a valid empty match. An all-caps acronym is not an
+      # accidentally-cased identifier; #232 is explicit that the shape being
+      # named is `jsOn`-like casing, which always has a lowercase run on BOTH
+      # sides of the embedded capital. `+` requires that run to be non-empty.
+      if printf '%s\n' "$kw_raw" | LC_ALL=C grep -Eq '^[A-Za-z][a-z0-9]+[A-Z][A-Za-z0-9]*$'; then
+        kw_raw_lc=$(printf '%s' "$kw_raw" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+        if [ "$kw_raw_lc" = "$kw" ] && [ "${#kw}" -le 6 ]; then
+          # jit_report_keyword() withholds ANY byte outside [a-z0-9-] (review
+          # finding): it exists for the NORMALISED spelling every other caller in
+          # this file hands it, which is always already-lowercased, and it
+          # withheld $kw_raw outright for the one uppercase letter this whole
+          # check exists to find -- the report never actually showed the raw
+          # identifier it claims to name. $kw_raw is safe to print as-is here
+          # and nowhere else in this file: it just matched the ERE two lines
+          # above, which admits nothing but [A-Za-z0-9], so there is no
+          # character left to withhold it for. Only its LENGTH still needs a
+          # bound, since the regex has no upper one.
+          if [ "${#kw_raw}" -le 40 ]; then kw_raw_disp="$kw_raw"; else kw_raw_disp="$JIT_KEYWORD_WITHHELD"; fi
+          JIT_IDCOLLISION="$JIT_IDCOLLISION    [$label] $(jit_report_name "$filename"): \"$kw_raw_disp\" normalises to the ordinary-looking word \"$(jit_report_keyword "$kw")\"
+"
+          JIT_IDCOLLISION_N=$((JIT_IDCOLLISION_N + 1))
+        fi
+      fi
+      # --- Generic-word verdict (#232), third TSV column -------------------------
+      # "generic" for an exact hit in the bundled wordlist, empty for everything else --
+      # including a multi-word keyword, which can never match a one-word wordlist line,
+      # and a keyword absent from the list, which is the documented degrade-to-specific
+      # case. Never consulted at prompt time -- this is the ONE place the file is read.
+      verdict=""
+      if [ -n "$GENERIC_WORDS_FILE" ] && [ -f "$GENERIC_WORDS_FILE" ] \
+        && LC_ALL=C grep -Fxq -- "$kw" "$GENERIC_WORDS_FILE" 2>/dev/null; then
+        verdict="generic"
+      fi
+      printf '%s\t%s\t%s\n' "$kw" "$filename" "$verdict"
       kw_written=$((kw_written + 1))
     done <<< "$kw_split" >> "$tsv"
     # An entry whose every keyword was blacklisted has a `keywords:` line and no row: the
@@ -863,6 +957,24 @@ if [ -n "$JIT_DROPPED" ]; then
   printf '%s' "$JIT_DROPPED" >&2
 else
   echo "(none — every keyword in every entry was indexed)" >&2
+fi
+echo "" >&2
+
+# --- Keywords that look like an identifier before normalisation (#232) ------------
+# Advisory, like the two sections above, and worded the same way for the same reason:
+# a quiet line that reads like every other quiet line here is how a check that never
+# ran passes for a check that found nothing.
+echo "=== Keywords that read as an identifier before normalisation, and an ordinary word after it (#232) ===" >&2
+echo "Normalisation lowercases and strips punctuation for matching. A term authored with" >&2
+echo "internal capitals (jsOn) can collapse onto a completely different, unintended word" >&2
+echo "(json) with nobody having chosen it. Rename the keyword, or accept the collision." >&2
+echo "" >&2
+if [ -n "$JIT_IDCOLLISION" ]; then
+  printf '%s' "$JIT_IDCOLLISION" >&2
+  echo "" >&2
+  echo "$JIT_IDCOLLISION_N keyword(s) -- see the comment above the check in this script for what it does and does not catch." >&2
+else
+  echo "(none — no keyword's normalised spelling silently dropped its casing)" >&2
 fi
 echo "" >&2
 

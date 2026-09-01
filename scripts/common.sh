@@ -2677,6 +2677,14 @@ jit_scan_entry_ages() {
   local base="$1" layer d out
   local LC_ALL=C
   JIT_ENTRY_AGES=""
+  # #243: the window, in seconds, inside which every mtime in a 00-manual layer has to
+  # fall for this run to treat the whole layer as a checkout rather than real editing
+  # history. A real author touching two files by hand almost never lands them this
+  # close together; `git clone`, a plugin install and a CI checkout always do. Bounded
+  # to digits only -- an override that is not a plain number falls back to the default
+  # rather than being handed to arithmetic below.
+  local window="${JIT_CONTEXT_CHECKOUT_WINDOW_S:-${DYNAMIC_RULES_CHECKOUT_WINDOW_S:-5}}"
+  case "$window" in ''|*[!0-9]*) window=5 ;; esac
   for layer in $JIT_LAYERS; do
     case "$layer" in
       *00-manual*) ;;
@@ -2691,6 +2699,11 @@ jit_scan_entry_ages() {
     # age nobody asked to see. Symlinked entries are skipped -- jit_bad_entry_file()
     # already refuses them as entries, so an age for one would describe a file this
     # tree never actually injects.
+    #
+    # A third column, the raw mtime in epoch seconds, rides along here (#243) for the
+    # spread check below -- coarser day-floored -M cannot see a checkout's few-second
+    # spread at all, since a whole calendar day of real drift and a same-second
+    # checkout can both floor to "0d apart".
     out="$(perl -e '
       my $d = shift or exit 0;
       opendir(my $h, $d) or exit 0;
@@ -2708,13 +2721,51 @@ jit_scan_entry_ages() {
         next unless -f $f;
         my $days = int(-M $f);
         $days = 0 if $days < 0;
-        print "$e\t$days\n";
+        my $mtime = (stat($f))[9];
+        print "$e\t$days\t$mtime\n";
       }
       closedir $h;
     ' "$d" 2>/dev/null)"
     [ -n "$out" ] || continue
+
+    # First pass: the mtime spread across every file this run just read, so a checkout
+    # signature is recognised BEFORE anything renders an age -- #243's "detect and
+    # decline". A layer of one file has no second point to compare and always falls
+    # through to rendering its real age, which is a known blind spot the header comment
+    # above jit_scan_entry_ages() names rather than an oversight: the heuristic is about
+    # the SHAPE of the whole layer, and one file carries no such shape.
+    local n=0 emin="" emax=""
+    while IFS=$'\t' read -r _e _days epoch; do
+      [ -n "$epoch" ] || continue
+      n=$((n + 1))
+      if [ -z "$emin" ] || [ "$epoch" -lt "$emin" ]; then emin="$epoch"; fi
+      if [ -z "$emax" ] || [ "$epoch" -gt "$emax" ]; then emax="$epoch"; fi
+    done <<EOF_SPREAD
+$out
+EOF_SPREAD
+
+    if [ "$n" -ge 2 ] && [ -n "$emin" ] && [ -n "$emax" ] && [ $((emax - emin)) -le "$window" ]; then
+      # Every mtime in this layer sits within $window seconds of the others -- an
+      # ordinary `git clone`, a fresh plugin install or a CI checkout produces exactly
+      # this shape every time, and a real editing history essentially never does across
+      # multiple files. Ages are withheld for the WHOLE layer rather than print a
+      # number that would read as "freshly maintained" on exactly the sessions #233
+      # wrote the footer for. Logged so this is distinguishable from the case where
+      # 00-manual holds no entries at all: that case never reaches this branch (the
+      # `[ -n "$out" ] || continue` above already skipped it) and logs nothing, so
+      # silence here always means "nothing to scan", never "declined".
+      jit_log_write "[$(_ts)] entry-ages declined for $layer: $n files within $((emax - emin))s of each other (looks like a checkout, not real age data)"
+      continue
+    fi
+
     while IFS= read -r line; do
       [ -n "$line" ] || continue
+      # The epoch column added above was only ever needed for the spread check just
+      # run; the age table jit_entry_age() (the awk half) reads never had a third
+      # column and must not grow one now, so it is stripped back off here. Safe as a
+      # shortest-suffix removal because the filename guard above already refused any
+      # name containing a tab, so exactly two tabs exist on this line.
+      line="${line%$'\t'*}"
       if [ "${#JIT_ENTRY_AGES}" -gt "$JIT_ENTRY_AGES_MAX" ]; then
         continue
       fi
