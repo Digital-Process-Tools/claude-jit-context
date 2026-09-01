@@ -114,19 +114,20 @@ fi
 # attention, which is the same argument #233 makes for the footer age above and for a
 # Stop-hook summary this issue leaves to a later change.
 #
-# jit-misses.sh may exit 2 (SKIPPED, named on stderr -- no log yet, an unreadable one, or
-# one with nothing this tool recognises) or 0 with either "findings" or "ok". Only exit 0
-# with an actual finding turns into text here; SKIPPED and "ok" both mean silence, which
-# is what this hook already produced before #233 and is what it still produces for the
-# common case of a fresh project or a quiet session. A hook must never fail hard (see
-# hooks.md), so a jit-misses.sh this platform could not even exec -- an unreadable
-# file, a bash this shell cannot find -- is exactly the same silence as "ok": $()
-# against a command that failed to start still returns empty, and MISSES_RC below then
-# reads as non-zero either way.
+# jit-misses.sh may exit 2 (SKIPPED, a reason named on stderr -- no log yet, an
+# unreadable one, or one with nothing this tool recognises) or 0 with either "findings"
+# or "ok". Before #247 this hook threw the exit-2 reason away with 2>/dev/null and
+# branched on the exit code alone, so a log that could not be evaluated rendered as {} --
+# byte-identical to "ok, nothing recurs". Silence and "nothing to say" are not the same
+# (hooks.md), so now: a genuine "ok" (the log was read, nothing recurs) still stays
+# quiet, and anything else that kept jit-misses.sh from reading it says so in one
+# sentence, on the same surface the findings already use. A hook must never fail hard
+# (see hooks.md) -- this is still exit 0 either way, just a sentence instead of nothing.
 JIT_MISSES_TOP=5
-MISSES_OUT="$(bash "$SCRIPT_DIR/jit-misses.sh" --top "$JIT_MISSES_TOP" 2>/dev/null)"
+MISSES_OUT="$(bash "$SCRIPT_DIR/jit-misses.sh" --top "$JIT_MISSES_TOP" 2>&1)"
 MISSES_RC=$?
 JIT_RECUR=""
+JIT_SKIP_REASON=""
 if [ "$MISSES_RC" = 0 ]; then
   # Reads jit-misses.sh recurring-miss lines back out of its human-readable report --
   # "  Nx  token" -- rather than reparsing hooks.log a second time with a second answer
@@ -157,10 +158,56 @@ if [ "$MISSES_RC" = 0 ]; then
     }
     END { if (out != "") print out }
   ')"
+else
+  # jit-misses.sh names its own reason on the first line of what it wrote --
+  # "jit-misses: SKIPPED -- <reason>" -- and that is now MISSES_OUT because the capture
+  # above merged stderr into it (2>&1). Anything that reaches this branch without that
+  # exact shape is a failure jit-misses.sh itself never got to report -- this shell could
+  # not even exec it, say -- and gets a reason of its own rather than silence.
+  JIT_SKIP_REASON="$(printf '%s\n' "$MISSES_OUT" | LC_ALL=C awk '
+    NR == 1 {
+      prefix = "jit-misses: SKIPPED -- "
+      if (index($0, prefix) == 1) print substr($0, length(prefix) + 1)
+      exit
+    }
+  ')"
+  if [ -z "$JIT_SKIP_REASON" ]; then
+    JIT_SKIP_REASON="jit-misses.sh exited $MISSES_RC"
+  fi
+  # Two of jit-misses.sh own SKIPPED reasons mean "there is no data yet", not "something
+  # is wrong": a project with no hooks.log at all, and one whose log exists but has
+  # nothing written to it. Both are the ordinary shape of a fresh project or its first
+  # few sessions, both were silent before #233 ever existed, and test-session-markers.sh
+  # already pins that silence for the no-such-file case across every engine this repo
+  # tests. Surfacing THOSE as "could not be evaluated" would turn the normal state of a
+  # brand new project into a standing warning on every session until enough history
+  # accumulates -- which is the opposite of what #247 is for. Every OTHER reason --
+  # unreadable, not a regular file, a log that is not this tool's log at all, one with
+  # records but none from pre-prompt -- means jit-misses.sh tried and could not, and that
+  # is the case #247 is about: it says so instead of reading as "nothing recurs".
+  case "$JIT_SKIP_REASON" in
+    "no such file"*|"the file is empty"*) JIT_SKIP_REASON="" ;;
+  esac
+  if [ -n "$JIT_SKIP_REASON" ]; then
+    # The reason is prose jit-misses.sh chose, not a token restricted to [a-z0-9-] like
+    # JIT_RECUR's, so it is escaped for the JSON string it lands inside -- a literal
+    # backslash or double quote would otherwise break the surrounding object, and a hook
+    # must never fail hard on a string it did not choose the shape of.
+    JIT_SKIP_REASON="$(printf '%s' "$JIT_SKIP_REASON" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
+  fi
 fi
 
+# raw counts, unfiltered for ordinary English words: #246. entries.md tells an author
+# the opposite of what a bare "recurring misses: X" reads as recommending -- "repo",
+# "context" and "index" are ordinary words that also happen to be project nouns in a
+# project about vocabulary indexing, and jit-misses.sh has no way to tell those apart
+# from a genuine gap (see #232, open on that same discrimination problem). Saying so
+# plainly here does not solve which of these are worth an entry; it stops the sentence
+# from reading as a recommendation on its own.
 if [ -n "$JIT_RECUR" ]; then
-  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"recurring misses: %s"}}\n' "$JIT_RECUR"
+  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"recurring misses (raw counts, not filtered for ordinary words -- judge before adding a vocabulary entry): %s"}}\n' "$JIT_RECUR"
+elif [ -n "$JIT_SKIP_REASON" ]; then
+  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"recurring misses: could not be evaluated (%s)"}}\n' "$JIT_SKIP_REASON"
 else
   echo '{}'
 fi
