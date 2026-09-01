@@ -57,7 +57,7 @@ cat | LC_ALL=C awk \
   -v state_dir="$JIT_STATE_DIR" \
   -v inject_default="$JIT_INJECT" \
   -v log_tmp="$JIT_TMP" \
-  "$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD"'
+  "$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -130,11 +130,10 @@ function jit_json_escape(s,   k, c) {
 # under LC_ALL=C (see the T_START comment at the top of this file for why the pin is
 # scoped here) -- the same axis jit_refuse_add()/jit_unreached_add() already use for their
 # own 4096-byte caps.
-function jit_blk_prepend(text,   i) {
-  for (i = nblk; i >= 1; i--) blk[i + 1] = blk[i]
-  blk[1] = text
-  nblk++
-}
+#
+# jit_blk_prepend() and its sibling jit_blk_join() now live in common.sh (JIT_AWK_BLK_BUILD,
+# #230), so pre-tool-hook.sh and pre-path-hook.sh -- which never had a manifest producer at
+# all until #230 -- share this file own copy instead of hand-rolling a third one.
 { input = input $0 }
 END {
   # --- Parse JSON: extract prompt ---
@@ -374,20 +373,13 @@ END {
     close(log_tmp)
   }
 
-  # --- Assemble the manifest and join the blocks (#219) ---
+  # --- Assemble the manifest and join the blocks (#219, #230) ---
   # nblk/blk[] are populated above: once per real vocabulary match, and once more per
-  # refused-row/layer/config notice, in final display order. The manifest is built from
-  # length(blk[i]) alone -- never from anything an entry authored -- so a consumer that
-  # trusts it can walk the joined text by byte count instead of searching it for "\n---\n".
-  matched = ""
-  if (nblk > 0) {
-    manifest = "# JIT-CTX-BLOCKS " nblk
-    for (bi = 1; bi <= nblk; bi++) {
-      manifest = manifest " " length(blk[bi])
-      matched = (matched == "") ? blk[bi] : matched "\n---\n" blk[bi]
-    }
-    matched = manifest "\n" matched
-  }
+  # refused-row/layer/config notice, in final display order. jit_blk_join() (common.sh,
+  # JIT_AWK_BLK_BUILD) builds the manifest from length(blk[i]) alone -- never from
+  # anything an entry authored -- and returns "" when nblk is 0, which the guard below
+  # already reads as "nothing to inject."
+  matched = jit_blk_join()
 
   # --- Output JSON ---
   if (matched != "") {

@@ -438,6 +438,73 @@ if [ "$DEFAULT_MODE" = 1 ]; then
   fi
 fi
 
+# --- Structural guard: grep -qF "$needle" with no -- (#214, #228) -------------------
+#
+# assert_survives_malformed (test-pre-tool-hook.sh, test-pre-prompt-hook.sh,
+# test-pre-path-hook.sh) invokes the hook it is testing itself -- (desc, engine, payload,
+# needle) in, PASS/FAIL out -- which is not the (desc, OUTPUT, needle) capture shape,
+# the (desc, needle) file:VAR shape, or the (desc, PATH, needle) path-arg shape
+# drive_declared() above knows how to drive. #228 found it carrying the same #214 defect
+# anyway: `LC_ALL=C grep -qF "$needle" "$out"` with no `--`, so a needle beginning with
+# `--` is parsed as a grep option and the helper -- branching only on exit status --
+# reports a pass having compared nothing. No current call site passes such a needle, so
+# this was latent rather than live; it is swept structurally, the same independent-of-
+# declaration guarantee the pipe scan above gives the SIGPIPE shape, rather than declared,
+# because there is no source type to declare it under.
+echo ""
+echo "Structural: grep -qF \"\$needle\" always carries --"
+# Narrowed to the literal variable name $228's own three call sites all share --
+# "$needle" -- not to every grep -qF taking some other variable (test-block-framing.sh's
+# $CHECKBYTE, test-dogfood-entries.sh's $rule/$SHELL_RULE, ...). Those are a different,
+# unfiled question this issue never raised, and widening the sweep to them would be
+# scope creep this file did not ask for.
+scan_dash_needle() {
+  awk '/^[[:space:]]*#/ { next }
+       /grep[[:space:]]+-[a-zA-Z]*qF[[:space:]]+"\$needle"/ && !/--[[:space:]]+"\$needle"/ { print FNR ": " $0 }' "$1"
+}
+
+# Assembled rather than written out, same reason the pipe-scan control fixture above is:
+# this file is itself one of the *.sh files the sweep below reads, and a literal
+# occurrence of the offending shape here would be indistinguishable from the thing being
+# prohibited. DQ/DS/N build the quote, the dollar sign and the variable name so no line
+# of this file spells `grep -qF "$needle"` outside the awk pattern above (which is a
+# regex, not a call).
+DASH_CONTROL="$WORK/scan-dash-control.sh"
+DQ='"'
+DS='$'
+N='needle'
+{
+  printf '%s\n' "# a mention in prose, must not flag: grep -qF ${DQ}${DS}${N}${DQ} out"
+  printf 'if LC_ALL=C grep -qF %s%s%s%s "$out"; then\n' "$DQ" "$DS" "$N" "$DQ"
+  printf 'if LC_ALL=C grep -qF -- %s%s%s%s "$out"; then\n' "$DQ" "$DS" "$N" "$DQ"
+} > "$DASH_CONTROL"
+dash_control_hits=$(scan_dash_needle "$DASH_CONTROL")
+case "$dash_control_hits" in
+  *"2: "*) case "$dash_control_hits" in
+             *"1: "*) fail "control: the dash scan flagged the commented line" "$dash_control_hits" ;;
+             *"3: "*) fail "control: the dash scan flagged a call that already carries --" "$dash_control_hits" ;;
+             *)       pass "control: the dash scan flags the unguarded call only" ;;
+           esac ;;
+  *) fail "control: the dash scan found nothing -- the sweep below is vacuous" "$dash_control_hits" ;;
+esac
+
+DASH_SCANNED=0
+for f in "$SUBJECTS"/*.sh; do
+  [ -f "$f" ] || continue
+  DASH_SCANNED=$((DASH_SCANNED + 1))
+  hits=$(scan_dash_needle "$f")
+  if [ -n "$hits" ]; then
+    fail "$(basename "$f"): grep -qF \"\$needle\" with no --" "$hits"
+  fi
+done
+if [ "$DEFAULT_MODE" = 1 ]; then
+  if [ "$DASH_SCANNED" -lt 10 ]; then
+    fail "scanned only $DASH_SCANNED files -- the dash guard saw no suites"
+  else
+    pass "scanned $DASH_SCANNED files for the unguarded grep -qF \"\$needle\" shape"
+  fi
+fi
+
 # --- The third outcome, said out loud -----------------------------------------------
 #
 # Neither list below is a failure on its own. Both are the coverage this harness does
