@@ -25,22 +25,36 @@
 #   ok         -- the log was read, nothing recurs, exit 0
 #   SKIPPED    -- named reason, exit 2
 #
-# Usage: bash scripts/jit-misses.sh [--log PATH] [--min N] [--top N]
+# Usage: bash scripts/jit-misses.sh [--log PATH] [--min N] [--top N] [--tail N]
 
 LOG=""
 MIN=2
 TOP=20
+TAIL=""
+# #248: this tool reads the WHOLE log by default, unbounded -- fine for a person who
+# chose the moment, wrong for session-start-hook.sh, which now calls it on every
+# session (#233 part 3) with no rotation behind it. --tail bounds that automatic
+# caller; a manual run stays whole-log unless the caller asks for --tail too. Either
+# way the header always names the log's current byte size, so the report is legible
+# about growth even when the read itself was not bounded.
+SIZE_THRESHOLD=10000000
 
 usage() {
   cat <<'EOF'
 jit-misses.sh -- the vocabulary this project keeps not having
 
-  bash scripts/jit-misses.sh [--log PATH] [--min N] [--top N]
+  bash scripts/jit-misses.sh [--log PATH] [--min N] [--top N] [--tail N] [--size-threshold N]
 
-  --log PATH   hook log to read. Default: $CLAUDE_PROJECT_DIR/.claude/jit-context/
-               .discovery/logs/hooks.log (CLAUDE_PROJECT_DIR defaults to .)
-  --min N      report a token shared by at least N misses. Default 2.
-  --top N      print at most N tokens. Default 20.
+  --log PATH        hook log to read. Default: $CLAUDE_PROJECT_DIR/.claude/jit-context/
+                     .discovery/logs/hooks.log (CLAUDE_PROJECT_DIR defaults to .)
+  --min N           report a token shared by at least N misses. Default 2.
+  --top N           print at most N tokens. Default 20.
+  --tail N          read only the last N lines of the log instead of the whole file.
+                     Unset by default -- a manual run still reads the whole history. The
+                     header says plainly when a report is over a window rather than the
+                     full log (#248).
+  --size-threshold N   bytes. When the log is at or past this size, the header names it
+                     as a size worth attention. Default 10000000 (10MB, see #248).
   --help       this text.
 
 What counts as the same miss
@@ -109,6 +123,8 @@ while [ $# -gt 0 ]; do
     --log)  [ $# -ge 2 ] || need_value "$1"; LOG="$2"; shift 2 ;;
     --min)  [ $# -ge 2 ] || need_value "$1"; MIN="$2"; shift 2 ;;
     --top)  [ $# -ge 2 ] || need_value "$1"; TOP="$2"; shift 2 ;;
+    --tail) [ $# -ge 2 ] || need_value "$1"; TAIL="$2"; shift 2 ;;
+    --size-threshold) [ $# -ge 2 ] || need_value "$1"; SIZE_THRESHOLD="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *)
       # An unknown flag is refused rather than ignored. A silently dropped --min reads as
@@ -125,6 +141,14 @@ case "$TOP" in ""|*[!0-9]*) echo "jit-misses: SKIPPED -- --top takes a whole num
 [ "$MIN" -ge 1 ] || MIN=1
 [ "$TOP" -ge 1 ] || TOP=1
 
+# --tail is unset by default (empty string), which means "whole log" and skips this
+# check entirely -- only validate it when a caller actually asked for a bound.
+if [ -n "$TAIL" ]; then
+  case "$TAIL" in ""|*[!0-9]*) echo "jit-misses: SKIPPED -- --tail takes a whole number" >&2; exit 2 ;; esac
+  [ "$TAIL" -ge 1 ] || TAIL=1
+fi
+case "$SIZE_THRESHOLD" in ""|*[!0-9]*) echo "jit-misses: SKIPPED -- --size-threshold takes a whole number" >&2; exit 2 ;; esac
+
 if [ -z "$LOG" ]; then
   LOG="${CLAUDE_PROJECT_DIR:-.}/.claude/jit-context/.discovery/logs/hooks.log"
 fi
@@ -139,6 +163,14 @@ skip() {
 [ -f "$LOG" ] || skip "not a regular file"
 [ -r "$LOG" ] || skip "not readable"
 [ -s "$LOG" ] || skip "the file is empty -- the hooks have logged nothing yet"
+
+# #248: the log's current byte size, named in the header below whatever the outcome --
+# a plain byte count, not a parse, so it costs nothing next to the awk pass that
+# follows and stays honest about growth even on an unbounded read. wc failing (it
+# should not, given the checks above just passed) leaves LOGBYTES empty rather than
+# wrong, and the header omits the figure rather than printing a lie.
+LOGBYTES="$(wc -c < "$LOG" 2>/dev/null | tr -d '[:space:]')"
+case "$LOGBYTES" in ""|*[!0-9]*) LOGBYTES="" ;; esac
 
 # LC_ALL=C, for the same reason the three hooks pin it (#68) and one that is specific to
 # this tool: the file it reads is one THE HOOKS WROTE, and they truncate the prompt copy at
@@ -176,7 +208,20 @@ skip() {
 # functions, and a bash variable cannot hold a NUL at all. A NUL in a prompt was dropped
 # before the log was written, not here. The awk output ends in exactly one newline on
 # every branch, which is what the printf below puts back.
-_JIT_MISSES_OUT=$(LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" '
+# #248: --tail bounds the READ, not just the report -- `tail -n N` (or `cat`, when no
+# bound was asked for) is what feeds awk, so an unbounded caller costs exactly what it
+# always cost and a bounded one never touches the lines outside its own window. `cat`
+# for the unbounded case rather than handing the filename to awk directly keeps this a
+# single invocation instead of two copies of the program text below; a plain byte
+# passthrough either way, so it changes nothing about NUL/UTF-8 handling.
+if [ -n "$TAIL" ]; then
+  JIT_MISSES_READ_CMD=(tail -n "$TAIL" -- "$LOG")
+  JIT_MISSES_BOUNDED=1
+else
+  JIT_MISSES_READ_CMD=(cat -- "$LOG")
+  JIT_MISSES_BOUNDED=0
+fi
+_JIT_MISSES_OUT=$(LC_ALL=C "${JIT_MISSES_READ_CMD[@]}" | LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" -v bounded="$JIT_MISSES_BOUNDED" -v tailn="${TAIL:-0}" -v logbytes="$LOGBYTES" -v threshold="$SIZE_THRESHOLD" '
 BEGIN {
   # Filler that two prompts can share without sharing a subject. Deliberately short and
   # visible: it is the only part of the grouping rule that is a matter of taste, and a
@@ -343,8 +388,18 @@ END {
     exit 2
   }
 
-  printf "jit-misses: %s\n", logfile
-  printf "  %d line(s), %d prompt record(s), %d with no vocabulary match", lines, prompts, misses
+  # #248: the byte count is named whether or not the read was bounded -- it is what
+  # makes a report over a window still legible about the log it did NOT fully read, and
+  # it is what tells a reader the size is climbing well before the next threshold. It
+  # printed nothing during the awk pass above; it is the LOGBYTES the shell already
+  # measured with `wc -c`, before this pass ever started.
+  printf "jit-misses: %s", logfile
+  if (logbytes != "") printf " (%s bytes)", logbytes
+  printf "\n"
+  if (bounded) printf "  bounded read -- last %d line(s) requested (--tail %d)\n", tailn, tailn
+  if (logbytes != "" && threshold != "" && (logbytes + 0) >= (threshold + 0))
+    printf "  the log has reached %s bytes, at or past the %s byte watch threshold (#248) -- reads may be getting slower; consider --tail or rotating\n", logbytes, threshold
+  printf "  %d line(s) read, %d prompt record(s), %d with no vocabulary match", lines, prompts, misses
   if (aside > 0) printf ", %d set aside (slash command or harness block)", aside
   if (headless > 0) printf ", %d with no message", headless
   # Said out loud rather than dropped in silence, on the same principle as `set aside`:
@@ -386,7 +441,7 @@ END {
   print "  .claude/jit-context/vocabulary/00-manual/<name>.md, then bash scripts/rebuild-tsv.sh"
   exit 0
 }
-' "$LOG")
+')
 _JIT_MISSES_RC=$?
 
 # 2 is this script own "could not evaluate", and an awk that DIED also exits 2 on both
