@@ -281,21 +281,29 @@ echo ""
 echo "=== F: the vocabulary pass binds on the path it was always reading ==="
 
 # tt is built from `command` -- the WHOLE command -- never from `cmd`. It was the early
-# exit alone that skipped this pass, so `; cat src/Billing/x.php` said nothing while
-# `true; cat src/Billing/x.php` bound Billing the whole time.
+# exit alone that skipped this pass, so `; cat src/Billingz/x.php` said nothing while
+# `true; cat src/Billingz/x.php` bound Billingz the whole time.
+#
+# "billingz", not "billing" (#251): a plain "billing" is an ordinary English word, and
+# once data/generic-words.txt carries a real SCOWL export, an exact-match keyword like
+# that is classified generic -- which downgrades this fixture's own entry to
+# title+description and drops VOCABBODY-fbilling from the injection, failing this
+# section for a reason that has nothing to do with what it tests. A keyword no
+# dictionary carries keeps this section a test of the cut-to-nothing fix, not of the
+# generic-word list's current contents.
 PROJ="$TMPROOT/f"; BASE="$PROJ/.claude/jit-context"
-mk_vocab_entry "$BASE" 00-manual fbilling 'billing'
+mk_vocab_entry "$BASE" 00-manual fbilling 'billingz'
 mk_tool_entry  "$BASE" 00-manual fctrl Bash 'ctrltarget' remind
 rebuild "$PROJ"
 
 OUT=$(run_bash_raw "$PROJ" "ctrltarget now")
 assert_contains "F POSITIVE CONTROL: a tool rule fires in this tree" "$OUT" "TOOLBODY-fctrl"
-OUT=$(run_bash_raw "$PROJ" "cat src/Billing/x.php")
+OUT=$(run_bash_raw "$PROJ" "cat src/Billingz/x.php")
 assert_contains "F POSITIVE CONTROL: the vocab entry binds on an uncut command" "$OUT" "VOCABBODY-fbilling"
-OUT=$(run_bash_raw "$PROJ" "true; cat src/Billing/x.php")
+OUT=$(run_bash_raw "$PROJ" "true; cat src/Billingz/x.php")
 assert_contains "F POSITIVE CONTROL: and after a chain operator (always did)" "$OUT" "VOCABBODY-fbilling"
 
-OUT=$(run_bash_raw "$PROJ" "; cat src/Billing/x.php"); RC=$?
+OUT=$(run_bash_raw "$PROJ" "; cat src/Billingz/x.php"); RC=$?
 assert_rc0      "F the hook exits 0" "$RC"
 assert_contains "F and now on a cut-to-nothing command too" "$OUT" "VOCABBODY-fbilling"
 
