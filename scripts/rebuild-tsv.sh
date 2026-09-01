@@ -16,6 +16,40 @@ LOG_FILE="$LOG_DIR/pipeline.log"
 # shellcheck disable=SC2034
 if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
 
+# --- Cross-tree write guard (#231) --------------------------------------------
+# JIT_BASE (set above, in common.sh) resolves against CLAUDE_PROJECT_DIR, never the
+# working directory. Inside a `git worktree`, the two usually agree -- but an agent
+# working a worktree inherits CLAUDE_PROJECT_DIR from the session that launched it, and
+# that value keeps pointing at the main clone even after the session's cwd moves into the
+# worktree. Every dimension can exist under the clone's JIT_BASE too, so the tree-found
+# check below is no help: this run indexes something, just not the tree the caller is
+# standing in, and because a worktree and its clone share one `.git`, that write is a
+# real change somebody else's next command trips over.
+#
+# Detected, not assumed: a worktree's `git rev-parse --show-toplevel` differs from its
+# clone's even though both share the same `.git`, so comparing the two toplevels tells the
+# worktree case apart from the ordinary one where CLAUDE_PROJECT_DIR and cwd already agree.
+# Either side answering empty -- cwd is not inside a git tree at all, or CLAUDE_PROJECT_DIR
+# does not resolve to one -- means this check cannot tell, and this script fails loudly
+# elsewhere (the no-entry-tree FATAL, or an index it cannot write) rather than guess here.
+if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -z "${JIT_CONTEXT_ALLOW_CROSS_TREE:-}" ]; then
+  JIT_CWD_TOP="$(git rev-parse --show-toplevel 2>/dev/null)"
+  JIT_PROJ_TOP="$(git -C "$CLAUDE_PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null)"
+  if [ -n "$JIT_CWD_TOP" ] && [ -n "$JIT_PROJ_TOP" ] && [ "$JIT_CWD_TOP" != "$JIT_PROJ_TOP" ]; then
+    echo "FATAL    refusing: cwd is inside a different git worktree than CLAUDE_PROJECT_DIR" >&2
+    echo "         cwd's tree:            $JIT_CWD_TOP" >&2
+    echo "         CLAUDE_PROJECT_DIR's:  $JIT_PROJ_TOP" >&2
+    echo "         Rebuilding would write JIT_BASE=$JIT_BASE -- inside the SECOND tree, not" >&2
+    echo "         the one this shell is standing in. That is #231: an agent working a" >&2
+    echo "         worktree inherits a stale CLAUDE_PROJECT_DIR and silently rewrites the" >&2
+    echo "         clone's index." >&2
+    echo "         If CLAUDE_PROJECT_DIR is the tree you actually mean to rebuild, set" >&2
+    echo "         JIT_CONTEXT_ALLOW_CROSS_TREE=1 and run this again." >&2
+    exit 2
+  fi
+  unset JIT_CWD_TOP JIT_PROJ_TOP
+fi
+
 # --- Where the KEYWORD columns were left unbounded (#126) ---------------------
 # Two reports print a keyword rather than a file name, and #113 left both alone. The
 # argument recorded here for leaving the dropped-keyword one alone was that its $kw "is
@@ -217,6 +251,14 @@ if [ "$JIT_DIMS_FOUND" = 0 ]; then
   echo "         with an exit 0. Currently CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so .>}" >&2
   exit 2
 fi
+
+# The success-path receipt (#231): the FATAL above is the only place this script ever
+# said which tree it chose, and that message is unreachable in exactly the case that
+# hurts -- when a tree IS found at JIT_BASE, but it is the wrong one, this used to write
+# there and say nothing. Printed unconditionally, before anything is written, so a
+# rebuild run from a stale CLAUDE_PROJECT_DIR is an obvious wrong write instead of a
+# silent one.
+echo "rebuild-tsv: writing JIT_BASE=$JIT_BASE (CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so .>}, cwd=$PWD)" >&2
 
 # Truncation failing left the previous index in place while every line after it reported
 # the rule count read back OUT of that stale file -- a success, with a number, for an index
