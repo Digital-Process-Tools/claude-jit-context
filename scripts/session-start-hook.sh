@@ -123,8 +123,17 @@ fi
 # quiet, and anything else that kept jit-misses.sh from reading it says so in one
 # sentence, on the same surface the findings already use. A hook must never fail hard
 # (see hooks.md) -- this is still exit 0 either way, just a sentence instead of nothing.
+# #248: jit-misses.sh read the WHOLE unrotated log here, unbounded, on every session --
+# the manual tool's own cost assumption, silently inherited by the one caller that never
+# chooses the moment. --tail bounds this call to the log's most recent lines; a person
+# running jit-misses.sh by hand still gets the full history, because that invocation is
+# not this one. The window is named explicitly in what gets injected below, so a report
+# built over the last JIT_MISSES_TAIL lines never reads as a report over the log's whole
+# life -- the same three-outcomes discipline #247 already holds this hook to, one axis
+# over: not just whether the log could be read, but how much of it was.
 JIT_MISSES_TOP=5
-MISSES_OUT="$(bash "$SCRIPT_DIR/jit-misses.sh" --top "$JIT_MISSES_TOP" 2>&1)"
+JIT_MISSES_TAIL=5000
+MISSES_OUT="$(bash "$SCRIPT_DIR/jit-misses.sh" --top "$JIT_MISSES_TOP" --tail "$JIT_MISSES_TAIL" 2>&1)"
 MISSES_RC=$?
 JIT_RECUR=""
 JIT_SKIP_REASON=""
@@ -197,6 +206,27 @@ else
   fi
 fi
 
+# #248: jit-misses.sh names the log's own size, and past its watch threshold says so in
+# a line of its own -- "  the log has reached N bytes, at or past the M byte watch
+# threshold ...". That line only exists when jit-misses.sh got far enough to read the
+# log at all, so this parse is safe to run unconditionally over MISSES_OUT: on a
+# SKIPPED run (JIT_SKIP_REASON branch above) or an ordinary small log, the prefix below
+# simply never matches and JIT_SIZE_NOTE stays empty. Read from MISSES_OUT rather than
+# threaded through a new jit-misses.sh flag, for the same reason JIT_RECUR is: one
+# report, read back rather than re-derived.
+JIT_SIZE_NOTE="$(printf '%s\n' "$MISSES_OUT" | LC_ALL=C awk '
+  {
+    prefix = "  the log has reached "
+    if (index($0, prefix) == 1) { print substr($0, length(prefix) + 1); exit }
+  }
+')"
+if [ -n "$JIT_SIZE_NOTE" ]; then
+  # Prose jit-misses.sh chose, so it is escaped the same way JIT_SKIP_REASON is above --
+  # a literal backslash or double quote would otherwise break the JSON string it lands
+  # inside, and a hook must never fail hard on a string it did not choose the shape of.
+  JIT_SIZE_NOTE="$(printf '%s' "$JIT_SIZE_NOTE" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
+fi
+
 # raw counts, unfiltered for ordinary English words: #246. entries.md tells an author
 # the opposite of what a bare "recurring misses: X" reads as recommending -- "repo",
 # "context" and "index" are ordinary words that also happen to be project nouns in a
@@ -204,10 +234,22 @@ fi
 # from a genuine gap (see #232, open on that same discrimination problem). Saying so
 # plainly here does not solve which of these are worth an entry; it stops the sentence
 # from reading as a recommendation on its own.
+#
+# #248: every branch below that has something to say also says WHICH WINDOW it covers
+# -- "last JIT_MISSES_TAIL line(s) of the log" -- so a finding built over a bounded read
+# never reads as a finding over the log's whole history, and a size-watch note appends
+# to whichever branch fired rather than replacing it, because "these words recur" and
+# "the log is getting big" are two different facts and neither should swallow the
+# other. The size note can also be the ONLY thing worth saying -- a log past threshold
+# with no recurring words and a readable log -- so it gets a branch of its own too.
 if [ -n "$JIT_RECUR" ]; then
-  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"recurring misses (raw counts, not filtered for ordinary words -- judge before adding a vocabulary entry): %s"}}\n' "$JIT_RECUR"
+  JIT_EXTRA=""
+  [ -n "$JIT_SIZE_NOTE" ] && JIT_EXTRA=" -- also, $JIT_SIZE_NOTE"
+  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"recurring misses (last %s line(s) of the log, raw counts, not filtered for ordinary words -- judge before adding a vocabulary entry): %s%s"}}\n' "$JIT_MISSES_TAIL" "$JIT_RECUR" "$JIT_EXTRA"
 elif [ -n "$JIT_SKIP_REASON" ]; then
   printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"recurring misses: could not be evaluated (%s)"}}\n' "$JIT_SKIP_REASON"
+elif [ -n "$JIT_SIZE_NOTE" ]; then
+  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$JIT_SIZE_NOTE"
 else
   echo '{}'
 fi

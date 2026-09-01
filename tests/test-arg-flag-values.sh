@@ -266,6 +266,8 @@ positive_argv() {
         --log) printf '%s\n%s\n' "--log" "$LOGFILE" ;;
         --min) printf '%s\n%s\n%s\n%s\n' "--log" "$LOGFILE" "--min" "2" ;;
         --top) printf '%s\n%s\n%s\n%s\n' "--log" "$LOGFILE" "--top" "5" ;;
+        --tail) printf '%s\n%s\n%s\n%s\n' "--log" "$LOGFILE" "--tail" "1" ;;
+        --size-threshold) printf '%s\n%s\n%s\n%s\n' "--log" "$LOGFILE" "--size-threshold" "1000000" ;;
       esac ;;
     jit-doctor.sh)
       case "$2" in
