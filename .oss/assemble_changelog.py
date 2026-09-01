@@ -26,26 +26,33 @@ a user installs imports this — it is a repo-internal release tool.
     python3 scripts/assemble_changelog.py --check     # CI: names *and* bodies
     python3 scripts/assemble_changelog.py --count     # exact fragment count
 
-**The fold names its own target; the read-only modes derive one.** `REPO` is
-found by walking up from *this file* for a `.git`, which answers "which
-repository am I stored in" -- not "which repository is being released". Those
-coincide for the copy vendored into a managed repo at
-`.oss/assemble_changelog.py` and they do not coincide for the copy shipped
-inside the plugin, whose own checkout is always a clone: the walk there always
-succeeds, and always on the wrong repository, so the `None` arm that refuses
-cleanly is unreachable in precisely the deployment where the guess is wrong.
+**The fold names its own target; the read-only modes derive one from the
+caller's cwd.** `REPO` is found by walking up from `Path.cwd()` for a
+`.git`, which answers "which repository is the caller standing in" -- not
+"which repository is being released", and the two can still differ (a caller
+`cd`'d into a submodule, say). It used to walk up from *this file* instead,
+which answered a different question -- "which repository am I stored in" --
+and that coincided with the caller's intent for the copy vendored into a
+managed repo at `.oss/assemble_changelog.py` (stored inside the repo it
+serves) and never coincided for the copy shipped inside a plugin, whose own
+checkout is a clone unrelated to whatever the caller meant: that walk always
+succeeded, always on the plugin's own tree, so a bare `--check` reported a
+clean verdict about fragments nobody asked about, from any cwd. Deriving from
+the caller's cwd instead closes that: the two copies now agree, because both
+answer about wherever the caller is standing rather than about wherever the
+script is installed.
 
-The requirement is **unconditional** rather than applied to one copy, and that
-is a decision, not an oversight. Nothing observable distinguishes the two: both
-copies sit at some depth inside a real clone, and the difference between them
-is what the caller meant, which is not on disk. A detector would be guessing,
-and the two directions of a wrong guess are not comparable -- a false negative
-rewrites `CHANGELOG.md` and deletes every fragment in a repository nobody
-named, while a false positive costs one line of typing that the refusal itself
-prints. So the vendored copy pays the same two flags, and every invocation this
-plugin generates passes them. The read-only modes keep the derived default:
-they only read, and requiring the flags there would break the `--check` gate in
-every managed repo at once.
+The fold's own requirement is **unconditional** rather than derived at all,
+in either direction. Nothing observable distinguishes "the caller's cwd is
+the repository being released" from "it merely happens to be a repository" --
+a detector would be guessing, and the two directions of a wrong guess are not
+comparable -- a false negative rewrites `CHANGELOG.md` and deletes every
+fragment in a repository nobody named, while a false positive costs one line
+of typing that the refusal itself prints. So the vendored copy pays the same
+two flags, and every invocation this plugin generates passes them. The
+read-only modes keep the cwd-derived default: they only read, so a wrong
+guess there costs a wasted read rather than a lossy write, and requiring the
+flags there would break the `--check` gate in every managed repo at once.
 
 Exit codes: 0 ok, 1 skipped (nothing to do, or nothing *provable* — stated
 either way), 2 refused (a finding).
@@ -63,6 +70,7 @@ import argparse
 import datetime
 import os
 import re
+import stat
 import sys
 from collections import Counter
 from dataclasses import dataclass
@@ -96,7 +104,37 @@ def _find_repo_root(start: Path) -> Optional[Path]:
     return None
 
 
-REPO = _find_repo_root(Path(__file__).resolve().parent)
+def _safe_cwd() -> Optional[Path]:
+    """`Path.cwd()`, without letting a vanished working directory take the
+    whole module down. `os.getcwd()` (which `Path.cwd()` wraps) raises
+    `FileNotFoundError` when the process's own current directory has been
+    removed out from under it -- a live race in this loop's own worktree
+    lifecycle, not a hypothetical one, and unlike the derivation this
+    replaced, a bare module-scope `Path.cwd()` runs on *every* invocation,
+    fold included, before `argparse` has even parsed `--dir`/`--changelog`.
+    `None` here reads exactly like "no `.git` above cwd" to every caller of
+    `REPO` below -- a refusal with a stated reason, never an import crash
+    with none."""
+    try:
+        return Path.cwd()
+    except OSError:
+        return None
+
+
+#: Derived from the *caller's* current working directory, not from
+#: this file's own install location. Walking up from `__file__` used to
+#: answer "which repository is this script stored in" -- correct for the
+#: copy vendored beside the repo it serves at `.oss/assemble_changelog.py`,
+#: and wrong for the copy shipped inside a plugin, whose own checkout is a
+#: clone unrelated to whatever repository the caller means. That walk always
+#: succeeded, always on the plugin's own tree, so a bare `--check` run from
+#: anywhere reported a clean verdict about fragments nobody asked about.
+#: Walking from `Path.cwd()` instead can still miss -- a caller `cd`'d
+#: somewhere with no `.git` above it, or standing nowhere at all -- and the
+#: read-only modes report that rather than falling back to the script's own
+#: tree; see `_resolve` below.
+_CWD = _safe_cwd()
+REPO = _find_repo_root(_CWD) if _CWD is not None else None
 
 #: Keep a Changelog 1.1.0, in the order the spec lists them. The order is data,
 #: not a sort: "Added" before "Fixed" is a convention readers rely on, and
@@ -592,7 +630,7 @@ _SELF_REF = r"(?:#|/(?:issues|pull)/){0}(?![0-9])"
 def self_reference_finding(name: str, text: str) -> Optional[str]:
     """One finding if the body never names the issue in its own filename.
 
-    `changelog.d/<issue>.<section>.md` holds the number in exactly one
+    `changelog.d/<issue>.<section>[.<slug>].md` holds the number in exactly one
     structural place, and assembly writes the *body* and deletes the file. So
     the number survives the release only when the author typed it into the
     prose, which made findability a property of author habit: measured on the
@@ -629,18 +667,146 @@ def self_reference_finding(name: str, text: str) -> Optional[str]:
         .format(name, at, number, lines[at - 1] if at <= len(lines) else ""))
 
 
+# How far up the tree `_absence_confirmed` will walk. Sibling constant to
+# `doctor._ANCESTOR_LIMIT` / `lane_setup._ANCESTOR_LIMIT`: a belt on a walk
+# that already stops at the anchor.
+_ANCESTOR_LIMIT = 512
+
+
+def _absence_confirmed(path: Path) -> Optional[bool]:
+    """Confirm positively that nothing is at `path`, after `stat` already
+    raised one of the two absence exceptions. True / False / None -- and
+    the third is the point.
+
+    A first-pass reviewer of this same fix found the gap this closes:
+    `FileNotFoundError` / `NotADirectoryError` alone is not evidence of
+    genuine absence. CLAUDE.md's own measurement is that an over-`MAX_PATH`
+    name on Windows arrives as `FileNotFoundError, errno 2, winerror None`
+    -- indistinguishable from a name that is truly not there -- and
+    `scripts/doctor.py`'s `_dir_state` and `scripts/lane_setup.py`'s
+    `worktree_occupancy` both exist to see through exactly that fold, by
+    walking up to the subject's own deepest lookable ancestor and asking
+    that ancestor's directory listing directly, rather than trusting the
+    exception type alone.
+
+    True  -- confirmed absent: an ancestor this platform *can* look at was
+             listed and the next component down was not in it (or that
+             ancestor is not a directory at all, so nothing can be under it).
+    False -- the name is right there in its parent's listing and `stat`
+             could not reach it. That is the unlookable case wearing
+             absence's clothes.
+    None  -- nothing here could confirm either way, so the caller must not
+             claim.
+
+    This is a third copy of the identical function in `doctor.py` and
+    `lane_setup.py`, not an import of either: this file ships standalone
+    into every scaffolded repo as `.oss/assemble_changelog.py`, without
+    `doctor.py` or `lane_setup.py` alongside it, so it cannot depend on
+    them. `doctor._dir_state`'s own docstring makes the same call for the
+    same reason, one file over: lifting the three into a shared module is a
+    refactor with a blast radius past any one of the fixes that wrote them.
+    """
+    try:
+        current = os.path.abspath(os.fspath(path))
+    except (OSError, ValueError, TypeError):
+        return None
+    for _ in range(_ANCESTOR_LIMIT):
+        parent = os.path.dirname(current)
+        name = os.path.basename(current)
+        if not name or parent == current or not parent:
+            return None
+        try:
+            found = os.stat(parent)
+        except (FileNotFoundError, NotADirectoryError):
+            current = parent
+            continue
+        except (OSError, ValueError):
+            return None
+        if not stat.S_ISDIR(found.st_mode):
+            return True
+        try:
+            entries = os.listdir(parent)
+        except (OSError, ValueError):
+            return None
+        return name not in entries
+    return None
+
+
+def _fragment_dir_state(directory: Path) -> Tuple[str, str]:
+    """Three answers for "is `directory` there", not `Path.is_dir()`'s two.
+
+    `Path.is_dir()` / `Path.exists()` swallow `OSError` to `False` on some
+    interpreter versions (CLAUDE.md's own `Path.exists()`/`Path.is_dir()`
+    trap; also `scripts/doctor.py`'s `_dir_state`, which measured the same
+    swallow directly on a local 3.14 install) -- so a permission-denied
+    `changelog.d/` would be reported by a bare `not directory.is_dir()` as
+    "does not exist", a confident absence for a directory that is right
+    there and simply could not be probed. `collect()`'s check is a printed
+    verdict, not a filter -- a call that only filters a list may swallow, a
+    call that prints a verdict must classify in three states -- so it gets
+    a third answer instead of a swallowed boolean.
+
+    ``"dir"``        -- confirmed a directory.
+    ``"absent"``     -- `stat` raised `FileNotFoundError` / `NotADirectoryError`
+                        *and* `_absence_confirmed` positively confirmed it:
+                        genuinely not there, or a path segment above it is a
+                        file.
+    ``"unreadable"`` -- `stat` raised something else, or raised an absence
+                        exception `_absence_confirmed` could not confirm (or
+                        actively contradicted -- the name is right there in
+                        its parent's listing). Could not determine -- never
+                        folded into "absent".
+
+    Deliberately `directory.stat()`, not `directory.is_dir()`: `is_dir()`
+    wraps its own `stat()` call in that same version-dependent swallow, so
+    an `except OSError` around `is_dir()` itself would be unreachable on
+    exactly the interpreter this exists for.
+    """
+    try:
+        st = directory.stat()
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        confirmed = _absence_confirmed(directory)
+        if confirmed is True:
+            return "absent", ""
+        if confirmed is False:
+            return "unreadable", (
+                "the name is present in its parent's listing but stat "
+                "could not reach it: {0}".format(exc))
+        return "unreadable", (
+            "stat reported absence and nothing could confirm it: "
+            "{0}".format(exc))
+    except OSError as exc:
+        return "unreadable", str(exc)
+    except ValueError as exc:
+        # `stat` raises `ValueError`, not `OSError`, for a path carrying an
+        # embedded null byte -- not the same fact as ENOENT.
+        return "unreadable", str(exc)
+    return ("dir" if stat.S_ISDIR(st.st_mode) else "absent"), ""
+
+
 def collect(directory: Path) -> List[Fragment]:
     """Every fragment in `directory`, sorted deterministically.
 
     All findings are gathered before raising: a release cut is a one-shot
     operation and reporting one bad name per run turns it into a queue.
     """
-    if not directory.is_dir():
+    state, detail = _fragment_dir_state(directory)
+    if state == "unreadable":
+        raise CannotValidate(
+            f"{directory}: could not determine whether the fragment "
+            f"directory exists — {detail}")
+    if state == "absent":
         raise BadFragment(f"{directory}: fragment directory does not exist")
 
     fragments: List[Fragment] = []
     findings: List[str] = []
     for path in sorted(directory.iterdir()):
+        # `path.is_dir()` here only filters this loop's own list -- it does
+        # not print a verdict, so it may swallow. Even swallowed to `False`
+        # on a permission-denied entry, the worst case is trying to read it
+        # as a fragment file, which raises loudly out of `path.read_text()`
+        # a few lines below rather than silently dropping the entry. Left as
+        # a bare call by design.
         if path.is_dir() or path.name in _IGNORED or path.name.startswith("."):
             continue
         try:
@@ -734,9 +900,33 @@ def _entry_count(lines: Sequence[str]) -> int:
     return sum(1 for line in lines if line.startswith("- "))
 
 
+#: Between the date and a title. An em dash, which `_line` already names as a
+#: character it deliberately permits and degrades rather than raising on.
+TITLE_SEPARATOR = " — "
+
+
+def release_heading(version: str, date: str, title: Optional[str] = None) -> str:
+    """The one place the text of a release heading is decided.
+
+    `render` returns the headings it wrote and `_verify_written` re-parses
+    against that list, so the heading has exactly one author. A caller that
+    wants to *quote* the heading — the dry run's receipt did, by formatting it
+    a second time — takes `render`'s return value rather than calling this,
+    and this exists so `render` itself is not the place a title is spliced.
+
+    The date stays. It is a fact about the release and Keep a Changelog's own
+    shape; a title is editorial and is added to it, never in place of it.
+    """
+    heading = "## [{0}] - {1}".format(version, date)
+    if title:
+        heading += TITLE_SEPARATOR + title
+    return heading
+
+
 def render(fragments: Sequence[Fragment], version: str, date: str,
            residue_preamble: Sequence[str] = (),
-           residue_sections: Sequence[Tuple[str, List[str]]] = ()
+           residue_sections: Sequence[Tuple[str, List[str]]] = (),
+           title: Optional[str] = None
            ) -> Tuple[str, List[str]]:
     """The release section as text, and the heading lines it wrote.
 
@@ -749,8 +939,12 @@ def render(fragments: Sequence[Fragment], version: str, date: str,
     function is *entitled* to have added, so that anything else in the result
     is a finding. Deriving that list by pattern-matching the output would put
     the verifier back on the same footing as the guard it exists to backstop.
+
+    *title* changes the heading's text and nothing else about that contract —
+    it goes into the returned list like any other heading, so the verifier
+    keeps accepting exactly what this function says it wrote.
     """
-    out = ["## [{0}] - {1}".format(version, date), ""]
+    out = [release_heading(version, date, title), ""]
     emitted = [out[0]]
     if any(line.strip() for line in residue_preamble):
         out.extend(residue_preamble)
@@ -1226,6 +1420,16 @@ def _first_release_links(lines: List[str], version: str) -> Tuple[str, List[str]
 # fallback for a caller that declared nothing, and an empty set means "no
 # version is declared untagged", which is true of every repo by default.
 #
+# Where the caller keeps its answer is the caller's business and this file has
+# no opinion on it -- the flag is the whole interface. A repository managed by
+# the plugin that vendors this script keeps it in `.oss.json` and renders it
+# into the CI leg, the checking command and the editor rule from there, so one
+# question has one answer; a repository using this script on its own writes it
+# wherever it writes such things. Either way, nothing here reads a config file:
+# a shared tool that went looking for one would find whichever repository it
+# happened to be standing in, which is the failure the emptied constant above
+# is the scar from.
+#
 # Nothing here declares a floor above which the set may not grow. Upstream's
 # comment cited a test enforcing one; that test was not vendored with the
 # script, and a citation to a file this repository does not have reads exactly
@@ -1235,22 +1439,123 @@ UNTAGGED_RELEASES = frozenset()
 _COMPARE_HREF_RE = re.compile(r"/compare/v(?P<version>\d+\.\d+\.\d+)\.\.\.HEAD$")
 
 
-def release_versions(text: str) -> List[str]:
-    """Every `## [x.y.z]` release version, newest first, off a real parse.
+def _release_headings(text: str) -> List[Tuple[int, str, str]]:
+    """(line index, version, full heading text) for every release heading.
 
     A parse and not a line prefix: this file quotes release headings inside
     fenced blocks by house style, so the characters `## [` appear in it
     without a heading being there — and a line-prefix test cannot tell the
     difference.
+
+    The version is read out of the leading `[...]` and nothing else is looked
+    at, which is the contract a title has to keep: whatever follows the
+    closing bracket is text this script writes and never reads back.
     """
-    versions = []
-    for _, tag, title in _headings(text):
+    found = []
+    for index, tag, title in _headings(text):
         if tag != "h2" or not title.startswith("[") or "]" not in title:
             continue
         label = title[1:title.index("]")]
         if _VERSION_RE.match(label):
-            versions.append(label)
-    return versions
+            found.append((index, label, title))
+    return found
+
+
+def release_versions(text: str) -> List[str]:
+    """Every `## [x.y.z]` release version, newest first, off a real parse."""
+    return [version for _, version, _ in _release_headings(text)]
+
+
+#: A leading `-`, en dash, em dash or colon between `[x.y.z]` and what follows
+#: it. Stripped so the date and the title are compared on their own; the
+#: separator is punctuation and says nothing about which of the two it is.
+_HEADING_SEPARATOR_RE = re.compile(r"^[-–—:]\s*")
+_HEADING_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\b")
+
+
+def heading_shape(heading: str) -> Tuple[str, str]:
+    """What a release heading carries after its `[x.y.z]`: three states.
+
+    `("dated", "2026-08-14")`, `("titled", the title)`, or `("bare", "")` for a
+    heading that is a version and nothing else. Three rather than two because
+    "this repository titles its release headings" is an inference, and a bare
+    heading is evidence for neither side — reading a title into `## [0.1.0]`
+    would be the separator-stripping matching its own leftovers.
+
+    Read off a heading, not off a line: the caller has already been through
+    the parser. The date is not validated as a real calendar date, only as the
+    shape this script writes; `## [0.1.0] - Scaffold` is this repository's own
+    oldest heading and is a title, correctly.
+    """
+    rest = heading[heading.index("]") + 1:].strip() if "]" in heading else ""
+    rest = _HEADING_SEPARATOR_RE.sub("", rest, count=1).strip()
+    if not rest:
+        return "bare", ""
+    match = _HEADING_DATE_RE.match(rest)
+    if match:
+        after = _HEADING_SEPARATOR_RE.sub(
+            "", rest[match.end():].strip(), count=1).strip()
+        if not after:
+            return "dated", match.group(0)
+        # `[x.y.z] - 2026-08-14 — A title`: what this script writes when it is
+        # given a title, so a repository that folded once with one is asked
+        # for one again.
+        return "titled", after
+    return "titled", rest
+
+
+def _title_problem(title: str) -> Optional[str]:
+    """Why this `--title` cannot be written, or None when it can.
+
+    Only one thing is refused, and it is structural rather than editorial: a
+    heading is one line. A value carrying a newline would end the heading part
+    way through and turn the rest into body text, which renders as prose under
+    a heading nobody wrote and parses back as neither.
+
+    What a title *says* is not this script's business. `_verify_written`
+    already re-parses the assembled file and refuses raw HTML, a link
+    destination a fragment may not carry, and any heading this run did not
+    report writing — so a title that smuggles structure is caught by the guard
+    that exists for it, on the assembled document, rather than by a second
+    list of rules here that would drift from it.
+    """
+    if "\n" in title or "\r" in title:
+        return ("--title {0!r} contains a line break, and a Markdown heading "
+                "is one line — everything after the break would render as "
+                "body text under a heading nobody wrote".format(title))
+    return None
+
+
+def _title_receipt(title: Optional[str], heading: str,
+                   shape: Optional[Tuple[str, str]]) -> str:
+    """One line saying which of the three declarations this fold was given,
+    and what it read the file's own convention to be.
+
+    Four renderings, not one. `--title 'text'`, `--title ''` (a decision to
+    cut this release plain) and no `--title` at all are three different
+    states, and the file either had a release heading to read a convention off
+    or it did not. A receipt that rendered them the same would turn "nobody
+    decided" into "somebody decided nothing" at precisely the moment the
+    heading is being written.
+    """
+    if title:
+        return "heading   `{0}` — from --title".format(heading)
+    if shape is None:
+        return ("heading   `{0}` — the default. CHANGELOG.md holds no release "
+                "heading to read a title convention from, so none was inferred "
+                "— not the same as reading one and finding it plain"
+                .format(heading))
+    kind, carried = shape
+    carried_note = " (`{0}`)".format(carried) if carried else ""
+    if title is not None:
+        return ("heading   `{0}` — --title '' declares this release "
+                "deliberately untitled. The newest release heading above it is "
+                "{1}{2}, and this is a decision recorded against it rather "
+                "than the flag being forgotten"
+                .format(heading, kind, carried_note))
+    return ("heading   `{0}` — the default, and the newest release heading "
+            "above it is {1}{2}, so no title convention was found to keep"
+            .format(heading, kind, carried_note))
 
 
 def audit_link_refs(text: str,
@@ -1319,6 +1624,34 @@ def audit_link_refs(text: str,
     return findings
 
 
+def _untagged_receipt(untagged: Optional[AbstractSet[str]]) -> str:
+    """One line saying which of the three declarations this run was given.
+
+    Not two. `None` (no `--untagged` on the command line) and an empty set
+    (`--untagged ''`) audit the file identically, and a receipt that renders
+    them the same has turned "nobody decided" into "somebody decided nothing"
+    — the absence-read-as-an-answer this file exists to not do, applied to
+    its own output.
+
+    The empty case is reachable on purpose: the workflow this script is
+    vendored into renders `--untagged ''` when a repository declares
+    `changelog_untagged: []`, so the declaration is visible in the CI log of
+    the repository that made it.
+    """
+    if untagged is None:
+        return ("untagged  (none declared) — no --untagged was passed, so every "
+                "`## [x.y.z]` section is expected to carry a link ref. That is "
+                "this run's default reading and not a statement anybody made")
+    if not untagged:
+        return ("untagged  (declared empty) — --untagged was passed naming no "
+                "version: the caller states that every release section here was "
+                "tagged. Same audit as declaring nothing, and a different claim")
+    versions = sorted(untagged)
+    return ("untagged  {0} — declared by the caller as having no tag, so no "
+            "`releases/tag/v...` link was expected for {1}"
+            .format(", ".join(versions), "them" if len(versions) > 1 else "it"))
+
+
 def check_links(changelog: Path,
                 untagged: Optional[AbstractSet[str]] = None) -> int:
     """`--check-links`: audit the table, and say which of the three it did.
@@ -1331,10 +1664,14 @@ def check_links(changelog: Path,
     findings about releases this repository never had.
 
     `None` means the caller declared nothing, which is not the same as
-    declaring that every section is tagged — but it is the only reading
-    available, and the receipt below says so by naming what was declared.
+    declaring that every section is tagged. Both audit the file identically
+    and only one of them is a decision somebody made, so the receipt names
+    which of the three it was given — on `ok` and on `refused` alike, because
+    a reader looking at a finding needs to know whether a declaration existed
+    before the finding means anything.
     """
     declared = UNTAGGED_RELEASES if untagged is None else untagged
+    declaration = _untagged_receipt(untagged)
     try:
         text = changelog.read_text(encoding="utf-8")
     except OSError as exc:
@@ -1347,19 +1684,19 @@ def check_links(changelog: Path,
         _receipt("skipped", "{0}".format(exc))
         return SKIPPED
     if findings:
+        # The count stays the count of findings. The declaration line is a
+        # labelled note in the same shape the `--untagged` refusal already
+        # uses, not a finding -- it is the context the findings are read in.
         _receipt("refused", "{0} finding(s) in {1}'s link ref table"
-                 .format(len(findings), changelog.name), findings)
+                 .format(len(findings), changelog.name),
+                 list(findings) + [declaration])
         return REFUSED
     versions = release_versions(text)
     _receipt("ok", "{0} release section(s) in {1}, parsed with markdown-it-py "
                    "{2}: each has a link ref or is declared untagged, and "
                    "[Unreleased] compares from v{3}"
              .format(len(versions), changelog.name, _MD_VERSION, versions[0]),
-             ["untagged  {0} — declared by the caller as having no tag, so no "
-              "`releases/tag/v...` link was expected for "
-              "{1}".format(", ".join(sorted(declared & set(versions))),
-                           "them" if len(declared & set(versions)) > 1 else "it")]
-             if declared & set(versions) else [])
+             [declaration])
     return OK
 
 
@@ -1504,10 +1841,18 @@ def _alarm(lines: Sequence[str]) -> None:
 
 
 def assemble(changelog: Path, directory: Path, version: str, date: str,
-             dry_run: bool = False, keep: bool = False) -> int:
+             dry_run: bool = False, keep: bool = False,
+             title: Optional[str] = None) -> int:
     if not _VERSION_RE.match(version):
         _receipt("refused", "--version {0!r} is not x.y.z".format(version))
         return REFUSED
+
+    if title is not None:
+        problem = _title_problem(title)
+        if problem:
+            _receipt("refused", problem + " — CHANGELOG.md untouched, nothing "
+                                          "consumed")
+            return REFUSED
 
     try:
         fragments = collect(directory)
@@ -1597,7 +1942,43 @@ def assemble(changelog: Path, directory: Path, version: str, date: str,
     preamble, residue_sections = _subsections(residue_body)
     folded = _entry_count(residue_body)
 
-    section, emitted = render(fragments, version, date, preamble, residue_sections)
+    # The title convention is read out of the file, not out of a config key.
+    # A heading style is a per-release editorial choice, so it cannot
+    # live in a file that is written once — and the changelog is the only place
+    # a repository has already stated the convention, four releases running in
+    # the case this was filed from. Derived at the moment it is needed, which
+    # is what a shared script owes a repository it knows nothing about.
+    #
+    # Three states, and the middle one is the reason this exists. Given a
+    # title, write it. Given `--title ''`, write the plain heading and record
+    # that somebody chose it. Given nothing against a file whose newest release
+    # heading carries a title, refuse: writing the plain heading would succeed,
+    # look right, and break a convention nobody reviewing a version bump reads
+    # the heading closely enough to notice.
+    previous = _release_headings(text)
+    shape = heading_shape(previous[0][2]) if previous else None
+    if title is None and shape is not None and shape[0] == "titled":
+        _receipt("refused",
+                 "CHANGELOG.md's newest release heading carries a title and "
+                 "this fold was given none — CHANGELOG.md untouched, nothing "
+                 "consumed",
+                 ["read      `## {0}` on line {1}, whose text after the version "
+                  "is {2!r}".format(previous[0][2], previous[0][0] + 1, shape[1]),
+                  "pass      --title '<what this release is about>' to write "
+                  "one, and `{0}` is what you would get"
+                  .format(release_heading(version, date, "…")),
+                  "or        --title '' to declare this release deliberately "
+                  "untitled. An empty title is a decision and the receipt "
+                  "records it as one; omitting the flag is not a decision, "
+                  "which is why it is refused here rather than defaulted "
+                  "through to `{0}`".format(release_heading(version, date)),
+                  "why       the plain heading would be written, the fold "
+                  "would succeed, and the break would be visible only to "
+                  "somebody reading the heading against the four above it"])
+        return REFUSED
+
+    section, emitted = render(fragments, version, date, preamble,
+                              residue_sections, title)
 
     # Arithmetic, not trust: every entry on either side has to be in the result.
     # A merge that dropped one would otherwise be indistinguishable from a clean
@@ -1650,6 +2031,7 @@ def assemble(changelog: Path, directory: Path, version: str, date: str,
         return REFUSED
 
     details = [
+        _title_receipt(title, emitted[0], shape),
         "consumed  " + ", ".join(f.path.name for f in fragments if f.path),
         "sections  " + ", ".join(
             "{0} ({1})".format(name.capitalize(), sum(1 for f in fragments if f.section == name))
@@ -1714,8 +2096,13 @@ def assemble(changelog: Path, directory: Path, version: str, date: str,
         "no raw HTML".format(_MD_VERSION, len(emitted)))
 
     if dry_run:
-        _receipt("ok", "dry-run: {0} fragment(s) would become `## [{1}] - {2}`; "
-                       "nothing written".format(len(fragments), version, date), details)
+        # `emitted[0]`, not a second `"## [{0}] - {1}"` formatted here. This
+        # line used to compose the heading itself, which made the receipt a
+        # second author of what a release heading looks like — so with a title
+        # it would have quoted a heading the fold was not about to write, in a
+        # mode whose entire job is to say what the fold would do.
+        _receipt("ok", "dry-run: {0} fragment(s) would become `{1}`; nothing "
+                       "written".format(len(fragments), emitted[0]), details)
         return OK
 
     # ------------------------------------------------------------------
@@ -1762,8 +2149,14 @@ def assemble(changelog: Path, directory: Path, version: str, date: str,
                            "twice if the next release also consumes them"
                            .format(len(fragments), directory.name))
 
-        _receipt("ok", "{0} fragment(s) -> `## [{1}] - {2}` in {3}"
-                 .format(len(fragments), version, date, changelog.name), details)
+        # `emitted[0]` for the same reason the dry run uses it, and more so:
+        # this is the only line that reports the mutation, printed after
+        # CHANGELOG.md was rewritten and the fragments deleted. Composing the
+        # heading here a second time made it name a heading that is not in the
+        # file it had just written -- the receipt disagreeing with the tree it
+        # exists to describe.
+        _receipt("ok", "{0} fragment(s) -> `{1}` in {2}"
+                 .format(len(fragments), emitted[0], changelog.name), details)
         # Flushed inside the guard on purpose. A receipt that only reached a
         # buffer has not been delivered, and a pipe that closed under it
         # raises when the interpreter flushes at shutdown -- after the exit
@@ -1819,9 +2212,15 @@ def check(directory: Path) -> int:
         _receipt("refused", "{0} fragment(s) will not assemble".format(len(findings)),
                  ["{0}/{1}".format(directory.name, line) for line in findings])
         return REFUSED
+    # Named on every branch below, including `ok`: a verdict that does
+    # not say what it read cannot be checked by the person reading it, and
+    # `directory.name` alone (a bare basename like `changelog.d`) does not
+    # say which repository that directory sits under -- resolved is the only
+    # spelling that answers the question this fragment's own bug was about.
+    resolved = directory.resolve()
     if not fragments:
         _receipt("skipped", "{0}/ holds 0 fragments — nothing to validate"
-                 .format(directory.name))
+                 .format(resolved))
         return OK
     # The receipt states what was established and names what established it,
     # which the last three did not. "no body writes at column 0" stayed
@@ -1829,14 +2228,14 @@ def check(directory: Path) -> int:
     # link ref, at any indent or nesting" was true of the scanner's own model
     # of CommonMark and false of CommonMark. This claim is checkable by the
     # person reading it: it is what markdown-it-py saw.
-    _receipt("ok", "{0} fragments, all names parse, each body names the issue "
-                   "in its own filename; each body parsed with "
-                   "markdown-it-py {1}, whose token stream holds no heading, no "
+    _receipt("ok", "{0} fragments in {1}, all names parse, each body names "
+                   "the issue in its own filename; each body parsed with "
+                   "markdown-it-py {2}, whose token stream holds no heading, no "
                    "link ref definition and no raw HTML at any depth, whose "
                    "fences all close inside the fragment, whose top level is "
                    "one `- ` bullet list, and every link and image destination "
                    "in which is on the allowlist"
-             .format(len(fragments), _MD_VERSION),
+             .format(len(fragments), resolved, _MD_VERSION),
              ["{0}  {1}".format(f.path.name if f.path else "?", f.section) for f in fragments])
     return OK
 
@@ -1852,11 +2251,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # caller named this" and "we guessed it", which is the whole question.
     parser.add_argument("--changelog", default=None,
                         help="path to CHANGELOG.md; required to fold, derived "
-                             "from this script's own repository for the "
-                             "read-only modes")
+                             "from the caller's own current working "
+                             "directory for the read-only modes")
     parser.add_argument("--dir", dest="directory", default=None,
                         help="path to the fragment directory; required to "
-                             "fold, derived for the read-only modes")
+                             "fold, derived from the caller's cwd for the "
+                             "read-only modes")
     parser.add_argument("--dry-run", action="store_true", help="report, write nothing")
     parser.add_argument("--keep", action="store_true", help="do not delete consumed fragments")
     parser.add_argument("--check", action="store_true",
@@ -1870,6 +2270,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                              "and one written anyway is a 404 that reads as a "
                              "working link. Per-repository, which is why it is "
                              "a flag and not a constant in this file")
+    parser.add_argument("--title", default=None,
+                        help="the release heading's title, written after the "
+                             "date as `## [x.y.z] - YYYY-MM-DD — <title>`. "
+                             "Absent means the convention is read out of "
+                             "CHANGELOG.md's newest release heading and the "
+                             "fold refuses if that one carries a title; "
+                             "`--title ''` declares this release deliberately "
+                             "untitled, which is a decision and is recorded as "
+                             "one. Per-release, which is why it is a flag and "
+                             "not a key in a config file written once")
     parser.add_argument("--count", action="store_true",
                         help="print the fragment count as a bare integer, and nothing else")
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -1877,36 +2287,80 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     def _resolve(value: Optional[str], flag: str,
                  derived: Optional[Path]) -> Optional[Path]:
         """Read-only modes only. Take what the caller passed, else the value
-        derived from this script's own location.
+        derived from the caller's own current working directory --
+        not from this script's install location, which may be a plugin
+        cache unrelated to whatever repository the caller means.
 
-        No `--dir`/`--changelog` given, and no `.git` found above this script
-        to derive a default from: say so, rather than composing a path out of
-        a guess and failing on that instead.
+        No `--dir`/`--changelog` given, and no `.git` found above the
+        caller's cwd to derive a default from: say so, rather than composing
+        a path out of a guess and falling back to the script's own tree.
+
+        An empty string is treated the same as absent, not as `Path('')` --
+        which `pathlib` reads as `.`. `--dir ''` is what a caller gets when
+        it captures a directory resolver's refusal without checking its exit
+        status (a shell `FRAGMENTS_DIR="$(...)"` with no exit-status check is
+        exactly that shape) -- present, but not a directory anyone named.
+        Falling back to the derived default here matches the existing choice
+        for a declared directory that names nothing usable: a read-only mode
+        never writes, so falling back costs a read of the wrong tree at
+        worst, and refusing here would break the read-only modes in every
+        managed repo whose caller happens to emit an empty value.
         """
-        if value is not None:
+        if value:
             return Path(value)
         if derived is None:
-            _receipt("skipped",
-                     "could not find the repository root above {0} "
-                     "(no .git there or in any parent) to derive a default "
-                     "for {1}; pass it explicitly"
-                     .format(Path(__file__).resolve(), flag))
+            if _CWD is None:
+                # The rarer of the two `derived is None` causes: the process's
+                # own current directory no longer exists to walk up from at
+                # all (see `_safe_cwd`), not merely "no .git found above it".
+                _receipt("skipped",
+                         "could not read the current working directory to "
+                         "derive a default for {0}; pass it explicitly"
+                         .format(flag))
+            else:
+                _receipt("skipped",
+                         "could not find the repository root above {0} "
+                         "(no .git there or in any parent) to derive a default "
+                         "for {1}; pass it explicitly"
+                         .format(_CWD, flag))
             return None
+        if value == "":
+            # Distinct from `value is None` -- the caller said *something*,
+            # and what it said was unusable. A receipt that only ever names
+            # fragment filenames or a bare basename gives no way to tell
+            # "your flag was honoured" from "your flag was empty and
+            # silently replaced", so this is loud exactly where the ordinary
+            # absent-flag case (covered below with no message at all) must
+            # stay quiet: a note on every default-using run would stop
+            # meaning anything.
+            print("note: {0} was empty -- using the derived default {1}"
+                  .format(flag, derived), file=sys.stderr)
         return derived
 
     def _fold_target() -> Optional[Tuple[Path, Path]]:
         """The fold's target, or a refusal that names what to pass.
 
         Deliberately does not fall back to `REPO`. See the module docstring:
-        the derivation says which repository this file is *stored* in, the
-        fold needs the one being *released*, and no copy of this script can
-        tell whether those are the same. A refusal that only reported
-        something missing would turn a wrong-target write into a dead end, so
-        this prints the flags and a whole invocation.
+        the derivation says which repository the caller's cwd is *inside*
+        of, the fold needs the one being *released*, and no copy of this
+        script can tell whether those are the same. A refusal that only
+        reported something missing would turn a wrong-target write into a
+        dead end, so this prints the flags and a whole invocation.
+
+        An empty string counts as missing, the same as `None`. `Path('')` is
+        `Path('.')`, so without this an empty `--dir` or `--changelog` would
+        fold the current working directory silently -- the one arm the fold
+        can least afford to guess, since it is the arm that deletes
+        fragments. This is deliberately not a check keyed to `REPO`: that
+        would also refuse this repository's own out-of-tree test fixtures
+        and any legitimate scratch-directory fold, which nothing on disk can
+        tell apart from a hostile one. Closing the empty-value gap instead
+        protects every caller, in-tree or out, without assuming anything
+        about where a legitimately-named directory lives.
         """
         missing = [flag for flag, value in (("--dir", args.directory),
                                             ("--changelog", args.changelog))
-                   if value is None]
+                   if not value]
         if not missing:
             return Path(args.changelog), Path(args.directory)
         _receipt("refused",
@@ -1921,9 +2375,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                   "CHANGELOG.md".format(args.version),
                   "why       the fold derives no default, in this copy or the "
                   "one vendored into a managed repo. This file finds a "
-                  "repository root by walking up from itself, which names the "
-                  "repository it is stored in and not the one you are "
-                  "releasing; nothing on disk says whether those are the same",
+                  "repository root by walking up from your current working "
+                  "directory, which names wherever you happen to be standing "
+                  "and not necessarily the one you are releasing; nothing on "
+                  "disk says whether those are the same",
                   "untouched CHANGELOG.md was not read or written, and no "
                   "fragment was consumed"])
         return None
@@ -1933,6 +2388,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     #: named nothing", which is what the fold gate reads.
     derived_dir = (REPO / "changelog.d") if REPO else None
     derived_changelog = (REPO / "CHANGELOG.md") if REPO else None
+
+    # `--check` and `--check-links` together used to run only the links audit --
+    # the mode dispatch below is a chain of `if`/`return`, and `check_links` was
+    # tested and returned before `check` was ever reached, so a fragment this
+    # run never opened could sit next to a link table that happened to be fine
+    # and the whole thing printed a single confident `ok`. That `ok` names what
+    # it did audit ("N release section(s)"), which reads as thorough rather
+    # than partial, and a combined invocation like this one is exactly what a
+    # "check before pushing" habit reaches for. Refusing the combination is the
+    # same shape as the `--untagged` refusal just below: a caller who asks for
+    # two audits in one call gets two separate ones, never a silent choice
+    # between them.
+    if args.check and args.check_links:
+        _receipt("refused",
+                 "--check and --check-links together only ever ran the links "
+                 "audit -- the fragment audit was silently skipped, and the "
+                 "printed ok named only the half that ran",
+                 ["run       --check --dir <fragment directory> for the "
+                  "fragment audit",
+                  "run       --check-links --changelog <changelog file> "
+                  "[--untagged x.y.z,...] for the link audit",
+                  "why       each flag already audits its own thing "
+                  "completely; combining them silently ran only one, which is "
+                  "the one failure mode a guard must not have"])
+        return REFUSED
 
     # `--untagged` is read by `--check-links` and by nothing else. Accepting it
     # silently on the fold, `--check` or `--count` would make a declaration that
@@ -1948,6 +2428,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                   "link ref table, which no other mode reads. Silently ignored "
                   "here, a declaration that never applied would be "
                   "indistinguishable from one that did"])
+        return REFUSED
+
+    # Same argument as `--untagged` above, one flag along. A title is read by
+    # the fold and by nothing else: accepted silently on `--check`,
+    # `--check-links` or `--count`, a title that was never going to be written
+    # would look exactly like one that was — and what it decides here is the
+    # heading a release ships under.
+    if args.title is not None and (args.check or args.check_links or args.count):
+        _receipt("refused",
+                 "--title is read by the fold only, and this run is a "
+                 "read-only mode — nothing was audited, written or consumed",
+                 ["pass      it on the fold (`--version x.y.z --dir ... "
+                  "--changelog ...`), or drop it here",
+                  "why       it decides the release heading, which no "
+                  "read-only mode writes. Silently ignored here, a title that "
+                  "never applied would be indistinguishable from one that did"])
         return REFUSED
 
     if args.count:
@@ -2003,7 +2499,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return REFUSED
     changelog, directory = target
     return assemble(changelog, directory, args.version, args.date,
-                    dry_run=args.dry_run, keep=args.keep)
+                    dry_run=args.dry_run, keep=args.keep, title=args.title)
 
 def _exit(code: int) -> int:
     """Deliver whatever is still buffered, and keep *code*.

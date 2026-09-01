@@ -9,10 +9,15 @@
   "presets": ["github", "git", "watch"],
   "ops": {
     "radar": {
+      "watch_name": "dpt-claude-jit-context",
       "radar_tiers": {
         "gh-prs": {}
       }
-    }
+    },
+    "watch": { "watch_name": "dpt-claude-jit-context" },
+    "unwatch": { "watch_name": "dpt-claude-jit-context" },
+    "watches": { "watch_name": "dpt-claude-jit-context" },
+    "channel": { "watch_name": "dpt-claude-jit-context" }
   },
   "validators": {
     "bash-check": {
