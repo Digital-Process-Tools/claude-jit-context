@@ -142,6 +142,27 @@ Copy this directory to `<your-project>/.claude/claude-jit-context/` and register
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/claude-jit-context/scripts/post-tool-hook.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/claude-jit-context/scripts/stop-hook.sh"
+          }
+        ]
+      }
     ]
   }
 }
@@ -1031,7 +1052,7 @@ That same log is how you find out whether the pull step is being taken, which is
 **Nothing is written in a project that has no `.claude/jit-context/` directory.** The
 plugin installs globally and then runs in every repository you open, so it creates nothing
 until you have opted in by making that directory — `bash scripts/jit-init.sh`, or a
-`mkdir` of your own. Until then all four hooks run, match nothing, log nothing and exit 0,
+`mkdir` of your own. Until then all six hooks run, match nothing, log nothing and exit 0,
 and `git status` in a project that never asked for any of this stays clean. Once the
 directory exists, the log and the once-per-session markers live under
 `.claude/jit-context/.discovery/`, which is a good line for your `.gitignore`:
@@ -1095,6 +1116,8 @@ It reads and prints. No file is written, no entry is created, no hook fires and 
 
 **The age is a filesystem mtime, not a commit date, and a fresh `git clone` used to reset it silently.** A new contributor's first clone, a CI leg, or a fresh plugin install all set every entry's mtime to checkout time, not to when it was actually last written. Reading commit history instead would fix this and is a materially bigger change; it is not done here. Instead, the age is **withheld** when this run cannot trust it: if every entry mtime in a `00-manual` layer sits within a few seconds of the others — exactly the shape a checkout produces, and one real editing history essentially never does across more than one file — the footer omits the age for the whole layer rather than print a wrong "0d ago". A genuine spread still shows a real age exactly as before. Three states, never two: an age, no age, and never a wrong age.
 
+**A `Stop` hook now closes the loop the footer above opens: if a session fired entries and never touched one, it says so on the way out.** `post-tool-hook.sh` watches every `Write` and `Edit` (its own matcher in `hooks.json` keeps it from waking up for anything else) and drops an existence-only marker the moment one lands under `.claude/jit-context/` — no path, no content, just "something here was touched this session" — beside the `shown` marks the plugin already keeps and aged out by the same `session-start-hook.sh` sweep. `stop-hook.sh` reads both marker sets back at session end: entries fired and the marker is there — silence, the session is doing exactly what a `00-manual` layer is for. Entries fired and the marker is absent — a numbered list naming every one of them, with its age where one is known: `3 entries injected this session, none updated. Fired:\n  1. bridge.md (last edited 170d ago)\n  2. cache.md\n  3. deploy.md`. And when the state directory itself is unavailable — the same degraded, unwritable-checkout case every marker in this plugin already tolerates — it says **could not tell**, deliberately, rather than let that silence read as the healthy case above. Deriving "was edited" from the age table would have inherited the exact clone-mtime trap the paragraph above this one exists to avoid, which is why this is a second, independent signal rather than a second read of the first one.
+
 ## Tests
 
 ```bash
@@ -1124,7 +1147,7 @@ contributors add `changelog.d/<issue>.<section>.md` and never edit the file itse
 convention is in [changelog.d/README.md](changelog.d/README.md).
 
 That assembler is Python and lives under `.github/`, which is **not** the runtime this page
-promises: nothing in `.github/` ships inside the plugin, and the four hooks that run in your
+promises: nothing in `.github/` ships inside the plugin, and the six hooks that run in your
 session are still `bash` + `awk` + `perl` with no install step.
 
 ## License

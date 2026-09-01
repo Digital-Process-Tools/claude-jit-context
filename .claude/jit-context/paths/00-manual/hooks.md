@@ -1,10 +1,10 @@
 ---
 title: A hook may never fail hard
-description: The contract for the four hooks and common.sh - every failure path exits 0 injecting nothing, no new runtime dependency, test first, and the awk traps that differ between Linux, macOS and Git Bash.
+description: The contract for the six hooks and common.sh - every failure path exits 0 injecting nothing, no new runtime dependency, test first, and the awk traps that differ between Linux, macOS and Git Bash.
 match: (^|/)scripts/(.*-hook|common)\.sh$
 ---
 
-These five scripts run in someone else's session, on every prompt and every tool call, often before they know this plugin exists — the four hooks, and `common.sh`, which is sourced by all four and is where every containment fix in 0.3.0 landed. Everything below applies to `common.sh` verbatim; it is executed by the hooks, not beside them.
+These seven scripts run in someone else's session, on every prompt, every tool call and session end, often before they know this plugin exists — the six hooks (`session-start-hook.sh`, `pre-prompt-hook.sh`, `pre-tool-hook.sh`, `pre-path-hook.sh`, `post-tool-hook.sh` and `stop-hook.sh`), and `common.sh`, which is sourced by all six and is where every containment fix in 0.3.0 landed. Everything below applies to `common.sh` verbatim; it is executed by the hooks, not beside them.
 
 `rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh` and `jit-init.sh` also live in `scripts/` and are **not** governed by this file — they never run in a stranger's session and are expected to fail loudly. See `paths/00-manual/tooling.md`.
 
@@ -20,7 +20,7 @@ These five scripts run in someone else's session, on every prompt and every tool
 
 **`hooks.log` is a compensating channel, so bound the line and never the information.** #28 and #35 took the index file-name column and the mode column out of *model* context because they are unvalidated text from a clone; the log — on the tree author's disk, read by a person — is where they still go, and `tests/test-security.sh` asserts that relationship in both hooks. The matches field was unbounded and grew with the index, 16–22 KB per call on a 400-row tree (#64), so `_log_hook()` in `common.sh` caps it at 2048 bytes and states the exact number of bytes it dropped. A cap that reported an item count would be guessing — an item may contain `", "` — and the trailing `[shown:N] << …` field is passed as a separate argument and never cut, because that is what `jit-misses.sh` parses.
 
-**Nothing is created in a project that has no `.claude/jit-context/`.** The log's `mkdir -p "$LOG_DIR"` was ungated and made the whole chain, including in repositories that had never heard of this plugin — and it ran *before* the state `mkdir`, whose own `[ -d "$JIT_BASE" ]` gate was therefore inert while carrying a comment claiming it worked (#51). Both are gated now, `JIT_LOG_DISABLED` is set when the tree is absent so no `>>` is attempted per call, and `tests/test-inert-without-tree.sh` drives an empty project through all four hooks and asserts `git status` is still clean. A write inside someone's repository is a user-visible thing; it needs an opt-in, and `jit-init.sh` is it.
+**Nothing is created in a project that has no `.claude/jit-context/`.** The log's `mkdir -p "$LOG_DIR"` was ungated and made the whole chain, including in repositories that had never heard of this plugin — and it ran *before* the state `mkdir`, whose own `[ -d "$JIT_BASE" ]` gate was therefore inert while carrying a comment claiming it worked (#51). Both are gated now, `JIT_LOG_DISABLED` is set when the tree is absent so no `>>` is attempted per call, and `tests/test-inert-without-tree.sh` drives an empty project through all six hooks and asserts `git status` is still clean. A write inside someone's repository is a user-visible thing; it needs an opt-in, and `jit-init.sh` is it.
 
 **No new runtime dependencies.** `awk` and `perl` only. No `jq`, no Python, no Node. Dropping `jq` is most of what 0.2.0 was; adding one back is a breaking change, not a convenience.
 
