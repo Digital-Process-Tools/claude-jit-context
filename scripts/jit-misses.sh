@@ -208,20 +208,26 @@ case "$LOGBYTES" in ""|*[!0-9]*) LOGBYTES="" ;; esac
 # functions, and a bash variable cannot hold a NUL at all. A NUL in a prompt was dropped
 # before the log was written, not here. The awk output ends in exactly one newline on
 # every branch, which is what the printf below puts back.
-# #248: --tail bounds the READ, not just the report -- `tail -n N` (or `cat`, when no
-# bound was asked for) is what feeds awk, so an unbounded caller costs exactly what it
-# always cost and a bounded one never touches the lines outside its own window. `cat`
-# for the unbounded case rather than handing the filename to awk directly keeps this a
-# single invocation instead of two copies of the program text below; a plain byte
-# passthrough either way, so it changes nothing about NUL/UTF-8 handling.
-if [ -n "$TAIL" ]; then
-  JIT_MISSES_READ_CMD=(tail -n "$TAIL" -- "$LOG")
-  JIT_MISSES_BOUNDED=1
-else
-  JIT_MISSES_READ_CMD=(cat -- "$LOG")
-  JIT_MISSES_BOUNDED=0
-fi
-_JIT_MISSES_OUT=$(LC_ALL=C "${JIT_MISSES_READ_CMD[@]}" | LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" -v bounded="$JIT_MISSES_BOUNDED" -v tailn="${TAIL:-0}" -v logbytes="$LOGBYTES" -v threshold="$SIZE_THRESHOLD" '
+# #248: --tail bounds the READ, not just the report -- `tail -n N` feeds awk instead of
+# the file itself when a bound was asked for. Unset (the manual default), this stays
+# the exact pre-#248 shape -- `awk ... "$LOG"`, no pipe, no subprocess between the
+# checks above and awk's own open -- rather than a `cat | awk` that LOOKS equivalent
+# and is not: a pipe's exit status (without `set -o pipefail`, which this file does not
+# use) is awk's alone, so a `tail`/`cat` that failed to read $LOG in the narrow race
+# between the readability check above and this line would hand awk an empty stdin, and
+# awk would report that honestly as "the file is empty" -- true of a genuinely empty
+# log and false of a read that silently failed, which is exactly the ambiguity this
+# whole file exists to refuse. Keeping the unbounded path unpiped means the one caller
+# that can actually SHOW that sentence to a person (a manual run; STDOUT IS THE REPORT,
+# per the header comment above) never goes through the pipe at all. The only caller
+# that ever passes --tail is session-start-hook.sh, and it already treats "the file is
+# empty" as ordinary silence rather than a surfaced failure, so the same race there is
+# silent either way.
+#
+# The program text below is one variable rather than two copies inline, precisely so
+# this branch does not have to choose between duplicating ~230 lines of awk or
+# accepting the pipe unconditionally.
+JIT_MISSES_AWK_PROG='
 BEGIN {
   # Filler that two prompts can share without sharing a subject. Deliberately short and
   # visible: it is the only part of the grouping rule that is a matter of taste, and a
@@ -441,7 +447,12 @@ END {
   print "  .claude/jit-context/vocabulary/00-manual/<name>.md, then bash scripts/rebuild-tsv.sh"
   exit 0
 }
-')
+'
+if [ -n "$TAIL" ]; then
+  _JIT_MISSES_OUT=$(LC_ALL=C tail -n "$TAIL" -- "$LOG" | LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" -v bounded=1 -v tailn="$TAIL" -v logbytes="$LOGBYTES" -v threshold="$SIZE_THRESHOLD" "$JIT_MISSES_AWK_PROG")
+else
+  _JIT_MISSES_OUT=$(LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" -v bounded=0 -v tailn=0 -v logbytes="$LOGBYTES" -v threshold="$SIZE_THRESHOLD" "$JIT_MISSES_AWK_PROG" "$LOG")
+fi
 _JIT_MISSES_RC=$?
 
 # 2 is this script own "could not evaluate", and an awk that DIED also exits 2 on both

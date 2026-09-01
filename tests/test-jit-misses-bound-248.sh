@@ -108,6 +108,37 @@ assert_status "exit 0" "$ST_UNDER" "0"
 assert_not_contains "no threshold note when nowhere near it" "$OUT_UNDER" "watch threshold"
 
 echo ""
+echo "=== an unbounded run never depends on tail or cat -- it never pipes (#248 follow-up) ==="
+# A broken tail/cat in PATH must not affect the DEFAULT (unbounded) invocation at all --
+# that is the actual fix for the TOCTOU race the self-review auditor found: piping
+# ANY read through tail/cat means the pipe's exit status is awk's alone (no pipefail in
+# this file), so a read failure between the earlier readability check and the read
+# itself would print the SAME "the file is empty" SKIPPED reason a genuinely empty log
+# gets. Keeping the unbounded path on a direct `awk ... "$LOG"` invocation -- no pipe,
+# no subprocess between the check and the open -- closes that off entirely for the one
+# caller a person can actually read the reason from (a manual run). A broken `tail` and
+# `cat` shadowing the real ones in PATH is the sharpest way to prove no pipe is taken:
+# if either were on the critical path, this would SKIP or silently misreport instead of
+# reporting the real finding.
+FAKEBIN="$TMP/fakebin"
+mkdir -p "$FAKEBIN"
+cat > "$FAKEBIN/tail" <<'FAKE'
+#!/bin/sh
+echo "fake tail: refuses to run" >&2
+exit 111
+FAKE
+cat > "$FAKEBIN/cat" <<'FAKE'
+#!/bin/sh
+echo "fake cat: refuses to run" >&2
+exit 111
+FAKE
+chmod +x "$FAKEBIN/tail" "$FAKEBIN/cat"
+OUT_NOPIPE=$(PATH="$FAKEBIN:$PATH" bash "$MISSES" --log "$LOG" 2>&1) && ST_NOPIPE=0 || ST_NOPIPE=$?
+assert_status "still exits 0 with a broken tail/cat shadowing PATH" "$ST_NOPIPE" "0"
+assert_contains "still reads the log for real, unaffected by the broken tail/cat" "$OUT_NOPIPE" "preprod"
+assert_not_contains "the broken stub is never reached on the default path" "$OUT_NOPIPE" "refuses to run"
+
+echo ""
 echo "=== --tail rejects the same shape --min and --top do ==="
 OUT_BAD=$(bash "$MISSES" --log "$LOG" --tail nope 2>&1) && ST_BAD=0 || ST_BAD=$?
 assert_status "a non-numeric --tail is refused, exit 2" "$ST_BAD" "2"
