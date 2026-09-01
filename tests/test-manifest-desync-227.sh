@@ -17,12 +17,13 @@
 # existed.
 #
 # A second section is the control this repository keeps needing: #227's own review
-# found that pre-tool-hook.sh and pre-path-hook.sh never build a manifest header at all,
+# found that pre-tool-hook.sh and pre-path-hook.sh never built a manifest header at all,
 # so gating the desync report on jit_blk_manifest_ok alone would have reported every
-# genuine tool/path match as "could not evaluate". jit_blk_manifest_seen is the flag
-# that keeps that from happening, and this suite pins it directly: a real path-matched
-# vocabulary entry, which never had a manifest to begin with, must NOT be reported as a
-# desync by either consumer.
+# genuine tool/path match as "could not evaluate". jit_blk_manifest_seen used to be the
+# flag that kept that from happening; #230 closed the producer gap instead (pre-path-hook.sh
+# now builds a manifest too), so that flag is gone and this suite pins the same guarantee
+# directly: a real path-matched vocabulary entry must NOT be reported as a desync by
+# either consumer.
 #
 # jit-drive: none -- every assertion here checks an exit code and a fixed literal notice
 # string against a real subprocess run, inline with if/grep rather than through a shared
@@ -146,11 +147,16 @@ fi
 
 # =====================================================================================
 echo ""
-echo "=== jit_blk_manifest_seen: a hook that never builds a manifest at all must NOT read as a desync ==="
-# pre-path-hook.sh's vocabulary-by-path branch never emits a "# JIT-CTX-BLOCKS " header
-# at all (a separate, filed-not-fixed gap) -- jit_blk_manifest_seen is 0 for it, and
-# both consumers gate the #227 desync report on manifest_seen && !manifest_ok, never on
-# !manifest_ok alone, so this must exit clean rather than reporting "could not evaluate".
+echo "=== a real path-matched vocabulary entry still exits clean ==="
+# Before #230, pre-path-hook.sh's vocabulary-by-path branch never emitted a
+# "# JIT-CTX-BLOCKS " header at all, and jit_blk_manifest_seen (common.sh) was the flag
+# that kept a manifest-less call like this one from reading as a #227 desync -- both
+# consumers gated on manifest_seen && !manifest_ok, never on !manifest_ok alone. #230
+# closed that gap: pre-path-hook.sh now builds a manifest the same way pre-prompt-hook.sh
+# always has, so jit_blk_manifest_seen is gone and both consumers gate on !manifest_ok
+# alone. This section is kept as the ordinary control that a genuine path-matched
+# vocabulary entry still exits clean -- now because its manifest genuinely verifies,
+# not because the absence of one was specially exempted.
 PPROJ="$TMP/path-proj"
 PBASE="$PPROJ/.claude/jit-context"
 build_project "$PBASE"
@@ -160,9 +166,9 @@ printf 'real vocabulary content matched by path\n' > "$PBASE/vocabulary/00-manua
 OUT=$(JIT_CONTEXT_VOCAB_PATHS=1 CLAUDE_PROJECT_DIR="$PPROJ" bash "$REPO/scripts/jit-dry-run.sh" --base "$PBASE" --file "config.secret.txt" 2>&1)
 ST=$?
 if [ "$ST" = 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: a manifest-less path match still exits 0 (jit_blk_manifest_seen keeps this out of #227's report)"
+  PASS=$((PASS + 1)); echo "  PASS: a real path-matched vocabulary entry still exits 0 (manifest verifies as of #230)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: a manifest-less path match moved off exit 0 (exit $ST) -- jit_blk_manifest_seen is not doing its job"
+  FAIL=$((FAIL + 1)); echo "  FAIL: a real path-matched vocabulary entry moved off exit 0 (exit $ST) -- its manifest is not verifying"
   echo "    got: $(printf '%s' "$OUT" | tr '\n' '|' | cut -c1-400)"
 fi
 if grep -qF "real-path-vocab.md" <<<"$OUT"; then
