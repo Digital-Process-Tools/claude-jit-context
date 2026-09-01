@@ -690,9 +690,19 @@ printf 'quoted\tquoted.md\n' >> "$V/00-index.tsv"
 OUT=$(run_prompt "the quoted one")
 assert_contains "the hook honours the quoted value" "$OUT" "QUOTED-BODY-MARKER"
 REPORT=$(CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh" 2>&1 >/dev/null)
-assert_contains "and rebuild-tsv counts it as arriving whole" "$REPORT" "quoted.md"
-# Paired, in the same report: the entry that is genuinely a summary is NOT counted.
-assert_not_contains "and does not count a summary entry as whole" "$REPORT" "billing.md"
+# Scoped to the "What a match costs" section alone (#232's own advisory-report pattern,
+# lifted from test-generic-keywords-232.sh's IDCOL extraction): REPORT is rebuild-tsv.sh's
+# WHOLE stderr, and it is not the only section entitled to name a file by path. The
+# all-generic fallback (#232) has its own advisory section that correctly names any entry
+# whose keywords are ALL classified generic against the bundled wordlist -- and once a
+# fuller wordlist replaces the hand-curated stand-in (#251), "billing" is exactly the kind
+# of ordinary word that list is meant to catch, so billing.md legitimately appears THERE
+# for a reason that has nothing to do with the injection-cost question this pair of
+# assertions is about. It is the LAST section rebuild-tsv.sh prints, so this reads to EOF.
+COST_SECTION="$(awk '/=== What a match costs/{p=1} p' <<<"$REPORT")"
+assert_contains "and rebuild-tsv counts it as arriving whole" "$COST_SECTION" "quoted.md"
+# Paired, in the same section: the entry that is genuinely a summary is NOT counted.
+assert_not_contains "and does not count a summary entry as whole" "$COST_SECTION" "billing.md"
 
 # rebuild-tsv.sh rewrote every index in the fixture tree from frontmatter, which is not
 # what the rest of this suite indexed by hand. Put them back, or every later assertion
