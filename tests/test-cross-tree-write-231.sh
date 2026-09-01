@@ -202,8 +202,10 @@ if [ -f "$MAIN_TSV" ]; then
 else
   bad "and CLAUDE_PROJECT_DIR's own index was written" "no file at $MAIN_TSV"
 fi
-assert_contains "and stderr names the check as unable to run, not silent" "$(cat "$ERR")"   "cross-tree check"
-assert_contains "and says which side could not resolve a git tree" "$(cat "$ERR")"   "cwd is not inside a git tree"
+assert_contains "and stderr names the check as unable to run, not silent" "$(cat "$ERR")" \
+  "cross-tree check"
+assert_contains "and says which side could not resolve a git tree" "$(cat "$ERR")" \
+  "cwd is not inside a git tree"
 rm -f "$MAIN_TSV" "$WT_TSV"
 
 echo ""
