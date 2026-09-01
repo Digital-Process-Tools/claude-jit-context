@@ -416,15 +416,24 @@ VOCAB_KEYWORD_BLACKLIST="${JIT_CONTEXT_KEYWORD_BLACKLIST:-${DYNAMIC_RULES_KEYWOR
 # Bundled rather than detected, for the same determinism reason #232 gives: if the
 # verdict depended on which machine ran the rebuild, two contributors would produce
 # different TSVs from identical sources and every rebuild would show phantom diffs.
-# scripts/data/generic-words.txt carries its own provenance note and the reason it is a
-# hand-curated substitute for the SCOWL/Dicollecte artifact #232 recommends rather than
-# that artifact itself -- read it before touching this variable.
+# data/generic-words.txt (repo root, a sibling of scripts/, NOT scripts/data/ -- see
+# below) carries its own provenance note and the reason it is a hand-curated substitute
+# for the SCOWL/Dicollecte artifact #232 recommends rather than that artifact itself --
+# read it before touching this variable.
 #
 # Consulted here, in rebuild-tsv.sh, and NOWHERE under scripts/*-hook.sh: the runtime
 # constraint in hooks.md is absolute, and this column is the mechanism that keeps the
 # dictionary out of the hot path -- the hook reads a byte that says "generic", never a
 # wordlist.
-GENERIC_WORDS_FILE="${JIT_CONTEXT_GENERIC_WORDS:-${DYNAMIC_RULES_GENERIC_WORDS:-$(dirname "$0")/data/generic-words.txt}}"
+#
+# Deliberately NOT scripts/data/: tests/test-arg-flag-values.sh sweeps every file
+# `git ls-files -- scripts` returns and asks classify_script() what kind of BASH ARGUMENT
+# PARSER it is -- a plain wordlist is neither bash nor a script, so it landed in the
+# same "not-bash-script" bucket a stray Python tool would, which that suite treats as a
+# hard failure by design (a shape it cannot read is a FAILURE, not a silent skip). A
+# top-level data/ directory, one level up, is outside that sweep's scope entirely rather
+# than a special case inside it.
+GENERIC_WORDS_FILE="${JIT_CONTEXT_GENERIC_WORDS:-${DYNAMIC_RULES_GENERIC_WORDS:-$(dirname "$0")/../data/generic-words.txt}}"
 
 # Source-root prefix used when mapping a "## Modules" section to path triggers.
 # Projects that keep modules somewhere other than src/ override this in config.env.
@@ -565,10 +574,29 @@ build_vocab_tsv() {
       # word either) -- so this is a length heuristic, not a wordlist lookup, and
       # is documented here as exactly that rather than as a completed
       # dictionary-backed classifier.
-      if printf '%s\n' "$kw_raw" | LC_ALL=C grep -Eq '^[A-Za-z][a-z0-9]*[A-Z][A-Za-z0-9]*$'; then
+      #
+      # `[a-z0-9]+`, not `[a-z0-9]*` (review finding): a `*` let a raw token of
+      # nothing but capitals -- `API`, `HTML`, `URL` -- through, because zero
+      # lowercase/digit characters between the leading letter and the next
+      # capital is a valid empty match. An all-caps acronym is not an
+      # accidentally-cased identifier; #232 is explicit that the shape being
+      # named is `jsOn`-like casing, which always has a lowercase run on BOTH
+      # sides of the embedded capital. `+` requires that run to be non-empty.
+      if printf '%s\n' "$kw_raw" | LC_ALL=C grep -Eq '^[A-Za-z][a-z0-9]+[A-Z][A-Za-z0-9]*$'; then
         kw_raw_lc=$(printf '%s' "$kw_raw" | LC_ALL=C tr '[:upper:]' '[:lower:]')
         if [ "$kw_raw_lc" = "$kw" ] && [ "${#kw}" -le 6 ]; then
-          JIT_IDCOLLISION="$JIT_IDCOLLISION    [$label] $(jit_report_name "$filename"): \"$(jit_report_keyword "$kw_raw")\" normalises to the ordinary-looking word \"$(jit_report_keyword "$kw")\"
+          # jit_report_keyword() withholds ANY byte outside [a-z0-9-] (review
+          # finding): it exists for the NORMALISED spelling every other caller in
+          # this file hands it, which is always already-lowercased, and it
+          # withheld $kw_raw outright for the one uppercase letter this whole
+          # check exists to find -- the report never actually showed the raw
+          # identifier it claims to name. $kw_raw is safe to print as-is here
+          # and nowhere else in this file: it just matched the ERE two lines
+          # above, which admits nothing but [A-Za-z0-9], so there is no
+          # character left to withhold it for. Only its LENGTH still needs a
+          # bound, since the regex has no upper one.
+          if [ "${#kw_raw}" -le 40 ]; then kw_raw_disp="$kw_raw"; else kw_raw_disp="$JIT_KEYWORD_WITHHELD"; fi
+          JIT_IDCOLLISION="$JIT_IDCOLLISION    [$label] $(jit_report_name "$filename"): \"$kw_raw_disp\" normalises to the ordinary-looking word \"$(jit_report_keyword "$kw")\"
 "
           JIT_IDCOLLISION_N=$((JIT_IDCOLLISION_N + 1))
         fi

@@ -1,5 +1,6 @@
 (^|/)CHANGELOG\.md$	changelog.md
 (^|/)(\.claude|examples|templates)/jit-context/.*\.md$	entries.md
+(^|/)data/generic-words[.]txt$	generic-words-data.md
 (^|/)scripts/(.*-hook|common)\.sh$	hooks.md
 \.claude-plugin/plugin\.json$	release.md
 (^|/)tests/[^/]*\.sh$	tests.md

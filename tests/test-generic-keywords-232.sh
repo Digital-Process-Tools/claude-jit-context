@@ -70,6 +70,11 @@ write_entry identifier-entry.md \
   "description: Has an identifier keyword that normalises to an ordinary word." \
   "keywords: jsOn"
 
+write_entry acronym-entry.md \
+  "title: Acronym entry" \
+  "description: Has ordinary all-caps acronym keywords, not accidental casing." \
+  "keywords: API, HTML"
+
 echo "=== A. rebuild-tsv.sh writes a third column: generic verdict ==="
 CLAUDE_PROJECT_DIR="$PROJ" bash "$REBUILD" >/dev/null 2>"$ROOT/rebuild.err"
 IDX="$BASE/vocabulary/00-manual/00-index.tsv"
@@ -79,8 +84,30 @@ assert_contains "a keyword absent from the wordlist degrades to specific (empty 
 
 echo ""
 echo "=== B. rebuild-tsv.sh reports an identifier that normalises to an ordinary word ==="
-assert_contains "the jsOn -> json collision is reported by name" "$(cat "$ROOT/rebuild.err")" "jsOn"
-assert_contains "and names the normalised form" "$(cat "$ROOT/rebuild.err")" "json"
+# The section header's own explanatory prose carries the literal string "jsOn" as an
+# EXAMPLE, unconditionally, whether or not any keyword was actually flagged -- asserting
+# on the bare word here would pass even if the check found nothing at all. The finding
+# line is the one that pairs the raw spelling with the ENTRY it came from, so that pairing
+# is what has to be asserted on instead.
+# Scoped to the identifier-collision section alone: the report ends with a
+# "What a match costs" section that names entries by PATH for an unrelated reason (the
+# largest/median entry on the tree), and a whole-file assertion would collide with that
+# section for any fixture small enough that acronym-entry.md happens to be it.
+IDCOL_FULL="$(cat "$ROOT/rebuild.err")"
+IDCOL="$(awk '/identifier before normalisation/{p=1} p{print} p && /keyword\(s\) --/{exit}' "$ROOT/rebuild.err")"
+assert_contains "the finding names the entry the keyword lives on" "$IDCOL" "identifier-entry.md"
+assert_contains "and shows the RAW spelling by name, not withheld" "$IDCOL" '"jsOn" normalises'
+assert_not_contains "the raw spelling is never silently withheld" "$IDCOL_FULL" '"<withheld: not a plain keyword>" normalises'
+assert_contains "and names the normalised form" "$IDCOL" "\"json\""
+
+echo ""
+echo "=== B2. an all-caps acronym (API, HTML) is NOT flagged as an accidental casing collision ==="
+# A raw token with no lowercase letter at all is an acronym an author chose on purpose,
+# not a camelCase identifier that lost its casing by accident -- #232's own example is
+# always mixed-case (jsOn), never all-caps. Negative assertion paired with a positive
+# control (jsOn, asserted above, from the SAME rebuild run, same section) so a harness
+# that flagged nothing at all in this section cannot pass this by accident.
+assert_not_contains "API/HTML are not flagged (all-caps acronyms, not an accident)" "$IDCOL" "acronym-entry.md"
 
 echo ""
 echo "=== C. pre-prompt-hook.sh: a match on the generic keyword alone injects summary only, and does not spend the shot ==="
