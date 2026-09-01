@@ -6,7 +6,7 @@ match: (^|/)(\.oss/[^/]+|\.github/workflows/oss-changelog\.yml)$
 
 **Anything you change here is lost at the next `/oss:scaffold --apply`.** These files are *owned templates*: the scaffold rewrites them in full on every run, by design, so upstream fixes reach every repository that uses the plugin. The right place for a change is an issue on `Digital-Process-Tools/claude-oss`, not this file.
 
-There is one local edit in the tree today, and it is documented in place: `--untagged 0.1.0` on the `--check-links` step of `oss-changelog.yml`. `tests/test-changelog-workflow-untagged.sh` guards it, because tests are not scaffold-owned — that suite goes red in the run that clobbers the edit rather than in someone else's pull request days later. Both the flag and the suite come out when claude-oss#121 lands a `changelog.untagged` key in `.oss.json`.
+There is no local edit in the tree today, and there used to be one worth knowing about: `--untagged 0.1.0` on the `--check-links` step of `oss-changelog.yml`, guarded by a suite in `tests/` because tests are not scaffold-owned. Both came out when claude-oss#121 landed `changelog_untagged` in `.oss.json` — the scaffold now generates the flag from that key, so the declaration is config rather than an edit, and a suite asserting the edit was asserting the workaround. If you find yourself wanting to hand-edit a file here, that is the shape to reach for instead: a key upstream reads, never a line the next `--apply` silently drops.
 
 ## The exit codes are the inverse of this repository's
 
