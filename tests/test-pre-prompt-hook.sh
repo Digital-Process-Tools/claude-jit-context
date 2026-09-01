@@ -383,7 +383,7 @@ assert_survives_malformed() {
   out=$(mktemp); err=$(mktemp)
   printf '%s\n' "$payload" | LC_ALL="$UTF8_LOCALE" PATH="$ENGINE_BIN/$eng:$PATH" \
     CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" > "$out" 2> "$err"
-  if LC_ALL=C grep -qF "$needle" "$out"; then
+  if LC_ALL=C grep -qF -- "$needle" "$out"; then
     PASS=$((PASS + 1)); echo "  PASS: $desc -- the ASCII keyword still matched"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc -- the ASCII keyword did NOT match"

@@ -64,7 +64,7 @@ JIT_CAND_BEGIN='--jit-candidates--'
 # channel and prints NOTHING, because whether they are real files is a question awk must not
 # ask (a getline probe on a directory is a fatal i/o error on one-true-awk, which is the awk
 # macOS ships). bash answers it with builtins and runs the program again over the survivors.
-JIT_PATH_PROG=$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON'
+JIT_PATH_PROG=$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_BLK_BUILD'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -298,7 +298,7 @@ END {
   # --- Load shown set ---
   jit_shown_load(shown_file, shown)
 
-  matched = ""
+  nblk = 0
   log_matches = ""
   sep = ""
   refused = ""
@@ -411,8 +411,7 @@ END {
         header = "# JIT Context: " rule_file " (matched: " pattern ")"
         log_matches = log_matches sep layer ":" rule_file "(" pattern ")" jit_inject_tag(ent)
         sep = ", "
-        if (matched != "") matched = matched "\n---\n" header "\n" content
-        else matched = header "\n" content
+        nblk++; blk[nblk] = header "\n" content
       }
     }
     close(index_file)
@@ -489,8 +488,7 @@ END {
           vheader = "# Vocabulary: " vocab_file " (matched path: " vpattern ")"
           log_matches = log_matches sep layer ":" vocab_file "(" vpattern ")" jit_inject_tag(vent)
           sep = ", "
-          if (matched != "") matched = matched "\n---\n" vheader "\n" vcontent
-          else matched = vheader "\n" vcontent
+          nblk++; blk[nblk] = vheader "\n" vcontent
         }
       }
       close(vindex)
@@ -504,7 +502,7 @@ END {
     shown["jit-refused-paths"] = 1
     jit_shown_mark(shown_file, "jit-refused-paths")
     note = jit_refusal_notice(refused, n_refused)
-    matched = (matched == "") ? note : note "\n---\n" matched
+    jit_blk_prepend(note)
   }
 
   # --- A layer directory that could not be read is reported, once per session ---
@@ -517,7 +515,7 @@ END {
     shown["jit-refused-layers"] = 1
     jit_shown_mark(shown_file, "jit-refused-layers")
     lnote = jit_layers_notice(layers_refused, layers_refused_n)
-    matched = (matched == "") ? lnote : lnote "\n---\n" matched
+    jit_blk_prepend(lnote)
   }
 
   # --- A refused config.env line is reported, once per session ---
@@ -531,7 +529,7 @@ END {
     shown["jit-refused-config"] = 1
     jit_shown_mark(shown_file, "jit-refused-config")
     cnote = jit_config_notice(config_refused, config_refused_n)
-    matched = (matched == "") ? cnote : cnote "\n---\n" matched
+    jit_blk_prepend(cnote)
   }
 
   # --- Log info to temp file ---
@@ -570,7 +568,11 @@ END {
   }
 
   # --- Output JSON ---
-  if (matched != "") {
+  # jit_blk_join() (common.sh, JIT_AWK_BLK_BUILD, #230) assembles the "# JIT-CTX-BLOCKS"
+  # manifest from nblk/blk[] the same way pre-prompt-hook.sh always has -- this hook
+  # never built one before, so a consumer walking additionalContext always fell back to
+  # searching it for "\n---\n", a separator an entry body can forge.
+  if ((matched = jit_blk_join()) != "") {
     matched = jit_json_escape(matched)
     printf "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"%s\"}}", matched
   } else {

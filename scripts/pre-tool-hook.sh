@@ -83,7 +83,7 @@ cat | LC_ALL=C awk \
   -v project="${CLAUDE_PROJECT_DIR:-.}" \
   -v log_tmp="$JIT_TMP" \
   -v missing_bins="$JIT_MISSING_REQUIRES" \
-  "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD"'
+  "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -297,7 +297,7 @@ END {
   fold_cmd = jit_fold_latin1(tolower(cmd))
   fold_full = jit_fold_latin1(tolower(full_command))
 
-  matched = ""
+  nblk = 0
   blocked = ""
   log_matches = ""
   sep = ""
@@ -849,8 +849,11 @@ END {
         if (ent["mode"] == "full" && why == "" && body !~ /^[[:space:]]*$/) adv_header = header
         else adv_header = "# JIT Context: " jit_clip(r_header_name, 255) " (matched: " jit_clip(r_match, 160) ")"
 
-        if (matched != "") matched = matched "\n---\n" adv_header "\n" content
-        else matched = adv_header "\n" content
+        # nblk/blk[] (common.sh, JIT_AWK_BLK_BUILD, #230) replace the old
+        # matched = matched "\n---\n" X string-concat: this is still speculative, exactly
+        # as the concat was -- a `break` above discards the whole scan on a block decision,
+        # and nblk/blk[] are discarded right along with it, never read past that point.
+        nblk++; blk[nblk] = adv_header "\n" content
       }
     }
     close(tools_tsv)
@@ -1037,8 +1040,7 @@ END {
           if (layer ~ /00-manual/) vh = vh "\\n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
           log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent)
           sep = ", "
-          if (matched != "") matched = matched "\n---\n" vh "\n" vc
-          else matched = vh "\n" vc
+          nblk++; blk[nblk] = vh "\n" vc
         }
       }
     }
@@ -1065,7 +1067,7 @@ END {
     shown["jit-no-subject"] = 1
     jit_shown_mark(shown_file, "jit-no-subject")
     unote = jit_no_subject_notice(unreached, n_unreached)
-    if (blocked == "") matched = (matched == "") ? unote : unote "\n---\n" matched
+    if (blocked == "") jit_blk_prepend(unote)
     else block_tail = block_tail "\n---\n" unote
   }
 
@@ -1101,7 +1103,7 @@ END {
     if (blocked == "") {
       shown["jit-refused-rules"] = 1
       jit_shown_mark(shown_file, "jit-refused-rules")
-      matched = (matched == "") ? note : note "\n---\n" matched
+      jit_blk_prepend(note)
     } else {
       block_tail = block_tail "\n---\n" note
     }
@@ -1121,7 +1123,7 @@ END {
     shown["jit-refused-layers"] = 1
     jit_shown_mark(shown_file, "jit-refused-layers")
     lnote = jit_layers_notice(layers_refused, layers_refused_n)
-    if (blocked == "") matched = (matched == "") ? lnote : lnote "\n---\n" matched
+    if (blocked == "") jit_blk_prepend(lnote)
     else block_tail = block_tail "\n---\n" lnote
   }
 
@@ -1140,7 +1142,7 @@ END {
     shown["jit-refused-config"] = 1
     jit_shown_mark(shown_file, "jit-refused-config")
     cnote = jit_config_notice(config_refused, config_refused_n)
-    if (blocked == "") matched = (matched == "") ? cnote : cnote "\n---\n" matched
+    if (blocked == "") jit_blk_prepend(cnote)
     else block_tail = block_tail "\n---\n" cnote
   }
   # --- Write log info to temp file (bash reads it for timing) ---
@@ -1188,7 +1190,11 @@ END {
     # do have one still get to use it.
     blocked = jit_json_escape(blocked block_tail)
     printf "{\"decision\":\"block\",\"reason\":\"%s\"}", blocked
-  } else if (matched != "") {
+  } else if ((matched = jit_blk_join()) != "") {
+    # jit_blk_join() (common.sh, JIT_AWK_BLK_BUILD, #230) assembles the "# JIT-CTX-BLOCKS"
+    # manifest from nblk/blk[] the same way pre-prompt-hook.sh always has -- this hook
+    # never built one before, so a consumer walking additionalContext always fell back to
+    # searching it for "\n---\n", a separator an entry body can forge.
     matched = jit_json_escape(matched)
     printf "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"%s\"}}", matched
   } else {

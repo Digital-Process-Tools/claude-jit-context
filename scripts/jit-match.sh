@@ -364,7 +364,13 @@ END {
     # already uses (common.sh, jit_refusal_notice()) -- and it still counts as a notice
     # below, which already moves this tool off exit 0 the same way an unverifiable match
     # or a refused row does.
-    if (jit_blk_manifest_seen && !jit_blk_manifest_ok) {
+    #
+    # Gated on !jit_blk_manifest_ok alone (#230): pre-prompt-hook.sh -- the only hook this
+    # script ever shells out to -- always builds a manifest now, so "no manifest was ever
+    # attempted" is no longer a state a real call here can reach. See the comment above
+    # jit_split_ctx_blocks() in common.sh for why the jit_blk_manifest_seen flag this
+    # comment used to gate on is gone rather than merely unread.
+    if (!jit_blk_manifest_ok) {
       nnotice++
       notice[nnotice] = "# JIT Context: the block manifest could not be evaluated, so this call fell back to a splitter an entry body can forge"
     }

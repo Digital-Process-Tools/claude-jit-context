@@ -1326,7 +1326,15 @@ END {
     # the manifest failed to verify and the split fell back to the pre-#219/#223
     # heuristic splitter, which an entry body can forge; this tool must fail loudly on
     # anything it could not evaluate, so that degrade has to move the exit code.
-    if (jit_blk_manifest_seen && !jit_blk_manifest_ok) desync = 1
+    #
+    # Gated on !jit_blk_manifest_ok alone (#230): this function is the only route
+    # report_hook() has into all three shipped hooks, by fixed filename, never a
+    # caller-supplied path -- and all three now build a manifest whenever they inject
+    # anything, so "no manifest was ever attempted" cannot happen on a real call any
+    # more. See the comment above jit_split_ctx_blocks() in common.sh for why the
+    # jit_blk_manifest_seen flag this comment used to gate on is gone rather than
+    # merely unread.
+    if (!jit_blk_manifest_ok) desync = 1
     for (b = 1; b <= jit_blk_n; b++) {
       body = jit_blk_body[b]
       nl = index(body, "\n")

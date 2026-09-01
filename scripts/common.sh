@@ -2114,6 +2114,49 @@ function jit_unescape(s,   n, i, c, nx, o) {
 }
 '
 
+# --- Building the byte-length manifest, shared by all three hooks (#219, #230) ----------
+#
+# #219 gave pre-prompt-hook.sh a way to join its own blocks so a consumer can walk them by
+# byte count instead of searching the joined text for "\n---\n" -- a separator an entry
+# body can forge, since .claude/jit-context/ is attacker-controlled input. #230 is that
+# pre-tool-hook.sh and pre-path-hook.sh never grew the same producer: they still join with
+# the bare "\n---\n" pre-prompt-hook.sh itself joined with before #219, so the forgery
+# class #219 closed for the prompt dimension stayed open for the tool and path dimensions,
+# via the same fallback splitter in jit_split_ctx_blocks() below.
+#
+# This is that producer, factored out so a third hand-rolled copy in pre-tool-hook.sh and
+# pre-path-hook.sh cannot drift the way a second copy already drifted once -- report_hook()
+# carried the pre-#219 grep, unfixed, through #223. All three hooks now build their block
+# list the same way pre-prompt-hook.sh always did: append a real match with `nblk++; blk[nblk]
+# = text`, prepend a refusal/layer/config notice with jit_blk_prepend(), and assemble the
+# final additionalContext with jit_blk_join() once the whole scan is done. jit_blk_join()
+# returns "" when nblk is 0, which every caller already reads as "print {} instead."
+#
+# nblk/blk[] are plain awk globals, uninitialised (0/empty) at the start of every END
+# block by awk's own rules -- no explicit reset needed before the first `nblk++`.
+#
+# Consumed by the hook awk programs (pre-prompt-hook.sh, pre-tool-hook.sh,
+# pre-path-hook.sh), which shellcheck cannot see -- same reason every other JIT_AWK_*
+# variable above carries this directive.
+# shellcheck disable=SC2034
+JIT_AWK_BLK_BUILD='
+function jit_blk_prepend(text,   i) {
+  for (i = nblk; i >= 1; i--) blk[i + 1] = blk[i]
+  blk[1] = text
+  nblk++
+}
+function jit_blk_join(   bi, out, manifest) {
+  if (nblk == 0) return ""
+  manifest = "# JIT-CTX-BLOCKS " nblk
+  out = ""
+  for (bi = 1; bi <= nblk; bi++) {
+    manifest = manifest " " length(blk[bi])
+    out = (out == "") ? blk[bi] : out "\n---\n" blk[bi]
+  }
+  return manifest "\n" out
+}
+'
+
 # --- Splitting additionalContext into blocks without trusting its own separator (#219,
 #     #223) -------------------------------------------------------------------------------
 #
@@ -2218,18 +2261,17 @@ function jit_unescape_blocks(s,   n, i, c, nx, hx, v, o) {
 function jit_split_ctx_blocks(ctx,   nl_pos, header, body_rest, hn, hf, declared_n, pos, bi, blen, rest, p1, p2, p) {
   jit_blk_n = 0
   jit_blk_manifest_ok = 0
-  # jit_blk_manifest_seen: a hook that never emits a "# JIT-CTX-BLOCKS " header at all --
-  # pre-tool-hook.sh and pre-path-hook.sh, today, never do -- is not the same finding as
-  # one that emits a manifest and then fails to verify. Both fall back to the same
-  # heuristic splitter below, but a consumer that moves its exit code on
-  # jit_blk_manifest_ok alone cannot tell "this hook was never manifest-protected" (a
-  # separate, pre-existing gap, filed on its own) from "the manifest here is broken",
-  # which is issue #226 own class. This flag is the difference: 0 means no manifest was
-  # even attempted, 1 means one was and jit_blk_manifest_ok says whether it verified.
-  jit_blk_manifest_seen = 0
+  # jit_blk_manifest_seen (the flag this comment used to describe) is gone as of #230:
+  # it existed only because pre-tool-hook.sh and pre-path-hook.sh never built a manifest
+  # at all, so a consumer gating its exit code on jit_blk_manifest_ok alone would have
+  # reported every genuine tool/path match as "could not evaluate" (#227). Now that all
+  # three hooks build one whenever they have anything to inject (#230), that state is
+  # unreachable from a real hook: additionalContext is only ever non-empty when a block
+  # was appended, and appending a block is exactly what prepends this manifest. Both
+  # consumers (jit-match.sh, jit-dry-run.sh report_hook()) gate on jit_blk_manifest_ok
+  # alone now.
   delete jit_blk_body
   if (substr(ctx, 1, 17) == "# JIT-CTX-BLOCKS ") {
-    jit_blk_manifest_seen = 1
     nl_pos = index(ctx, "\n")
     if (nl_pos > 0) {
       header = substr(ctx, 1, nl_pos - 1)
