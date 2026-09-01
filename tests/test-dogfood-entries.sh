@@ -225,7 +225,19 @@ assert_allows() {
 assert_not_blocked_by() {
   local desc="$1" payload="$2" forbidden_rule="$3" out
   out=$(hook_verdict "$payload")
-  if grep -qF '"decision":"block"' <<<"$out" && grep -qF "$forbidden_rule" <<<"$out"; then
+  # A hook that produced no output at all -- crashed, or fell over on this specific
+  # payload shape -- greps false for "$forbidden_rule" exactly like a genuine allow, so
+  # without this guard this helper would report PASS for "the harness said nothing"
+  # (oss-audit #239: the earlier tool_probe above proves the hook CAN refuse one payload,
+  # never that it answers THESE three). Every real verdict carries one marker or the
+  # other: a block always has "decision":"block", and a fall-through (allow or degraded
+  # advisory) always carries the hookSpecificOutput wrapper -- so their absence together
+  # is the harness failing to evaluate, not a clean answer.
+  if ! grep -qF '"decision":"block"' <<<"$out" && ! grep -qF '"hookSpecificOutput"' <<<"$out"; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    the hook produced no verdict at all for this payload -- not a clean allow"
+    echo "    got: ${out:-<nothing>}"
+  elif grep -qF '"decision":"block"' <<<"$out" && grep -qF "$forbidden_rule" <<<"$out"; then
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
     echo "    $forbidden_rule must NOT block this call"
     echo "    got: ${out:0:200}"
@@ -282,6 +294,22 @@ fi
 assert_not_blocked_by "a backup of the index"   "$(file_payload Edit "docs/00-index.tsv.bak")"        "$EDIT_RULE"
 assert_not_blocked_by "a differently named tsv" "$(file_payload Edit "docs/my00-index.tsv")"          "$EDIT_RULE"
 assert_not_blocked_by "the index name in a dir" "$(file_payload Edit "docs/00-index.tsv/notes.md")"   "$EDIT_RULE"
+
+# Second positive control, same shape: a payload the hook cannot answer at all -- no
+# "decision", no hookSpecificOutput -- must be reported as a failure ("no verdict"),
+# never silently folded into "not blocked, so PASS" (oss-audit #239). Malformed JSON on
+# stdin is pre-tool-hook.sh's own documented empty-answer path (`{}`, exit 0): neither
+# marker appears, which is exactly the shape this guard exists to catch.
+control_out=$(
+  PASS=0 FAIL=0
+  assert_not_blocked_by "probe" "not valid json at all" "$EDIT_RULE"
+)
+if grep -q '^  FAIL: probe$' <<<"$control_out" && grep -qF "no verdict at all" <<<"$control_out"; then
+  PASS=$((PASS + 1)); echo "  PASS: control -- an unanswerable payload is not read as an allow"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: control -- an unanswerable payload is not read as an allow"
+  echo "    got: $control_out"
+fi
 
 # --- Bash: the subject is a command string ------------------------------------
 # The blindness #92 reports. The guard was anchored on the tool, so every one of these
