@@ -1206,6 +1206,36 @@ JIT_AWK_ENTRY='
 function jit_row_id(layer, rown) {
   return layer " row " rown
 }
+# #233: looks up the age jit_scan_entry_ages() (bash half, above) already read for
+# "<layer>/<file>" and returns it as a whole number of days, or "" when the table has
+# nothing for that key -- an entry outside 00-manual, a JIT_ENTRY_AGES table capped
+# mid-line, or a perl this platform could not run. "" is a real answer, not a defect:
+# every caller treats it as "say nothing", never as "0 days old", so a platform where
+# this could not be measured degrades to the footer exactly as it read before #233.
+#
+# Parsed ONCE per awk process, on the first call, into jit_age[] -- not once per row.
+# ENVIRON["JIT_ENTRY_AGES"] is "<layer>/<file>\t<days>" lines, exactly what the bash
+# scan built; a line this split cannot make sense of (no tab, an empty key) is skipped
+# rather than crashing the whole table, the same tolerance jit_shown_load() already
+# gives a marker file it did not write.
+function jit_entry_age(key,   raw, n, i, ln, tp) {
+  if (!jit_age_loaded) {
+    jit_age_loaded = 1
+    raw = ENVIRON["JIT_ENTRY_AGES"]
+    if (raw != "") {
+      n = split(raw, jit_age_lines, "\n")
+      for (i = 1; i <= n; i++) {
+        ln = jit_age_lines[i]
+        if (ln == "") continue
+        tp = index(ln, "\t")
+        if (tp == 0) continue
+        jit_age[substr(ln, 1, tp - 1)] = substr(ln, tp + 1) + 0
+      }
+    }
+  }
+  if (key in jit_age) return jit_age[key]
+  return ""
+}
 # Every hook log line ends with a field lifted verbatim out of the tool payload, after
 # jit_unescape() -- so a JSON newline escape is a REAL newline by the time it is written.
 # Two things went wrong with that and only one of them was a security bug.
@@ -2593,6 +2623,84 @@ jit_scan_layers() {
 
     JIT_LAYERS="$JIT_LAYERS${JIT_LAYERS:+ }$name"
     kept=$((kept + 1))
+  done
+}
+
+# #233: the injection footer names an entry's own age -- "last edited 170d ago" -- so a
+# rule leaned on for months without a touch reads as the highest-probability stale entry
+# in the shelf, at the one moment nothing else is competing for attention. Only
+# 00-manual is asked, because that is the only layer the footer already tells an author
+# to go fix; a generated layer has no author to send there.
+#
+# WHY THIS IS A BASH SCAN, NOT AN AWK STAT. Neither one-true-awk, gawk nor mawk carries
+# a portable stat() this repo can rely on across the three CI platforms, and the
+# `common.sh` lstat comment above jit_scan_layers() already states the rule this follows:
+# at most a couple of subprocesses per hook, and NEVER one per row of an index that can
+# hold hundreds. So this reads mtimes the same way jit_scan_layers() reads the directory
+# itself -- once, in bash, before awk ever runs -- with ONE perl process per 00-manual
+# layer directory, not one per matched entry. perl is already a dependency of this
+# script (see _ms() at the top of every hook), so this adds no new one.
+#
+# The result is a table, not a lookup: every file in the directory gets an age, whether
+# or not this session's keywords will ever match it. That is deliberately proportionate
+# to jit_scan_layers()'s own cost, which already reads the whole directory listing for
+# every hook invocation -- a 00-manual layer is hand-authored and stays small by
+# construction, unlike 10-auto/20-grouped/30-crosscutting, which this never touches.
+#
+# JIT_ENTRY_AGES is exported (like JIT_LAYERS_REFUSED) because awk reads it through
+# ENVIRON, not through -v: entries live at least one to a line, and a newline inside an
+# awk -v value is a fatal error raised before the program runs at all.
+JIT_ENTRY_AGES_MAX=8192
+export JIT_ENTRY_AGES=""
+
+# Sets JIT_ENTRY_AGES to "<layer>/<file><TAB><days>\n..." for every regular, non-symlink
+# file in every scanned layer whose name contains "00-manual", under the base directory
+# just scanned by jit_scan_layers() (its vetted, already-validated $JIT_LAYERS is what
+# this reads -- never a fresh glob of its own, so a layer name jit_scan_layers() refused
+# is never opened here either).
+jit_scan_entry_ages() {
+  # $1 dimension base directory -- the same one just passed to jit_scan_layers()
+  local base="$1" layer d out
+  local LC_ALL=C
+  JIT_ENTRY_AGES=""
+  for layer in $JIT_LAYERS; do
+    case "$layer" in
+      *00-manual*) ;;
+      *) continue ;;
+    esac
+    d="$base/$layer"
+    [ -d "$d" ] || continue
+    # A single perl process per 00-manual layer (there is ordinarily exactly one),
+    # never per row and never per match. -M is days-since-mtime relative to the
+    # process's own start time, floored towards zero: a file newer than "now" (a clock
+    # skew, a checkout that rewrote mtimes forward) reads as 0d rather than a negative
+    # age nobody asked to see. Symlinked entries are skipped -- jit_bad_entry_file()
+    # already refuses them as entries, so an age for one would describe a file this
+    # tree never actually injects.
+    out="$(perl -e '
+      my $d = shift or exit 0;
+      opendir(my $h, $d) or exit 0;
+      while (defined(my $e = readdir $h)) {
+        next if $e eq "." || $e eq "..";
+        my $f = "$d/$e";
+        next if -l $f;
+        next unless -f $f;
+        my $days = int(-M $f);
+        $days = 0 if $days < 0;
+        print "$e\t$days\n";
+      }
+      closedir $h;
+    ' "$d" 2>/dev/null)"
+    [ -n "$out" ] || continue
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      if [ "${#JIT_ENTRY_AGES}" -gt "$JIT_ENTRY_AGES_MAX" ]; then
+        continue
+      fi
+      JIT_ENTRY_AGES="$JIT_ENTRY_AGES${JIT_ENTRY_AGES:+$JIT_NL}$layer/$line"
+    done <<EOF_AGES
+$out
+EOF_AGES
   done
 }
 

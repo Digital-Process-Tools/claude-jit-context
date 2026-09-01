@@ -394,6 +394,13 @@ END {
       mkw = ""
       if (match(header, /\(matched: [^)]*\)/)) {
         mkw = substr(header, RSTART + 10, RLENGTH - 11)
+        # #233: a 00-manual header now carries " · last edited Nd ago" inside the same
+        # parenthetical, after the keyword list -- see jit_entry_age() in common.sh and
+        # its call sites in pre-prompt-hook.sh/pre-tool-hook.sh. Strip it back off before
+        # jit_index_verified() sees mkw, or an entry whose age is being reported would
+        # verify against a keyword string the real index never held and land in the
+        # unverifiable bucket for a reason that has nothing to do with verification.
+        sub(/ \302\267 last edited [0-9]+d ago$/, "", mkw)
       }
       # jit_index_verified() -- see its own comment above -- is a SECOND, structural check
       # on top of the manifest-verified split above (#219): on the manifest path this is

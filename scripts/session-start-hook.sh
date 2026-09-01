@@ -107,4 +107,60 @@ if [ -n "$JIT_STATE_DIR" ]; then
   ' "$JIT_STATE_DIR" 2>/dev/null
 fi
 
-echo '{}'
+# #233 part 3: jit-misses.sh already reads every prompt this project has logged and
+# ranks the words that keep matching nothing -- demand, measured, and collected for
+# free by pre-prompt-hook.sh on every call. It just never ran on its own; a human had to
+# think to invoke it. SessionStart is the one moment nothing else is competing for
+# attention, which is the same argument #233 makes for the footer age above and for a
+# Stop-hook summary this issue leaves to a later change.
+#
+# jit-misses.sh may exit 2 (SKIPPED, named on stderr -- no log yet, an unreadable one, or
+# one with nothing this tool recognises) or 0 with either "findings" or "ok". Only exit 0
+# with an actual finding turns into text here; SKIPPED and "ok" both mean silence, which
+# is what this hook already produced before #233 and is what it still produces for the
+# common case of a fresh project or a quiet session. A hook must never fail hard (see
+# hooks.md), so a jit-misses.sh this platform could not even exec -- an unreadable
+# file, a bash this shell cannot find -- is exactly the same silence as "ok": $()
+# against a command that failed to start still returns empty, and MISSES_RC below then
+# reads as non-zero either way.
+JIT_MISSES_TOP=5
+MISSES_OUT="$(bash "$SCRIPT_DIR/jit-misses.sh" --top "$JIT_MISSES_TOP" 2>/dev/null)"
+MISSES_RC=$?
+JIT_RECUR=""
+if [ "$MISSES_RC" = 0 ]; then
+  # Reads jit-misses.sh recurring-miss lines back out of its human-readable report --
+  # "  Nx  token" -- rather than reparsing hooks.log a second time with a second answer
+  # to what counts as a repeated miss. LC_ALL=C for the same reason every other awk pass
+  # in this repository is pinned to it (#68): the token already comes out of
+  # jit-misses.sh restricted to [a-z0-9-], so nothing here needs to decode anything.
+  #
+  # index()/substr() throughout, never split() on a variable-width field: the token
+  # itself may contain a literal letter x (nextjs, xterm), so splitting the line on "x"
+  # would cut the wrong one. The FIRST "x" in "Nx  token" is always the count/token
+  # separator, because jit-misses.sh only ever prints digits before it.
+  JIT_RECUR="$(printf '%s\n' "$MISSES_OUT" | LC_ALL=C awk -v top="$JIT_MISSES_TOP" '
+    {
+      line = $0
+      if (substr(line, 1, 2) != "  ") next
+      rest = substr(line, 3)
+      xi = index(rest, "x")
+      if (xi == 0) next
+      n = substr(rest, 1, xi - 1)
+      if (n !~ /^[0-9]+$/) next
+      tail = substr(rest, xi + 1)
+      if (substr(tail, 1, 2) != "  ") next
+      tok = substr(tail, 3)
+      if (tok == "") next
+      out = out (out == "" ? "" : ", ") "\\\"" tok "\\\" x" n
+      c++
+      if (c >= top) exit
+    }
+    END { if (out != "") print out }
+  ')"
+fi
+
+if [ -n "$JIT_RECUR" ]; then
+  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"recurring misses: %s"}}\n' "$JIT_RECUR"
+else
+  echo '{}'
+fi
