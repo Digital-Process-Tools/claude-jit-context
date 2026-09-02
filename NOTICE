@@ -1,0 +1,89 @@
+Third-party notices for claude-jit-context
+===========================================
+
+This file exists solely to satisfy the notice and attribution terms carried
+by third-party data bundled in this repository. It changes nothing about
+claude-jit-context's own terms, which remain exactly as stated in LICENSE.
+
+The bundled data is `data/generic-words.txt` (#251), a combined English and
+French word list consulted by `scripts/rebuild-tsv.sh` at index-build time
+only -- never at prompt time, and never a runtime dependency of
+`scripts/*-hook.sh`. Its own header comment records full provenance: sources,
+exact upstream versions, fetch dates, and every transformation applied. This
+file is the notice that provenance requires; it does not restate it.
+
+
+1. English word list -- SCOWL, size 35 "words" category
+---------------------------------------------------------
+
+Source:  https://sourceforge.net/projects/wordlist/files/latest/download
+Version: 2020.12.07
+
+The collective work is Copyright 2000-2018 by Kevin Atkinson. Its Copyright
+file grants, verbatim:
+
+    Permission to use, copy, modify, distribute and sell these word
+    lists, the associated scripts, the output created from the scripts,
+    and its documentation for any purpose is hereby granted without fee,
+    provided that the above copyright notice appears in all copies and
+    that both that copyright notice and this permission notice appear in
+    supporting documentation. Kevin Atkinson makes no representations
+    about the suitability of this array for any purpose. It is provided
+    "as is" without express or implied warranty.
+
+The rows bundled here are drawn from SCOWL's size-35 tier, which folds in
+three further component sources, each separately and explicitly placed in
+the public domain by that same Copyright file:
+
+  - The Moby (TM) Words II package (Grady Ward): "The Moby lexicon project
+    is complete and has been place into the public domain. Use, sell,
+    rework, excerpt and use in any way on any platform."
+
+  - Brian Kelk's "UK English Wordlist With Frequency Classification":
+    confirmed public domain by its author in the correspondence the
+    Copyright file reproduces ("That is the intention.").
+
+  - Alan Beale's 12Dicts package and Supplement: "The 12Dicts package and
+    Supplement is in the Public Domain."
+
+This satisfies the copyright-notice condition above. The full Copyright
+file, including sections covering SCOWL tiers and component sources not
+bundled here (WordNet, VarCon, UKACD, ENABLE -- all part of levels 40 and
+above, none of which feed the size-35 tier this repository uses), is
+archived at:
+
+  https://sourceforge.net/projects/wordlist/files/latest/download
+
+
+2. French word list -- Dicollecte/Grammalecte fr.dic stems
+-------------------------------------------------------------
+
+Source:  https://raw.githubusercontent.com/LibreOffice/dictionaries/master/fr_FR/dictionaries/fr.dic
+  (mirrored through LibreOffice's dictionaries repository; dicollecte.org
+  itself now resolves to an unrelated parked domain)
+Version: dictionnaires orthographiques français 7.7
+License: Mozilla Public License 2.0
+
+This file is Covered Software under the MPL 2.0. The upstream project's own
+README (fr_FR/dictionaries/README_dict_fr.txt) states its licence the same
+way this notice does -- by name and version, with a URL to the canonical
+text, rather than embedding the licence body in the dictionary's own
+distribution:
+
+    Licence :
+      MPL : Mozilla Public License
+      version 2.0  --  http://www.mozilla.org/MPL/2.0/
+
+Following that same convention, the full licence text is not reproduced in
+this repository. It is stable, versioned, and permanently available at:
+
+  https://www.mozilla.org/en-US/MPL/2.0/
+
+Only Hunspell stems are bundled here (the affix-rule flags after "/" on
+each upstream `.dic` line are dropped), lowercase-only, ASCII-folded. See
+`data/generic-words.txt`'s own header for the full transformation record.
+No modifications to the Covered Software's content are distributed beyond
+this filtering and folding, and none are claimed as this project's own.
+
+Nothing in this file, or in the licence referenced above, alters or is
+altered by claude-jit-context's own LICENSE.

@@ -1164,3 +1164,6 @@ session are still `bash` + `awk` + `perl` with no install step.
 
 Source-available under the Community License. See [LICENSE](LICENSE).
 Use permitted. Modification, redistribution and resale prohibited.
+
+Third-party licence terms for data bundled in this repository (`data/generic-words.txt`)
+are reproduced separately in [NOTICE](NOTICE).
