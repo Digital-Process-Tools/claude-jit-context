@@ -10,8 +10,9 @@
 # THREE STATES, and #244's own body is explicit the third must never render as the
 # first:
 #
-#   * entries fired this session and NONE were edited -- the numbered list #233 asked
-#     for, naming every fired entry.
+#   * entries fired this session and NONE were edited -- one line, framed as
+#     informational and non-actionable (#292); the numbered, per-entry detail #233
+#     originally asked for is unchanged, it just moved to hooks.log.
 #   * entries fired and SOME were edited -- silence. The healthy case, the same posture
 #     SessionStart's own "ok, nothing recurs" already takes (session-start-hook.sh):
 #     a hook must never fail hard, and here that includes not nagging about a session
@@ -223,12 +224,16 @@ jit_age_for() {
 # #292: the model-facing line built below carries only bare names, one line, no
 # per-entry breakdown -- the maintainer decided this reads as an instruction
 # otherwise. The numbered, age-annotated detail #233 originally asked for still
-# exists; it moves to hooks.log via jit_log_write() (common.sh: "a file on the disk
-# of whoever runs the hook that a person reads and no model does"), never dropped.
-# jit_report_name() (common.sh) is the same guard every other maintainer-facing
-# report in this tree applies before printing a name out of a committed file -- a
-# bare name that fails it becomes "<withheld: ...>" rather than free text riding
-# into a session's own transcript.
+# exists, and is NEVER bounded by the 200-name cap below -- only jit_report_name()'s
+# own guard applies to it; it moves to hooks.log via jit_log_write() (common.sh: "a
+# file on the disk of whoever runs the hook that a person reads and no model does"),
+# never dropped and never truncated a second time on top of it. Self-review on this
+# change (#292) caught a first draft that applied the SAME 200-entry break to both
+# lists at once -- that dropped the 200th fired entry's name from the model line
+# while still logging it (an off-by-one in the "N more" count), and separately
+# silently truncated hooks.log too, contradicting the model line's own "see
+# hooks.log" pointer. Two lists, two caps, decoupled below; tests/test-stop-hook.sh
+# section O drives both at 205 fired entries.
 JIT_NAMES=""
 JIT_LOG_LIST=""
 JIT_I=0
@@ -237,24 +242,31 @@ while IFS= read -r _jit_name; do
   JIT_I=$((JIT_I + 1))
   _jit_age="$(jit_age_for "$_jit_name")"
   _jit_shown="$(jit_report_name "$_jit_name")"
+  # "; " rather than a literal "\n": hooks.log is one physical line per record
+  # (jit-misses.sh parses it that way -- paths/00-manual/hooks.md), so an escaped
+  # newline embedded in the text here would be misleading bytes on disk, not an
+  # actual line break for whoever reads the file.
   if [ -n "$_jit_age" ]; then
-    JIT_LOG_LIST="$JIT_LOG_LIST\\n  $JIT_I. $_jit_shown (last edited ${_jit_age}d ago)"
+    JIT_LOG_LIST="$JIT_LOG_LIST${JIT_LOG_LIST:+; }$JIT_I. $_jit_shown (last edited ${_jit_age}d ago)"
   else
-    JIT_LOG_LIST="$JIT_LOG_LIST\\n  $JIT_I. $_jit_shown"
+    JIT_LOG_LIST="$JIT_LOG_LIST${JIT_LOG_LIST:+; }$JIT_I. $_jit_shown"
   fi
   # A hard cap for the same reason JIT_LAYERS_MAX exists: the fired count is chosen by
   # what matched this session, not by this hook, and a report that keeps growing
   # unbounded is the resource #64 already measured and capped once in this codebase --
-  # here bounding the one-line NAME list rather than the numbered one it replaces.
-  if [ "$JIT_I" -ge 200 ]; then
-    JIT_NAMES="$JIT_NAMES, and $((JIT_FIRED_N - JIT_I)) more (not named here, see hooks.log)"
-    break
+  # here bounding only the model-facing NAME list; a name past this count is still
+  # logged above, just not repeated into the session's own transcript.
+  if [ "$JIT_I" -le 200 ]; then
+    JIT_NAMES="$JIT_NAMES${JIT_NAMES:+, }$_jit_shown"
   fi
-  JIT_NAMES="$JIT_NAMES${JIT_NAMES:+, }$_jit_shown"
 done <<EOF_FIRED
 $JIT_FIRED
 EOF_FIRED
 unset _jit_name _jit_age _jit_shown
+
+if [ "$JIT_FIRED_N" -gt 200 ]; then
+  JIT_NAMES="$JIT_NAMES, and $((JIT_FIRED_N - 200)) more (not named here, see hooks.log)"
+fi
 
 # JIT_FIRED_OVERFLOW is 0 in the ordinary case (see the cap comment above) -- named
 # explicitly only when the collection pass above actually hit it, so the count in the
@@ -262,11 +274,13 @@ unset _jit_name _jit_age _jit_shown
 JIT_TOTAL=$((JIT_FIRED_N + JIT_FIRED_OVERFLOW))
 if [ "$JIT_FIRED_OVERFLOW" -gt 0 ]; then
   JIT_NAMES="$JIT_NAMES, plus $JIT_FIRED_OVERFLOW more past this hook's own $JIT_FIRED_MAX-entry cap, not deduplicated or listed"
+  JIT_LOG_LIST="$JIT_LOG_LIST; plus $JIT_FIRED_OVERFLOW more past this hook's own $JIT_FIRED_MAX-entry cap, not deduplicated or listed"
 fi
 
-# hooks.log keeps the full numbered, age-annotated detail the model-facing line below
-# no longer carries -- the maintainer curating .claude/jit-context/ reads that file;
-# the model reads only the one line handed to additionalContext.
-jit_log_write "$(printf '[%s] stop: %s entries fired this session, none updated.%s' "$(_ts)" "$JIT_TOTAL" "$JIT_LOG_LIST")"
+# hooks.log keeps the full, unbounded (past the 200 cap above) numbered, age-annotated
+# detail the model-facing line below no longer carries -- the maintainer curating
+# .claude/jit-context/ reads that file; the model reads only the one line handed to
+# additionalContext.
+jit_log_write "$(printf '[%s] stop: %s entries fired this session, none updated. %s' "$(_ts)" "$JIT_TOTAL" "$JIT_LOG_LIST")"
 
 printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (informational only, no action needed): %s entries injected this session, none updated -- fired: %s"}}\n' "$JIT_TOTAL" "$JIT_NAMES"

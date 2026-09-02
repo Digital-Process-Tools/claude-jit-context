@@ -99,7 +99,7 @@ fi
 echo ""
 echo "=== B: entries fired, something WAS edited this session -- silence ==="
 # The healthy case. This is the pair to A: without it, a hook that always prints the
-# numbered list regardless of the edit marker would pass A by construction.
+# fired-entries line regardless of the edit marker would pass A by construction.
 
 P="$(new_project b)"
 mkdir -p "$(state_of "$P")"
@@ -222,8 +222,8 @@ echo "=== I: stop_hook_active=true -- a re-entry caused by this hook's own outpu
 # #279: the harness re-invokes Stop when a previous Stop's own additionalContext blocked
 # the turn from ending, and sets stop_hook_active=true on that re-entry. Section A is this
 # case's positive control on the same code path: the same fired-entries fixture, with
-# stop_hook_active=false, must still produce the numbered list. Without that pairing this
-# assertion would pass for free if the hook simply exited early on a malformed payload.
+# stop_hook_active=false, must still produce the fired-entries line. Without that pairing
+# this assertion would pass for free if the hook simply exited early on a malformed payload.
 
 P="$(new_project i)"
 mkdir -p "$(state_of "$P")"
@@ -332,6 +332,42 @@ if grep -qF -- "could not tell whether any entry fired" <<<"$OUT"; then
   FAIL=$((FAIL + 1)); echo "  FAIL: the declined-marker state rendered identically to case D (state dir unknown)"
 else
   PASS=$((PASS + 1)); echo "  PASS: the declined-marker state text differs from case D"
+fi
+
+echo ""
+echo "=== O: past the 200-name cap -- the cap bounds the model line only, never hooks.log ==="
+# #292's own review round (self-review) caught two regressions the first pass of this
+# change introduced: an off-by-one that dropped the 200th fired entry's name from the
+# model-facing line while still logging it (so the "N more" tail undercounted by one),
+# and the SAME 200-entry cap silently truncating hooks.log too -- contradicting the
+# model line's own "see hooks.log" pointer, since hooks.log never had the rest either.
+# 205 fired entries: the model line must name exactly entries 1-200 and say "5 more";
+# hooks.log must carry all 205, entry 200 and entry 205 both included.
+
+P="$(new_project o)"
+mkdir -p "$(state_of "$P")"
+: > "$(state_of "$P")/vocab-shown-sess-o.txt"
+_jit_o=1
+while [ "$_jit_o" -le 205 ]; do
+  printf 'entry-%03d.md\n' "$_jit_o" >> "$(state_of "$P")/vocab-shown-sess-o.txt"
+  _jit_o=$((_jit_o + 1))
+done
+unset _jit_o
+OUT="$(run_stop "$P" "sess-o")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_contains "the model line names entry 200 (the cap boundary itself)" "$OUT" "entry-200.md"
+assert_contains "the model line's overflow tail accounts for exactly the other 5" "$OUT" "and 5 more"
+if grep -qF -- "entry-201.md" <<<"$OUT"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: the model line named an entry past the 200 cap"
+else
+  PASS=$((PASS + 1)); echo "  PASS: the model line names nothing past the 200 cap"
+fi
+LOG="$P/.claude/jit-context/.discovery/logs/hooks.log"
+if [ -f "$LOG" ]; then
+  assert_contains "hooks.log carries entry 200" "$(cat "$LOG")" "entry-200.md"
+  assert_contains "hooks.log carries entry 205 too -- the model-line cap does not truncate the log" "$(cat "$LOG")" "entry-205.md"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: hooks.log was not written at all for a fired session"
 fi
 
 echo ""
