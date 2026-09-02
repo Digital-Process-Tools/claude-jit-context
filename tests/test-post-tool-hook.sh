@@ -154,6 +154,70 @@ assert_empty_json "the hook answers empty JSON" "$OUT"
 assert_no_file "no .claude directory is materialised" "$P/.claude"
 
 echo ""
+echo "=== H: JIT_BASE canonicalisation (#276) -- three routes that used to miss, one that must still hit ==="
+
+echo ""
+echo "--- H0: a canonical CLAUDE_PROJECT_DIR (no trailing slash, no symlink, absolute) still marks -- the positive control every route below is measured against ---"
+
+P="$(new_project h0)"
+FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
+OUT="$(run_post_tool "$P" "sess-h0" "Edit" "$FP")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_file "a canonical path still marks (positive control)" "$(state_of "$P")/edited-sess-h0.txt"
+
+echo ""
+echo "--- H1: a trailing slash on CLAUDE_PROJECT_DIR must not blind the marker ---"
+
+P="$(new_project h1)"
+FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
+OUT="$(printf '{"session_id":"sess-h1","tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$FP" \
+  | CLAUDE_PROJECT_DIR="$P/" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_file "a trailing slash on CLAUDE_PROJECT_DIR still marks" "$(state_of "$P")/edited-sess-h1.txt"
+
+echo ""
+echo "--- H2: a symlinked project root (the macOS /tmp -> /private/tmp shape) must not blind the marker ---"
+
+REAL="$TMP/h2-real"
+LINK="$TMP/h2-link"
+rm -rf "$REAL" "$LINK"
+mkdir -p "$REAL/.claude/jit-context/vocabulary/00-manual"
+ln -s "$REAL" "$LINK"
+FP="$REAL/.claude/jit-context/vocabulary/00-manual/bridge.md"
+OUT="$(printf '{"session_id":"sess-h2","tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$FP" \
+  | CLAUDE_PROJECT_DIR="$LINK" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_file "a symlinked CLAUDE_PROJECT_DIR still marks the file the symlink resolves to" \
+  "$REAL/.claude/jit-context/.discovery/state/edited-sess-h2.txt"
+
+echo ""
+echo "--- H3: a relative CLAUDE_PROJECT_DIR must not blind the marker ---"
+
+P="$(new_project h3)"
+FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
+OUT="$(cd "$TMP" && printf '{"session_id":"sess-h3","tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$FP" \
+  | CLAUDE_PROJECT_DIR="h3" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_file "a relative CLAUDE_PROJECT_DIR still marks" "$(state_of "$P")/edited-sess-h3.txt"
+
+echo ""
+echo "--- H4: the negative half of H2 -- an unrelated file under a symlinked project marks nothing (paired per tests.md) ---"
+
+REAL2="$TMP/h4-real"
+LINK2="$TMP/h4-link"
+rm -rf "$REAL2" "$LINK2"
+mkdir -p "$REAL2/.claude/jit-context/vocabulary/00-manual"
+mkdir -p "$TMP/h4-elsewhere/src"
+ln -s "$REAL2" "$LINK2"
+FP="$TMP/h4-elsewhere/src/app.php"
+OUT="$(printf '{"session_id":"sess-h4","tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$FP" \
+  | CLAUDE_PROJECT_DIR="$LINK2" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_no_file "an unrelated file under a symlinked project still marks nothing" \
+  "$REAL2/.claude/jit-context/.discovery/state/edited-sess-h4.txt"
+
+
+echo ""
 echo "=========================================="
 echo "Results: $PASS passed, $FAIL failed"
 echo "=========================================="
