@@ -4,11 +4,21 @@
 # (#244, same issue) is what makes the denominator (was anything edited) exist at all.
 #
 # THREE STATES, and the issue is explicit that the third must never render as the first:
-# entries fired and none edited (the numbered list); entries fired and some edited
+# entries fired and none edited (one line, #292); entries fired and some edited
 # (silence -- the healthy case, same posture SessionStart's own "ok" already takes);
 # and COULD NOT TELL whether anything was edited, which must say so rather than pass as
 # clean. This suite drives all three, plus the "nothing fired at all" case, which is a
 # fourth, uncontroversial kind of silence (there is nothing to compare).
+#
+# #292: none of the four rendered states is actionable -- every non-silent message is
+# housekeeping about .claude/jit-context/*.md entry FILES, never an instruction to the
+# model. There is no fifth, actionable state in this machine to hold as a positive
+# control against "reads as inert" -- so the control here is that all three non-silent
+# messages (fired/none-updated, could-not-tell, edit-declined) carry the identical
+# "no action needed" marker verbatim, while remaining textually distinguishable from
+# one another (asserted in sections D and N below, unchanged from #284/#285/#286). If a
+# genuinely actionable state is ever added to this machine, it must NOT carry that
+# marker, and a test asserting so belongs beside these.
 #
 # jit-drive: assert_contains contains capture
 #
@@ -69,7 +79,7 @@ run_stop() {
     | CLAUDE_PROJECT_DIR="$p" bash "$SCRIPTS/stop-hook.sh" 2>&1
 }
 
-echo "=== A: entries fired, nothing edited -- the numbered list ==="
+echo "=== A: entries fired, nothing edited -- one line, framed as informational (#292) ==="
 
 P="$(new_project a)"
 mkdir -p "$(state_of "$P")"
@@ -79,6 +89,12 @@ assert_rc0 "the hook exits 0" "$RC"
 assert_contains "the message names the fired entry" "$OUT" "bridge.md"
 assert_contains "and the other one too" "$OUT" "cache.md"
 assert_contains "and says none were updated" "$OUT" "none updated"
+assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
+if grep -qF -- '\n' <<<"$OUT"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: the fired-entries message still renders as a multi-line list"
+else
+  PASS=$((PASS + 1)); echo "  PASS: the fired-entries message collapsed to one line"
+fi
 
 echo ""
 echo "=== B: entries fired, something WAS edited this session -- silence ==="
@@ -119,6 +135,7 @@ else
   OUT="$(run_stop "$P" "sess-d")"; RC=$?
   assert_rc0 "the hook exits 0" "$RC"
   assert_contains "it says it could not tell" "$OUT" "could not tell"
+  assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
   if [ "$OUT" = "{}" ]; then
     FAIL=$((FAIL + 1)); echo "  FAIL: could-not-tell rendered as silence"
   else
@@ -300,6 +317,7 @@ printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-n.txt"
 OUT="$(run_stop "$P" "sess-n")"; RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_contains "it says an edit could not be confirmed" "$OUT" "could not be confirmed"
+assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
 if [ "$OUT" = "{}" ]; then
   FAIL=$((FAIL + 1)); echo "  FAIL: the declined-marker state rendered as silence"
 else

@@ -101,7 +101,7 @@ fi
 # so there is no fired count and no edit signal to compare: this is state three, and it
 # must say so rather than fall through to the silent branches below.
 if [ -z "$JIT_STATE_DIR" ] || [ -z "$SESSION_ID" ]; then
-  printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context: could not tell whether any entry fired or was edited this session (no session state to read back)"}}\n'
+  printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (informational only, no action needed): could not tell whether any entry fired or was edited this session (no session state to read back)"}}\n'
   exit 0
 fi
 
@@ -183,16 +183,16 @@ fi
 # unknown, checked above): this says so explicitly rather than falling through to the
 # "none updated" list below, which would misreport a refused write as a clean session.
 if [ -f "$EDIT_DECLINED_MARK" ] && [ ! -L "$EDIT_DECLINED_MARK" ]; then
-  printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context: an edit under this tree may have happened this session but could not be confirmed (marker write was declined)"}}\n'
+  printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (informational only, no action needed): an edit under this tree may have happened this session but could not be confirmed (marker write was declined)"}}\n'
   exit 0
 fi
 
-# Ages are read for DISPLAY ONLY, on entries this hook has already decided (from the
-# real marker above) were not edited. Only 00-manual is asked, for the same reason
-# jit_scan_entry_ages() itself gives: it is the only layer with an author to point at.
-# A dimension that does not exist here scans to nothing and costs nothing extra; this
-# runs once per session, not once per tool call, so the per-dimension cost budget that
-# shapes post-tool-hook.sh does not apply.
+# Ages are read for the MAINTENANCE LOG ONLY (#292), on entries this hook has already
+# decided (from the real marker above) were not edited. Only 00-manual is asked, for
+# the same reason jit_scan_entry_ages() itself gives: it is the only layer with an
+# author to point at. A dimension that does not exist here scans to nothing and costs
+# nothing extra; this runs once per session, not once per tool call, so the
+# per-dimension cost budget that shapes post-tool-hook.sh does not apply.
 JIT_AGES_ALL=""
 for _jit_dim in vocabulary tools paths; do
   jit_scan_layers "$JIT_BASE/$_jit_dim" "$_jit_dim"
@@ -220,29 +220,37 @@ jit_age_for() {
   esac
 }
 
-# The numbered list #233 asked for. jit_report_name() (common.sh) is the same guard
-# every other maintainer-facing report in this tree applies before printing a name out
-# of a committed file -- a bare name that fails it becomes "<withheld: ...>" rather than
-# free text riding into a session's own transcript.
-JIT_LIST=""
+# #292: the model-facing line built below carries only bare names, one line, no
+# per-entry breakdown -- the maintainer decided this reads as an instruction
+# otherwise. The numbered, age-annotated detail #233 originally asked for still
+# exists; it moves to hooks.log via jit_log_write() (common.sh: "a file on the disk
+# of whoever runs the hook that a person reads and no model does"), never dropped.
+# jit_report_name() (common.sh) is the same guard every other maintainer-facing
+# report in this tree applies before printing a name out of a committed file -- a
+# bare name that fails it becomes "<withheld: ...>" rather than free text riding
+# into a session's own transcript.
+JIT_NAMES=""
+JIT_LOG_LIST=""
 JIT_I=0
 while IFS= read -r _jit_name; do
   [ -n "$_jit_name" ] || continue
   JIT_I=$((JIT_I + 1))
-  # A hard cap for the same reason JIT_LAYERS_MAX exists: the fired count is chosen by
-  # what matched this session, not by this hook, and a report that keeps growing
-  # unbounded is the resource #64 already measured and capped once in this codebase.
-  if [ "$JIT_I" -gt 200 ]; then
-    JIT_LIST="$JIT_LIST\\n  ... and $((JIT_FIRED_N - 200)) more, not listed here"
-    break
-  fi
   _jit_age="$(jit_age_for "$_jit_name")"
   _jit_shown="$(jit_report_name "$_jit_name")"
   if [ -n "$_jit_age" ]; then
-    JIT_LIST="$JIT_LIST\\n  $JIT_I. $_jit_shown (last edited ${_jit_age}d ago)"
+    JIT_LOG_LIST="$JIT_LOG_LIST\\n  $JIT_I. $_jit_shown (last edited ${_jit_age}d ago)"
   else
-    JIT_LIST="$JIT_LIST\\n  $JIT_I. $_jit_shown"
+    JIT_LOG_LIST="$JIT_LOG_LIST\\n  $JIT_I. $_jit_shown"
   fi
+  # A hard cap for the same reason JIT_LAYERS_MAX exists: the fired count is chosen by
+  # what matched this session, not by this hook, and a report that keeps growing
+  # unbounded is the resource #64 already measured and capped once in this codebase --
+  # here bounding the one-line NAME list rather than the numbered one it replaces.
+  if [ "$JIT_I" -ge 200 ]; then
+    JIT_NAMES="$JIT_NAMES, and $((JIT_FIRED_N - JIT_I)) more (not named here, see hooks.log)"
+    break
+  fi
+  JIT_NAMES="$JIT_NAMES${JIT_NAMES:+, }$_jit_shown"
 done <<EOF_FIRED
 $JIT_FIRED
 EOF_FIRED
@@ -253,7 +261,12 @@ unset _jit_name _jit_age _jit_shown
 # ordinary sentence stays exact rather than always carrying a caveat nobody needs.
 JIT_TOTAL=$((JIT_FIRED_N + JIT_FIRED_OVERFLOW))
 if [ "$JIT_FIRED_OVERFLOW" -gt 0 ]; then
-  JIT_LIST="$JIT_LIST\\n  ... plus $JIT_FIRED_OVERFLOW more past this hook's own $JIT_FIRED_MAX-entry cap, not deduplicated or listed"
+  JIT_NAMES="$JIT_NAMES, plus $JIT_FIRED_OVERFLOW more past this hook's own $JIT_FIRED_MAX-entry cap, not deduplicated or listed"
 fi
 
-printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"%s entries injected this session, none updated. Fired:%s"}}\n' "$JIT_TOTAL" "$JIT_LIST"
+# hooks.log keeps the full numbered, age-annotated detail the model-facing line below
+# no longer carries -- the maintainer curating .claude/jit-context/ reads that file;
+# the model reads only the one line handed to additionalContext.
+jit_log_write "$(printf '[%s] stop: %s entries fired this session, none updated.%s' "$(_ts)" "$JIT_TOTAL" "$JIT_LOG_LIST")"
+
+printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (informational only, no action needed): %s entries injected this session, none updated -- fired: %s"}}\n' "$JIT_TOTAL" "$JIT_NAMES"
