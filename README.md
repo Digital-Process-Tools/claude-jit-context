@@ -20,6 +20,16 @@ claude-jit-context takes the ceiling off. Knowledge moves behind pattern matchin
 
 **Know more. Carry less.** Everything else that saves context makes the agent dumber — trim the rules, drop the conventions, summarize the docs. This is the one lever that cuts what is *resident* without cutting what is *known*.
 
+## From the same workshop
+
+Four plugins, one team, each does one thing. This one and three siblings:
+
+- [claude-remember](https://github.com/Digital-Process-Tools/claude-remember): memory across sessions. Saves, compresses through Haiku, reloads at the next start.
+- [claude-supertool](https://github.com/Digital-Process-Tools/claude-supertool): batched file and tracker ops. One call instead of seven, and a refusal instead of a wrong answer.
+- [claude-oss](https://github.com/Digital-Process-Tools/claude-oss): the maintainer loop that runs these four repos. Triage, build, review, merge, release.
+
+All four install from one marketplace: `/plugin marketplace add Digital-Process-Tools/claude-marketplace`.
+
 ## The receipt
 
 The project this was extracted from runs **1,000 entries — 2.58 MB of markdown**, on the order of 600,000 tokens. As `.claude/rules/` that is not expensive, it is impossible: it does not fit in any context window that exists. A handful of entries fire in a given session. The rest cost nothing, and are still there the moment they are relevant.
