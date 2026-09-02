@@ -433,18 +433,32 @@ VOCAB_KEYWORD_BLACKLIST="${JIT_CONTEXT_KEYWORD_BLACKLIST:-${DYNAMIC_RULES_KEYWOR
 # hard failure by design (a shape it cannot read is a FAILURE, not a silent skip). A
 # top-level data/ directory, one level up, is outside that sweep's scope entirely rather
 # than a special case inside it.
-GENERIC_WORDS_FILE="${JIT_CONTEXT_GENERIC_WORDS:-${DYNAMIC_RULES_GENERIC_WORDS:-$(dirname "$0")/../data/generic-words.txt}}"
-
-# GENERIC_WORDS_EXPLICIT (#265): whether an operator actually set one of these two
-# variables to a non-empty value, as opposed to GENERIC_WORDS_FILE having fallen all
-# the way through to the shipped default path. `${VAR:-default}` cannot itself tell
-# those apart -- an unset VAR and a VAR set to "" both take the default branch -- so
-# this is computed separately, from the same two names, before either is consulted
-# for anything else. It answers exactly one question below: is a missing file this
-# operator's typo, or the documented factory state nobody configured at all?
+# GENERIC_WORDS_EXPLICIT (#265, widened #270): whether an operator actually SET one
+# of these two variables at all -- including to the empty string -- as opposed to
+# GENERIC_WORDS_FILE having fallen all the way through to the shipped default path.
+# `${VAR:-default}` cannot tell "set to empty" apart from "unset": both take the
+# default branch, which is exactly #270's bug -- JIT_CONTEXT_GENERIC_WORDS="" was
+# documented as an explicit opt-out but silently fell through to the bundled default
+# wordlist instead, with classification staying ON. `${VAR+x}` (presence, not value)
+# is checked instead, so an explicitly-empty variable is honoured as its own value
+# (empty -> opted out, below) rather than triggering the fallback chain. Priority
+# order is presence-first, not emptiness-first, which is a deliberate change from
+# the old fallback in exactly one combination: JIT_CONTEXT_GENERIC_WORDS="" together
+# with a non-empty DYNAMIC_RULES_GENERIC_WORDS. The old `${A:-${B:-default}}` chain
+# would have fallen through an empty A to B; this stops at A the moment it is SET,
+# even to empty, and never consults B at all -- because #270's whole point is that an
+# explicitly-empty variable is a first-class opt-out, not a hole to fall through.
+# Reviewed and confirmed intentional (#270); tests/test-generic-wordlist-broken-255.sh
+# section A3 pins it.
 GENERIC_WORDS_EXPLICIT=0
-if [ -n "${JIT_CONTEXT_GENERIC_WORDS:-}" ] || [ -n "${DYNAMIC_RULES_GENERIC_WORDS:-}" ]; then
+if [ "${JIT_CONTEXT_GENERIC_WORDS+set}" = "set" ]; then
+  GENERIC_WORDS_FILE="$JIT_CONTEXT_GENERIC_WORDS"
   GENERIC_WORDS_EXPLICIT=1
+elif [ "${DYNAMIC_RULES_GENERIC_WORDS+set}" = "set" ]; then
+  GENERIC_WORDS_FILE="$DYNAMIC_RULES_GENERIC_WORDS"
+  GENERIC_WORDS_EXPLICIT=1
+else
+  GENERIC_WORDS_FILE="$(dirname "$0")/../data/generic-words.txt"
 fi
 
 # --- Generic-word wordlist health, read ONCE for the whole run (#255, #265) ---------
@@ -466,9 +480,19 @@ fi
 # see the original #255 comment this widens):
 #
 #   unset / default path absent -- the documented degrade: an index built before this
-#                              feature landed, or a project that opted out by setting
-#                              JIT_CONTEXT_GENERIC_WORDS="" -- every keyword reads as
-#                              specific, exactly pre-#232 behaviour. Not an error.
+#                              feature landed and never configured anything -- every
+#                              keyword reads as specific, exactly pre-#232 behaviour.
+#                              Not an error.
+#   explicitly set to "" -- #270: a project that opted OUT on purpose. Before #270 this
+#                              was indistinguishable from "unset" by `${VAR:-default}`
+#                              and silently fell through to the shipped default
+#                              wordlist, leaving classification ON -- the opposite of
+#                              the documented behaviour. GENERIC_WORDS_FILE is now
+#                              derived with `${VAR+set}` (presence, not value), so an
+#                              explicitly-empty variable is honoured as its own value
+#                              and hits the `-z` branch below directly: every keyword
+#                              reads as specific, same receipt as the unset case above,
+#                              but for a different, deliberate reason. Not an error.
 #   explicitly set / file absent -- #265: an operator DID set JIT_CONTEXT_GENERIC_WORDS
 #                              or DYNAMIC_RULES_GENERIC_WORDS, and the path it names
 #                              does not exist -- a typo'd config.env, indistinguishable
