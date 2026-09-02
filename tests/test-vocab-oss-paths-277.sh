@@ -43,8 +43,14 @@ fi
 # A plain temp file, never "$REPO/.git/..." -- inside a `git worktree`, `.git` is a FILE
 # (a gitdir pointer), not a directory, so a path under it fails with ENOTDIR rather than
 # writing anything (#277 was itself found and fixed from inside a worktree).
+# CLAUDE_PROJECT_DIR explicitly set to $REPO: run-all.sh cd's into tests/ before running
+# each suite, and this session's own CLAUDE_PROJECT_DIR (inherited from the harness that
+# started it) points at a DIFFERENT checkout entirely -- rebuild-tsv.sh's own #231
+# cross-tree guard then refuses (exit 2) rather than silently writing the wrong tree,
+# which is the guard working as intended, not a bug in this test. Pin it here the same
+# way test-jit-init.sh and test-cross-tree-write-231.sh already do for their own targets.
 ERR_A="$(mktemp 2>/dev/null || mktemp -t jit277a)"
-bash "$REPO/scripts/rebuild-tsv.sh" >/dev/null 2>"$ERR_A"
+CLAUDE_PROJECT_DIR="$REPO" bash "$REPO/scripts/rebuild-tsv.sh" >/dev/null 2>"$ERR_A"
 RC=$?
 if [ "$RC" = 0 ]; then
   ok "A rebuild-tsv.sh exits 0"
