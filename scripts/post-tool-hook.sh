@@ -29,7 +29,9 @@
 # `hooks/hooks.json` already narrows PostToolUse to the Write and Edit tools via its own
 # matcher, and after the one JSON parse below the very first thing this script does is a
 # plain `case` prefix comparison against $JIT_BASE -- never a match against the index,
-# never a second fork for anything but the marker write itself.
+# never a second fork for anything but the marker write itself (and, since #276, the
+# canonicalisation fallback below, which is itself gated behind a zero-fork substring
+# test before it forks anything).
 #
 # A hook must never fail hard (hooks.md): every exit below answers `{}`.
 SCRIPT_DIR="$(dirname "$0")"
@@ -100,12 +102,96 @@ case "$PT_FP" in
   *..*|*\\*) echo '{}'; exit 0 ;;
 esac
 
-# The cheap prefix test. $JIT_BASE carries no trailing slash (common.sh), so this cannot
-# match a sibling directory that merely starts with the same characters --
-# ".claude/jit-contextual/x" is not ".claude/jit-context/x".
+# The cheap prefix test. $JIT_BASE carries no trailing slash on the ordinary path
+# (common.sh), so on an ordinary session this already cannot match a sibling directory
+# that merely starts with the same characters -- ".claude/jit-contextual/x" is not
+# ".claude/jit-context/x". It is also the fast path almost every OTHER session's edit
+# takes: no match, no fork, exit -- the cost this hook's header promises to hold to.
 case "$PT_FP" in
   "$JIT_BASE"/*) ;;
-  *) echo '{}'; exit 0 ;;
+  *)
+    # #276: the literal test above is lexical, not physical, and three ordinary values
+    # make it miss a file that IS inside this tree. A trailing slash on
+    # CLAUDE_PROJECT_DIR leaves JIT_BASE reading ".../project//.claude/jit-context",
+    # and no real file_path carries a doubled slash to match it. A relative
+    # CLAUDE_PROJECT_DIR leaves JIT_BASE never starting with "/" at all, so it can
+    # never prefix an absolute file_path, for any input. And a symlinked project root
+    # (macOS's /tmp -> /private/tmp is the standing example) means JIT_BASE and
+    # file_path can each spell the exact same file on disk with different characters --
+    # whichever one of the two a given payload happens to canonicalise and the other
+    # does not. A missed marker here is not just a missed injection: stop-hook.sh reads
+    # its absence as the positive claim "nothing was updated", which is false when the
+    # observer never matched in the first place.
+    #
+    # Resolving that costs a `cd -P` fork, and the header above is explicit that this
+    # hook affords at most one fork beyond the marker write, for every edit everywhere,
+    # most of which have nothing to do with this project. So the fallback stays behind
+    # a substring test that costs nothing: JIT_BASE's tail is always the literal
+    # ".claude/jit-context" (common.sh builds no other shape), so a file_path that does
+    # not contain that substring anywhere cannot be inside ANY project's jit-context
+    # tree, canonical or not, and is rejected right here with zero forks -- exactly the
+    # fast path above, just one string test later.
+    case "$PT_FP" in
+      *"/.claude/jit-context/"*) ;;
+      *) echo '{}'; exit 0 ;;
+    esac
+
+    # jit_pt_canon_dir(): prints $1's physical location on disk today, resolving
+    # symlinks in whatever prefix of it already exists and reattaching whatever is
+    # left (which cannot itself contain a symlink, because it does not exist yet) with
+    # single slashes. Adapted from jit-init.sh's resolve_dir() -- duplicated rather
+    # than shared, because the two scripts do not source a common file for this and
+    # adding one is a bigger change than this fix. No `realpath`: jit-init.sh's own
+    # comment already established there is none on macOS, and none may be added here
+    # either (hooks.md: no new runtime dependency).
+    jit_pt_canon_dir() {
+      local head="$1" tail="" phys
+      while [ ! -d "$head" ]; do
+        case "$head" in */*) ;; *) break ;; esac
+        tail="${head##*/}${tail:+/}$tail"
+        head="${head%/*}"
+        [ -n "$head" ] || head="/"
+      done
+      if [ -d "$head" ]; then
+        phys="$(CDPATH='' cd -P "$head" 2>/dev/null && pwd -P)"
+        [ -n "$phys" ] && head="$phys"
+      fi
+      if [ -z "$tail" ]; then
+        printf '%s\n' "$head"
+      else
+        printf '%s/%s\n' "${head%/}" "$tail"
+      fi
+    }
+
+    JIT_BASE_ABS="$JIT_BASE"
+    case "$JIT_BASE_ABS" in
+      /*) ;;
+      *) JIT_BASE_ABS="$PWD/$JIT_BASE_ABS" ;;
+    esac
+    JIT_BASE_CANON="$(jit_pt_canon_dir "$JIT_BASE_ABS")"
+
+    PT_FP_ABS="$PT_FP"
+    case "$PT_FP_ABS" in
+      /*) ;;
+      *) PT_FP_ABS="$PWD/$PT_FP_ABS" ;;
+    esac
+    case "$PT_FP_ABS" in
+      */) PT_FP_DIR="${PT_FP_ABS%/}"; PT_FP_BASE="" ;;
+      *)  PT_FP_DIR="${PT_FP_ABS%/*}"; PT_FP_BASE="${PT_FP_ABS##*/}" ;;
+    esac
+    [ -n "$PT_FP_DIR" ] || PT_FP_DIR="/"
+    PT_FP_DIR_CANON="$(jit_pt_canon_dir "$PT_FP_DIR")"
+    if [ -n "$PT_FP_BASE" ]; then
+      PT_FP_CANON="${PT_FP_DIR_CANON%/}/$PT_FP_BASE"
+    else
+      PT_FP_CANON="$PT_FP_DIR_CANON"
+    fi
+
+    case "$PT_FP_CANON" in
+      "$JIT_BASE_CANON"/*) ;;
+      *) echo '{}'; exit 0 ;;
+    esac
+    ;;
 esac
 
 # `[ -L ]` before the write, the same guard jit_shown_apply() applies to the `shown`
