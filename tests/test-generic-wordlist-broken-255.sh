@@ -102,6 +102,20 @@ assert_rc "an empty override exits 0" 0 "$RC"
 assert_not_contains "and nothing FATAL is printed" "$(cat "$ERR")" "FATAL"
 
 echo ""
+echo "=== A2. #270: JIT_CONTEXT_GENERIC_WORDS=\"\" must actually opt OUT of classification, not silently fall through to the default wordlist ==="
+# Section A above only asserts exit 0 / no FATAL, which the pre-#270 bug also satisfied
+# while quietly still classifying against the shipped default -- the opposite of the
+# documented opt-out. "context" is a real entry in data/generic-words.txt, so if the
+# opt-out is honoured it must degrade to specific (empty 3rd column) here, exactly as
+# it does in the truly-unset case B1 below.
+rebuild ""
+assert_rc "an empty override still exits 0" 0 "$RC"
+assert_contains "and the opted-out keyword degrades to specific, not generic" \
+  "$(cat "$BASE/vocabulary/00-manual/00-index.tsv")" "$(printf 'context\twidget.md\t')"
+assert_not_contains "and it is NOT classified generic via the shipped default wordlist" \
+  "$(cat "$BASE/vocabulary/00-manual/00-index.tsv")" "$(printf 'context\twidget.md\tgeneric')"
+
+echo ""
 echo "=== B1. JIT_CONTEXT_GENERIC_WORDS/DYNAMIC_RULES_GENERIC_WORDS both truly unset: not an error, whatever the default path resolves to ==="
 rebuild_unset
 assert_rc "an unset override exits 0" 0 "$RC"
