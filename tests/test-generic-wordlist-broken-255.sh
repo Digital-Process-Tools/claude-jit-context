@@ -45,6 +45,18 @@ assert_contains() {
   else bad "$desc" "expected to contain: $want"; echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
   fi
 }
+assert_line() {
+  local desc="$1" out="$2" want="$3"
+  # exact whole-line match, not a substring -- "$want" is deliberately never a prefix
+  # of a longer row here, unlike assert_contains, which would pass on
+  # "keyword\tfile\t" against both "keyword\tfile\t" (specific) AND
+  # "keyword\tfile\tgeneric" (generic), since the former is a literal prefix of the
+  # latter. Reviewer finding (#270): an assert_contains here would have kept
+  # passing even if the fix did nothing.
+  if grep -qFx -- "$want" <<<"$out"; then ok "$desc"
+  else bad "$desc" "expected exact line: $want"; echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
+  fi
+}
 assert_not_contains() {
   local desc="$1" out="$2" unwanted="$3"
   if grep -qF -- "$unwanted" <<<"$out"; then bad "$desc" "must NOT contain: $unwanted"; echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
@@ -110,10 +122,26 @@ echo "=== A2. #270: JIT_CONTEXT_GENERIC_WORDS=\"\" must actually opt OUT of clas
 # it does in the truly-unset case B1 below.
 rebuild ""
 assert_rc "an empty override still exits 0" 0 "$RC"
-assert_contains "and the opted-out keyword degrades to specific, not generic" \
+assert_line "and the opted-out keyword degrades to specific, not generic" \
   "$(cat "$BASE/vocabulary/00-manual/00-index.tsv")" "$(printf 'context\twidget.md\t')"
 assert_not_contains "and it is NOT classified generic via the shipped default wordlist" \
   "$(cat "$BASE/vocabulary/00-manual/00-index.tsv")" "$(printf 'context\twidget.md\tgeneric')"
+
+echo ""
+echo "=== A3. #270 review finding: an explicitly-empty JIT_CONTEXT_GENERIC_WORDS opts out even when DYNAMIC_RULES_GENERIC_WORDS names a real, usable wordlist ==="
+# The old `${A:-${B:-default}}` fallback chain would have fallen through an empty A
+# to B, and classified against B. The new presence-first derivation stops at A the
+# moment it is SET, even to empty, and never consults B -- a deliberate behavior
+# change beyond #270's original unset-vs-empty bug, flagged by the spawned reviewer
+# and pinned here rather than left undocumented and untested.
+GOODFILE_A3="$ROOT/good-words-a3.txt"
+printf 'context\n' > "$GOODFILE_A3"
+JIT_CONTEXT_GENERIC_WORDS="" DYNAMIC_RULES_GENERIC_WORDS="$GOODFILE_A3" \
+  CLAUDE_PROJECT_DIR="$ROOT" bash "$REBUILD" >/dev/null 2>"$ERR"
+RC=$?
+assert_rc "still exits 0" 0 "$RC"
+assert_line "and JIT_CONTEXT_GENERIC_WORDS=\"\" wins: the keyword stays specific, DYNAMIC_RULES_GENERIC_WORDS is not consulted" \
+  "$(cat "$BASE/vocabulary/00-manual/00-index.tsv")" "$(printf 'context\twidget.md\t')"
 
 echo ""
 echo "=== B1. JIT_CONTEXT_GENERIC_WORDS/DYNAMIC_RULES_GENERIC_WORDS both truly unset: not an error, whatever the default path resolves to ==="

@@ -442,8 +442,14 @@ VOCAB_KEYWORD_BLACKLIST="${JIT_CONTEXT_KEYWORD_BLACKLIST:-${DYNAMIC_RULES_KEYWOR
 # wordlist instead, with classification staying ON. `${VAR+x}` (presence, not value)
 # is checked instead, so an explicitly-empty variable is honoured as its own value
 # (empty -> opted out, below) rather than triggering the fallback chain. Priority
-# order matches the old fallback: JIT_CONTEXT_GENERIC_WORDS wins if set at all (even
-# empty), then DYNAMIC_RULES_GENERIC_WORDS, then the shipped default.
+# order is presence-first, not emptiness-first, which is a deliberate change from
+# the old fallback in exactly one combination: JIT_CONTEXT_GENERIC_WORDS="" together
+# with a non-empty DYNAMIC_RULES_GENERIC_WORDS. The old `${A:-${B:-default}}` chain
+# would have fallen through an empty A to B; this stops at A the moment it is SET,
+# even to empty, and never consults B at all -- because #270's whole point is that an
+# explicitly-empty variable is a first-class opt-out, not a hole to fall through.
+# Reviewed and confirmed intentional (#270); tests/test-generic-wordlist-broken-255.sh
+# section A3 pins it.
 GENERIC_WORDS_EXPLICIT=0
 if [ "${JIT_CONTEXT_GENERIC_WORDS+set}" = "set" ]; then
   GENERIC_WORDS_FILE="$JIT_CONTEXT_GENERIC_WORDS"
