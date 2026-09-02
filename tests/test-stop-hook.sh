@@ -4,11 +4,21 @@
 # (#244, same issue) is what makes the denominator (was anything edited) exist at all.
 #
 # THREE STATES, and the issue is explicit that the third must never render as the first:
-# entries fired and none edited (the numbered list); entries fired and some edited
+# entries fired and none edited (one line, #292); entries fired and some edited
 # (silence -- the healthy case, same posture SessionStart's own "ok" already takes);
 # and COULD NOT TELL whether anything was edited, which must say so rather than pass as
 # clean. This suite drives all three, plus the "nothing fired at all" case, which is a
 # fourth, uncontroversial kind of silence (there is nothing to compare).
+#
+# #292: none of the four rendered states is actionable -- every non-silent message is
+# housekeeping about .claude/jit-context/*.md entry FILES, never an instruction to the
+# model. There is no fifth, actionable state in this machine to hold as a positive
+# control against "reads as inert" -- so the control here is that all three non-silent
+# messages (fired/none-updated, could-not-tell, edit-declined) carry the identical
+# "no action needed" marker verbatim, while remaining textually distinguishable from
+# one another (asserted in sections D and N below, unchanged from #284/#285/#286). If a
+# genuinely actionable state is ever added to this machine, it must NOT carry that
+# marker, and a test asserting so belongs beside these.
 #
 # jit-drive: assert_contains contains capture
 #
@@ -69,7 +79,7 @@ run_stop() {
     | CLAUDE_PROJECT_DIR="$p" bash "$SCRIPTS/stop-hook.sh" 2>&1
 }
 
-echo "=== A: entries fired, nothing edited -- the numbered list ==="
+echo "=== A: entries fired, nothing edited -- one line, framed as informational (#292) ==="
 
 P="$(new_project a)"
 mkdir -p "$(state_of "$P")"
@@ -79,11 +89,17 @@ assert_rc0 "the hook exits 0" "$RC"
 assert_contains "the message names the fired entry" "$OUT" "bridge.md"
 assert_contains "and the other one too" "$OUT" "cache.md"
 assert_contains "and says none were updated" "$OUT" "none updated"
+assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
+if grep -qF -- '\n' <<<"$OUT"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: the fired-entries message still renders as a multi-line list"
+else
+  PASS=$((PASS + 1)); echo "  PASS: the fired-entries message collapsed to one line"
+fi
 
 echo ""
 echo "=== B: entries fired, something WAS edited this session -- silence ==="
 # The healthy case. This is the pair to A: without it, a hook that always prints the
-# numbered list regardless of the edit marker would pass A by construction.
+# fired-entries line regardless of the edit marker would pass A by construction.
 
 P="$(new_project b)"
 mkdir -p "$(state_of "$P")"
@@ -119,6 +135,7 @@ else
   OUT="$(run_stop "$P" "sess-d")"; RC=$?
   assert_rc0 "the hook exits 0" "$RC"
   assert_contains "it says it could not tell" "$OUT" "could not tell"
+  assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
   if [ "$OUT" = "{}" ]; then
     FAIL=$((FAIL + 1)); echo "  FAIL: could-not-tell rendered as silence"
   else
@@ -205,8 +222,8 @@ echo "=== I: stop_hook_active=true -- a re-entry caused by this hook's own outpu
 # #279: the harness re-invokes Stop when a previous Stop's own additionalContext blocked
 # the turn from ending, and sets stop_hook_active=true on that re-entry. Section A is this
 # case's positive control on the same code path: the same fired-entries fixture, with
-# stop_hook_active=false, must still produce the numbered list. Without that pairing this
-# assertion would pass for free if the hook simply exited early on a malformed payload.
+# stop_hook_active=false, must still produce the fired-entries line. Without that pairing
+# this assertion would pass for free if the hook simply exited early on a malformed payload.
 
 P="$(new_project i)"
 mkdir -p "$(state_of "$P")"
@@ -300,6 +317,7 @@ printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-n.txt"
 OUT="$(run_stop "$P" "sess-n")"; RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_contains "it says an edit could not be confirmed" "$OUT" "could not be confirmed"
+assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
 if [ "$OUT" = "{}" ]; then
   FAIL=$((FAIL + 1)); echo "  FAIL: the declined-marker state rendered as silence"
 else
@@ -314,6 +332,42 @@ if grep -qF -- "could not tell whether any entry fired" <<<"$OUT"; then
   FAIL=$((FAIL + 1)); echo "  FAIL: the declined-marker state rendered identically to case D (state dir unknown)"
 else
   PASS=$((PASS + 1)); echo "  PASS: the declined-marker state text differs from case D"
+fi
+
+echo ""
+echo "=== O: past the 200-name cap -- the cap bounds the model line only, never hooks.log ==="
+# #292's own review round (self-review) caught two regressions the first pass of this
+# change introduced: an off-by-one that dropped the 200th fired entry's name from the
+# model-facing line while still logging it (so the "N more" tail undercounted by one),
+# and the SAME 200-entry cap silently truncating hooks.log too -- contradicting the
+# model line's own "see hooks.log" pointer, since hooks.log never had the rest either.
+# 205 fired entries: the model line must name exactly entries 1-200 and say "5 more";
+# hooks.log must carry all 205, entry 200 and entry 205 both included.
+
+P="$(new_project o)"
+mkdir -p "$(state_of "$P")"
+: > "$(state_of "$P")/vocab-shown-sess-o.txt"
+_jit_o=1
+while [ "$_jit_o" -le 205 ]; do
+  printf 'entry-%03d.md\n' "$_jit_o" >> "$(state_of "$P")/vocab-shown-sess-o.txt"
+  _jit_o=$((_jit_o + 1))
+done
+unset _jit_o
+OUT="$(run_stop "$P" "sess-o")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_contains "the model line names entry 200 (the cap boundary itself)" "$OUT" "entry-200.md"
+assert_contains "the model line's overflow tail accounts for exactly the other 5" "$OUT" "and 5 more"
+if grep -qF -- "entry-201.md" <<<"$OUT"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: the model line named an entry past the 200 cap"
+else
+  PASS=$((PASS + 1)); echo "  PASS: the model line names nothing past the 200 cap"
+fi
+LOG="$P/.claude/jit-context/.discovery/logs/hooks.log"
+if [ -f "$LOG" ]; then
+  assert_contains "hooks.log carries entry 200" "$(cat "$LOG")" "entry-200.md"
+  assert_contains "hooks.log carries entry 205 too -- the model-line cap does not truncate the log" "$(cat "$LOG")" "entry-205.md"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: hooks.log was not written at all for a fired session"
 fi
 
 echo ""
