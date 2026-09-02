@@ -261,9 +261,16 @@ assert_eq "the Codex hooks manifest uses PLUGIN_ROOT, not CLAUDE_PLUGIN_ROOT" \
 # One plugin, one version. remember's own test_codex_manifest_410.py carries this
 # assertion for the same reason: a second manifest that drifts from the first ships
 # stale metadata silently.
+# No pipe: tests/test-assertion-helpers.sh's structural scan refuses a test that
+# pipes into an early-exiting reader, and awk reading the file directly needs neither.
+manifest_version() {
+  LC_ALL=C awk -F'"' '/"version"[[:space:]]*:/ { print $4; exit }' "$1"
+}
 assert_eq "the two manifests declare the same version" \
-  "$(grep -o '"version"[^,]*' "$CLAUDE_MANIFEST" | head -1)" \
-  "$(grep -o '"version"[^,]*' "$CODEX_MANIFEST" | head -1)"
+  "$(manifest_version "$CLAUDE_MANIFEST")" \
+  "$(manifest_version "$CODEX_MANIFEST")"
+assert_eq "and that version is not empty (positive control)" \
+  "yes" "$( [ -n "$(manifest_version "$CLAUDE_MANIFEST")" ] && echo yes || echo no )"
 
 # Every script one manifest binds, the other must bind. A hook that ships on one host
 # and silently not the other is this repo's own defect class wearing a manifest.
