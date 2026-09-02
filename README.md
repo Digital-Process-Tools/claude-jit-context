@@ -192,8 +192,14 @@ A fresh install has nothing to match, so nothing happens — and the first thing
 wants to know is how to make something happen. Ask the plugin:
 
 ```bash
-bash scripts/jit-init.sh
+/jit-context:init
 ```
+
+The recommended install is the marketplace, and after that install this is the only path
+that exists: `$CLAUDE_PLUGIN_ROOT` is not a variable your own shell has, and the
+alternative — finding `jit-init.sh` under `~/.claude/plugins/cache/...` — changes on every
+update (#202). Cloned or manually installed, `bash scripts/jit-init.sh` still works exactly
+as before.
 
 It creates `vocabulary/`, `paths/` and `tools/` under `.claude/jit-context/`, drops one
 entry that answers _"how do I write one of these?"_, and builds the index so that entry is
@@ -202,17 +208,16 @@ and it arrives — the documentation delivered by the mechanism it documents.
 
 The file is yours from that moment. Edit it, delete it, or write your own beside it. A
 second run **refuses rather than overwrites**: a copy you have edited is not ours to
-replace, and that refusal exits `1` and says which file it left alone.
+replace, and that refusal exits `1` and says which file it left alone — `/jit-context:init`
+relays that refusal verbatim.
 
 Nothing else is installed and no rule is read from outside your project. Everything the
 hooks ever match lives in your repository, where you can read it.
 
-Run it from wherever the plugin landed — `scripts/jit-init.sh` from a clone,
-`.claude/claude-jit-context/scripts/jit-init.sh` after a manual install, or
-`"$CLAUDE_PLUGIN_ROOT"/scripts/jit-init.sh` inside a session that installed it from the
-marketplace. It seeds the project you are standing in; `--base DIR` seeds another, and
-refuses any path that is not a `<project>/.claude/jit-context`, because seeding anywhere
-else writes entries no hook will ever load.
+It seeds the project you are standing in; `--base DIR` seeds another —
+`/jit-context:init --base ~/work/other-project/.claude/jit-context` — and refuses any path
+that is not a `<project>/.claude/jit-context`, because seeding anywhere else writes entries
+no hook will ever load.
 
 `--base` is resolved before anything is written, so every path it prints is the physical
 location of the files — a symbolic link above `.claude` is followed and reported at its
