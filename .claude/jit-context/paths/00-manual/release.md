@@ -1,12 +1,14 @@
 ---
-title: The version lives in three files
-description: plugin.json, the README badge and the CHANGELOG heading must agree, and the sweep that finds any site they forgot.
-match: \.claude-plugin/plugin\.json$
+title: The version lives in five files
+description: both plugin manifests, the README badge, the CHANGELOG heading and SECURITY.md must agree, and the sweep that finds any site they forgot.
+match: \.(claude|codex)-plugin/plugin\.json$
 ---
 
-Bumping the version here is one of three edits. The other two:
+Bumping the version here is one of five edits. `.oss.json`'s `version_sites` is the list, and `tests/test-version-sites.sh` is what compares them. The other four:
 
+- `.codex-plugin/plugin.json` — the Codex manifest (#289). One plugin, one version: a second manifest that drifts ships stale metadata silently, and `tests/test-host-registry.sh` fails when the two disagree.
 - `README.md` — the version badge, near the top
+- `SECURITY.md` — the supported minor, which is a minor and not a full version
 - `CHANGELOG.md` — a new section, **assembled, not hand-written**:
 
 ```bash

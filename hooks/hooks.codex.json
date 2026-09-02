@@ -1,0 +1,65 @@
+{
+  "description": "Codex-side binding of the same scripts/*.sh Claude Code already runs. Observed against a real codex-cli 0.150.1 install (#288): the PreToolUse payload carries tool_name and tool_input under those exact names, and both {\"decision\":\"block\"} and hookSpecificOutput.permissionDecision=deny stop the call. See hooks/hooks.json for the Claude Code manifest these scripts also ship for; the two are separate files because Codex's default convention would otherwise claim that same path.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/scripts/session-start-hook.sh\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/scripts/pre-prompt-hook.sh\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/scripts/pre-tool-hook.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Edit|Write|Glob|Grep|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/scripts/pre-path-hook.sh\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/scripts/post-tool-hook.sh\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${PLUGIN_ROOT}/scripts/stop-hook.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
