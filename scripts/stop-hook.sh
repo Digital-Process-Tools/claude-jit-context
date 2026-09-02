@@ -38,15 +38,32 @@ source "$SCRIPT_DIR/common.sh"
 # guards against and for the same reason: without the tty guard, awk would sit waiting
 # on a payload that will never arrive.
 SESSION_ID=""
+STOP_HOOK_ACTIVE="false"
 if [ ! -t 0 ]; then
-  SESSION_ID="$(LC_ALL=C awk "$JIT_AWK_JSON"'
+  _jit_parsed="$(LC_ALL=C awk "$JIT_AWK_JSON"'
     { input = input $0 }
     END {
       n = jit_json_fields(input, raw, fs, fe)
-      k = jit_session_key(raw, fs, fe, n)
-      if (k != "") print k
+      print jit_session_key(raw, fs, fe, n)
+      print (jit_stop_hook_active(raw, fs, fe, n) ? "true" : "false")
     }
   ' 2>/dev/null)"
+  SESSION_ID="$(printf '%s\n' "$_jit_parsed" | sed -n 1p)"
+  STOP_HOOK_ACTIVE="$(printf '%s\n' "$_jit_parsed" | sed -n 2p)"
+  unset _jit_parsed
+fi
+
+# #279: the harness re-invokes Stop when THIS hook's own additionalContext blocked the
+# previous turn from ending, and marks that re-entry with stop_hook_active=true in the
+# very same payload shape this hook already parses above. Printing the same report
+# again on the re-entry is exactly what re-triggers it -- nine straight re-entries in
+# one live session before the harness gave up and overrode the block. The inert shape
+# below is the same one the missing-JIT_BASE branch further down already uses; this
+# check runs before that one so a re-entry costs nothing further, regardless of
+# whether the tree or state directory can even be resolved.
+if [ "$STOP_HOOK_ACTIVE" = "true" ]; then
+  echo '{}'
+  exit 0
 fi
 
 # A project that has never heard of this plugin gets nothing -- the same "inert without
