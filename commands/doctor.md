@@ -6,7 +6,8 @@ allowed-tools: Bash
 Run the diagnostic and relay its output verbatim:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/jit-doctor.sh" $ARGUMENTS
+IFS=' ' read -r -a jit_doctor_args <<< "${ARGUMENTS:-}"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/jit-doctor.sh" ${jit_doctor_args[@]+"${jit_doctor_args[@]}"}
 ```
 
 `${CLAUDE_PLUGIN_ROOT}` is what makes this reachable without a version number: the only
@@ -15,8 +16,14 @@ and that path changes on every plugin update (#202). `hooks/hooks.json` already 
 every hook the same way; this is the same resolution, for the one diagnostic you reach for
 when you suspect nothing is firing and do not yet know why.
 
-`$ARGUMENTS` passes through `--base <tree>` unchanged, so "point this at another project's
-`.claude/jit-context/`" still works exactly as it does run from a checkout.
+`jit-doctor.sh` parses `--base <tree>` as two separate words (the `--base)` arm in its own
+argument loop), so `$ARGUMENTS` is genuinely meant to carry more than one shell word here --
+a plain `"$ARGUMENTS"` would hand the script one combined argument and break `--base`. The
+array above makes that splitting explicit instead of leaning on bash's own
+unquoted-expansion word-splitting, which also glob-expands: a typed value containing `*` or
+`?` used to be matched against whatever files sat in the current directory and spliced in
+as extra arguments, silently and differently on every machine (#278). `read -a` still
+splits on spaces; it never globs.
 
 Do not summarise away any line -- relay the report exactly as printed, including its blank
 lines and its section headers. Three outcomes, and only the report itself carries which one
