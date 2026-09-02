@@ -14,7 +14,7 @@
 #   tools                 worse: no layer loop at all. pre-tool-hook.sh took
 #                         tools_tsv="$JIT_BASE/tools/00-manual/00-index.tsv" directly, so
 #                         `10-auto`, `20-grouped` and `30-crosscutting` were dead in the
-#                         tools dimension too -- the three layer names README.md line 764
+#                         tools dimension too -- the three layer names docs/layers.md
 #                         says are indexed and fire. That dimension is also the only one
 #                         that can REFUSE a call, so a `mode: block` rule there failed
 #                         open and said nothing.
@@ -190,7 +190,7 @@ echo "=== B: tools -- the dimension that can BLOCK read one layer and no others 
 PROJ="$TMPROOT/b"; BASE="$PROJ/.claude/jit-context"
 mk_tool_entry "$BASE" 00-manual  tmanual 'manualtarget'
 mk_tool_entry "$BASE" 01-oss     toss    'osstarget'
-# Not an invented name: README.md says a `20-grouped` entry is indexed and fires. In the
+# Not an invented name: docs/layers.md says a `20-grouped` entry is indexed and fires. In the
 # tools dimension it never did, because there was no layer loop there at all.
 mk_tool_entry "$BASE" 20-grouped tgroup  'grouptarget'
 rebuild "$PROJ"
@@ -201,7 +201,7 @@ assert_contains "B POSITIVE CONTROL: the 00-manual tool rule fires" "$OUT" "TOOL
 OUT=$(run_tool "$PROJ" "osstarget now")
 assert_contains "B the 01-oss tool rule fires" "$OUT" "TOOLBODY-toss"
 OUT=$(run_tool "$PROJ" "grouptarget now")
-assert_contains "B the 20-grouped tool rule fires, as README.md promises" "$OUT" "TOOLBODY-tgroup"
+assert_contains "B the 20-grouped tool rule fires, as docs/layers.md promises" "$OUT" "TOOLBODY-tgroup"
 
 # A tools layer can refuse a call. A block rule that never loaded fails OPEN, silently,
 # which is the worst shape this defect takes and the one claude-oss filed against.

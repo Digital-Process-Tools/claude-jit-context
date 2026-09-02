@@ -57,7 +57,7 @@ jit_tmp_open
 #
 # The tools dimension was the WORST of the three and was not in the issue title: it had no
 # layer loop at all. `tools_tsv` and `tools_dir` were pinned to tools/00-manual, so
-# `10-auto`, `20-grouped` and `30-crosscutting` were dead here even though README.md says
+# `10-auto`, `20-grouped` and `30-crosscutting` were dead here even though docs/layers.md says
 # a rule in any of them is indexed and fires -- and this is the only dimension that can
 # REFUSE a call, so a `mode: block` rule in one of those layers failed OPEN and said
 # nothing. That is the shape claude-oss filed #176 against.
@@ -320,7 +320,7 @@ END {
   # --- Tool rules matching ---
   # THE LAYER LOOP #176 ADDED. This dimension had none: tools_tsv and tools_dir arrived
   # pinned to tools/00-manual and nothing else in the tree was ever opened, so a rule in
-  # `01-oss` or in any of the three generated layer names README.md documents was indexed
+  # `01-oss` or in any of the three generated layer names docs/layers.md documents was indexed
   # by the rebuild and read by no matcher. The list is enumerated from disk by
   # jit_scan_layers() in common.sh; the bound comes off the same split() rather than being
   # a second literal beside it.
