@@ -85,5 +85,8 @@ each upstream `.dic` line are dropped), lowercase-only, ASCII-folded. See
 No modifications to the Covered Software's content are distributed beyond
 this filtering and folding, and none are claimed as this project's own.
 
-Nothing in this file, or in the licence referenced above, alters or is
-altered by claude-jit-context's own LICENSE.
+This file does not itself alter claude-jit-context's own LICENSE, and is
+not altered by it. LICENSE condition 6 is what defers to the terms named
+here: conditions 1 and 2 do not reach the third-party files listed above,
+and where the terms named here grant rights those conditions would
+otherwise withhold, the third-party terms govern that material (#264).
