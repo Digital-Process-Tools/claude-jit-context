@@ -48,9 +48,27 @@ if [ ! -t 0 ]; then
       print (jit_stop_hook_active(raw, fs, fe, n) ? "true" : "false")
     }
   ' 2>/dev/null)"
-  SESSION_ID="$(printf '%s\n' "$_jit_parsed" | sed -n 1p)"
-  STOP_HOOK_ACTIVE="$(printf '%s\n' "$_jit_parsed" | sed -n 2p)"
-  unset _jit_parsed
+  _jit_awk_rc=$?
+  if [ "$_jit_awk_rc" -eq 0 ]; then
+    SESSION_ID="$(printf '%s\n' "$_jit_parsed" | sed -n 1p)"
+    STOP_HOOK_ACTIVE="$(printf '%s\n' "$_jit_parsed" | sed -n 2p)"
+    case "$STOP_HOOK_ACTIVE" in
+      true|false) ;;
+      *) STOP_HOOK_ACTIVE="unknown" ;;
+    esac
+  else
+    # #284: the awk parse itself could not run at all (no usable awk on PATH, a
+    # broken interpreter). SESSION_ID and STOP_HOOK_ACTIVE both stay unset in that
+    # case, and an unset STOP_HOOK_ACTIVE reads identically to a parsed "false" --
+    # which falls through to the JIT_STATE_DIR/SESSION_ID check below, and THAT
+    # branch answers with additionalContext, exactly the output that blocks a turn
+    # from ending and reopens #279's re-entry loop, in the one state where this hook
+    # is least able to notice it is looping. "unknown" is a third value, distinct
+    # from both true and false, that takes the SAME silent early return true does --
+    # never re-derived from the empty string.
+    STOP_HOOK_ACTIVE="unknown"
+  fi
+  unset _jit_parsed _jit_awk_rc
 fi
 
 # #279: the harness re-invokes Stop when THIS hook's own additionalContext blocked the
@@ -61,7 +79,11 @@ fi
 # below is the same one the missing-JIT_BASE branch further down already uses; this
 # check runs before that one so a re-entry costs nothing further, regardless of
 # whether the tree or state directory can even be resolved.
-if [ "$STOP_HOOK_ACTIVE" = "true" ]; then
+#
+# "unknown" (#284) takes the identical branch: when this hook cannot tell whether the
+# harness is re-entering, staying silent is the safe direction -- a Stop hook that
+# says nothing costs a missing report; one that speaks costs a turn that will not end.
+if [ "$STOP_HOOK_ACTIVE" = "true" ] || [ "$STOP_HOOK_ACTIVE" = "unknown" ]; then
   echo '{}'
   exit 0
 fi
@@ -86,6 +108,15 @@ fi
 VOCAB_FILE="$JIT_STATE_DIR/vocab-shown-$SESSION_ID.txt"
 PATH_FILE="$JIT_STATE_DIR/path-shown-$SESSION_ID.txt"
 EDIT_MARK="$JIT_STATE_DIR/edited-$SESSION_ID.txt"
+# #285: post-tool-hook.sh drops THIS marker, and only this one, on the branch where
+# its own symlink guard refused to write EDIT_MARK -- an edit really happened, but its
+# evidence was declined. Read below, after the "nothing fired" check and before the
+# EDIT_MARK check, so it renders as its own distinguishable fourth state rather than
+# folding into either "none updated" (case B: nothing was edited at all) or the
+# JIT_STATE_DIR-unknown branch above (case D: this whole state directory could not be
+# trusted). A reader who sees this text knows specifically that an edit was attempted
+# and its own record of it was refused.
+EDIT_DECLINED_MARK="$JIT_STATE_DIR/edited-declined-$SESSION_ID.txt"
 
 # The `shown` marks carry a handful of sentinel keys beside real entry names --
 # `jit-refused-*`, `jit-no-subject` -- written by the same jit_shown_mark() call sites
@@ -144,6 +175,15 @@ fi
 # question; nothing here re-derives it from a timestamp.
 if [ -f "$EDIT_MARK" ] && [ ! -L "$EDIT_MARK" ]; then
   echo '{}'
+  exit 0
+fi
+
+# #285: an edit was attempted but post-tool-hook.sh's own symlink guard refused to
+# record it. Distinct from both the silent B (nothing edited) and D (state dir
+# unknown, checked above): this says so explicitly rather than falling through to the
+# "none updated" list below, which would misreport a refused write as a clean session.
+if [ -f "$EDIT_DECLINED_MARK" ] && [ ! -L "$EDIT_DECLINED_MARK" ]; then
+  printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context: an edit under this tree may have happened this session but could not be confirmed (marker write was declined)"}}\n'
   exit 0
 fi
 
