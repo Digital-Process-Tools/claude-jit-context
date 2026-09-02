@@ -216,6 +216,37 @@ assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "stop_hook_active=true means no additionalContext, even though entries fired" "$OUT"
 
 echo ""
+echo "=== J: stop_hook_active is missing from the payload entirely -- treated as false ==="
+# A distinct code path from I/A explicit false: jit_stop_hook_active() falls off its own
+# scan loop and returns 0 via the final fallthrough, never matching the key at all. An
+# older harness, or a hand-run reproduction, can omit the field outright.
+
+P="$(new_project j)"
+mkdir -p "$(state_of "$P")"
+printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-j.txt"
+OUT="$(printf '{"session_id":"sess-j","hook_event_name":"Stop"}' \
+  | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" 2>&1)"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_contains "a payload with no stop_hook_active key at all still reports" "$OUT" "bridge.md"
+
+echo ""
+echo "=== K: an escaped quote earlier in the payload must not desync the field scan ==="
+# jit_json_fields() merges raw[] segments across an escaped quote, so its LOGICAL field
+# count (n) can sit below the PHYSICAL raw[] position stop_hook_active own value lives
+# at. A bound check written against n instead of the physical array would refuse a
+# genuinely in-range raw[] read and misreport a real true as false here -- silently
+# reopening #279 for exactly the sessions whose cwd or transcript_path contains a
+# literal double quote.
+
+P="$(new_project k)"
+mkdir -p "$(state_of "$P")"
+printf 'bridge.md\ncache.md\n' > "$(state_of "$P")/vocab-shown-sess-k.txt"
+OUT="$(printf '{"session_id":"sess-k","cwd":"C:\\quo\\"te","stop_hook_active":true}' \
+  | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" 2>&1)"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_empty_json "an escaped quote ahead of stop_hook_active does not hide a real true" "$OUT"
+
+echo ""
 echo "=========================================="
 if [ "$D_SKIPPED" -eq 0 ]; then
   echo "Results: $PASS passed, $FAIL failed"

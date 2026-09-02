@@ -2105,11 +2105,22 @@ function jit_session_key(raw, fs, fe, n,   i, k) {
 # next key opening quote). Matched as a prefix on that segment rather than parsed as
 # its own field, which is why this reads fe[i]+1 directly instead of looking for a
 # paired value field the way jit_session_key() does.
+#
+# NO fe[i]+1-vs-n bound check here, and that omission is deliberate, not an
+# oversight: n is jit_json_fields() own LOGICAL field count (its own k), but fe[]
+# stores PHYSICAL raw[] positions, and the two only coincide when nothing earlier in
+# the payload merged raw segments across an escaped quote. Any earlier field that
+# does (an escaped quote inside cwd, transcript_path, or any string ahead of this
+# key) leaves physical positions running past the logical count, so a bound check
+# against n refuses a raw[] index that is genuinely still in range and reads a
+# real true value as false -- the exact re-entry bug this function exists to close,
+# reintroduced by the guard meant to protect it. Referencing raw[fe[i]+1] past the
+# end of the array is not unsafe in awk: an unset numeric index reads back as the
+# empty string, which the regex below simply fails to match.
 function jit_stop_hook_active(raw, fs, fe, n,   i) {
   for (i = 2; i <= n; i += 2) {
     if (fs[i] != fe[i]) continue
     if (raw[fs[i]] != "stop_hook_active") continue
-    if (fe[i] + 1 > n) return 0
     return (raw[fe[i] + 1] ~ /^[[:space:]]*:[[:space:]]*true/) ? 1 : 0
   }
   return 0
