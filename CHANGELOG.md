@@ -7,6 +7,213 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-02
+
+### Added
+
+- **A match on an ordinary word no longer spends a vocabulary entry one shot** (#232). `rebuild-tsv.sh` now classifies every vocabulary keyword against a bundled generic-word list and writes the verdict as a third `00-index.tsv` column; a keyword absent from the list, or an index built before this landed, degrades to the old behaviour. In the hooks, a match on a keyword classed generic injects title and description only and leaves the entry unmarked, so the full body still arrives the moment a specific keyword hits later in the session -- recall never moves, only what a generic-only match delivers. A match carrying at least one specific keyword still behaves exactly as before: full body, one shot.
+
+  `rebuild-tsv.sh` also reports, at rebuild time, a keyword whose pre-normalisation spelling reads as a deliberately-cased identifier (`jsOn`) and whose normalised spelling collapsed onto a short, ordinary-looking word (`json`) with nobody having chosen it -- a length heuristic rather than a dictionary lookup, since #232's own research shows a dictionary cannot tell the two apart either (`json` is not a dictionary word).
+
+  `data/generic-words.txt` (repository root, deliberately not `scripts/data/` -- a plain wordlist is not a bash script, and `tests/test-arg-flag-values.sh` sweeps everything under `scripts/` looking for one) is a small, hand-curated substitute for the SCOWL/Dicollecte artifact #232's own research recommends, not that artifact itself -- this session could not fetch and verify a license-clean snapshot of either within its time budget. Swapping it for a verified export is follow-up work; nothing in `rebuild-tsv.sh` or the hooks changes when that happens.
+
+  `jit-doctor.sh`'s short-keyword advisory read every byte after a row's first tab as the entry file name, which the new third column broke on sight -- naming `<withheld: not a plain name>` instead of the file for any short keyword in a rebuilt tree. Fixed alongside this change: the advisory now reads the second field only.
+
+- **An entry whose keywords are ALL generic no longer sits at description-only for the rest of the session** (#232). PR #250 shipped the generic-keyword downgrade (title+description, entry left unmarked) but not the gate #232 itself asked to have counted before that step landed: an entry that owns no specific keyword never gets the later specific match the downgrade is banking on. `rebuild-tsv.sh` now computes, per entry, whether every one of its keyword rows classified generic; when they all did, the "generic" verdict is cleared back to empty on every row for that entry, so the hooks -- unchanged -- treat it as specific: full body, one shot spent, on any match. That is exactly today's pre-#232 behaviour for such an entry, and no worse; the fallback is reported at rebuild time so any entry relying on it is visible and can be given a specific keyword instead. Measured against this repository's own corpus (196-word bundled list): zero entries currently trip it.
+
+- **The injection footer names a 00-manual vocabulary entry's own age, and a session that saw only misses now says so at start** (#233). `# Vocabulary: bridge.md (matched: bridge · last edited 170d ago)` -- the age is read once per hook invocation over the whole `00-manual` layer directory, in bash, before `awk` ever runs, never per matched row. `jit-match.sh`'s own keyword verification is taught to strip the new suffix back off before comparing against the index, so an aged header is not reported as unverifiable.
+
+  `session-start-hook.sh` now runs `jit-misses.sh` on every session and, when it finds a real recurring miss, opens the session with it: `recurring misses: "preprod" x5, "deploy" x5`. Each entry is one token -- the same unit `jit-misses.sh` ranks -- never a reassembled phrase. A quiet session or one with no log yet still emits `{}`, exactly as before -- `jit-misses.sh`'s own SKIPPED and "nothing recurs" outcomes both mean silence here too.
+
+  A `Stop`-hook summary of entries fired-but-not-edited this session -- the issue's second proposal -- is not part of this change: whether "nothing was written this session" is a signal this plugin can actually derive turned out to be a materially bigger question than the footer or the `SessionStart` call, and is left for a follow-up.
+
+- **CodeQL now scans this repository's GitHub Actions workflows** (#235). Secret scanning, push protection, Dependabot alerts and automated security fixes are on as well; all four were `disabled`, which renders identically to a repository nothing has ever found anything in.
+
+  The scan is scoped to `actions` and that is not a reduced scope -- it is the whole of what CodeQL can say here. The product is 1.5 MB of Shell, which CodeQL has no analyser for; `shellcheck` in `tests.yml` is what covers it. The only supported language present is Python, and every byte of it is `.oss/`, vendored from the `oss` plugin and rewritten wholesale by the next `/oss:scaffold --apply` -- so scanning it would report findings against code nobody here can fix without the fix being dropped. The workflow states its own widening condition: a supported language arriving outside `.oss/`.
+
+- **A `Stop` hook now closes the loop #233's footer opened: a session that fired entries and never touched one says so on the way out** (#244, part 2 of #233). `post-tool-hook.sh` is the missing signal -- a `PostToolUse` hook keyed on `Write`/`Edit` that drops an existence-only marker the moment a write lands under `.claude/jit-context/`, beside the `shown` marks this plugin already keeps and aged out by the same `session-start-hook.sh` sweep. `stop-hook.sh` reads both marker sets back: entries fired and the marker is there -- silence, the healthy case. Entries fired and it is absent -- a numbered list naming every one, with its age where `jit_scan_entry_ages()` has one. And when the state directory itself is unavailable, it says **could not tell** rather than let that read as the clean case.
+
+  Deliberately not built on the mtime table `jit_scan_entry_ages()` already reads: it inherits #243 -- a fresh clone reports every file as freshly touched -- so a signal built on it would answer the fired-vs-edited question wrong on exactly the sessions this feature exists for. The edit marker is a second, independent signal for that reason, never a second read of the age table.
+
+- **The README names its three sibling plugins near the top** (#260). One block, three
+  links, one marketplace command. Before this each README named the others once or not
+  at all, and the repo strangers reach first (claude-remember) pointed nowhere.
+
+- **`/jit-context:init` seeds the first entry from inside a session** (#261). After the
+  recommended marketplace install there was no command a user could actually type:
+  `jit-init.sh` lived only under a version-numbered plugin cache path, or a clone path
+  nobody has after installing from the marketplace. `commands/init.md` resolves the
+  script through `${CLAUDE_PLUGIN_ROOT}`, the same way `/jit-context:doctor` already
+  does, and the README's first-entry walkthrough now leads with the command rather than
+  a script path that does not exist for most readers.
+
+- **Add `NOTICE`, reproducing third-party licence terms for the two corpora bundled in
+  `data/generic-words.txt`** (#264). The SCOWL size-35 English list's own Copyright file
+  requires its grant to appear in all copies; `NOTICE` reproduces it verbatim, along with
+  the public-domain statements for the component sources SCOWL's size-35 tier folds in.
+  The French list (Dicollecte/Grammalecte `fr.dic` stems, 66,690 rows, MPL 2.0) is named
+  by version and referenced by URL rather than embedded in full, matching how the
+  upstream LibreOffice mirror itself states its own licence. This is pure addition and
+  changes nothing about `LICENSE` or claude-jit-context's own terms -- the question of
+  whether `LICENSE` needs a third-party carve-out is the other half of #264 and remains
+  open.
+  Compatibility: compatible - adds a new file only; no existing behaviour, script, or
+  licence term changes.
+
+### Changed
+
+- **Refreshed the `oss`-owned files and gave this repo its own watch channel** (#234). `/oss:doctor` reported four owned files as `would change what it does`; `/oss:scaffold --apply` replaces them wholesale, so the whole trio plus `.oss/README.md` and the `01-oss` rule layer move together. `CONTRIBUTING.md` and a `tools/01-oss` layer arrive with the same command, and `vocabulary/01-oss/01-paths.tsv` goes, because the current `oss` release no longer ships it.
+
+  `.supertool.json` now declares `watch_name` on all five watch ops. The name `bin/oss-workspace` derives from `.oss.json`'s `repo` is 40 characters and the installed supertool discards anything failing its 32-character pattern, so this repo had been binding the shared default socket — a fleet possibly belonging to another project, rendering identically to a private board. Declaring it on `radar` alone is not enough: the other four ops fall back to the environment when their subprocesses run, which splits the fleet without erroring anywhere.
+
+  Re-run under `oss` 0.17.0 after the first refresh, because `/oss:doctor` reported `.oss/assemble_changelog.py` as `would change what it does` again — `_safe_cwd`, `_has_reason`, `_echo`, `compatibility_finding` and two more. Owned files are replaced wholesale on every run and this repo hand-maintains none of them, so a refresh is the delivery mechanism rather than a change made here.
+
+- **The `--untagged 0.1.0` declaration is config now, and the suite guarding it is retired** (#234). Refreshing the `oss`-owned files rewrote `.github/workflows/oss-changelog.yml` and dropped the local `--untagged 0.1.0` edit on its `--check-links` step, so the changelog leg refused: `## [0.1.0]` has a section, `v0.1.0` has no tag and never can — the version predates this repository, which was extracted from claude-supertool at `0.2.0`. The fix is upstream's own: `changelog_untagged` in `.oss.json` names the version, and the scaffold generates the flag from that key, so the next `--apply` regenerates the declaration instead of dropping it.
+
+  `tests/test-changelog-workflow-untagged.sh` is deleted rather than repaired, on the retirement condition its own header stated: with the key landed and the template reading it, the declaration is config and not an edit, so a suite asserting the edit asserts the workaround rather than the requirement. A deleted key is still caught — loudly, by the same leg — rather than silently, which is what the guard existed to prevent.
+
+- **`data/generic-words.txt` is now a verified SCOWL-35 / Dicollecte export, not the 196-word hand-curated stand-in PR #250 shipped** (#251). English: SCOWL size 35 (BSD-compatible per Kevin Atkinson's own Copyright grant), "words" category only across nine dialects (american, australian, british, british_z, canadian, english, variant_1/2/3) -- proper nouns, abbreviations, contractions and the "upper" category excluded so a project token is never classed as ordinary. French: Dicollecte/Grammalecte's Hunspell stems (MPL 2.0), fetched through LibreOffice's own mirror of the dictionary rather than dicollecte.org, which now resolves to an unrelated parked domain. 103776 unique words, ~1.0 MB, up from 4 KB -- the whole repo-size cost of this change; nothing under `scripts/` moved, and `GENERIC_WORDS_FILE` already pointed at this path.
+
+  The French entries are ASCII-folded through the same table `jit_fold_latin1()` applies to a keyword before the comparison, rather than stored with their native accents. #232 named three rows in the PR #250 stand-in (`meme`, `detail`, `equipe`, stored accented) that could never match for exactly that reason -- the classifier folds the keyword but never the wordlist file, so an accented row is permanently dead. This export is folded up front so the same class of row is never introduced again.
+
+  Re-measured against #232's own question on this repo's own corpus (22 keyword rows across 3 vocabulary entries): still zero entries reachable only through generic keywords. Every keyword this repo's own vocabulary entries carry is either multi-word (which can never equal a one-word wordlist line) or a single word absent from both source lists.
+
+  `tests/test-cut-to-nothing.sh`'s own vocabulary fixture used `billing` as a keyword to prove an unrelated fix (a cut-to-nothing command still binding a vocab entry); `billing` is an ordinary English word and is now classified generic by this export, which downgrades that fixture's entry to title+description and broke the assertion for a reason that had nothing to do with what the section tests. Renamed the fixture's keyword to `billingz`.
+
+  Added `tests/test-generic-words-invariant.sh`: asserts every non-comment row in `data/generic-words.txt` is a bare `[a-z]+` word, so a stored-accented row (the exact #232 dead-row shape) cannot silently re-enter the file, whether from a hand-edit or from a future change to `JIT_AWK_FOLD`'s own accent table.
+
+- **README.md moved its 800-line reference manual to `docs/`** (#260). The file was 1169
+  lines: the pitch and install arc were buried under awk-vs-PCRE gotchas, invocation
+  anchoring, layer precedence, `config.env`, hook timing and the diagnostic tools, all
+  before the reader ever reached `## Tests`. Nothing was deleted -- `## Writing an
+  entry` through the pre-`## Tests` material moved to `docs/writing-entries.md`,
+  `docs/patterns.md`, `docs/keyword-matching.md`, `docs/layers.md`,
+  `docs/configuration.md`, `docs/performance.md` and `docs/diagnostics.md`, and
+  README.md links to each from a new "Further reading" section. README.md is now 409
+  lines. The version badge stays in README.md and stays a version site.
+  Compatibility: compatible - moves prose between files; no script, hook or test
+  behaviour changes.
+
+- **`LICENSE` no longer claims restrictions over the bundled third-party word lists** (#264). Condition 1 forbids commercial redistribution of the Software "in whole or in part" and condition 2 forbids competing use, and until now neither named an exception. `data/generic-words.txt` is not all ours: 66,690 of its rows are Hunspell stems from Dicollecte under MPL-2.0, and the English rows come from SCOWL, whose grant covers "distribute and sell" in as many words. Over that file, conditions 1 and 2 asserted restrictions this project has no standing to impose.
+
+  New condition 6 says so directly: conditions 1 and 2 do not reach the third-party files listed in `NOTICE`, those remain governed by the terms named there, and where those terms grant rights this license would otherwise withhold, the third-party terms govern. Nothing about the project's own code changes, and no right over the rest of the Software is granted.
+
+  `NOTICE` landed in #267 and reproduces the third-party terms. It said what is bundled; it could not stop this repository's own license from contradicting it, and its closing paragraph asserted that nothing in it altered `LICENSE` — true when written, false once `LICENSE` deferred to it, so that paragraph now points at condition 6 instead. 0.7.0 is the first release to ship those rows.
+
+### Fixed
+
+- **A latent recurrence of #214 in `assert_survives_malformed` (`tests/test-pre-tool-hook.sh`, `tests/test-pre-prompt-hook.sh`, `tests/test-pre-path-hook.sh`) now carries `--`** (#228). All three called `LC_ALL=C grep -qF "$needle" "$out"` with no `--` separator, so a needle beginning with `--` would be parsed as a grep option; the helper, branching only on exit status, would have reported a pass having compared nothing. No current call site passed such a needle, so this was latent rather than live.
+
+  The issue's own reproduction named a second helper, `assert_no_raw_controls`, in the same three files -- checked and it does not carry this defect: it never calls `grep` at all, only `perl -0777 -ne '...'` regex checks. Only `assert_survives_malformed`'s three call sites needed the fix.
+
+  Declaring the helper with `# jit-drive:` so `tests/test-assertion-helpers.sh` sweeps it -- the stronger of the two fixes the issue offered, and what #214's own fix argued for -- turned out not to fit: `drive_declared()` only knows how to drive a helper in the `(desc, OUTPUT, needle)` capture shape, the `(desc, needle)` file:VAR shape, or the `(desc, PATH, needle)` path-arg shape, and `assert_survives_malformed` is none of those -- it invokes the hook it is testing itself, `(desc, engine, payload, needle)` in. Extending the harness with a new source type for that shape is a separate, materially bigger change than this fix. Instead the sweep is structural, the same independent-of-declaration guarantee `test-assertion-helpers.sh` already gives the `| grep -q` SIGPIPE shape (#56): a new `grep -qF "$needle"` call anywhere under `tests/` that does not carry `--` is now caught by a dedicated scan, narrowed to that exact variable name so it does not flag every other `grep -qF` call in the tree taking some other needle.
+
+- **`pre-tool-hook.sh` and `pre-path-hook.sh` now build the same byte-length block manifest `pre-prompt-hook.sh` has carried since #219** (#230). Both hooks used to join their own matched rules and refusal notices with the bare `\n---\n` separator and never prepended a `# JIT-CTX-BLOCKS <n> <len1> <len2> ...` manifest, so `jit_split_ctx_blocks()` (common.sh) always took the pre-#219 fallback for their output -- the same separator an entry body can forge, since `.claude/jit-context/` is attacker-controlled input. The forgery class #219 closed for prompt-dimension (vocabulary) matches was therefore still open for tool-dimension and vocabulary-by-path matches: an entry whose own body ended in `\n---\n# JIT Context: evil.md (matched: x)` was indistinguishable from a genuine second match.
+
+  The producer is now one function, `jit_blk_prepend()`/`jit_blk_join()` in `common.sh` (`JIT_AWK_BLK_BUILD`), shared by all three hooks instead of a third hand-rolled copy -- two copies already drifted once, which is what left `jit-dry-run.sh`'s `report_hook()` carrying the pre-#219 grep, unfixed, through #223.
+
+  `jit_blk_manifest_seen` (the flag #229 added so a consumer would not report every genuine tool/path match as "could not evaluate" while the producer gap was open) is gone rather than merely unread: both consumers (`jit-match.sh`, `jit-dry-run.sh`) now gate on `!jit_blk_manifest_ok` alone, because every real hook call builds a manifest whenever it injects anything.
+
+  Driven end-to-end through `jit-dry-run.sh`'s sample-call mode, a "must not fabricate" and a "must still report" fixture per hook (`tests/test-jit-dry-run-report-forgery.sh`): a forged header inside a real match's own body is no longer counted as a second entry, and two genuinely independent matches are both still named.
+
+- **`rebuild-tsv.sh` now says which tree it wrote on success, and refuses a write that crosses a `git worktree` boundary** (#231). `JIT_BASE` resolves against `CLAUDE_PROJECT_DIR`, never the working directory -- and an agent working a branch in `git worktree` inherits a `CLAUDE_PROJECT_DIR` from the session that launched it, which keeps pointing at the main clone after the session's cwd moves into the worktree. Because a worktree and its clone share one `.git`, running the rebuild from inside the worktree used to silently rewrite the clone's `00-index.tsv` and report success -- noticed only when an unrelated command afterwards found the clone dirty.
+
+  Every successful run now prints the resolved `JIT_BASE`, `CLAUDE_PROJECT_DIR` and `cwd` on stderr, so a wrong write is obvious rather than silent. And when the working directory's own git worktree differs from `CLAUDE_PROJECT_DIR`'s, the script refuses outright (exit 2) rather than guessing which tree the caller meant -- consistent with `paths/00-manual/tooling.md`'s contract for this script, which is expected to fail loudly rather than never fail hard. The one legitimate case -- deliberately rebuilding a tree other than the one you are standing in -- is a flag away: `JIT_CONTEXT_ALLOW_CROSS_TREE=1`.
+
+- **`test-dogfood-entries.sh`'s three negative controls for `no-hand-editing-the-index.md` no
+  longer conflate a refusal by that rule with a refusal by anything else** (#239). They asserted
+  "must not be blocked at all", so a machine without `supertool` on `PATH` saw the tools-dimension
+  layer's own unrelated catch-all (`tools/01-oss/supertool-required.md`, generated and replaced
+  wholesale by the `oss` plugin's scaffold) refuse the same calls and reported it as this rule
+  overreaching, when the rule under test was not involved. The hook's own `reason` already names
+  which entry matched, so the three controls now bind to that name instead of to silence — the
+  suite is green on both configurations with the code under test unchanged, and a genuine
+  regression in `no-hand-editing-the-index.md` still fails it (proven by a new positive control
+  in the same fixture). The new helper also refuses to read "the hook said nothing" as a clean
+  allow: a payload the hook cannot answer at all now fails loudly instead of passing on emptiness,
+  with its own positive control pinning the failure.
+
+- **`rebuild-tsv.sh`'s #231 cross-tree guard now says when it could not run, instead of rendering identically to a check that ran and agreed** (#240). The guard only compares `git rev-parse --show-toplevel` for `cwd` and for `CLAUDE_PROJECT_DIR` when both come back non-empty; either side answering empty -- no `git` on `PATH`, `cwd` not inside a work tree, or `CLAUDE_PROJECT_DIR` not resolving to one -- used to skip the comparison and print nothing, so a caller saw the same silence whether the check ran and found nothing to refuse, or never ran at all.
+
+  The success-path receipt already prints raw `cwd=` and `CLAUDE_PROJECT_DIR=` strings, but only a reader who already suspected a mismatch would go compare them by eye. A rebuild now prints `note: cross-tree check (#231) could not run -- <why>` on that skip path, naming which side could not resolve a git tree, before the receipt line. Exit code is unchanged -- this is advisory, the same class as the ambiguous-keyword and dropped-keyword reports this script already prints without moving the status.
+
+- **The injection footer's "last edited Nd ago" no longer lies on a fresh clone** (#243). `jit_scan_entry_ages()` now reads each 00-manual entry's mtime alongside its raw epoch, and when every file in a layer sits within a few seconds of the others -- an ordinary `git clone`, a fresh plugin install and a CI checkout all produce exactly this shape -- the whole layer's ages are withheld rather than rendered as a false `0d ago`. A genuine spread still renders a real age exactly as before. The decline is logged by name, distinguishable from the case where `00-manual` holds no entries at all, which was already silent and stays that way.
+
+- **The automatic recurring-misses line SessionStart injects now says plainly that its counts
+  are raw and unfiltered for ordinary English words** (#246). `paths/00-manual/entries.md` tells
+  an author to avoid an ordinary word as a vocabulary keyword because it fires constantly, and a
+  bare `recurring misses: "repo" x33, "context" x32, ...` read, unqualified, as the plugin's own
+  SessionStart channel recommending exactly that mistake every session -- "repo", "context" and
+  "index" are ordinary words that also happen to be project nouns in a project about vocabulary
+  indexing, and `jit-misses.sh` has no way to tell those apart from a genuine gap. The injected
+  sentence now reads `recurring misses (raw counts, not filtered for ordinary words -- judge
+  before adding a vocabulary entry): ...`, which does not solve which of these tokens are worth an
+  entry -- that discrimination problem is what #232 is open on -- but stops the sentence from
+  reading as a recommendation on its own, which is the defect #246 was filed against. The harder
+  question of automatically telling an ordinary word from a project noun stays #232's to answer.
+
+- **`session-start-hook.sh` no longer reads a `jit-misses.sh` log it could not evaluate as
+  "nothing recurs"** (#247). `jit-misses.sh` exits 2 with a named reason on stderr for a log it
+  cannot read or make sense of, and the hook threw that reason away with `2>/dev/null` and
+  branched on the exit code alone -- so an unreadable log, a log that is not this tool's log, or
+  one whose records are all from a hook other than pre-prompt rendered `{}`, byte-identical to a
+  session where the log was genuinely read and nothing recurs. It now injects
+  `recurring misses: could not be evaluated (<reason>)` on the same surface the findings already
+  use, for exactly those cases. A brand new project with no log yet, or one whose log exists but
+  is still empty, stays exactly as quiet as before -- that is not a failure to evaluate, it is a
+  project with no history yet, and `test-session-markers.sh` already pinned that silence across
+  every awk engine this repo tests.
+
+- **`jit-misses.sh` no longer reads the whole, unrotated `hooks.log` on the one path that
+  runs unattended** (#248). `session-start-hook.sh` has called it synchronously on every
+  session since #233 part 3, and the read was unbounded and its cost linear in a file that
+  only grows -- fine at 0.136s over 3.2MB on the maintainer's own log, and measured linear
+  to 2.336s at 20x that size, with nothing to explain a slow session start. The automatic
+  call now passes `--tail 5000`, bounding the read itself (not just the report) to the
+  log's most recent lines; a person running `jit-misses.sh` by hand still gets the full
+  history, because a manual run never asked for a window. The header always names the
+  log's current byte size regardless of whether the read was bounded, and a new
+  `--size-threshold` (default 10MB) names the log in the report once it is at or past that
+  size, so a session start that is getting slower says so instead of staying silent about
+  it. `session-start-hook.sh` reads both of these back the same way it already reads
+  `jit-misses.sh`'s findings and its SKIPPED reason -- the injected context now says which
+  window a set of recurring misses came from, and surfaces the size-watch note on its own
+  when there is nothing else to say. Log rotation itself (shape 2 of the three the issue
+  named) is a larger, separately-costed change and is not part of this fix.
+- The unbounded (manual, default) invocation stays on the exact pre-#248 shape --
+  `awk ... "$LOG"`, no pipe -- rather than routing every read through `tail`/`cat`, which
+  would have made a `jit-misses.sh` run report "the file is empty" on a read that failed
+  for any other reason too, since this file sets no `pipefail` and a pipe's exit status is
+  awk's alone.
+
+- **`rebuild-tsv.sh`'s generic-word classifier no longer forks one `grep` per keyword against `data/generic-words.txt`** (#255). #251 grew that file 260x (196 words/~4KB -> 103,776 words/~1.0MB), which made the per-keyword fork the dominant cost of a rebuild at realistic keyword counts: measured end to end on this repo's own `rebuild-tsv.sh`, 500 keywords went from 14.8s to 6.9s and 1000 keywords went from 30.2s to 15.3s. This repo's own 22-keyword corpus is unaffected either way (well under a second). Every keyword a run needs classified is now batched through one `awk` process that reads the wordlist once into a hash, instead of one `grep -Fxq` re-scanning the whole file per keyword; the resulting `00-index.tsv` files are byte-identical to before, verified by rebuilding this repo's own dogfood tree.
+
+  A wordlist that is configured (`JIT_CONTEXT_GENERIC_WORDS`, or the bundled default) but exists and cannot actually be read -- empty, or unreadable -- is now a named, loud failure: `rebuild-tsv.sh` prints a `FATAL` line naming the file and exits 2, rather than silently classifying every keyword as non-generic the way the old per-keyword `grep ... 2>/dev/null` already did (undetected until now). A wordlist that is simply not configured or not present at all is unchanged: the documented pre-#232 degrade, silent, exit 0.
+
+  New: `tests/test-generic-wordlist-broken-255.sh`, covering both the loud failure (empty and unreadable wordlist, each exit 2 and named on stderr) and its negative controls (unset override, missing file: both exit 0 and silent) alongside a positive control that a working wordlist still classifies correctly.
+
+  Two findings from this PR's own review, fixed in the same commit: the new FATAL lines now print a sanitised copy of the wordlist path with any C0 control byte stripped, since `JIT_CONTEXT_GENERIC_WORDS` can arrive through `config.env` (the same trust boundary as any other clone-supplied setting) and a raw carriage return embedded in it could otherwise forge the terminal line; and the classify pass now checks that it received exactly as many verdicts back as keywords it sent, so a classify awk that died or was truncated mid-run is itself a named, loud (exit 2) failure rather than silently defaulting every unclassified keyword to non-generic.
+
+- **`rebuild-tsv.sh`'s generic-word wordlist health check now catches a typo'd path, not just an empty or unreadable file** (#265). #255 made a wordlist that is configured but empty or unreadable a loud, named, exit-2 failure. The branch beside it did not: a wordlist that is configured but **missing** -- one wrong character in a `config.env` path -- still exited 0 in total silence, folding "the operator set this and typo'd it" into "the operator set nothing at all". Those are not the same fact, and the silent case disabled the whole #232 generic-keyword classification with a receipt byte-identical to a healthy run.
+
+  `rebuild-tsv.sh` now asks whether `JIT_CONTEXT_GENERIC_WORDS` or `DYNAMIC_RULES_GENERIC_WORDS` was explicitly set before deciding what a missing file means: explicitly configured and absent is now a `FATAL` naming the path, exit 2, the same shape #255 already gives an empty or unreadable wordlist. Unset, with the default path absent, is unchanged -- silent, exit 0, the documented pre-#232 degrade that a project which never opted in must keep getting.
+
+  `tests/test-generic-wordlist-broken-255.sh` now exercises both halves of that split in the same fixture: a truly-unset override (silent, exit 0) beside an explicitly-configured-but-missing one (loud, exit 2, named on stderr), paired with the existing empty/unreadable and positive-control sections so a future change cannot make either state vacuous.
+
+- **With `CLAUDE_PROJECT_DIR` unset, `post-tool-hook.sh`'s edit marker could never be written, and `stop-hook.sh` then asserted "none updated" as a measured fact about a session where the entry genuinely was edited** (#266). `common.sh` fell back to `JIT_BASE="${CLAUDE_PROJECT_DIR:-.}/.claude/jit-context"` — relative — while `file_path` out of a real tool payload always arrives absolute, so `post-tool-hook.sh`'s `case "$PT_FP" in "$JIT_BASE"/*)` prefix test could never match, for any input. #244 built the Stop hook around three states and was explicit that *could not tell* must never render as the clean case; this was a fourth situation the design had not named, and it rendered as the first one instead.
+
+  Established first, per the issue's own instruction: this codebase already treats an unset `CLAUDE_PROJECT_DIR` as a real, anticipated state rather than one foreclosed by the shipped `hooks.json` — `jit-doctor.sh` diagnoses it by name, and nothing in the test suite or in `pre-path-hook.sh`'s own absolute-token handling assumes it cannot happen. So the fix makes the fallback correct rather than declaring the branch unreachable: `JIT_BASE` now falls back to `${PWD:-.}` instead of bare `.`, which is always absolute and costs no subprocess, so the prefix comparison holds regardless of which branch of the fallback fired. `tests/test-jit-base-unset-project-dir-266.sh` drives the exact composition — an edit under the tree, an edit outside it, and both hooks run back to back with `CLAUDE_PROJECT_DIR` unset — with a positive control paired against each negative, so a fix that only suppressed the false claim could not pass by construction.
+
+  Two diagnostic strings that were accurate before this change are corrected alongside it, rather than left saying something the code no longer does: `rebuild-tsv.sh`'s two `CLAUDE_PROJECT_DIR=<unset, so .>` receipts and `jit-doctor.sh`'s `--help` parenthetical now name "the current directory" instead of the bare `.` the fallback no longer produces. `jit-misses.sh`'s matching help line is deliberately untouched — it refuses to source `common.sh` and independently defaults to `.`, so its text is still true.
+
+- **`JIT_CONTEXT_GENERIC_WORDS=""` now actually opts a project out of generic-word classification, instead of silently falling through to the shipped default wordlist** (#270). `rebuild-tsv.sh` derived the wordlist path with `${JIT_CONTEXT_GENERIC_WORDS:-default}`, and bash's `:-` cannot tell "explicitly set to empty" apart from "unset" -- both took the default branch. A project that set the variable empty on purpose, to opt out the way the script's own comment block documented, instead kept classification ON against the bundled 100k-word list: the opposite of the documented behaviour, with a receipt that gave no sign anything was wrong.
+
+  `GENERIC_WORDS_FILE` is now derived with `${VAR+set}` -- a presence test, not a value test -- so an explicitly-empty `JIT_CONTEXT_GENERIC_WORDS` or `DYNAMIC_RULES_GENERIC_WORDS` is honoured as its own value rather than triggering the fallback chain. Between the two legitimate fixes #270 named, this repo picked **honour empty as an explicit opt-out** (skip classification, exit 0, unchanged receipt) over FATALing it the way #265 now FATALs an explicitly-configured-but-missing path: an empty string is the spelled-out, no-ambiguity way to say "nothing here on purpose," not a plausible typo, so there is no operator mistake for a FATAL to protect against.
+
+  `tests/test-generic-wordlist-broken-255.sh` gets a new section (A2) beside the existing empty-override case: the old section only asserted exit 0 and no `FATAL`, which the pre-#270 bug also satisfied while silently misclassifying -- the new section asserts on the actual index row, so a keyword the bundled wordlist marks generic must come back specific when the operator opted out.
+
+  A spawned reviewer caught a second, undocumented consequence of the same derivation change: an explicitly-empty `JIT_CONTEXT_GENERIC_WORDS` now also overrides a non-empty `DYNAMIC_RULES_GENERIC_WORDS`, where the old `${A:-${B:-default}}` chain would have fallen through the empty `A` to `B`. That is intentional -- an explicit opt-out on the primary variable should not be defeated by a fallback -- but it was neither commented nor tested; both are fixed in the same commit (section A3), and `assert_contains`'s substring match in A2 was tightened to an exact-line `assert_line`, since the old assertion would have kept passing even against the pre-#270 bug.
+
 ## [0.6.0] - 2026-08-26
 
 ### Added
@@ -2419,7 +2626,8 @@ and publishes it.
 
 Initial internal version: tool and path rules, configured through `config.json`.
 
-[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.7.0
 [0.6.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.4.0
