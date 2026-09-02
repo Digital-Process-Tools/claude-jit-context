@@ -2088,6 +2088,32 @@ function jit_session_key(raw, fs, fe, n,   i, k) {
   }
   return ""
 }
+# --- Stop/SubagentStop re-entry guard (#279) ---------------------------------
+# The harness re-invokes a Stop hook whose own output (additionalContext) blocked the
+# turn from ending, and marks that re-entry with "stop_hook_active":true in the same
+# payload -- a JSON boolean, never wrapped in quotes, so it cannot be read by
+# jit_session_key() quoted-value logic above. A hook that never checks this field
+# cannot tell its own re-entry from a first stop and re-emits the same
+# additionalContext every time, which is exactly what re-triggers it: nine straight
+# re-entries in one live session before the harness overrode the block (#279).
+#
+# The key field itself is still quoted ("stop_hook_active"), so it lands as its own
+# entry in raw/fs/fe exactly as "session_id" does. The BOOLEAN that follows it is not
+# quoted, so it never gets a field of its own -- it sits in the raw segment
+# immediately after the key closing quote, still carrying the leading ":" and
+# whatever trails it up to the next quote character (a comma, a closing brace, or the
+# next key opening quote). Matched as a prefix on that segment rather than parsed as
+# its own field, which is why this reads fe[i]+1 directly instead of looking for a
+# paired value field the way jit_session_key() does.
+function jit_stop_hook_active(raw, fs, fe, n,   i) {
+  for (i = 2; i <= n; i += 2) {
+    if (fs[i] != fe[i]) continue
+    if (raw[fs[i]] != "stop_hook_active") continue
+    if (fe[i] + 1 > n) return 0
+    return (raw[fe[i] + 1] ~ /^[[:space:]]*:[[:space:]]*true/) ? 1 : 0
+  }
+  return 0
+}
 # "" means this run keeps its shown set in memory only: it still dedups within the one
 # invocation, and forgets at exit. Every read and write of the set goes through the
 # functions below, so the empty case is handled in one place rather than at nine.

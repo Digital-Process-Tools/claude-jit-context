@@ -64,8 +64,8 @@ new_project() {
 state_of() { printf '%s' "$1/.claude/jit-context/.discovery/state"; }
 
 run_stop() {
-  local p="$1" sid="$2"
-  printf '{"session_id":"%s","hook_event_name":"Stop","stop_hook_active":false}' "$sid" \
+  local p="$1" sid="$2" active="${3:-false}"
+  printf '{"session_id":"%s","hook_event_name":"Stop","stop_hook_active":%s}' "$sid" "$active" \
     | CLAUDE_PROJECT_DIR="$p" bash "$SCRIPTS/stop-hook.sh" 2>&1
 }
 
@@ -199,6 +199,21 @@ OUT="$(run_stop "$P" "sess-h")"; RC=$?
 assert_rc0 "the hook exits 0 on 600 distinct fired entries" "$RC"
 assert_contains "the reported total accounts for all 600" "$OUT" "$JIT_HI entries injected"
 assert_contains "the overflow past the cap is named, not silently dropped" "$OUT" "more past this hook's own"
+
+echo ""
+echo "=== I: stop_hook_active=true -- a re-entry caused by this hook's own output, never re-report ==="
+# #279: the harness re-invokes Stop when a previous Stop's own additionalContext blocked
+# the turn from ending, and sets stop_hook_active=true on that re-entry. Section A is this
+# case's positive control on the same code path: the same fired-entries fixture, with
+# stop_hook_active=false, must still produce the numbered list. Without that pairing this
+# assertion would pass for free if the hook simply exited early on a malformed payload.
+
+P="$(new_project i)"
+mkdir -p "$(state_of "$P")"
+printf 'bridge.md\ncache.md\n' > "$(state_of "$P")/vocab-shown-sess-i.txt"
+OUT="$(run_stop "$P" "sess-i" "true")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_empty_json "stop_hook_active=true means no additionalContext, even though entries fired" "$OUT"
 
 echo ""
 echo "=========================================="
