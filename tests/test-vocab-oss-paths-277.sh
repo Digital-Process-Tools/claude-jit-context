@@ -17,6 +17,11 @@
 # carries no "## Modules" section -- IS tracked; the fix tracks it too, not teach the
 # generator to skip the layer.
 #
+# jit-drive: none -- ok()/bad() below are local, one-line pass/fail counters over plain
+# `[ -e ... ]` / `[ -s ... ]` / `git status --porcelain` checks, the same shape
+# test-commands.sh already declares `none` for; nothing here is a captured-output
+# assertion of the shared contains/lacks/marker shape test-assertion-helpers.sh drives.
+#
 # Usage: bash tests/test-vocab-oss-paths-277.sh
 
 set -uo pipefail
