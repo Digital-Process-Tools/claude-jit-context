@@ -2,7 +2,7 @@
 (^|/)(\.claude|examples|templates)/jit-context/.*\.md$	entries.md
 (^|/)data/generic-words[.]txt$	generic-words-data.md
 (^|/)scripts/(.*-hook|common|host)\.sh$	hooks.md
-\.claude-plugin/plugin\.json$	release.md
+\.(claude|codex)-plugin/plugin\.json$	release.md
 (^|/)tests/[^/]*\.sh$	tests.md
 (^|/)scripts/(rebuild-tsv|jit-dry-run|jit-misses|jit-init|jit-doctor|jit-match)\.sh$	tooling.md
 (^|/)(\.oss/[^/]+|\.github/workflows/oss-changelog\.yml)$	vendored-oss.md

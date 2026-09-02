@@ -78,8 +78,6 @@ assert_eq "CLAUDE_CODE_SESSION_ID alone -> claude-code" "claude-code" "$(run_det
 # host also sets can never be what tells the two apart.
 assert_eq "CLAUDE_PROJECT_DIR alone -> still unknown, not a signature" "unknown" "$(run_detect env CLAUDE_PROJECT_DIR=/tmp/x)"
 assert_eq "CLAUDE_PLUGIN_ROOT alone -> still unknown, not a signature" "unknown" "$(run_detect env CLAUDE_PLUGIN_ROOT=/tmp/x)"
-assert_eq "CODEX_SESSION_ID alone -> codex" "codex" "$(run_detect env CODEX_SESSION_ID=xyz)"
-assert_eq "CODEX_THREAD_ID alone -> codex" "codex" "$(run_detect env CODEX_THREAD_ID=xyz)"
 # Both hosts' own (non-alias) signatures present at once -- a real configuration
 # (a Codex session launched from inside a Claude Code session inherits the
 # parent's CLAUDE_CODE_* vars alongside its own freshly-set CODEX_* ones,
@@ -87,6 +85,13 @@ assert_eq "CODEX_THREAD_ID alone -> codex" "codex" "$(run_detect env CODEX_THREA
 # listed first in scripts/host.sh.
 assert_eq "both signatures present -> claude-code wins (registry order)" "claude-code" \
   "$(run_detect env CLAUDE_CODE_SESSION_ID=abc CODEX_SESSION_ID=xyz)"
+# #288 captured all 54 variables of a real Codex PreToolUse hook environment and found
+# no CODEX_ variable among them, so the two fixtures that used to sit here
+# ("CODEX_SESSION_ID alone -> codex", "CODEX_THREAD_ID alone -> codex") asserted a
+# signature that could never fire on a real machine. They are removed rather than
+# inverted: there is nothing left to detect codex BY. What replaces them is the
+# misdetection fixture in the #289 block below -- the failure that actually happens --
+# together with the two envelope-equality assertions that make it cost nothing.
 # Gemini CLI carries no signature at all -- it is never the RESULT of
 # detection, by design (scripts/host.sh's own comment on this row, matching
 # remember's registry). Nothing to assert it detects AS; the case that matters
@@ -98,13 +103,13 @@ run_lookup() {
   env -i PATH="$PATH" bash -c 'source "'"$HOST_SH"'" >/dev/null 2>&1; '"$1"' "'"$2"'"'
 }
 assert_eq "claude-code state is OBSERVED"        "OBSERVED"                "$(run_lookup jit_host_state claude-code)"
-assert_eq "codex state is UNKNOWN"               "UNKNOWN"                 "$(run_lookup jit_host_state codex)"
+assert_eq "codex state is OBSERVED (#288 watched it fire)" "OBSERVED"      "$(run_lookup jit_host_state codex)"
 assert_eq "gemini-cli state is UNKNOWN"          "UNKNOWN"                 "$(run_lookup jit_host_state gemini-cli)"
 assert_eq "a name with no row is UNKNOWN"        "UNKNOWN"                 "$(run_lookup jit_host_state bogus-host)"
 assert_eq "jit_host_detect own miss value is UNKNOWN" "UNKNOWN"            "$(run_lookup jit_host_state unknown)"
 
 assert_eq "claude-code inject envelope is its own shape" "claude-hookSpecificOutput" "$(run_lookup jit_host_inject_envelope claude-code)"
-assert_eq "codex inject envelope is UNKNOWN -- not observed for THIS plugin" "UNKNOWN" "$(run_lookup jit_host_inject_envelope codex)"
+assert_eq "codex inject envelope is Claude Code's own shape (#288)" "claude-hookSpecificOutput" "$(run_lookup jit_host_inject_envelope codex)"
 assert_eq "gemini-cli inject envelope is UNKNOWN"     "UNKNOWN"            "$(run_lookup jit_host_inject_envelope gemini-cli)"
 
 # The third state, by name. Every one of these five must NOT read as
@@ -112,7 +117,7 @@ assert_eq "gemini-cli inject envelope is UNKNOWN"     "UNKNOWN"            "$(ru
 # false, and much stronger, no) -- "refusal-not-established" is the only
 # honest answer for a host whose PreToolUse refusal has never been watched.
 assert_eq "claude-code refusal is the one OBSERVED contract" "claude-decision-block"   "$(run_lookup jit_host_refusal_state claude-code)"
-assert_eq "codex refusal is not-established, not a guess"    "refusal-not-established" "$(run_lookup jit_host_refusal_state codex)"
+assert_eq "codex refusal is the same OBSERVED contract (#288)" "claude-decision-block" "$(run_lookup jit_host_refusal_state codex)"
 assert_eq "gemini-cli refusal is not-established"            "refusal-not-established" "$(run_lookup jit_host_refusal_state gemini-cli)"
 assert_eq "an unrecognised host is not-established"          "refusal-not-established" "$(run_lookup jit_host_refusal_state bogus-host)"
 assert_eq "the empty string is not-established"              "refusal-not-established" "$(env -i PATH="$PATH" bash -c 'source "'"$HOST_SH"'" >/dev/null 2>&1; jit_host_refusal_state ""')"
@@ -173,6 +178,120 @@ for hook in pre-tool-hook.sh pre-prompt-hook.sh pre-path-hook.sh session-start-h
   assert_literal_in "$hook still hand-rolls the identical inject tail" \
     "$INJECT_TAIL_ESC" "$INJECT_TAIL_PLAIN" "$REPO/scripts/$hook"
 done
+
+
+echo ""
+echo "=== #289: the codex row, after #288's live observation ==="
+# Every assertion below is grounded in real codex-cli 0.150.1 runs captured for #288,
+# not in Codex's documentation and not in remember's observation of its own
+# inject-only hooks. Four runs: one passthrough, one {"decision":"block"}, one
+# permissionDecision:deny, one additionalContext. Both refusal shapes stopped the call
+# ("hook: PreToolUse Blocked", and the command never ran); additionalContext let it
+# through, which is correct.
+assert_eq "codex honours the same block envelope Claude Code does" \
+  "claude-decision-block" "$(run_lookup jit_host_refusal_state codex)"
+assert_eq "codex takes the same inject envelope Claude Code does" \
+  "claude-hookSpecificOutput" "$(run_lookup jit_host_inject_envelope codex)"
+
+# The two above are what make a misdetection between these hosts harmless: their
+# contracts are byte-identical, so nothing emitted can differ. That is the whole
+# reason jit_host_detect() is safe to leave best-effort.
+assert_eq "claude-code and codex agree on the refusal envelope" \
+  "$(run_lookup jit_host_refusal_state claude-code)" "$(run_lookup jit_host_refusal_state codex)"
+assert_eq "claude-code and codex agree on the inject envelope" \
+  "$(run_lookup jit_host_inject_envelope claude-code)" "$(run_lookup jit_host_inject_envelope codex)"
+
+# gemini-cli is still unobserved and must not have been swept along by #288.
+assert_eq "gemini-cli was not swept along -- still not established" \
+  "refusal-not-established" "$(run_lookup jit_host_refusal_state gemini-cli)"
+assert_eq "gemini-cli was not swept along -- still UNKNOWN" \
+  "UNKNOWN" "$(run_lookup jit_host_state gemini-cli)"
+
+echo ""
+echo "=== #289: hook-not-trusted is its own state, and is not permission ==="
+# Observed for #288: a Codex hook with no trusted_hash in ~/.codex/config.toml is
+# silently skipped -- no warning, no non-zero exit, no transcript line, the tool call
+# simply proceeds. remember's four hooks firing in that same run is the positive
+# control, so the silence was trust and only trust. That is a THIRD thing:
+# "unsupported" says the host cannot block, "refusal-not-established" says nobody
+# checked, and this says the host can, we asked, and it declined to run us.
+assert_eq "hook-not-trusted is recognised and returned as itself" \
+  "hook-not-trusted" "$(run_lookup jit_host_refusal_state_for_envelope hook-not-trusted)"
+assert_eq "an unrecognised envelope normalises to the safe third state" \
+  "refusal-not-established" "$(run_lookup jit_host_refusal_state_for_envelope bogus-envelope)"
+assert_eq "a refusal is honoured for claude-decision-block" \
+  "yes" "$(run_lookup jit_host_refusal_honoured claude-decision-block)"
+assert_eq "a refusal is NOT honoured when the hook is not trusted" \
+  "no" "$(run_lookup jit_host_refusal_honoured hook-not-trusted)"
+assert_eq "a refusal is NOT honoured when unsupported" \
+  "no" "$(run_lookup jit_host_refusal_honoured unsupported)"
+assert_eq "a refusal is NOT honoured when not established" \
+  "no" "$(run_lookup jit_host_refusal_honoured refusal-not-established)"
+
+echo ""
+echo "=== #289: detection is best-effort, and the registry says so ==="
+# Captured live for #288: a Codex hook launched from inside a Claude Code shell
+# inherits CLAUDE_CODE_ENTRYPOINT and CLAUDE_CODE_SESSION_ID from its parent, so
+# detection answers claude-code for a genuine Codex hook. One agent CLI launching
+# another is the normal way this plugin gets exercised, and no environment variable
+# survives it -- remember reached the same place from the other side, its own
+# detect_host() ending with zero production consumers.
+assert_eq "an inherited CLAUDE_CODE_ENTRYPOINT makes detection answer claude-code under Codex" \
+  "claude-code" "$(run_detect CLAUDE_CODE_ENTRYPOINT=cli PLUGIN_ROOT=/x/.codex/plugins/cache/mk/p/0.0.1)"
+assert_eq "detection is documented as best-effort" \
+  "yes" "$(grep -q 'BEST-EFFORT' "$HOST_SH" && echo yes || echo no)"
+assert_eq "the codex row no longer claims a signature that cannot fire" \
+  "no" "$(grep -q '^codex|CODEX_' "$HOST_SH" && echo yes || echo no)"
+
+echo ""
+echo "=== #289: the Codex install layer ships, and matches the Claude one ==="
+CODEX_MANIFEST="$REPO/.codex-plugin/plugin.json"
+CODEX_HOOKS="$REPO/hooks/hooks.codex.json"
+CLAUDE_HOOKS="$REPO/hooks/hooks.json"
+CLAUDE_MANIFEST="$REPO/.claude-plugin/plugin.json"
+MARKETPLACE="$REPO/.agents/plugins/marketplace.json"
+assert_eq "a Codex plugin manifest ships"    "yes" "$( [ -r "$CODEX_MANIFEST" ] && echo yes || echo no )"
+assert_eq "a Codex hooks manifest ships"     "yes" "$( [ -r "$CODEX_HOOKS" ] && echo yes || echo no )"
+assert_eq "a self-referential marketplace entry ships" "yes" "$( [ -r "$MARKETPLACE" ] && echo yes || echo no )"
+assert_eq "the Codex manifest points at the Codex hooks file, relatively" \
+  "yes" "$(grep -q '"\./hooks/hooks\.codex\.json"' "$CODEX_MANIFEST" 2>/dev/null && echo yes || echo no)"
+assert_eq "the Codex hooks manifest uses PLUGIN_ROOT, not CLAUDE_PLUGIN_ROOT" \
+  "no" "$(grep -q 'CLAUDE_PLUGIN_ROOT' "$CODEX_HOOKS" 2>/dev/null && echo yes || echo no)"
+
+# One plugin, one version. remember's own test_codex_manifest_410.py carries this
+# assertion for the same reason: a second manifest that drifts from the first ships
+# stale metadata silently.
+# No pipe: tests/test-assertion-helpers.sh's structural scan refuses a test that
+# pipes into an early-exiting reader, and awk reading the file directly needs neither.
+manifest_version() {
+  LC_ALL=C awk -F'"' '/"version"[[:space:]]*:/ { print $4; exit }' "$1"
+}
+assert_eq "the two manifests declare the same version" \
+  "$(manifest_version "$CLAUDE_MANIFEST")" \
+  "$(manifest_version "$CODEX_MANIFEST")"
+assert_eq "and that version is not empty (positive control)" \
+  "yes" "$( [ -n "$(manifest_version "$CLAUDE_MANIFEST")" ] && echo yes || echo no )"
+
+# Every script one manifest binds, the other must bind. A hook that ships on one host
+# and silently not the other is this repo's own defect class wearing a manifest.
+for _s in session-start-hook pre-prompt-hook pre-tool-hook pre-path-hook post-tool-hook stop-hook; do
+  assert_eq "hooks.codex.json binds $_s.sh" \
+    "yes" "$(grep -q "$_s\.sh" "$CODEX_HOOKS" 2>/dev/null && echo yes || echo no)"
+  assert_eq "hooks.json binds $_s.sh (positive control)" \
+    "yes" "$(grep -q "$_s\.sh" "$CLAUDE_HOOKS" 2>/dev/null && echo yes || echo no)"
+done
+
+# Codex documents exactly eleven lifecycle events. A manifest naming one it does not
+# document registers nothing, silently -- the same shape as an untrusted hook.
+CODEX_DOCUMENTED='SessionStart SessionEnd SubagentStart SubagentStop PreToolUse PostToolUse PermissionRequest PreCompact PostCompact UserPromptSubmit Stop'
+_undocumented=""
+for _ev in $(grep -oE '^    "[A-Za-z]+": \[' "$CODEX_HOOKS" | tr -d ' ":[' ); do
+  case " $CODEX_DOCUMENTED " in
+    *" $_ev "*) ;;
+    *) _undocumented="$_undocumented $_ev" ;;
+  esac
+done
+assert_eq "hooks.codex.json names only events Codex documents" "" "$_undocumented"
 
 echo ""
 echo "========================"

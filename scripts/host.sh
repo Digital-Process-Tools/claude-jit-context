@@ -41,12 +41,12 @@
 #   5  state             OBSERVED or UNKNOWN -- has claude-jit-context ITSELF been run
 #                        under this host and watched fire. Never set to OBSERVED on
 #                        the strength of another plugin's observation: remember 0.24.0
-#                        watched Codex fire its own inject-only hooks against a real
-#                        codex-cli 0.150.1 install, and that is real evidence the
-#                        signature/var columns below are grounded rather than
-#                        invented -- it is not evidence about THIS plugin's harder
-#                        contract, the PreToolUse refusal, which remember never uses
-#                        and Codex has not been watched honour for us.
+#                        watched Codex fire its own INJECT-ONLY hooks, which was never
+#                        evidence about this plugin's harder contract. codex is
+#                        OBSERVED here on #288's own runs against codex-cli 0.150.1:
+#                        PreToolUse fired, the payload carried tool_name and
+#                        tool_input under those names, and a {"decision":"block"}
+#                        stopped a real command from running.
 #   6  inject_envelope   the shape identifier a SessionStart/UserPromptSubmit/
 #                        PostToolUse inject must take on this host, or UNKNOWN
 #   7  refusal_envelope  the shape identifier a PreToolUse refusal must take,
@@ -59,16 +59,34 @@
 # with a real signature is tried before one with none, so an empty signature can never
 # accidentally win a tie it was never meant to enter.
 #
-# codex's signature_vars, project_dir_var and plugin_root_var are copied verbatim from
-# remember's own CODEX Host instance (pipeline/host.py, 0.24.0) -- CODEX_SESSION_ID and
-# CODEX_THREAD_ID are, in that file's own words, "what a live codex exec process
-# actually exports on every run, verified against codex-cli 0.150.1". gemini-cli
-# carries no signature and no known variables at all: Gemini CLI documents none for
-# command hooks, which remember's own registry notes is not a gap in what it records --
-# "it is what UNKNOWN already behaves like."
+# codex carries NO signature_vars, and that is a measurement rather than an omission.
+# The row previously claimed CODEX_SESSION_ID,CODEX_THREAD_ID, copied from remember's
+# own CODEX Host instance. #288 captured the whole environment of a real Codex
+# PreToolUse hook -- 54 variables -- and not one CODEX_ variable was among them, so
+# that signature could never have fired. remember reached the same conclusion from the
+# other side: those names reach a Codex *tool shell*, never the process that runs a
+# hook, which is why its own detect_host() ended with zero production consumers.
+#
+# What #288 also captured is why detection here is BEST-EFFORT and must stay
+# non-load-bearing: a Codex hook launched from inside a Claude Code shell inherits
+# CLAUDE_CODE_ENTRYPOINT and CLAUDE_CODE_SESSION_ID from its parent, so
+# jit_host_detect() answers "claude-code" for a genuine Codex hook. That is not a bug
+# to fix by adding a cleverer signature -- one agent CLI launching another is the
+# normal way this plugin gets exercised, and no environment variable survives it.
+#
+# It costs nothing on the wire, which is the point: #288 observed that Codex takes the
+# SAME envelope Claude Code does, both directions. Same payload field names
+# (tool_name, tool_input.command), same {"decision":"block"}, same hookSpecificOutput.
+# So the two rows carry identical contracts, tests/test-host-registry.sh asserts they
+# stay identical, and a misdetection between them cannot change a byte emitted.
+#
+# gemini-cli carries no signature and no known variables at all: Gemini CLI documents
+# none for command hooks, which remember's own registry notes is not a gap in what it
+# records -- "it is what UNKNOWN already behaves like." It is also the design's real
+# test (BeforeTool/AfterTool), and nothing in #288 speaks to it.
 JIT_HOST_REGISTRY='
 claude-code|CLAUDE_CODE_ENTRYPOINT,CLAUDE_CODE_SESSION_ID|CLAUDE_PROJECT_DIR|CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block
-codex|CODEX_SESSION_ID,CODEX_THREAD_ID|CLAUDE_PROJECT_DIR|PLUGIN_ROOT,CLAUDE_PLUGIN_ROOT|UNKNOWN|UNKNOWN|refusal-not-established
+codex||CLAUDE_PROJECT_DIR|PLUGIN_ROOT,CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block
 gemini-cli||||UNKNOWN|UNKNOWN|refusal-not-established
 '
 
@@ -142,6 +160,19 @@ jit_host_inject_envelope() {
 #   unsupported                this host has been watched NOT support a refusal at all
 #                              (no row is this today -- a real negative result, not
 #                              yet observed for any host)
+#   hook-not-trusted           the host has the contract and the plugin declares the
+#                              hook, and the host is DECLINING TO RUN IT. Observed for
+#                              #288: Codex keys a trusted_hash per hook in its
+#                              config.toml, and a hook with no entry is silently
+#                              skipped -- no warning, no non-zero exit, no transcript
+#                              line, the tool call simply proceeds. This is neither of
+#                              the two above: "unsupported" says the host cannot block,
+#                              "refusal-not-established" says nobody checked, and this
+#                              says the host can and we asked and it did not. No ROW
+#                              carries it -- it is not a property of a host, it is a
+#                              property of one install -- but jit_host_refusal_honoured()
+#                              below must answer "no" for it, which is the whole reason
+#                              it is named rather than folded into either neighbour.
 #   refusal-not-established    every other case: an unrecognised NAME, a row with
 #                              nothing in its 7th column, or a row whose state is not
 #                              OBSERVED. This is NOT "unsupported" -- it is "nobody has
@@ -155,4 +186,29 @@ jit_host_refusal_state() {
   row=$(jit_host_row "$name") || { printf 'refusal-not-established\n'; return 0; }
   IFS='|' read -r _ _ _ _ _ _ refusal <<<"$row"
   printf '%s\n' "${refusal:-refusal-not-established}"
+}
+
+# jit_host_refusal_state_for_envelope ENVELOPE -- the identity function over refusal
+# envelope identifiers, with an unrecognised value normalised to the safe third state.
+# It exists so a caller holding an envelope identifier that did NOT come from a
+# registry row -- "hook-not-trusted", derived per install rather than per host -- runs
+# through the same recognition every row value does, instead of being compared against
+# string literals at each call site.
+jit_host_refusal_state_for_envelope() {
+  case "${1:-}" in
+    claude-decision-block|unsupported|hook-not-trusted) printf '%s\n' "$1" ;;
+    *) printf 'refusal-not-established\n' ;;
+  esac
+}
+
+# jit_host_refusal_honoured ENVELOPE -- "yes" only when a refusal emitted in this shape
+# has been watched stop a real call. Everything else is "no", and the three ways of
+# being "no" are deliberately not collapsed by the caller: this function is the single
+# place that decides, so a hook can never accidentally treat "nobody checked" or "the
+# host declined to run us" as permission to emit a block that will be ignored.
+jit_host_refusal_honoured() {
+  case "$(jit_host_refusal_state_for_envelope "${1:-}")" in
+    claude-decision-block) printf 'yes\n' ;;
+    *) printf 'no\n' ;;
+  esac
 }
