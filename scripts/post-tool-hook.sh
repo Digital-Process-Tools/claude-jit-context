@@ -28,10 +28,15 @@
 # session, most of which have nothing to do with this project's own tree.
 # `hooks/hooks.json` already narrows PostToolUse to the Write and Edit tools via its own
 # matcher, and after the one JSON parse below the very first thing this script does is a
-# plain `case` prefix comparison against $JIT_BASE -- never a match against the index,
-# never a second fork for anything but the marker write itself (and, since #276, the
-# canonicalisation fallback below, which is itself gated behind a zero-fork substring
-# test before it forks anything).
+# zero-fork substring test against the file_path -- never a match against the index,
+# never a fork at all -- for a session whose edit has nothing to do with this project's
+# tree. #286 changed what happens once that test passes: canonicalisation (the forking
+# part) is no longer a rare fallback gated behind a second, lexical, $JIT_BASE-prefix
+# test -- it now runs on every file_path that reaches this point, including the
+# ordinary in-tree edit this hook exists to observe. That is a deliberate trade: the
+# substring test is still the one thing that keeps every OTHER session's edit at zero
+# forks, and the edits that do reach canonicalisation are, by construction, either a
+# real edit to this project's own tree or an attempt to look like one.
 #
 # A hook must never fail hard (hooks.md): every exit below answers `{}`.
 SCRIPT_DIR="$(dirname "$0")"
@@ -102,96 +107,85 @@ case "$PT_FP" in
   *..*|*\\*) echo '{}'; exit 0 ;;
 esac
 
-# The cheap prefix test. $JIT_BASE carries no trailing slash on the ordinary path
-# (common.sh), so on an ordinary session this already cannot match a sibling directory
-# that merely starts with the same characters -- ".claude/jit-contextual/x" is not
-# ".claude/jit-context/x". It is also the fast path almost every OTHER session's edit
-# takes: no match, no fork, exit -- the cost this hook's header promises to hold to.
+# #286: canonicalisation used to run ONLY on the branch below, reached when the cheap
+# lexical prefix test says "outside the tree" -- because #276 already knew that test is
+# lexical, not physical, and can miss a file that IS inside the tree (see the three
+# routes named below). What #276 did not cover: a path that is lexically INSIDE
+# $JIT_BASE but physically outside it -- a symlink planted inside
+# ".claude/jit-context/" itself, pointing elsewhere -- takes the OTHER branch, the one
+# that was trusted on the lexical test alone, and never reached the canonical check at
+# all. That is a false-positive marker for an edit that did not actually land in the
+# tree, the opposite direction from #276's false negative, same misreport shape.
+#
+# Restructured to one call site rather than two: the lexical prefix test above is
+# replaced by the cheap substring test alone as the ONLY zero-fork gate (JIT_BASE's
+# tail is always the literal ".claude/jit-context" -- common.sh builds no other shape --
+# so a file_path that does not contain that substring anywhere cannot be inside ANY
+# project's jit-context tree, canonical or not, and is rejected here with zero forks,
+# still the fast path for almost every OTHER session's edit, which is what this hook's
+# header promises to hold the cost to). Anything that passes the substring test now
+# ALWAYS reaches the canonical check below, whether or not it also happened to pass the
+# old lexical prefix test -- so the physically-outside-but-lexically-inside case can no
+# longer skip it.
 case "$PT_FP" in
-  "$JIT_BASE"/*) ;;
-  *)
-    # #276: the literal test above is lexical, not physical, and three ordinary values
-    # make it miss a file that IS inside this tree. A trailing slash on
-    # CLAUDE_PROJECT_DIR leaves JIT_BASE reading ".../project//.claude/jit-context",
-    # and no real file_path carries a doubled slash to match it. A relative
-    # CLAUDE_PROJECT_DIR leaves JIT_BASE never starting with "/" at all, so it can
-    # never prefix an absolute file_path, for any input. And a symlinked project root
-    # (macOS's /tmp -> /private/tmp is the standing example) means JIT_BASE and
-    # file_path can each spell the exact same file on disk with different characters --
-    # whichever one of the two a given payload happens to canonicalise and the other
-    # does not. A missed marker here is not just a missed injection: stop-hook.sh reads
-    # its absence as the positive claim "nothing was updated", which is false when the
-    # observer never matched in the first place.
-    #
-    # Resolving that costs a `cd -P` fork, and the header above is explicit that this
-    # hook affords at most one fork beyond the marker write, for every edit everywhere,
-    # most of which have nothing to do with this project. So the fallback stays behind
-    # a substring test that costs nothing: JIT_BASE's tail is always the literal
-    # ".claude/jit-context" (common.sh builds no other shape), so a file_path that does
-    # not contain that substring anywhere cannot be inside ANY project's jit-context
-    # tree, canonical or not, and is rejected right here with zero forks -- exactly the
-    # fast path above, just one string test later.
-    case "$PT_FP" in
-      *"/.claude/jit-context/"*) ;;
-      *) echo '{}'; exit 0 ;;
-    esac
+  *"/.claude/jit-context/"*) ;;
+  *) echo '{}'; exit 0 ;;
+esac
 
-    # jit_pt_canon_dir(): prints $1's physical location on disk today, resolving
-    # symlinks in whatever prefix of it already exists and reattaching whatever is
-    # left (which cannot itself contain a symlink, because it does not exist yet) with
-    # single slashes. Adapted from jit-init.sh's resolve_dir() -- duplicated rather
-    # than shared, because the two scripts do not source a common file for this and
-    # adding one is a bigger change than this fix. No `realpath`: jit-init.sh's own
-    # comment already established there is none on macOS, and none may be added here
-    # either (hooks.md: no new runtime dependency).
-    jit_pt_canon_dir() {
-      local head="$1" tail="" phys
-      while [ ! -d "$head" ]; do
-        case "$head" in */*) ;; *) break ;; esac
-        tail="${head##*/}${tail:+/}$tail"
-        head="${head%/*}"
-        [ -n "$head" ] || head="/"
-      done
-      if [ -d "$head" ]; then
-        phys="$(CDPATH='' cd -P "$head" 2>/dev/null && pwd -P)"
-        [ -n "$phys" ] && head="$phys"
-      fi
-      if [ -z "$tail" ]; then
-        printf '%s\n' "$head"
-      else
-        printf '%s/%s\n' "${head%/}" "$tail"
-      fi
-    }
+# jit_pt_canon_dir(): prints $1's physical location on disk today, resolving
+# symlinks in whatever prefix of it already exists and reattaching whatever is
+# left (which cannot itself contain a symlink, because it does not exist yet) with
+# single slashes. Adapted from jit-init.sh's resolve_dir() -- duplicated rather
+# than shared, because the two scripts do not source a common file for this and
+# adding one is a bigger change than this fix. No `realpath`: jit-init.sh's own
+# comment already established there is none on macOS, and none may be added here
+# either (hooks.md: no new runtime dependency).
+jit_pt_canon_dir() {
+  local head="$1" tail="" phys
+  while [ ! -d "$head" ]; do
+    case "$head" in */*) ;; *) break ;; esac
+    tail="${head##*/}${tail:+/}$tail"
+    head="${head%/*}"
+    [ -n "$head" ] || head="/"
+  done
+  if [ -d "$head" ]; then
+    phys="$(CDPATH='' cd -P "$head" 2>/dev/null && pwd -P)"
+    [ -n "$phys" ] && head="$phys"
+  fi
+  if [ -z "$tail" ]; then
+    printf '%s\n' "$head"
+  else
+    printf '%s/%s\n' "${head%/}" "$tail"
+  fi
+}
 
-    JIT_BASE_ABS="$JIT_BASE"
-    case "$JIT_BASE_ABS" in
-      /*) ;;
-      *) JIT_BASE_ABS="$PWD/$JIT_BASE_ABS" ;;
-    esac
-    JIT_BASE_CANON="$(jit_pt_canon_dir "$JIT_BASE_ABS")"
+JIT_BASE_ABS="$JIT_BASE"
+case "$JIT_BASE_ABS" in
+  /*) ;;
+  *) JIT_BASE_ABS="$PWD/$JIT_BASE_ABS" ;;
+esac
+JIT_BASE_CANON="$(jit_pt_canon_dir "$JIT_BASE_ABS")"
 
-    PT_FP_ABS="$PT_FP"
-    case "$PT_FP_ABS" in
-      /*) ;;
-      *) PT_FP_ABS="$PWD/$PT_FP_ABS" ;;
-    esac
-    case "$PT_FP_ABS" in
-      */) PT_FP_DIR="${PT_FP_ABS%/}"; PT_FP_BASE="" ;;
-      *)  PT_FP_DIR="${PT_FP_ABS%/*}"; PT_FP_BASE="${PT_FP_ABS##*/}" ;;
-    esac
-    [ -n "$PT_FP_DIR" ] || PT_FP_DIR="/"
-    PT_FP_DIR_CANON="$(jit_pt_canon_dir "$PT_FP_DIR")"
-    if [ -n "$PT_FP_BASE" ]; then
-      PT_FP_CANON="${PT_FP_DIR_CANON%/}/$PT_FP_BASE"
-    else
-      PT_FP_CANON="$PT_FP_DIR_CANON"
-    fi
+PT_FP_ABS="$PT_FP"
+case "$PT_FP_ABS" in
+  /*) ;;
+  *) PT_FP_ABS="$PWD/$PT_FP_ABS" ;;
+esac
+case "$PT_FP_ABS" in
+  */) PT_FP_DIR="${PT_FP_ABS%/}"; PT_FP_BASE="" ;;
+  *)  PT_FP_DIR="${PT_FP_ABS%/*}"; PT_FP_BASE="${PT_FP_ABS##*/}" ;;
+esac
+[ -n "$PT_FP_DIR" ] || PT_FP_DIR="/"
+PT_FP_DIR_CANON="$(jit_pt_canon_dir "$PT_FP_DIR")"
+if [ -n "$PT_FP_BASE" ]; then
+  PT_FP_CANON="${PT_FP_DIR_CANON%/}/$PT_FP_BASE"
+else
+  PT_FP_CANON="$PT_FP_DIR_CANON"
+fi
 
-    case "$PT_FP_CANON" in
-      "$JIT_BASE_CANON"/*) ;;
-      *) echo '{}'; exit 0 ;;
-    esac
-    ;;
+case "$PT_FP_CANON" in
+  "$JIT_BASE_CANON"/*) ;;
+  *) echo '{}'; exit 0 ;;
 esac
 
 # `[ -L ]` before the write, the same guard jit_shown_apply() applies to the `shown`
@@ -204,6 +198,19 @@ esac
 EDIT_MARK="$JIT_STATE_DIR/edited-$PT_SESSION.txt"
 if [ ! -L "$EDIT_MARK" ]; then
   : 2>/dev/null > "$EDIT_MARK"
+else
+  # #285: the guard above tripped -- a symlink sits at the marker's own name -- so the
+  # write above never happened, and stop-hook.sh reading that absence would read it as
+  # the positive claim "nothing was edited", which is false: an edit DID land, only its
+  # evidence was refused. This branch already knows it is declining, which is the only
+  # place this trace is allowed to cost anything (the ordinary A/B paths above never
+  # reach here). Same `[ -L ]`-before-write guard, same left-to-right redirection
+  # ordering, for the same reason: this new marker name is exactly as real a symlink
+  # target as EDIT_MARK itself.
+  EDIT_DECLINED_MARK="$JIT_STATE_DIR/edited-declined-$PT_SESSION.txt"
+  if [ ! -L "$EDIT_DECLINED_MARK" ]; then
+    : 2>/dev/null > "$EDIT_DECLINED_MARK"
+  fi
 fi
 
 echo '{}'

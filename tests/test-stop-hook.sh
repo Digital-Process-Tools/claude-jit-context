@@ -247,6 +247,76 @@ assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "an escaped quote ahead of stop_hook_active does not hide a real true" "$OUT"
 
 echo ""
+echo "=== L: awk cannot run at all -- unknown, not false, taking the safe (true-like) silent branch (#284) ==="
+# The parsed STOP_HOOK_ACTIVE variable is empty when the awk parse cannot run at all
+# (stub awk, a broken interpreter). Reading that empty string identically to a parsed
+# "false" falls through to the "could not tell" branch further down, which EMITS
+# additionalContext -- exactly the output that blocks a turn from ending and reopens
+# #279's re-entry loop, in the one state where the hook is least able to notice. A
+# third value, distinct from both true and false, must take the SAME silent early
+# return "true" does.
+
+P="$(new_project l)"
+mkdir -p "$(state_of "$P")"
+printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-l.txt"
+FAKE_AWK_DIR="$TMP/fake-awk-l"
+mkdir -p "$FAKE_AWK_DIR"
+cat > "$FAKE_AWK_DIR/awk" <<'FAKE_AWK'
+#!/bin/sh
+exit 127
+FAKE_AWK
+chmod +x "$FAKE_AWK_DIR/awk"
+OUT="$(printf '{"session_id":"sess-l","stop_hook_active":true}' \
+  | PATH="$FAKE_AWK_DIR:$PATH" CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" 2>&1)"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_empty_json "an unusable awk renders as silence, never as the could-not-tell additionalContext" "$OUT"
+
+echo ""
+echo "=== M: a fired session with a REAL awk and stop_hook_active=false is the positive control for L ==="
+# Without this pairing, L would pass for free if the fix simply silenced this hook
+# whenever anything at all goes wrong -- section A already proves the ordinary awk
+# path still reports; this repeats that proof with the SAME fixture shape as L (a
+# single fired entry) so a reader can compare the two runs directly.
+
+P="$(new_project m)"
+mkdir -p "$(state_of "$P")"
+printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-m.txt"
+OUT="$(run_stop "$P" "sess-m")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_contains "a real awk on the same fixture shape still reports the fired entry" "$OUT" "bridge.md"
+
+echo ""
+echo "=== N: a symlink-refused edit marker (#285) renders as its own fourth state, distinct from B and D ==="
+# post-tool-hook.sh drops a distinguishable declined-marker when its own symlink guard
+# trips on the edit marker's write. This must render differently from B (nothing was
+# edited at all) and from D (the state directory itself could not be trusted) -- a
+# reader must be able to tell "an edit happened but its evidence was refused" apart
+# from both.
+
+P="$(new_project n)"
+mkdir -p "$(state_of "$P")"
+printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-n.txt"
+: > "$(state_of "$P")/edited-declined-sess-n.txt"
+OUT="$(run_stop "$P" "sess-n")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_contains "it says an edit could not be confirmed" "$OUT" "could not be confirmed"
+if [ "$OUT" = "{}" ]; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: the declined-marker state rendered as silence"
+else
+  PASS=$((PASS + 1)); echo "  PASS: the declined-marker state did not render as silence"
+fi
+if grep -qF -- "none updated" <<<"$OUT"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: the declined-marker state rendered identically to case B (none updated)"
+else
+  PASS=$((PASS + 1)); echo "  PASS: the declined-marker state text differs from case B"
+fi
+if grep -qF -- "could not tell whether any entry fired" <<<"$OUT"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: the declined-marker state rendered identically to case D (state dir unknown)"
+else
+  PASS=$((PASS + 1)); echo "  PASS: the declined-marker state text differs from case D"
+fi
+
+echo ""
 echo "=========================================="
 if [ "$D_SKIPPED" -eq 0 ]; then
   echo "Results: $PASS passed, $FAIL failed"
