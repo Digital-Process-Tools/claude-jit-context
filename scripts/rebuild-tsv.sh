@@ -461,7 +461,9 @@ fi
 # empty file silently classified every keyword as non-generic and nothing said so --
 # this repo's own defect class, in the tool built to name it. `paths/00-manual/
 # tooling.md` binds this script to fail loudly rather than degrade silently, so the
-# four states below are distinguished and only two of them are silent:
+# four states below are distinguished, and only the first is silent (the fourth,
+# successful classification, was never counted as part of this silent-vs-loud pair --
+# see the original #255 comment this widens):
 #
 #   unset / default path absent -- the documented degrade: an index built before this
 #                              feature landed, or a project that opted out by setting
