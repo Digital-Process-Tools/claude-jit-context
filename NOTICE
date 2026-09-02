@@ -67,14 +67,14 @@ License: Mozilla Public License 2.0
 This file is Covered Software under the MPL 2.0. The upstream project's own
 README (fr_FR/dictionaries/README_dict_fr.txt) states its licence the same
 way this notice does -- by name and version, with a URL to the canonical
-text, rather than embedding the license body in the dictionary's own
+text, rather than embedding the licence body in the dictionary's own
 distribution:
 
     Licence :
       MPL : Mozilla Public License
       version 2.0  --  http://www.mozilla.org/MPL/2.0/
 
-Following that same convention, the full license text is not reproduced in
+Following that same convention, the full licence text is not reproduced in
 this repository. It is stable, versioned, and permanently available at:
 
   https://www.mozilla.org/en-US/MPL/2.0/
@@ -85,5 +85,5 @@ each upstream `.dic` line are dropped), lowercase-only, ASCII-folded. See
 No modifications to the Covered Software's content are distributed beyond
 this filtering and folding, and none are claimed as this project's own.
 
-Nothing in this file, or in the license referenced above, alters or is
+Nothing in this file, or in the licence referenced above, alters or is
 altered by claude-jit-context's own LICENSE.
