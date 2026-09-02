@@ -7,6 +7,55 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-02
+
+### Fixed
+
+- **Audited every `assert_not_contains` call site in `tests/*.sh` whose needle is a `.md` filename for the whole-output-vs-narrowed-section fragility #257 named, rather than only chasing the one instance already confirmed broken** (#257). Re-derived the surface at 42 sites (not the 40 counted on `main` at `ac17c25`, since #251's real wordlist and #256's fix both moved it). Every site was read and classified:
+
+  - 21 already read an already-narrowed variable (`$WARNS`, `$IDCOL`, `fired_for(...)`, ...) -- fine as written, per #257's own framing.
+  - 3 read a different producer entirely -- an index file or a hook's on-disk marker, never `rebuild-tsv.sh`'s stderr report -- so the two-section collision #257 describes cannot reach them.
+  - 5 read a single tool-call's decision output from `pre-tool-hook.sh` / `pre-path-hook.sh` (`test-security.sh`, `test-rule-guard.sh`, `test-invocation-macro.sh`), which has one shape per call and no second section capable of naming a file.
+  - 4 check that a name forged inside an entry body (`evil-forged*.md`) is never reported as a match (`test-jit-dry-run-report-forgery.sh`); that name is never indexed anywhere, so no section, present or future, can legitimately produce it -- genuinely "absent from everything", the case #257 says needs no change.
+  - 9 read `rebuild-tsv.sh`'s whole multi-section stderr report directly (`test-inject-mode.sh`, `test-silent-drops.sh`) but check for a needle shape -- a 2-space-indented full relative path, or a `filename: reason` suffix -- that is structurally unique to the one section meant, because the all-generic fallback's own advisory lines (`    [label] filename`) carry neither an indent-then-full-path nor a trailing colon. Verified empirically, not just by reading the format strings: every fixture keyword these assertions cover (`billing`, `invoice`, `ledger`, `file`, `payments`, `pinned`, `quoted`, `weird`) classifies as generic against the real, merged `data/generic-words.txt`, so the fallback section is actually firing in these tests today, and the assertions still pass for the right reason.
+
+  The one instance #257 named as already confirmed broken -- `billing.md` in `test-inject-mode.sh`'s "does not count a summary entry as whole" assertion -- was already fixed by #256's `COST_SECTION` scoping, merged to `main` before this branch's base; reproducing it red first (per #257's own TDD instruction) found it green already. No other site in the 42 is currently fragile for the reason #257 describes. The remaining 9 whole-report reads are safe today by a needle format that happens to be section-specific rather than by an explicit scope -- noted for the maintainer as a candidate for the same `awk`-range narrowing `test-inject-mode.sh`'s `COST_SECTION` and `test-generic-keywords-232.sh`'s `IDCOL` already use, if a future report section reuses either shape. Left alone here rather than refactored speculatively: nothing in the 42 is red, and #257 itself says not to force scope where none is needed.
+
+- **Canonicalise both sides of post-tool-hook.sh's edit-marker prefix test** (#276). A
+  trailing slash on `CLAUDE_PROJECT_DIR`, a symlinked project root (macOS's `/tmp` ->
+  `/private/tmp` is the standing example), or a relative `CLAUDE_PROJECT_DIR` each made
+  the lexical `case` prefix test that decides whether an edited file is inside this
+  project silently miss a file that genuinely was under `.claude/jit-context`. No edit
+  marker got written, and `stop-hook.sh` then read the marker's absence as the positive
+  claim "N entries injected this session, none updated" -- which was false: the observer
+  never fired at all.
+
+  The fix stays inside `post-tool-hook.sh`. The existing lexical prefix test is kept as
+  the fast path for the overwhelming majority of edits, which are in some other project
+  entirely; only when it misses, and only after a zero-fork substring check confirms the
+  path could plausibly be under some project's `.claude/jit-context` tree, does the hook
+  fall back to resolving both `JIT_BASE` and `file_path` with a portable `cd -P` walk (no
+  `realpath`, none is guaranteed on macOS, and no new runtime dependency is allowed under
+  `scripts/`).
+
+  `stop-hook.sh`'s own three-state distinction between "nothing was edited this session"
+  and "the observer could not have fired" -- the issue's wider route 2, which is the one
+  that stops this whole class of bug recurring elsewhere -- is left open. `stop-hook.sh`
+  is held by a separate, concurrently running fix (#279) as of this change, so it was not
+  touched here.
+
+- **Stop hook re-entry loop** (#279). `scripts/stop-hook.sh` re-emitted its own
+  "N entries injected this session, none updated" `additionalContext` on every
+  re-invocation, because it never read `stop_hook_active` out of the payload it
+  already parses -- so it could not tell a first stop from the harness's own
+  re-entry caused by the previous stop's `additionalContext` blocking the turn
+  from ending. Nine straight re-entries in one live session were the observed
+  cost, ending only when the harness gave up and overrode the block. The hook
+  now reads `stop_hook_active` in the same JSON parse pass that already yields
+  the session key (a new `jit_stop_hook_active()` in `scripts/common.sh`) and
+  prints the same inert `{}` the missing-`JIT_BASE` branch already uses when it
+  is `true`.
+
 ## [0.7.0] - 2026-09-02
 
 ### Added
@@ -2626,7 +2675,8 @@ and publishes it.
 
 Initial internal version: tool and path rules, configured through `config.json`.
 
-[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.7.1
 [0.7.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.7.0
 [0.6.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.5.0
