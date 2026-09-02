@@ -435,7 +435,19 @@ VOCAB_KEYWORD_BLACKLIST="${JIT_CONTEXT_KEYWORD_BLACKLIST:-${DYNAMIC_RULES_KEYWOR
 # than a special case inside it.
 GENERIC_WORDS_FILE="${JIT_CONTEXT_GENERIC_WORDS:-${DYNAMIC_RULES_GENERIC_WORDS:-$(dirname "$0")/../data/generic-words.txt}}"
 
-# --- Generic-word wordlist health, read ONCE for the whole run (#255) ---------------
+# GENERIC_WORDS_EXPLICIT (#265): whether an operator actually set one of these two
+# variables to a non-empty value, as opposed to GENERIC_WORDS_FILE having fallen all
+# the way through to the shipped default path. `${VAR:-default}` cannot itself tell
+# those apart -- an unset VAR and a VAR set to "" both take the default branch -- so
+# this is computed separately, from the same two names, before either is consulted
+# for anything else. It answers exactly one question below: is a missing file this
+# operator's typo, or the documented factory state nobody configured at all?
+GENERIC_WORDS_EXPLICIT=0
+if [ -n "${JIT_CONTEXT_GENERIC_WORDS:-}" ] || [ -n "${DYNAMIC_RULES_GENERIC_WORDS:-}" ]; then
+  GENERIC_WORDS_EXPLICIT=1
+fi
+
+# --- Generic-word wordlist health, read ONCE for the whole run (#255, #265) ---------
 # Until now the classifier forked one `grep -Fxq` PER KEYWORD against this file --
 # #251 grew it from 196 words/~4KB to 103,776 words/~1.0MB, measured at ~4.5ms per
 # call, amortized, so a rebuild over a few hundred keywords spent seconds re-scanning
@@ -449,12 +461,22 @@ GENERIC_WORDS_FILE="${JIT_CONTEXT_GENERIC_WORDS:-${DYNAMIC_RULES_GENERIC_WORDS:-
 # empty file silently classified every keyword as non-generic and nothing said so --
 # this repo's own defect class, in the tool built to name it. `paths/00-manual/
 # tooling.md` binds this script to fail loudly rather than degrade silently, so the
-# three states below are distinguished and only one of them is silent:
+# four states below are distinguished, and only the first is silent (the fourth,
+# successful classification, was never counted as part of this silent-vs-loud pair --
+# see the original #255 comment this widens):
 #
-#   unset / no file at all  -- the documented degrade: an index built before this
+#   unset / default path absent -- the documented degrade: an index built before this
 #                              feature landed, or a project that opted out by setting
 #                              JIT_CONTEXT_GENERIC_WORDS="" -- every keyword reads as
 #                              specific, exactly pre-#232 behaviour. Not an error.
+#   explicitly set / file absent -- #265: an operator DID set JIT_CONTEXT_GENERIC_WORDS
+#                              or DYNAMIC_RULES_GENERIC_WORDS, and the path it names
+#                              does not exist -- a typo'd config.env, indistinguishable
+#                              from the silent case above until GENERIC_WORDS_EXPLICIT
+#                              is checked. Folding this into the silent degrade is
+#                              exactly the defect this issue reports: one wrong
+#                              character disables all of #232 with a receipt
+#                              byte-identical to a healthy run. Loud, same as below.
 #   exists, unreadable/empty -- a configuration defect: something IS configured and
 #                              present but cannot be used. Loud: named on stderr,
 #                              jit_rc 2 (this run is not one the classifier column can
@@ -477,8 +499,11 @@ GENERIC_WORDS_OK=0
 GENERIC_WORDS_FILE_SAFE=$(printf '%s' "$GENERIC_WORDS_FILE" | LC_ALL=C tr -d '\000-\037\177')
 if [ -z "$GENERIC_WORDS_FILE" ]; then
   : # opted out -- not an error
-elif [ ! -e "$GENERIC_WORDS_FILE" ]; then
+elif [ ! -e "$GENERIC_WORDS_FILE" ] && [ "$GENERIC_WORDS_EXPLICIT" -eq 0 ]; then
   : # nothing configured/shipped -- the documented degrade, not an error
+elif [ ! -e "$GENERIC_WORDS_FILE" ]; then
+  echo "FATAL    generic-word classifier: $GENERIC_WORDS_FILE_SAFE was explicitly configured (JIT_CONTEXT_GENERIC_WORDS or DYNAMIC_RULES_GENERIC_WORDS) but does not exist -- every keyword this run will read as non-generic (the pre-#232 degrade), which would otherwise be silent. Fix the path or unset the variable to accept the degrade on purpose." >&2
+  jit_rc 2
 elif [ ! -r "$GENERIC_WORDS_FILE" ]; then
   echo "FATAL    generic-word classifier: $GENERIC_WORDS_FILE_SAFE exists but is not readable -- every keyword this run will read as non-generic (the pre-#232 degrade), which would otherwise be silent. Fix its permissions or unset JIT_CONTEXT_GENERIC_WORDS to accept the degrade on purpose." >&2
   jit_rc 2

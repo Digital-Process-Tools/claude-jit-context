@@ -15,6 +15,15 @@
 # at all" degrade, which stays silent and exit 0 on purpose (an index built before this
 # feature landed must not start failing loudly for a reason nobody changed).
 #
+# #265: that "no wordlist configured at all" degrade was itself too wide. It fired
+# identically whether the operator genuinely configured nothing, OR explicitly set
+# JIT_CONTEXT_GENERIC_WORDS/DYNAMIC_RULES_GENERIC_WORDS to a path that does not exist
+# -- a typo'd config.env -- and the receipt for both was byte-identical to a healthy
+# run. Section B below now exercises both halves of that split explicitly: B1 (truly
+# unset, default path also absent) stays silent exit 0, and B2 (explicitly configured,
+# path absent) is loud exit 2, paired in the same fixture so a future change cannot
+# make both vacuous at once.
+#
 # jit-drive: assert_contains contains capture
 # jit-drive: assert_not_contains not_contains capture
 #
@@ -76,6 +85,16 @@ rebuild() {
   RC=$?
   return 0
 }
+# #265's split needs a call that leaves JIT_CONTEXT_GENERIC_WORDS genuinely UNSET,
+# never merely "" -- rebuild() above always sets it (to "" when no arg is given),
+# which exercises the opt-out case (A), not the truly-unset one (B1). env -u is the
+# only way to get that from here without touching this process's own environment.
+rebuild_unset() {
+  env -u JIT_CONTEXT_GENERIC_WORDS -u DYNAMIC_RULES_GENERIC_WORDS \
+    CLAUDE_PROJECT_DIR="$ROOT" bash "$REBUILD" >/dev/null 2>"$ERR"
+  RC=$?
+  return 0
+}
 
 echo "=== A. no wordlist configured at all (empty override): the documented degrade stays silent, exit 0 ==="
 rebuild ""
@@ -83,10 +102,20 @@ assert_rc "an empty override exits 0" 0 "$RC"
 assert_not_contains "and nothing FATAL is printed" "$(cat "$ERR")" "FATAL"
 
 echo ""
-echo "=== B. a wordlist path that does not exist: the documented degrade stays silent, exit 0 ==="
-rebuild "$ROOT/does-not-exist.txt"
-assert_rc "a missing wordlist file exits 0" 0 "$RC"
+echo "=== B1. JIT_CONTEXT_GENERIC_WORDS/DYNAMIC_RULES_GENERIC_WORDS both truly unset: not an error, whatever the default path resolves to ==="
+rebuild_unset
+assert_rc "an unset override exits 0" 0 "$RC"
 assert_not_contains "and nothing FATAL is printed" "$(cat "$ERR")" "FATAL"
+
+echo ""
+echo "=== B2. #265: JIT_CONTEXT_GENERIC_WORDS explicitly set to a path that does not exist -- loud, exit 2 ==="
+MISSING="$ROOT/does-not-exist.txt"
+rebuild "$MISSING"
+assert_rc "an explicitly-configured missing wordlist exits 2" 2 "$RC"
+assert_contains "and names the missing file" "$(cat "$ERR")" "$MISSING"
+assert_contains "and says it was explicitly configured" "$(cat "$ERR")" "explicitly configured"
+assert_contains "the vocabulary index is still written despite the missing wordlist" \
+  "$(cat "$BASE/vocabulary/00-manual/00-index.tsv")" "widget.md"
 
 echo ""
 echo "=== C. a wordlist that EXISTS and is EMPTY: loud, exit 2, and the vocab index still gets written ==="
