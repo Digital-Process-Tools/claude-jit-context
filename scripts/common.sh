@@ -4,7 +4,32 @@
 
 _ms() { perl -MTime::HiRes -e 'printf("%.0f\n",Time::HiRes::time()*1000)'; }
 
-JIT_BASE="${CLAUDE_PROJECT_DIR:-.}/.claude/jit-context"
+# #266: the fallback used to be "${CLAUDE_PROJECT_DIR:-.}", which leaves JIT_BASE
+# RELATIVE whenever CLAUDE_PROJECT_DIR is unset. post-tool-hook.sh's edit-marker gate
+# (#244) compares JIT_BASE against `file_path` out of the tool payload with a plain
+# `case` prefix test, and that field always arrives ABSOLUTE in a real payload. A
+# relative pattern can never prefix-match an absolute subject, for any input -- so with
+# CLAUDE_PROJECT_DIR unset, no edit under the tree was ever recognised as one, and
+# stop-hook.sh (#244) then asserted "none updated" as a measured fact about a session
+# where the entry genuinely was edited. That is a confident wrong answer, not a
+# degrade-to-silence: this codebase's own jit-doctor.sh already treats an unset
+# CLAUDE_PROJECT_DIR as a real, anticipated state worth diagnosing (its own `--base`
+# resolution message spells out the fallback by name), not one closed off as
+# unreachable, so the fix here is to make the fallback correct rather than to declare
+# the state impossible.
+#
+# $PWD is a bash-maintained, always-absolute reflection of the process's own working
+# directory -- no subprocess, no `pwd` fork, no dependency on JIT_BASE's target already
+# existing (unlike `cd "$JIT_BASE" && pwd`, which needs the directory to be there
+# first). Every hook here is launched with cwd at the project root (the same posture
+# every test fixture and jit-dry-run.sh already assume when they set
+# CLAUDE_PROJECT_DIR explicitly), so falling back to $PWD instead of "." keeps the
+# resolved tree identical on disk and makes JIT_BASE absolute either way -- the
+# comparison in post-tool-hook.sh now holds regardless of which branch of the fallback
+# fired. The bare "." further back (if $PWD itself is somehow empty) preserves the
+# old, already-tested degradation rather than reaching for a third fallback nothing
+# here exercises.
+JIT_BASE="${CLAUDE_PROJECT_DIR:-${PWD:-.}}/.claude/jit-context"
 
 # --- Entry files and layer directories that are SYMBOLIC LINKS ---------------
 # PR #11 stopped an index row from NAMING a path outside its layer. It did not stop the

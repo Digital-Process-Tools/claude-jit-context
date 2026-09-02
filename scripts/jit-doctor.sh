@@ -67,7 +67,8 @@ jit-doctor.sh -- is any of this running at all, and against which tree?
   bash scripts/jit-doctor.sh [--base DIR]
 
   --base DIR   the entry tree to judge. Default: $CLAUDE_PROJECT_DIR/.claude/jit-context,
-               which is what the hooks read (CLAUDE_PROJECT_DIR defaults to .).
+               which is what the hooks read (with CLAUDE_PROJECT_DIR unset it falls
+               back to the current directory).
   --help       this text.
 
 What it reports

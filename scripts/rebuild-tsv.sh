@@ -285,7 +285,7 @@ if [ "$JIT_DIMS_FOUND" = 0 ]; then
   echo "         -- none of tools/, paths/ or vocabulary/ is there, so nothing was indexed." >&2
   echo "         JIT_BASE resolves against CLAUDE_PROJECT_DIR, never the working directory," >&2
   echo "         so a rebuild run from the wrong root indexes nothing and used to say so" >&2
-  echo "         with an exit 0. Currently CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so .>}" >&2
+  echo "         with an exit 0. Currently CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so the current directory>}" >&2
   exit 2
 fi
 
@@ -295,7 +295,7 @@ fi
 # there and say nothing. Printed unconditionally, before anything is written, so a
 # rebuild run from a stale CLAUDE_PROJECT_DIR is an obvious wrong write instead of a
 # silent one.
-echo "rebuild-tsv: writing JIT_BASE=$JIT_BASE (CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so .>}, cwd=$PWD)" >&2
+echo "rebuild-tsv: writing JIT_BASE=$JIT_BASE (CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so the current directory>}, cwd=$PWD)" >&2
 
 # Truncation failing left the previous index in place while every line after it reported
 # the rule count read back OUT of that stale file -- a success, with a number, for an index
