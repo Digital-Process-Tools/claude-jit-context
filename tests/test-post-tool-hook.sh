@@ -89,6 +89,8 @@ OUT="$(run_post_tool "$P" "sess-a" "Edit" "$FP")"; RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "the hook answers empty JSON" "$OUT"
 assert_file "an edit marker is written for this session" "$(state_of "$P")/edited-sess-a.txt"
+assert_no_file "no declined-marker trace on the ordinary, ungated path (#285 negative control)" \
+  "$(state_of "$P")/edited-declined-sess-a.txt"
 
 echo ""
 echo "=== B: a Write under the tree also drops a marker ==="
@@ -98,6 +100,8 @@ FP="$P/.claude/jit-context/vocabulary/00-manual/new.md"
 OUT="$(run_post_tool "$P" "sess-b" "Write" "$FP")"; RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_file "a write marker is written for this session too" "$(state_of "$P")/edited-sess-b.txt"
+assert_no_file "no declined-marker trace on the ordinary, ungated path (#285 negative control)" \
+  "$(state_of "$P")/edited-declined-sess-b.txt"
 
 echo ""
 echo "=== C: a tool this hook does not watch marks nothing (the negative half of A) ==="

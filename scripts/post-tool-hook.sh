@@ -28,10 +28,15 @@
 # session, most of which have nothing to do with this project's own tree.
 # `hooks/hooks.json` already narrows PostToolUse to the Write and Edit tools via its own
 # matcher, and after the one JSON parse below the very first thing this script does is a
-# plain `case` prefix comparison against $JIT_BASE -- never a match against the index,
-# never a second fork for anything but the marker write itself (and, since #276, the
-# canonicalisation fallback below, which is itself gated behind a zero-fork substring
-# test before it forks anything).
+# zero-fork substring test against the file_path -- never a match against the index,
+# never a fork at all -- for a session whose edit has nothing to do with this project's
+# tree. #286 changed what happens once that test passes: canonicalisation (the forking
+# part) is no longer a rare fallback gated behind a second, lexical, $JIT_BASE-prefix
+# test -- it now runs on every file_path that reaches this point, including the
+# ordinary in-tree edit this hook exists to observe. That is a deliberate trade: the
+# substring test is still the one thing that keeps every OTHER session's edit at zero
+# forks, and the edits that do reach canonicalisation are, by construction, either a
+# real edit to this project's own tree or an attempt to look like one.
 #
 # A hook must never fail hard (hooks.md): every exit below answers `{}`.
 SCRIPT_DIR="$(dirname "$0")"
