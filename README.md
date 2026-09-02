@@ -186,6 +186,25 @@ Bash, `awk`, `perl` (used only for millisecond timestamps) and `mktemp` (one scr
 
 Linux, macOS and Windows. The suite runs on all three in CI — including macOS's bash 3.2 and Windows under Git Bash. On Windows the hooks need a `bash` on `PATH`, which Git Bash provides; that is the same requirement every hook-based plugin in this family has.
 
+### Hosts
+
+This plugin runs under Claude Code, and Claude Code is the only host it has ever been
+watched run under. `scripts/host.sh` holds a small registry -- one row per host, the
+variables it uses, and whether this plugin has *observed* it fire -- rather than a
+Codex-shaped branch bolted onto each hook.
+
+Two things live in that registry per host: which environment variables identify it, and
+its **output envelope contract** -- what an injected note looks like, what a refused
+tool call looks like, and whether refusing is even possible there. That second part is
+the sharper question here than for a plugin that only injects: a `forbid:` rule silently
+degrading to advisory the moment a host's refusal contract is assumed rather than
+watched is this plugin's worst failure mode, so an unobserved host reads as exactly
+that -- `refusal-not-established` -- never as `block` or `advisory`. Codex and Gemini
+CLI both have rows in the registry (their variable names are grounded in the
+[`remember`](https://github.com/Digital-Process-Tools/claude-remember) plugin's own,
+separately-observed prior art), and both are `UNKNOWN` for this plugin until someone
+watches this plugin's own `PreToolUse` block fire under them.
+
 ## Your first entry, in one command
 
 A fresh install has nothing to match, so nothing happens — and the first thing anyone

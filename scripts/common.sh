@@ -31,6 +31,32 @@ _ms() { perl -MTime::HiRes -e 'printf("%.0f\n",Time::HiRes::time()*1000)'; }
 # here exercises.
 JIT_BASE="${CLAUDE_PROJECT_DIR:-${PWD:-.}}/.claude/jit-context"
 
+# --- Which host is running this hook (#252) ----------------------------------------
+# scripts/host.sh is the registry; this just calls it, and guards the call the way
+# every other capability in this file guards itself: a missing or unreadable
+# host.sh must not take a hook down with it. paths/00-manual/hooks.md's "every
+# failure path exits 0 with nothing injected" applies to this block exactly like
+# everything else here, so a source failure or a function that is somehow missing
+# leaves JIT_HOST at its safe default rather than aborting.
+#
+# JIT_HOST_REFUSAL_STATE is exported so a hook that later gates a `mode: block` row
+# on host support can read it directly rather than re-deriving it -- no hook does
+# that yet (see JIT_AWK_ENVELOPE below), but the value is correct and available from
+# the first line any hook runs.
+JIT_HOST="unknown"
+JIT_HOST_REFUSAL_STATE="refusal-not-established"
+_jit_host_sh="$(dirname "${BASH_SOURCE[0]}")/host.sh"
+if [ -r "$_jit_host_sh" ]; then
+  # shellcheck disable=SC1090
+  source "$_jit_host_sh" 2>/dev/null && \
+    JIT_HOST="$(jit_host_detect 2>/dev/null)" && \
+    JIT_HOST_REFUSAL_STATE="$(jit_host_refusal_state "$JIT_HOST" 2>/dev/null)"
+  [ -n "$JIT_HOST" ] || JIT_HOST="unknown"
+  [ -n "$JIT_HOST_REFUSAL_STATE" ] || JIT_HOST_REFUSAL_STATE="refusal-not-established"
+fi
+export JIT_HOST JIT_HOST_REFUSAL_STATE
+unset _jit_host_sh
+
 # --- Entry files and layer directories that are SYMBOLIC LINKS ---------------
 # PR #11 stopped an index row from NAMING a path outside its layer. It did not stop the
 # entry file from BEING a link to one: the name in the index is bare, so it passes that
@@ -2973,3 +2999,44 @@ jit_missing_requires() {
   done
   printf '%s' "$missing"
 }
+
+# --- The output envelope, built in one place (#252) --------------------------------
+#
+# Today three hooks each hand-roll one of three JSON shapes with a `printf` inside
+# their own `END` block: pre-tool-hook.sh's block/inject/empty at its own printf
+# sites, pre-prompt-hook.sh's and pre-path-hook.sh's inject/empty. Every one of those
+# calls jit_json_escape() (defined per-hook, not shared -- a separate cleanup this
+# issue does not attempt) on its own text FIRST and only THEN builds the wrapper
+# around it, so these functions take an ALREADY-ESCAPED string and wrap it -- they do
+# not escape, and calling one on unescaped text produces invalid JSON exactly the way
+# calling printf on it today would.
+#
+# This is infrastructure, not yet wiring: no hook in this repository calls these
+# functions today (rewriting pre-tool-hook.sh's, pre-prompt-hook.sh's and
+# pre-path-hook.sh's own printf sites to call them is a follow-up, tracked
+# separately from #252 -- those three files are outside this change's own claimed
+# lane). What is here is "one place that builds the envelope" existing at all, with
+# the exact wire shape those three sites already emit, so adopting it is a like-for-
+# like swap rather than a behaviour change when it happens.
+#
+# Every function below builds the Claude Code shape -- the only OBSERVED row in
+# the scripts/host.sh registry. A future second host with its own OBSERVED envelope
+# contract gets its own functions here, dispatched on $JIT_HOST/JIT_HOST_REFUSAL_STATE
+# (both exported above, from scripts/host.sh) -- never a guess folded into these three
+# threaded through an untested branch. jit_envelope_block() in particular must never
+# be called for a host whose refusal_envelope is not literally "claude-decision-block";
+# see jit_host_refusal_state() in scripts/host.sh for why "refusal-not-established" and
+# "unsupported" are both a NO here, and different from each other.
+# shellcheck disable=SC2034
+JIT_AWK_ENVELOPE='
+function jit_envelope_inject(event, text_escaped) {
+  if (text_escaped == "") return "{}"
+  return "{\"hookSpecificOutput\":{\"hookEventName\":\"" event "\",\"additionalContext\":\"" text_escaped "\"}}"
+}
+function jit_envelope_block(reason_escaped) {
+  return "{\"decision\":\"block\",\"reason\":\"" reason_escaped "\"}"
+}
+function jit_envelope_empty() {
+  return "{}"
+}
+'

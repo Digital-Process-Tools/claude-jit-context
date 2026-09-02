@@ -1,10 +1,10 @@
 ---
 title: A hook may never fail hard
-description: The contract for the six hooks and common.sh - every failure path exits 0 injecting nothing, no new runtime dependency, test first, and the awk traps that differ between Linux, macOS and Git Bash.
-match: (^|/)scripts/(.*-hook|common)\.sh$
+description: The contract for the six hooks, common.sh and host.sh - every failure path exits 0 injecting nothing, no new runtime dependency, test first, and the awk traps that differ between Linux, macOS and Git Bash.
+match: (^|/)scripts/(.*-hook|common|host)\.sh$
 ---
 
-These seven scripts run in someone else's session, on every prompt, every tool call and session end, often before they know this plugin exists — the six hooks (`session-start-hook.sh`, `pre-prompt-hook.sh`, `pre-tool-hook.sh`, `pre-path-hook.sh`, `post-tool-hook.sh` and `stop-hook.sh`), and `common.sh`, which is sourced by all six and is where every containment fix in 0.3.0 landed. Everything below applies to `common.sh` verbatim; it is executed by the hooks, not beside them.
+These eight scripts run in someone else's session, on every prompt, every tool call and session end, often before they know this plugin exists — the six hooks (`session-start-hook.sh`, `pre-prompt-hook.sh`, `pre-tool-hook.sh`, `pre-path-hook.sh`, `post-tool-hook.sh` and `stop-hook.sh`), `common.sh`, which is sourced by all six and is where every containment fix in 0.3.0 landed, and `host.sh` (#252), sourced by `common.sh` in turn and therefore inside every hook's own process the same way. Everything below applies to `common.sh` and `host.sh` verbatim; both are executed by the hooks, not beside them.
 
 `rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh` and `jit-init.sh` also live in `scripts/` and are **not** governed by this file — they never run in a stranger's session and are expected to fail loudly. See `paths/00-manual/tooling.md`.
 
