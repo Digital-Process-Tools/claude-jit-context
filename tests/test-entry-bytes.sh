@@ -117,12 +117,21 @@ assert_marker_lacks() {
   else ok "$1"; fi
 }
 # --- A fresh project tree per case --------------------------------------------
+# Only 00-manual is created per dimension: no case in this file ever writes into
+# 10-auto/20-grouped/30-crosscutting. What actually makes that safe is downstream of
+# jit_scan_layers() (common.sh), not the glob in it alone: every consumer here reads a
+# layer's index through awk getline (pre-tool-hook.sh) or "[ -f ] || continue" (common.sh
+# jit_missing_requires()), and both treat a missing file and a present-but-empty one
+# identically -- getline returns 0/-1 either way, the loop body never runs. So a layer
+# this fixture no longer creates reads exactly like the empty one it used to create.
+# #318: the other three layers x three dimensions were 9 of the 12 mkdir calls and 18
+# of the 24 touch calls this fixture used to make, for zero assertions that read them.
 new_proj() {
   local p b d l
   p=$(mktemp -d)
   b="$p/.claude/jit-context"
   for d in tools paths vocabulary; do
-    for l in 00-manual 10-auto 20-grouped 30-crosscutting; do
+    for l in 00-manual; do
       mkdir -p "$b/$d/$l"
       : > "$b/$d/$l/00-index.tsv"
       : > "$b/$d/$l/01-paths.tsv"
