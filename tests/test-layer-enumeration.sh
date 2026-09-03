@@ -337,10 +337,17 @@ echo "=== H: the count is bounded, and crossing the bound says so ==="
 
 # A layer list whose length the clone chooses is the JIT_SYMLINKS problem one directory
 # up. Truncating quietly would be this defect with a fix wearing its name.
+#
+# #313: each filler layer here costs rebuild-tsv.sh a real pass (two _ms() perl forks, a
+# wc, and a report_bad_bytes awk), measured at ~0.05s/layer on this machine and the
+# dominant cost of this whole suite on Windows CI. JIT_LAYERS_MAX is 64 and is not
+# overridable by env, so crossing it needs more than 64 real layer directories -- but not
+# 80 of them. 66 clears the bound with a 3-layer margin (65th, 66th, 67th refused) instead
+# of a 17-layer one, for the same assertions below.
 PROJ="$TMPROOT/h"; BASE="$PROJ/.claude/jit-context"
 mk_path_entry "$BASE" 00-manual hmanual 'hfile\.php$'
 i=0
-while [ "$i" -lt 80 ]; do
+while [ "$i" -lt 66 ]; do
   mkdir -p "$(printf '%s/paths/9%02d-filler' "$BASE" "$i")"
   i=$((i + 1))
 done
