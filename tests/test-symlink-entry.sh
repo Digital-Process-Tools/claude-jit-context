@@ -479,10 +479,14 @@ assert_contains "s3f control: an honourable block rule blocks before the links e
 
 # Now bury it. Names are padded so the byte budget is crossed with a few dozen links rather
 # than a few thousand -- the budget is on BYTES, which is the quantity ARG_MAX is about, and
-# 4000 short names and 40 long ones are the same problem.
+# 4000 short names and 40 long ones are the same problem. 60 links, not 200: a local
+# measurement against JIT_SYMLINKS_MAX=8192 crosses the budget at roughly 28-42 links
+# depending on the temp directory's own path length, so 60 keeps real margin without
+# the suite paying for ~140 unnecessary `ln -s` forks per direction it drives this
+# fixture (found while profiling #317, the same oversized-fixture class #306 fixed).
 PAD="$(printf 'p%.0s' $(seq 1 190))"
 i=0
-while [ "$i" -lt 200 ]; do
+while [ "$i" -lt 60 ]; do
   i=$((i + 1))
   ln -s /etc/hosts "$D/$PAD$i.md"
 done
@@ -522,7 +526,7 @@ assert_not_contains "s3f: and nothing is refused any more" "$OUT" "too many symb
 # jit-dry-run.sh sweeps the tree it was pointed at, so it reaches the same wall and must
 # reach the same verdict rather than clearing the tree.
 i=0
-while [ "$i" -lt 200 ]; do
+while [ "$i" -lt 60 ]; do
   i=$((i + 1))
   ln -s /etc/hosts "$D/$PAD$i.md"
 done
