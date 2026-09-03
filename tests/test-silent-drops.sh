@@ -242,7 +242,17 @@ if ! grep -qF "hooks.md" <<<"$path_probe"; then
   exit 1
 fi
 
-assert_contains "the seeded template entry"  "$(fired_for "templates/jit-context/vocabulary/00-manual/writing-rules.md")" "entries.md"
+# The template path is probed once and its output reused below (#311): the two
+# assertions against it (entries.md fires, tooling.md does not) read the same
+# fired_for() output for the same input file, and fired_for() is the most expensive
+# call in this suite (it re-lints the whole tree per invocation, in jit-dry-run.sh's
+# own Phase 1, ahead of the Phase 2 sample-file check this suite actually wants).
+# Calling it twice for byte-identical input was redundant work the assertions never
+# asked for -- the same class of finding as #306's oversized payload, not a change to
+# what either assertion checks.
+template_probe="$(fired_for "templates/jit-context/vocabulary/00-manual/writing-rules.md")"
+
+assert_contains "the seeded template entry"  "$template_probe" "entries.md"
 assert_contains "our own entry tree still"   "$(fired_for ".claude/jit-context/paths/00-manual/hooks.md")" "entries.md"
 assert_contains "the shipped examples still" "$(fired_for "examples/jit-context/tools/00-manual/git.md")" "entries.md"
 
@@ -258,8 +268,7 @@ assert_not_contains "a session scratchpad path" \
 # tests/test-dogfood-entries.sh asserts this too, deliberately: the template is
 # documentation, not one of the five tools. Repeated here because making entries.md reach
 # templates/ is exactly the change that could drag tooling.md along with it.
-assert_not_contains "and tooling.md still does not claim it" \
-  "$(fired_for "templates/jit-context/vocabulary/00-manual/writing-rules.md")" "tooling.md"
+assert_not_contains "and tooling.md still does not claim it" "$template_probe" "tooling.md"
 
 echo ""
 echo "Passed: $PASS  Failed: $FAIL"
