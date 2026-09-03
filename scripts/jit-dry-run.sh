@@ -17,6 +17,7 @@
 #   bash scripts/jit-dry-run.sh [--base DIR]
 #   bash scripts/jit-dry-run.sh [--base DIR] --tool Bash --command "git push origin main"
 #   bash scripts/jit-dry-run.sh [--base DIR] --file src/Billing/Total.php
+#   bash scripts/jit-dry-run.sh [--base DIR] --file a.php --file b.php   (lints once)
 #   bash scripts/jit-dry-run.sh [--base DIR] --prompt "how do invoice totals work"
 #   bash scripts/jit-dry-run.sh [--base DIR] --tool Agent --agent claude-security:scan
 #
@@ -34,14 +35,50 @@
 
 set -uo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# The bootstrap, so it cannot use common.sh's jit_path_dir -- common.sh is what this line
+# is resolving the path to. Same case split, written out.
+case "$0" in
+  */*) SCRIPT_DIR="$(cd "${0%/*}" && pwd)" ;;
+  *)   SCRIPT_DIR="$PWD" ;;
+esac
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/common.sh"
 
 BASE="$PWD/.claude/jit-context"
+# Written by jit_path_dir(), jit_path_base() and index_label() through `printf -v`, which
+# assigns into a variable named at runtime. shellcheck cannot follow that and reports
+# SC2154 at every use -- declared here so the warning is answered by the code rather than
+# by a disable comment scattered over a dozen lines.
+label=""
+tsv_dir=""
+rb_label=""
+rb_dir=""
+fm=""
+lw_fm=""
+idx_cache=""
+idx_cache_for=""
+want=""
+tool=""
+mode=""
+require=""
+forbid=""
+requires=""
+raw_inj=""
+desc=""
+name=""
+_lw_parent=""
+_lw_dim=""
+_lw_layer=""
+
 SAMPLE_TOOL=""
 SAMPLE_COMMAND=""
-SAMPLE_FILE=""
+ # --file is repeatable (#307). A --file call is ~89% full-tree lint and ~11% the two
+# hook spawns it was asked for -- measured by counting external commands on PATH: 224 for
+# a bare run, 252 for the same run carrying one --file. A caller with N files paid that
+# lint N times over a tree that cannot change between them, and tests/test-dogfood-entries.sh
+# paid it 39 times in one run: 8,736 of that suite's 10,302 process spawns, which is most
+# of the 442s it costs on the Windows leg, where a spawn is the expensive thing.
+SAMPLE_FILES=()
 SAMPLE_PROMPT=""
 SAMPLE_AGENT=""
 
@@ -49,7 +86,7 @@ usage() {
   # Through the end of the Exit: block, which is where --help says what a WARN row does
   # to the exit code. A line added above this shifts it and truncates silently, so
   # tests/test-jit-dry-run.sh asserts on the last sentence rather than on the range.
-  sed -n '2,33p' "$0"
+  sed -n '2,34p' "$0"
   exit "${1:-0}"
 }
 
@@ -75,7 +112,7 @@ while [ $# -gt 0 ]; do
     --base)    [ $# -ge 2 ] || need_value "$1"; BASE="$2"; shift 2 ;;
     --tool)    [ $# -ge 2 ] || need_value "$1"; SAMPLE_TOOL="$2"; shift 2 ;;
     --command) [ $# -ge 2 ] || need_value "$1"; SAMPLE_COMMAND="$2"; shift 2 ;;
-    --file)    [ $# -ge 2 ] || need_value "$1"; SAMPLE_FILE="$2"; shift 2 ;;
+    --file)    [ $# -ge 2 ] || need_value "$1"; SAMPLE_FILES+=("$2"); shift 2 ;;
     --prompt)  [ $# -ge 2 ] || need_value "$1"; SAMPLE_PROMPT="$2"; shift 2 ;;
     --agent)   [ $# -ge 2 ] || need_value "$1"; SAMPLE_AGENT="$2"; shift 2 ;;
     -h|--help) usage 0 ;;
@@ -239,6 +276,20 @@ report_layer() {
   printf '%s' "$n"
 }
 
+# The label an index file reports under -- "tools/00-manual", "paths/01-oss".
+#
+# Factored because it was written out six times, identically, as
+# `"<dim>/$(report_layer "$(basename "$(dirname "$tsv")")")"` -- two forks each, in a loop
+# over every index file in every dimension. See jit_path_dir/jit_path_base in common.sh:
+# they assign into a named variable, so this helper forks once (report_layer's own command
+# substitution) where the written-out version forked three times.
+index_label() {   # VAR, dimension, path-to-00-index.tsv
+  local _il_dir _il_layer
+  jit_path_dir _il_dir "$3"
+  jit_path_base _il_layer "$_il_dir"
+  printf -v "$1" '%s/%s' "$2" "$(report_layer "$_il_layer")"
+}
+
 # --- Phase 1: can every pattern be honoured? ---------------------------------
 # Two independent checks per row, because they see different defects.
 #
@@ -381,6 +432,160 @@ TREE_INJECT="$(
   printf '%s' "$_v"
 )"
 
+# --- Pattern probes, batched (#307-follow-on) --------------------------------
+#
+# check_pattern() forks awk TWICE per row -- once for the structural guard, once to ask
+# the local engine whether it will accept the pattern. Over this repository's own tree
+# that was 142 of the 346 external commands one bare lint spawned, and it is the single
+# largest remaining source. A lint is what CI runs on every merge request.
+#
+# Both probes are batched into ONE awk each, per index file, before its row loop opens.
+# The verdicts land in a memo keyed on the pattern string, and check_pattern() reads that
+# memo. On a miss it falls back to its original two forks, so nothing about the verdict
+# depends on the batch having run or having been complete -- the batch changes cost, never
+# outcome, and a tree it could not pre-scan is simply as slow as it was before.
+#
+# Patterns reach awk on STDIN rather than through `-v`, for the same reason the per-row
+# probes use ENVIRON: a `-v` assignment processes escape sequences in its value and would
+# repair or mangle the very backslash under test. Input data is not escape-processed. A
+# pattern is one TSV field, so it carries neither a real newline nor a tab and survives
+# being one line here.
+# The memo is a SHELL VARIABLE, not a file, and that is load-bearing rather than a
+# convenience. A file would need a lookup, and a lookup is an awk or a grep -- one fork per
+# row, which is the cost this whole block exists to remove, reintroduced by the cache
+# meant to remove it. The first version of this did exactly that. Held in a variable, a
+# lookup is parameter expansion and forks nothing.
+#
+# One record per line, `<kind>\tab<pattern>\tab<verdict>`. A pattern is one TSV field and
+# carries neither a real newline nor a tab, so it cannot forge a record boundary.
+PAT_MEMO=""
+ENT_MEMO=""
+PAT_NL="
+"
+
+# The engine probe is the half that cannot simply be looped inside one awk: a pattern the
+# engine refuses is FATAL, and it takes the whole process down with it -- which is exactly
+# the property the report is about ("it alone silences every rule in its index"). So the
+# batch prints an `ok <n>` line per pattern it survived and flushes after each; the first
+# index with no `ok` is the fatal one, and the scan resumes in a fresh process after it.
+# A clean index costs one fork; an index with k fatal rows costs k+1, which is still fewer
+# than one per row for any k below the row count.
+# The match column is NOT the same in every dimension, and guessing cost this a silent
+# no-op on two thirds of the tree the first time it was written: `tools` carries the tool
+# in column 1 and the match in column 2, `paths` carries the match in column 1. `tools`
+# additionally marks a regex with a leading `~` -- a bare value there is a substring test
+# that never reaches check_pattern() -- while a `paths` match is always a bare ERE. So the
+# column and the tilde rule are both arguments, named by the caller that knows its own
+# index. `vocabulary` is not primed at all: its column 1 is a literal keyword, and nothing
+# in that loop calls check_pattern().
+# ONE process per index for both guards, and no gate on how many rows an index has.
+#
+# The first version ran two extractions, two sorts and two guards -- about eight processes
+# per index -- to remove three per row, so it needed a row-count threshold to stop losing
+# on small indexes, and the threshold itself cost two more processes to evaluate. That was
+# a fix on top of a shape that was wrong: measured, it made tests/test-jit-dry-run.sh
+# SLOWER (2,916 process spawns to 3,564, on dozens of one- and two-row fixtures) while
+# making a real lint twice as fast.
+#
+# So the extraction, the deduplication and both guards happen in a single awk. Deduplicated
+# with a seen[] array rather than `sort -u`, which is one more process for something awk is
+# already looping. Fixed cost per index: this process plus the engine probe below, against
+# three processes per row removed. There is no index size at which that loses, so there is
+# nothing to threshold.
+#
+# The match column is NOT the same in every dimension, and assuming it was made the first
+# version a silent no-op over two thirds of the tree: `tools` keeps the match in column 2
+# and marks a regex with a leading `~`, `paths` keeps a bare ERE in column 1. The file-name
+# column moves too. All of it is an argument, named by the caller that knows its own index.
+idx_prime() {   # tsv, match column (0 for none), 1 if ~ marks a regex, name column, layer dir
+  local tsv="$1" pcol="$2" need="$3" ncol="$4" dir="$5" out pats n i start line k
+  out="$(JIT_DIR="$dir" LC_ALL=C awk -F'\t' -v pc="$pcol" -v need="$need" -v nc="$ncol" \
+    "$JIT_AWK_GUARD$JIT_AWK_ENTRY"'
+    {
+      if (pc > 0) {
+        p = $pc
+        if (need == 1) {
+          if (p ~ /^~/) p = substr(p, 2)
+          else p = ""
+        }
+        if (p != "" && !seenp[p]++) printf "why\t%s\t%s\n", p, jit_bad_pattern(p)
+      }
+      if (nc > 0) {
+        f = $nc
+        if (f != "" && !seenf[f]++) printf "ent\t%s\t%s\n", f, jit_bad_entry_file(f, ENVIRON["JIT_DIR"])
+      }
+    }' "$tsv" 2>/dev/null)"
+  [ -n "$out" ] || return 0
+  PAT_MEMO="$PAT_MEMO$PAT_NL$out"
+  ENT_MEMO="$ENT_MEMO$PAT_NL$out"
+
+  [ "$pcol" -gt 0 ] || return 0
+  # The pattern list, in the order the memo above carries it, for the engine probe.
+  pats=""
+  while IFS= read -r line; do
+    case "$line" in
+      "why	"*)
+        line="${line#why	}"
+        pats="$pats${line%%	*}$PAT_NL"
+        ;;
+    esac
+  done <<<"$out"
+  pats="${pats%"$PAT_NL"}"
+  [ -n "$pats" ] || return 0
+  n=0
+  while IFS= read -r line; do n=$((n + 1)); done <<<"$pats"
+
+  # The engine probe is the half that cannot join the pass above: a pattern the engine
+  # refuses is FATAL and takes the whole process down with it -- which is exactly the
+  # property the report is about ("it alone silences every rule in its index"). So it prints
+  # an `ok <n>` line per pattern it survived and flushes after each; the first index with no
+  # `ok` is the fatal one, and the scan resumes in a fresh process after it. A clean index
+  # costs one process; an index with k fatal rows costs k+1.
+  start=1
+  while [ "$start" -le "$n" ]; do
+    i=$(LC_ALL=C awk -v from="$start" '
+      { pat[NR] = $0 }
+      END {
+        for (k = from; k <= NR; k++) {
+          if (match("", pat[k])) x = 1
+          printf "ok %d\n", k
+          fflush()
+        }
+      }' <<<"$pats" 2>/dev/null | LC_ALL=C awk 'END { print (NR ? $2 : 0) }')
+    [ -n "$i" ] || i=0
+    k=0
+    while IFS= read -r line; do
+      k=$((k + 1))
+      [ "$k" -ge "$start" ] || continue
+      if [ "$k" -le "$i" ]; then
+        PAT_MEMO="$PAT_MEMO${PAT_NL}engine	$line	accepted"
+      elif [ "$k" -eq $((i + 1)) ]; then
+        PAT_MEMO="$PAT_MEMO${PAT_NL}engine	$line	rejected"
+        break
+      fi
+    done <<<"$pats"
+    [ "$i" -ge "$n" ] && break
+    start=$((i + 2))
+  done
+}
+
+# Reads one memo record. Returns 1 on a miss, which is what sends check_pattern() back to
+# its own two forks -- so a pattern the batch never saw, or an index it could not pre-scan,
+# still gets the same verdict at the old cost.
+#
+# Parameter expansion only. No awk, no grep, no command substitution: a fork here would be
+# one per row, which is exactly what idx_prime() just spent one process to avoid.
+pat_memo_get() {   # VAR, kind (why|engine), pattern
+  local _key="$PAT_NL$2	$3	" _rest
+  case "$PAT_MEMO" in
+    *"$_key"*)
+      _rest="${PAT_MEMO#*"$_key"}"
+      printf -v "$1" '%s' "${_rest%%"$PAT_NL"*}"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 check_pattern() {
   # $1 layer label, $2 rule file, $3 pattern
   # $file is the index entry-file column, which the clone chose -- printed through
@@ -409,9 +614,22 @@ check_pattern() {
   #
   # Neither probe redirects its stderr. Silencing a probe is how #98 happened: a fatal
   # became an empty result and the empty result read as a clean tree.
-  why="$(LC_ALL=C JIT_PAT="$pat" awk "$JIT_AWK_GUARD"'BEGIN { print jit_bad_pattern(ENVIRON["JIT_PAT"]) }')"
+  # The memo idx_prime() filled for this index, if it has this pattern. A miss falls
+  # through to the two forks below, unchanged -- see pat_memo_get().
+  local memo_why="" memo_engine="" memo_hit=0
+  if pat_memo_get memo_why why "$pat" && pat_memo_get memo_engine engine "$pat"; then
+    memo_hit=1
+  fi
 
-  if LC_ALL=C JIT_PAT="$pat" awk 'BEGIN { if (match("", ENVIRON["JIT_PAT"])) x = 1 }' >/dev/null 2>&1; then
+  if [ "$memo_hit" = 1 ]; then
+    why="$memo_why"
+  else
+    why="$(LC_ALL=C JIT_PAT="$pat" awk "$JIT_AWK_GUARD"'BEGIN { print jit_bad_pattern(ENVIRON["JIT_PAT"]) }')"
+  fi
+
+  if { [ "$memo_hit" = 1 ] && [ "$memo_engine" = accepted ]; } \
+     || { [ "$memo_hit" != 1 ] \
+          && LC_ALL=C JIT_PAT="$pat" awk 'BEGIN { if (match("", ENVIRON["JIT_PAT"])) x = 1 }' >/dev/null 2>&1; }; then
     engine="accepted"
   elif [ -n "$why" ]; then
     # The structural guard refuses this row at load, so the hook never hands it to
@@ -541,6 +759,19 @@ check_paths_fragment() {
 # the linter would clear a row every hook refuses.
 jit_scan_symlinks "$BASE"
 
+# Same contract as pat_memo_get(): parameter expansion only, and a miss is what sends
+# check_entry_file() back to its own fork.
+ent_memo_get() {   # VAR, name
+  local _key="$PAT_NL$2	" _rest
+  case "$ENT_MEMO" in
+    *"$_key"*)
+      _rest="${ENT_MEMO#*"$_key"}"
+      printf -v "$1" '%s' "${_rest%%"$PAT_NL"*}"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 check_entry_file() {
   # $1 layer label, $2 entry file name, $3 layer directory, $4 row number in that index
   #
@@ -552,7 +783,11 @@ check_entry_file() {
   # in the tool they opened to find out. jit_row_id() in common.sh is the same answer the
   # hooks give, and the closing line below is worded to match it.
   local label="$1" file="$2" dir="${3:-}" rown="${4:-?}" why disp
-  why="$(JIT_ENTRY="$file" JIT_DIR="$dir" awk "$JIT_AWK_ENTRY"'BEGIN { print jit_bad_entry_file(ENVIRON["JIT_ENTRY"], ENVIRON["JIT_DIR"]) }')"
+  # The memo idx_prime() filled for this index, if it has this name. A miss falls through
+  # to the original fork, so the verdict never depends on the batch having run.
+  if ! ent_memo_get why "$file"; then
+    why="$(JIT_ENTRY="$file" JIT_DIR="$dir" awk "$JIT_AWK_ENTRY"'BEGIN { print jit_bad_entry_file(ENVIRON["JIT_ENTRY"], ENVIRON["JIT_DIR"]) }')"
+  fi
   [ -n "$why" ] || return 0
   disp="$(jit_report_name "$file")"
   printf 'REFUSED  %-18s %-30s %s\n' "$label" "$disp" "$why"
@@ -608,23 +843,29 @@ check_index_current() {
   [ -d "$dir" ] || return 0
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
-    name="$(basename "$md")"
+    jit_path_base name "$md"
     [ "$name" = "00-README.md" ] && continue
-    want="$(jit_frontmatter match "$md")"
+    # One awk for the whole entry, not one per field (#307 follow-on). This asked for up
+    # to six fields and paid six processes, each re-reading the same file -- 42 of the 142
+    # awks a bare lint spawned. jit_fm_get() reads the memo with parameter expansion and
+    # forks nothing, and the value rules live in the one shared program either way.
+    fm=""
+    jit_frontmatter_many fm "$md" match tool mode require forbid requires
+    jit_fm_get want "$fm" match
     [ -n "$want" ] || continue
     if [ "$dim" = tools ]; then
-      tool="$(jit_frontmatter tool "$md")"
+      jit_fm_get tool "$fm" tool
       # rebuild-tsv.sh skips a tools entry with no `tool:`, so this lint must skip it
       # too -- otherwise every vocabulary-shaped file in the directory reads as stale.
       [ -n "$tool" ] || continue
-      mode="$(jit_frontmatter mode "$md")"
-      require="$(jit_frontmatter require "$md")"
-      forbid="$(jit_frontmatter forbid "$md")"
+      jit_fm_get mode "$fm" mode
+      jit_fm_get require "$fm" require
+      jit_fm_get forbid "$fm" forbid
       # (#203) The same normalisation build_tool_tsv() applies, or a requires: value
       # carrying a stray tab or newline would make this comparison find drift that is
       # not there -- the rebuilt row and the committed one would both be "wrong" and
       # agree with neither.
-      requires="$(jit_frontmatter requires "$md")"
+      jit_fm_get requires "$fm" requires
       requires="${requires//$'\t'/ }"
       requires="${requires//$'\n'/ }"
     fi
@@ -634,10 +875,22 @@ check_index_current() {
     else
       row="$(printf '%s\t%s' "$want" "$name")"
     fi
-    if ! JIT_ROW="$row" awk '
-      $0 == ENVIRON["JIT_ROW"] { found = 1 }
-      END { exit(found ? 0 : 1) }
-    ' "$dir/00-index.tsv" 2>/dev/null; then
+    # The index this row is compared against, read ONCE per layer rather than re-opened by
+    # an awk per entry (#307 follow-on). This was one fork per .md file in the tree, asking
+    # a whole-line equality question bash answers with a substring test.
+    #
+    # The needles are newline-wrapped on both sides, so a row can only match a WHOLE line:
+    # without that, a shorter row would match as a prefix of a longer one and a genuinely
+    # stale entry would report clean. That is the direction that matters -- this check's
+    # whole job is to notice a row the rebuild would change.
+    if [ "$idx_cache_for" != "$dir" ]; then
+      idx_cache_for="$dir"
+      idx_cache=""
+      # `$(< file)`, not `$(cat file)`: bash reads the file itself, so this is a subshell
+      # and not a subshell plus an exec.
+      [ -f "$dir/00-index.tsv" ] && idx_cache="$PAT_NL$(<"$dir/00-index.tsv")$PAT_NL"
+    fi
+    if [ "${idx_cache#*"$PAT_NL$row$PAT_NL"}" = "$idx_cache" ]; then
       STALE=$((STALE + 1))
       # No row position on this line, and unlike check_entry_file() that is deliberate.
       # There is none to give -- this loop walks a *.md glob, not an index -- but the
@@ -724,7 +977,13 @@ for tsv in "$BASE"/tools/*/00-index.tsv; do
   [ -f "$tsv" ] || continue
   INDEXES=$((INDEXES + 1))
   IDX_TOOLS=$((IDX_TOOLS + 1))
-  label="tools/$(report_layer "$(basename "$(dirname "$tsv")")")"
+  index_label label tools "$tsv"
+  # Hoisted out of the row loop below: $tsv does not change across it, so the old
+  # per-row $(dirname "$tsv") was one fork per ROW rather than one per index file.
+  jit_path_dir tsv_dir "$tsv"
+  # One process for every pattern AND every entry-file name in this index, instead of
+  # three per ROW. See idx_prime().
+  idx_prime "$tsv" 2 1 3 "$tsv_dir"
   rown=0
   # `tr` to STX (0x02), not `IFS=$'"'"'\t'"'"'` directly (#203). bash `read` treats a tab in
   # IFS as IFS WHITESPACE regardless of what IFS is actually set to, which COLLAPSES a run
@@ -748,7 +1007,7 @@ for tsv in "$BASE"/tools/*/00-index.tsv; do
     [ -n "${r_match:-}" ] || continue
     [ -n "${r_file:-}" ] || continue
     LISTED=$((LISTED + 1))
-    check_entry_file "$label" "$r_file" "$(dirname "$tsv")" "$rown" || { REFUSED=$((REFUSED + 1)); continue; }
+    check_entry_file "$label" "$r_file" "$tsv_dir" "$rown" || { REFUSED=$((REFUSED + 1)); continue; }
     # A bare match is a substring test (index()), not a regex — nothing to compile.
     case "$r_match" in
       "~"*) check_pattern "$label" "$r_file" "${r_match#\~}" ;;
@@ -765,14 +1024,20 @@ for tsv in "$BASE"/paths/*/00-index.tsv; do
   [ -f "$tsv" ] || continue
   INDEXES=$((INDEXES + 1))
   IDX_PATHS=$((IDX_PATHS + 1))
-  label="paths/$(report_layer "$(basename "$(dirname "$tsv")")")"
+  index_label label paths "$tsv"
+  # Hoisted out of the row loop below: $tsv does not change across it, so the old
+  # per-row $(dirname "$tsv") was one fork per ROW rather than one per index file.
+  jit_path_dir tsv_dir "$tsv"
+  # One process for every pattern AND every entry-file name in this index, instead of
+  # three per ROW. See idx_prime().
+  idx_prime "$tsv" 1 0 2 "$tsv_dir"
   rown=0
   while IFS=$'\t' read -r p_match p_file _rest; do
     rown=$((rown + 1))
     [ -n "${p_match:-}" ] || continue
     [ -n "${p_file:-}" ] || continue
     LISTED=$((LISTED + 1))
-    check_entry_file "$label" "$p_file" "$(dirname "$tsv")" "$rown" || { REFUSED=$((REFUSED + 1)); continue; }
+    check_entry_file "$label" "$p_file" "$tsv_dir" "$rown" || { REFUSED=$((REFUSED + 1)); continue; }
     # Only if the pattern can be honoured at all. A refused row is already dead; warning
     # that it is also badly anchored reports one problem as two.
     check_pattern "$label" "$p_file" "$p_match" && check_paths_fragment "$label" "$p_file" "$p_match"
@@ -789,7 +1054,13 @@ for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; 
   # An index was opened. That is the whole of what INDEXES answers, and leaving this line
   # out is what made a vocabulary-only tree exit 2 saying nothing had been checked (#55).
   INDEXES=$((INDEXES + 1))
-  label="vocabulary/$(report_layer "$(basename "$(dirname "$tsv")")")"
+  index_label label vocabulary "$tsv"
+  # Hoisted out of the row loop below: $tsv does not change across it, so the old
+  # per-row $(dirname "$tsv") was one fork per ROW rather than one per index file.
+  jit_path_dir tsv_dir "$tsv"
+  # Vocabulary carries literal keywords, not patterns: name column only.
+  idx_prime "$tsv" 0 0 2 "$tsv_dir"
+  # One awk for every pattern in this index, instead of two per row (see pat_prime).
   v_rown=0
   while IFS=$'\t' read -r _v_key v_file _rest; do
     v_rown=$((v_rown + 1))
@@ -798,7 +1069,7 @@ for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; 
     # Counted apart from REFUSED, which is a subset of the rules the summary line says
     # were indexed and compiled. Folding these in printed "2 refused" under "1 rule
     # indexed", which is the kind of arithmetic that makes a reader distrust the tool.
-    check_entry_file "$label" "$v_file" "$(dirname "$tsv")" "$v_rown" || VOCAB_REFUSED=$((VOCAB_REFUSED + 1))
+    check_entry_file "$label" "$v_file" "$tsv_dir" "$v_rown" || VOCAB_REFUSED=$((VOCAB_REFUSED + 1))
     # Keywords only, never the module-path rows in 01-paths.tsv: those are derived from a
     # "## Modules" section and are not something anybody authored as a rule.
     case "$tsv" in
@@ -899,15 +1170,21 @@ EOF
 
 for tsv in "$BASE"/tools/*/00-index.tsv; do
   [ -f "$tsv" ] || continue
-  check_row_bytes "tools/$(report_layer "$(basename "$(dirname "$tsv")")")" "$tsv" "$(dirname "$tsv")" tools
+  index_label rb_label tools "$tsv"
+  jit_path_dir rb_dir "$tsv"
+  check_row_bytes "$rb_label" "$tsv" "$rb_dir" tools
 done
 for tsv in "$BASE"/paths/*/00-index.tsv; do
   [ -f "$tsv" ] || continue
-  check_row_bytes "paths/$(report_layer "$(basename "$(dirname "$tsv")")")" "$tsv" "$(dirname "$tsv")" paths
+  index_label rb_label paths "$tsv"
+  jit_path_dir rb_dir "$tsv"
+  check_row_bytes "$rb_label" "$tsv" "$rb_dir" paths
 done
 for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; do
   [ -f "$tsv" ] || continue
-  check_row_bytes "vocabulary/$(report_layer "$(basename "$(dirname "$tsv")")")" "$tsv" "$(dirname "$tsv")" vocabulary
+  index_label rb_label vocabulary "$tsv"
+  jit_path_dir rb_dir "$tsv"
+  check_row_bytes "$rb_label" "$tsv" "$rb_dir" vocabulary
 done
 
 if [ "$INDEXES" -eq 0 ]; then
@@ -941,7 +1218,7 @@ list_whole() {
   [ -d "$dir" ] || return 0
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
-    name="$(basename "$md")"
+    jit_path_base name "$md"
     [ "$name" = "00-README.md" ] && continue
     # An entry the hooks REFUSE costs nothing, so it belongs in the REFUSED rows above and
     # not in a budget. Listing it in both reported one problem as two -- and a tree with
@@ -949,9 +1226,22 @@ list_whole() {
     # was refused, which is a report that argues with itself.
     [ -L "$md" ] && continue
     [ "${JIT_SYMLINKS_ALL:-}" = "1" ] && continue
-    raw_inj="$(jit_frontmatter inject "$md")"
-    inj="$(printf '%s' "$raw_inj" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-    desc="$(jit_frontmatter description "$md")"
+    # Both fields of this entry in one process -- see the same change in the STALE check.
+    lw_fm=""
+    jit_frontmatter_many lw_fm "$md" inject description
+    jit_fm_get raw_inj "$lw_fm" inject
+    # `${var,,}` is bash 4, so this takes the same shape as _ms() in common.sh: the
+    # builtin where the shell has it, the two tr forks where it does not. macOS ships
+    # bash 3.2 and keeps them; Git Bash and Linux CI drop two forks per row here, which
+    # over a tree is the second-largest fork source this lint had after dirname/basename.
+    # Whitespace goes with ${var//[[:space:]]/} either way -- that one is bash 3.2.
+    if [ "${BASH_VERSINFO[0]:-0}" -ge 4 ]; then
+      inj="${raw_inj,,}"
+      inj="${inj//[[:space:]]/}"
+    else
+      inj="$(printf '%s' "$raw_inj" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+    fi
+    jit_fm_get desc "$lw_fm" description
     why=""
     # `pin` mirrors jit_entry_load() in common.sh: the mode was decided by the ENTRY, not
     # inherited from the project default. An entry pinned to full can never render as a
@@ -959,7 +1249,14 @@ list_whole() {
     # tree and being able to flip -- naming it would send an author to write a line
     # nothing will ever read.
     pin=0
-    if [ "$(sed -n 1p "$md")" != "---" ]; then
+    # `read` off the file, not `$(sed -n 1p ...)`: one fork per entry, over a whole tree,
+    # to look at a line bash can read itself. `read` returns non-zero on a file with no
+    # trailing newline, which is exactly the malformed case this test is looking for, so
+    # its status is deliberately not checked -- an unreadable or empty file leaves
+    # $_fm_first empty and takes the same branch a wrong first line does.
+    _fm_first=""
+    IFS= read -r _fm_first < "$md" 2>/dev/null
+    if [ "$_fm_first" != "---" ]; then
       eff=full; pin=1; why="no frontmatter, so there is nothing to summarise"
     elif [ "$inj" = full ]; then
       eff=full; pin=1; why="inject: full in this entry"
@@ -1014,7 +1311,9 @@ list_whole() {
     fi
     if [ -z "$desc" ] && [ "$pin$eff" != "1full" ]; then NODESC=$((NODESC + 1)); fi
     if [ "$eff" = full ]; then
-      size="$(wc -c < "$md" | tr -d ' ')"
+      # Arithmetic expansion, not `| tr -d ' '`: some wc implementations pad the count with
+      # leading whitespace, and $(( )) discards it for nothing. One fork per entry saved.
+      size=$(( $(wc -c < "$md") ))
       WHOLE=$((WHOLE + 1))
       # Capped. This runs against user trees of any size, and a budget that scrolls its own
       # total off the screen is not a budget. The COUNT is never capped -- a report that
@@ -1034,7 +1333,10 @@ for _d in "$BASE"/tools/*/ "$BASE"/paths/*/ "$BASE"/vocabulary/*/; do
   _d="${_d%/}"
   # The dimension half comes from this script's own glob and is always tools|paths|
   # vocabulary; the LAYER half is the clone's directory name and goes through the policy.
-  list_whole "$_d" "$(basename "$(dirname "$_d")")/$(report_layer "$(basename "$_d")")"
+  jit_path_dir _lw_parent "$_d"
+  jit_path_base _lw_dim "$_lw_parent"
+  jit_path_base _lw_layer "$_d"
+  list_whole "$_d" "$_lw_dim/$(report_layer "$_lw_layer")"
 done
 unset _d
 echo ""
@@ -1461,7 +1763,7 @@ END {
   fi
 }
 
-if [ -n "$SAMPLE_TOOL$SAMPLE_COMMAND$SAMPLE_FILE$SAMPLE_PROMPT$SAMPLE_AGENT" ]; then
+if [ -n "$SAMPLE_TOOL$SAMPLE_COMMAND$SAMPLE_PROMPT$SAMPLE_AGENT" ] || [ "${#SAMPLE_FILES[@]}" -gt 0 ]; then
   echo ""
   case "$BASE" in
     */.claude/jit-context)
@@ -1474,11 +1776,27 @@ if [ -n "$SAMPLE_TOOL$SAMPLE_COMMAND$SAMPLE_FILE$SAMPLE_PROMPT$SAMPLE_AGENT" ]; 
       # dimension matches file_path when there is no command — a `block` rule guarding
       # Edit of a generated file is only reachable this way, and routing --file to the
       # path hook alone reported it as not firing when the rule was fine.
-      if [ -n "$SAMPLE_FILE" ]; then
-        payload="{\"tool_name\":\"${SAMPLE_TOOL:-Read}\",\"tool_input\":{\"file_path\":\"$(json_quote "$SAMPLE_FILE")\"}}"
+      # Each --file gets its own subject line, printed whether there is one of them or
+      # forty. report_hook() labels its line with the hook's name and nothing else, so N
+      # files would otherwise print 2N lines with no way to tell which answer belongs to
+      # which sample -- and a report shape that changed with the argument count would be
+      # two things to keep true and one nobody could grep.
+      #
+      # The subject is the caller's own argument, not text out of the tree being linted,
+      # so it does not go through print_untrusted() the way the file-name column does.
+      #
+      # An index loop rather than `for f in "${SAMPLE_FILES[@]}"`: this script runs under
+      # `set -u`, and expanding an empty array that way is an unbound-variable error on
+      # the bash macOS ships (3.2), which is one of the three legs CI runs.
+      sample_i=0
+      while [ "$sample_i" -lt "${#SAMPLE_FILES[@]}" ]; do
+        sample_f="${SAMPLE_FILES[$sample_i]}"
+        sample_i=$((sample_i + 1))
+        printf '  file: %s\n' "$sample_f"
+        payload="{\"tool_name\":\"${SAMPLE_TOOL:-Read}\",\"tool_input\":{\"file_path\":\"$(json_quote "$sample_f")\"}}"
         report_hook pre-tool-hook.sh "$payload" "$PROJECT"
         report_hook pre-path-hook.sh "$payload" "$PROJECT"
-      fi
+      done
       if [ -n "$SAMPLE_COMMAND" ]; then
         payload="{\"tool_name\":\"${SAMPLE_TOOL:-Bash}\",\"tool_input\":{\"command\":\"$(json_quote "$SAMPLE_COMMAND")\"}}"
         report_hook pre-tool-hook.sh "$payload" "$PROJECT"
@@ -1493,7 +1811,8 @@ if [ -n "$SAMPLE_TOOL$SAMPLE_COMMAND$SAMPLE_FILE$SAMPLE_PROMPT$SAMPLE_AGENT" ]; 
         payload="{\"tool_name\":\"${SAMPLE_TOOL:-Agent}\",\"tool_input\":{\"subagent_type\":\"$(json_quote "$SAMPLE_AGENT")\"}}"
         report_hook pre-tool-hook.sh "$payload" "$PROJECT"
       fi
-      if [ -n "$SAMPLE_TOOL" ] && [ -z "$SAMPLE_COMMAND$SAMPLE_FILE$SAMPLE_PROMPT$SAMPLE_AGENT" ]; then
+      if [ -n "$SAMPLE_TOOL" ] && [ -z "$SAMPLE_COMMAND$SAMPLE_PROMPT$SAMPLE_AGENT" ] \
+         && [ "${#SAMPLE_FILES[@]}" -eq 0 ]; then
         echo "  SKIPPED: --tool needs a target. Add --command, --file or --agent."
       fi
       ;;

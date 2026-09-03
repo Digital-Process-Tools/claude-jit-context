@@ -92,8 +92,13 @@ state_of() { printf '%s' "$1/.claude/jit-context/.discovery/state"; }
 # anywhere and is exactly the #295 "plugin-owned, nobody to curate" case.
 manual_entry() {
   local p="$1" dim="$2" name="$3"
-  mkdir -p "$p/.claude/jit-context/$dim/00-manual"
-  : > "$p/.claude/jit-context/$dim/00-manual/$name"
+  local dir="$p/.claude/jit-context/$dim/00-manual"
+  # #312: mkdir -p forks a process every call; a directory that already exists
+  # (every call after a loop's first, e.g. section H's 600 and section O's 205)
+  # does not need it re-run. The -d check is a shell builtin, no fork -- same
+  # end state (dir exists, file truncated/created) on every call either way.
+  [ -d "$dir" ] || mkdir -p "$dir"
+  : > "$dir/$name"
 }
 
 # #300: JIT_CONTEXT_STOP_REPORT is off by default now, so every section below that
@@ -252,15 +257,19 @@ echo "=== H: the dedup scan is bounded, not quadratic in an untrusted marker fil
 
 P="$(new_project h)"
 enable_stop_report "$P"
-mkdir -p "$(state_of "$P")"
+# #312: state_of runs via $( ), a subshell fork on every call -- hoisted once
+# outside the 600-iteration loop below instead of re-forked on each pass.
+H_STATE_DIR="$(state_of "$P")"
+mkdir -p "$H_STATE_DIR"
 JIT_HI=600
 _jit_seq=1
-: > "$(state_of "$P")/vocab-shown-sess-h.txt"
+: > "$H_STATE_DIR/vocab-shown-sess-h.txt"
 while [ "$_jit_seq" -le "$JIT_HI" ]; do
-  printf 'entry-%s.md\n' "$_jit_seq" >> "$(state_of "$P")/vocab-shown-sess-h.txt"
+  printf 'entry-%s.md\n' "$_jit_seq" >> "$H_STATE_DIR/vocab-shown-sess-h.txt"
   manual_entry "$P" vocabulary "entry-$_jit_seq.md"
   _jit_seq=$((_jit_seq + 1))
 done
+unset H_STATE_DIR
 OUT="$(run_stop "$P" "sess-h")"; RC=$?
 assert_rc0 "the hook exits 0 on 600 distinct fired entries" "$RC"
 assert_contains "the reported total accounts for all 600" "$OUT" "$JIT_HI entries injected"
@@ -414,15 +423,21 @@ echo "=== O: past the 200-name cap -- the cap bounds the model line only, never 
 
 P="$(new_project o)"
 enable_stop_report "$P"
-mkdir -p "$(state_of "$P")"
-: > "$(state_of "$P")/vocab-shown-sess-o.txt"
+# #312: state_of runs via $( ), a subshell fork on every call -- hoisted once
+# outside the 205-iteration loop below instead of re-forked on each pass.
+O_STATE_DIR="$(state_of "$P")"
+mkdir -p "$O_STATE_DIR"
+: > "$O_STATE_DIR/vocab-shown-sess-o.txt"
 _jit_o=1
 while [ "$_jit_o" -le 205 ]; do
-  printf 'entry-%03d.md\n' "$_jit_o" >> "$(state_of "$P")/vocab-shown-sess-o.txt"
-  manual_entry "$P" vocabulary "$(printf 'entry-%03d.md' "$_jit_o")"
+  # printf -v is a shell builtin (no fork), unlike the $( ) command
+  # substitution this replaced -- same formatted name, no subshell per iteration.
+  printf -v _jit_o_name 'entry-%03d.md' "$_jit_o"
+  printf '%s\n' "$_jit_o_name" >> "$O_STATE_DIR/vocab-shown-sess-o.txt"
+  manual_entry "$P" vocabulary "$_jit_o_name"
   _jit_o=$((_jit_o + 1))
 done
-unset _jit_o
+unset _jit_o _jit_o_name O_STATE_DIR
 OUT="$(run_stop "$P" "sess-o")"; RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_contains "the model line names entry 200 (the cap boundary itself)" "$OUT" "entry-200.md"

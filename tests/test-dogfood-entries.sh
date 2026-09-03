@@ -23,10 +23,167 @@ FAIL=0
 # directory, so running this from tests/ made EVERY sample return nothing — and the
 # assert_silent cases all passed on that emptiness. A vacuous pass is the exact defect
 # this suite is about, so the guard below fails loudly instead of trusting the silence.
-fired_for() {
-  (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$DRYRUN" --file "$1" 2>&1) \
-    | awk '/pre-path-hook\.sh/ { $1=""; print }'
+#
+# Memoised by path (#307), on disk rather than in a bash array. jit-dry-run.sh --file
+# does a full-tree lint on every invocation -- pattern, index and config.env checks
+# over the whole of this repository's own .claude/jit-context/ -- before it ever gets
+# to the one sample line this helper reads (that lint is ~95% of each call's cost,
+# measured: a bare `jit-dry-run.sh` with no sample flag at all costs the same ~1.3s as
+# one with --file). The tree does not change between assertions in one run of this
+# suite, so a path already queried by an earlier assertion is answered from cache
+# rather than re-linting the whole tree to read the same line again. 59 call sites
+# query only 39 distinct paths -- 20 of those calls were paying for a lint whose
+# answer this run already had.
+#
+# On disk, not in a CACHE_PATHS=()/CACHE_OUT=() pair of bash arrays, because every real
+# call site reads this helper through command substitution -- out=$(fired_for "$path")
+# -- and command substitution always forks a subshell. A subshell's array mutations die
+# with it; an in-memory cache populated that way is invisible to the very next call and
+# never hits, which a caching helper under test only through direct, unsubstituted
+# calls will not catch (an earlier version of this fix shipped exactly that: green on
+# its own targeted test, silently uncached everywhere the suite actually calls it).
+# Files under $FIRED_FOR_CACHE_DIR persist across subshells because they are on disk.
+#
+# The manifest maps path -> cache-file-number with one line per miss; no path is ever
+# hashed into a filename, which would risk two distinct paths colliding into the same
+# slot. What each assertion CHECKS is untouched: the cache is keyed on the exact query
+# string, so two assertions reading two different rules off the same path still both
+# see that path's real output, and a path queried once is never queried with different
+# arguments and merged into it.
+FIRED_FOR_CACHE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jit-dogfood-fired-for.XXXXXXXX" 2>/dev/null)" || {
+  echo "  FAIL: could not create a cache dir for fired_for() memoisation"
+  exit 1
 }
+trap 'rm -rf "$FIRED_FOR_CACHE_DIR"' EXIT
+FIRED_FOR_MANIFEST="$FIRED_FOR_CACHE_DIR/manifest"
+: > "$FIRED_FOR_MANIFEST"
+
+# Every path answered here that the prime below did not already have. Read by the drift
+# guard at the bottom: a call site added without a matching prime entry still WORKS, it
+# just quietly costs a whole extra tree lint again, and a suite that silently walks back
+# to 442s is exactly the kind of absence nothing would report.
+FIRED_FOR_LAZY="$FIRED_FOR_CACHE_DIR/lazy"
+: > "$FIRED_FOR_LAZY"
+
+fired_for() {
+  local path="$1" n out
+  n=$(awk -F'\t' -v p="$path" '$2==p{print $1; exit}' "$FIRED_FOR_MANIFEST")
+  if [ -n "$n" ]; then
+    cat "$FIRED_FOR_CACHE_DIR/$n"
+    return
+  fi
+  printf '%s\n' "$path" >>"$FIRED_FOR_LAZY"
+  out=$( (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$DRYRUN" --file "$path" 2>&1) \
+    | awk '/pre-path-hook\.sh/ { $1=""; print }' )
+  n=$(($(wc -l <"$FIRED_FOR_MANIFEST") + 1))
+  printf '%s\n' "$out" >"$FIRED_FOR_CACHE_DIR/$n"
+  printf '%s\t%s\n' "$n" "$path" >>"$FIRED_FOR_MANIFEST"
+  cat "$FIRED_FOR_CACHE_DIR/$n"
+}
+
+# Fill the cache for many paths in ONE evaluation of the tree (#307). jit-dry-run.sh
+# lints the whole of .claude/jit-context/ before it answers any sample, and that lint is
+# 224 of the 252 external commands one `--file` call spawns -- so 39 separate calls spent
+# 8,736 of this suite's 10,302 spawns re-linting a tree that cannot change between them.
+# On the Windows leg a process spawn is the expensive thing, which is where the 442s went.
+#
+# --file is repeatable, so one call answers every path and the report carries a `  file: X`
+# subject line per sample. Each block is cut out on those markers and written into the same
+# on-disk cache fired_for() reads, so nothing about what the assertions SEE changes: a
+# primed path is a cache hit, an unprimed one still evaluates lazily and still gets the
+# right answer. The only difference a missing prime entry makes is cost, which is why the
+# drift guard at the bottom of this file exists.
+fired_for_prime() {
+  local out path n
+  local args=()
+  for path in "$@"; do
+    args+=(--file "$path")
+  done
+  [ "${#args[@]}" -gt 0 ] || return 0
+  out=$( (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$DRYRUN" "${args[@]}" 2>&1) )
+  for path in "$@"; do
+    # Never overwrite an answer already in the cache: fired_for() keys on the exact query
+    # string and a path primed twice must stay one entry, or fired_for_misses() -- which
+    # the memoisation test reads -- would count evaluations that never happened.
+    n=$(awk -F'\t' -v p="$path" '$2==p{print $1; exit}' "$FIRED_FOR_MANIFEST")
+    [ -z "$n" ] || continue
+    n=$(($(wc -l <"$FIRED_FOR_MANIFEST") + 1))
+    awk -v want="  file: $path" '
+      $0 == want { on = 1; next }
+      on && /^  file: / { exit }
+      on && /pre-path-hook\.sh/ { $1 = ""; print }
+    ' <<<"$out" >"$FIRED_FOR_CACHE_DIR/$n"
+    printf '%s\t%s\n' "$n" "$path" >>"$FIRED_FOR_MANIFEST"
+  done
+}
+
+# How many distinct paths have actually been evaluated so far -- read from disk so it
+# is correct even when the last call to fired_for() ran, and updated the manifest,
+# inside a subshell this function's own caller never sees.
+fired_for_misses() {
+  wc -l <"$FIRED_FOR_MANIFEST" | tr -d '[:space:]'
+}
+
+# The scripts/ half of the prime list, read one line at a time rather than left to an
+# unquoted command substitution to split on whitespace: a tracked path containing a space
+# is not a thing this repository has today, and a list that silently tore one in half if
+# it ever did would be a coverage hole nothing reports.
+PRIME_SCRIPTS=()
+prime_scripts=$(cd "$REPO" && git ls-files -- scripts)
+while IFS= read -r prime_script; do
+  [ -n "$prime_script" ] || continue
+  PRIME_SCRIPTS+=("$prime_script")
+done <<<"$prime_scripts"
+
+# Every path the assertions below ask about, answered in one evaluation of the tree.
+# Written out rather than derived from the call sites: a derivation goes silently narrower
+# the moment somebody writes an assertion in a shape it does not parse, and this list is
+# greppable. It cannot rot unnoticed either -- a path missing from it is answered lazily,
+# correctly, and named by the drift guard at the bottom of this file.
+#
+# scripts/ comes from git ls-files, the same source the coverage section at the bottom
+# reads, so a new script is primed the moment it is staged.
+#
+# "docs/only-the-memoisation-test-asks-for-this.txt" is deliberately NOT here. The
+# memoisation test below needs a path nothing has evaluated yet, and priming it would make
+# that test read 0 for the wrong reason. It is the one path the drift guard allows.
+fired_for_prime \
+  ".claude/jit-context/paths/00-manual/hooks.md" \
+  "examples/jit-context/tools/00-manual/git.md" \
+  "/private/tmp/claude-501/-Users-floriandavid-Documents-claude-jit-context/x/scratchpad/note.md" \
+  "docs/contributing.md" \
+  "README.md" \
+  "scripts/pre-path-hook.sh" \
+  "scripts/session-start-hook.sh" \
+  "scripts/common.sh" \
+  "scripts/rebuild-tsv.sh" \
+  "scripts/jit-dry-run.sh" \
+  "scripts/jit-misses.sh" \
+  "scripts/jit-init.sh" \
+  "scripts/jit-doctor.sh" \
+  "scripts/pre-tool-hook.sh" \
+  "tests/test-pre-path-hook.sh" \
+  "tests/test-jit-dry-run.sh" \
+  "tests/test-jit-init.sh" \
+  "tests/run-all.sh" \
+  "tests/fixtures/tree/setup.sh" \
+  "myscripts/common.sh" \
+  "vendor/subscripts/jit-misses.sh" \
+  "contests/entry.sh" \
+  "templates/jit-context/vocabulary/00-manual/writing-rules.md" \
+  ".oss/assemble_changelog.py" \
+  ".oss/vendor/lib/thing.py" \
+  ".github/workflows/oss-changelog.yml" \
+  ".github/workflows/tests.yml" \
+  ".claude-plugin/plugin.json" \
+  ".supertool.json" \
+  "CHANGELOG.md" \
+  "vendor/thing/CHANGELOG.md" \
+  "changelog.d/README.md" \
+  "changelog.d/70.fixed.md" \
+  "docs/CHANGELOG.md.tmpl" \
+  "docs/nothing-governs-this.txt" \
+  "${PRIME_SCRIPTS[@]}"
 
 # Proves the harness can see the tree at all. Without it, every assert_silent below
 # would pass in an environment where the dry-run silently evaluates nothing.
@@ -38,6 +195,37 @@ if ! grep -q "hooks.md" <<<"$harness_probe"; then
   echo "  FAIL: harness cannot evaluate this repo's own tree — every result below would be vacuous"
   exit 1
 fi
+
+# Load-bearing for the memoisation above (#307), not a timing assertion -- this suite
+# carries no threshold that fails a build on slowness, and never will. Two queries
+# against the SAME path must cost one full-tree evaluation, not two: that is the whole
+# of the fix, and a cache that stops working here would still pass every assertion
+# below it, because none of them read fired_for_misses(). Only this one does.
+#
+# Through out=$(fired_for ...), the exact calling convention every assert_fires/
+# assert_silent call site below actually uses -- not a direct, unsubstituted call. An
+# earlier version of this cache was in-memory (bash arrays) and this same test called
+# fired_for directly, unsubstituted; that made the test pass while the cache was
+# invisible to every real call site, all of which go through command substitution and
+# therefore fork a subshell the array mutations could not survive. Routing the test
+# through $( ) is what makes it prove the thing the suite actually needs.
+#
+# A path nothing has answered yet. Every path a real assertion asks about is now filled by
+# fired_for_prime above, and "scripts/pre-path-hook.sh" is answered by harness_probe as
+# well, so any of those would be a cache hit before this test made a call of its own and
+# the diff below would read as 0 for the wrong reason. This one is deliberately in neither
+# list, which is why the drift guard at the bottom of this file allows it by name.
+misses_before=$(fired_for_misses)
+out=$(fired_for "docs/only-the-memoisation-test-asks-for-this.txt")
+out=$(fired_for "docs/only-the-memoisation-test-asks-for-this.txt")
+misses_after=$(fired_for_misses)
+if [ "$((misses_after - misses_before))" -eq 1 ]; then
+  PASS=$((PASS + 1)); echo "  PASS: fired_for answers a repeated path from cache, not a second evaluation"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: fired_for re-evaluated an already-queried path"
+  echo "    expected exactly 1 subprocess invocation for two identical queries, got $((misses_after - misses_before))"
+fi
+unset out
 
 # jit-drive: none -- every helper here runs a real hook from a path or a payload and captures it itself; none takes hook output as an argument
 assert_fires() {
@@ -504,6 +692,39 @@ while IFS= read -r script; do
     echo "    the entry that states its contract, then rebuild: bash scripts/rebuild-tsv.sh"
   fi
 done <<<"$script_list"
+
+echo ""
+echo "=== every path this suite asks about was answered by the one primed evaluation ==="
+# The drift guard for fired_for_prime (#307). A call site added without a matching entry
+# in the prime list still gets the right answer -- it just pays a whole extra full-tree
+# lint for it, 224 external commands, which on the Windows leg is where this suite's 442s
+# came from. Nothing else in this file reads that cost, so without this the list rots
+# against the assertions silently and the suite walks back to where it started.
+#
+# One path is allowed, by name: the memoisation test above needs a path nothing has
+# evaluated yet, so priming it would make that test read 0 for the wrong reason.
+MEMO_TEST_PATH="docs/only-the-memoisation-test-asks-for-this.txt"
+unexpected_lazy=$(grep -vxF "$MEMO_TEST_PATH" "$FIRED_FOR_LAZY")
+
+# Positive control, and it is not optional here: this reads a file, and an empty result is
+# what "no drift" looks like AND what "the tracking never recorded anything" looks like.
+# The memo test's own path is written to it by fired_for() on a real miss, so its presence
+# proves the file is being fed at all.
+if grep -qxF "$MEMO_TEST_PATH" "$FIRED_FOR_LAZY"; then
+  PASS=$((PASS + 1)); echo "  PASS: control -- lazy evaluations are actually being recorded"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: control -- nothing was recorded as lazily evaluated"
+  echo "    the memoisation test above evaluates $MEMO_TEST_PATH and nothing primed it,"
+  echo "    so it must appear here. An empty list below proves nothing while this is red."
+fi
+
+if [ -z "$unexpected_lazy" ]; then
+  PASS=$((PASS + 1)); echo "  PASS: no path was evaluated outside the primed batch"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: $(grep -c . <<<"$unexpected_lazy") path(s) cost a full-tree lint of their own"
+  echo "$unexpected_lazy" | sed 's/^/      /'
+  echo "    add each of them to the fired_for_prime call near the top of this file."
+fi
 
 echo ""
 echo "========================"

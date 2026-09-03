@@ -3,7 +3,7 @@
 # Single awk process: parses JSON, scans tool + vocab TSVs, outputs JSON.
 # Bash wrapper only handles timing (2 perl calls) and log writing.
 
-SCRIPT_DIR="$(dirname "$0")"
+case "$0" in */*) SCRIPT_DIR="${0%/*}" ;; *) SCRIPT_DIR="." ;; esac
 source "$SCRIPT_DIR/common.sh"
 T_START=$(_ms)
 
@@ -75,7 +75,9 @@ JIT_VOCAB_LAYERS="$JIT_LAYERS"
 # call, the same shape jit_layers_notice()'s caller already uses for a bash-built list.
 JIT_MISSING_REQUIRES="$(jit_missing_requires "$JIT_BASE/tools" "$JIT_TOOL_LAYERS")"
 
-cat | LC_ALL=C awk \
+# `awk` reads stdin itself; the `cat` in front of it was one fork per invocation, on the
+# hottest path this plugin has, buying nothing.
+LC_ALL=C awk \
   -v tool_layers="$JIT_TOOL_LAYERS" \
   -v vocab_layers="$JIT_VOCAB_LAYERS" \
   -v tools_base="$JIT_BASE/tools" \

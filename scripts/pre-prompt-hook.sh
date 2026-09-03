@@ -2,7 +2,7 @@
 # claude-jit-context — Vocabulary-based UserPromptSubmit hook
 # Single awk process: parses JSON, matches keywords against TSV indexes, outputs JSON.
 
-SCRIPT_DIR="$(dirname "$0")"
+case "$0" in */*) SCRIPT_DIR="${0%/*}" ;; *) SCRIPT_DIR="." ;; esac
 source "$SCRIPT_DIR/common.sh"
 T_START=$(_ms)
 
@@ -55,7 +55,9 @@ jit_scan_layers "$JIT_BASE/vocabulary" vocabulary
 # and not a per-row stat.
 jit_scan_entry_ages "$JIT_BASE/vocabulary"
 
-cat | LC_ALL=C awk \
+# `awk` reads stdin itself; the `cat` in front of it was one fork per invocation buying
+# nothing.
+LC_ALL=C awk \
   -v vocab_layers="$JIT_LAYERS" \
   -v vocab_base="$JIT_BASE/vocabulary" \
   -v state_dir="$JIT_STATE_DIR" \

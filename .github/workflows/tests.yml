@@ -8,13 +8,70 @@ on:
     branches: [main]
   pull_request:
 
+# Cancel a run this branch has already superseded. Three pushes in one afternoon left three
+# full matrices racing for the same runners, and the two older ones were answering questions
+# about commits nobody was waiting on any more -- which is worse than waste when runners
+# queue, because the run you ARE waiting on is behind them.
+#
+# Pull requests only. A push to main is never superseded in the sense that matters: its run
+# is the record of whether that commit was green, and cancelling it would leave a merged
+# commit with no verdict at all. `github.ref` keys the group, so two branches never cancel
+# each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege for every job here: this workflow only reads the tree and runs tests.
+# No job writes to the repository, posts a comment, or uploads an asset. A workflow with no
+# permissions block inherits the repository default, which on many repositories is a write
+# token -- that is what CodeQL flagged on the two gate jobs.
+permissions:
+  contents: read
+
 jobs:
   hooks:
     runs-on: ${{ matrix.os }}
+    # 4 shards x 3 platforms. Sharding makes nothing faster and bills the same minutes --
+    # the same suites run, on the same runners. What it splits is the WALL CLOCK, and only
+    # the Windows leg needed it: measured on f5433e2, windows-latest ran this list
+    # sequentially in 1,305s against ubuntu's 162s for the same commit, because a process
+    # launch on that platform costs roughly ten times what it costs elsewhere.
+    #
+    # fail-fast stays false: a shard that goes red must not cancel the other three, or the
+    # first failure hides every other suite's verdict -- which is the same absence this
+    # repository is about, one level up in the CI.
+    #
+    # The partition itself is asserted by tests/test-run-all-shard.sh, not by this file: a
+    # suite in no shard runs NOWHERE, and a leg that ran 30 of 45 suites is green exactly
+    # the way a leg that ran all 45 is. That suite proves the union of every shard is the
+    # complete list and that nothing appears twice.
+    name: hooks (${{ matrix.os }}, shard ${{ matrix.shard }}/${{ matrix.shards }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # `include` and not `os` x `shard`, because the shard COUNT differs per platform and
+        # a cross product cannot say that. The obvious spelling -- keep the cross product
+        # and `exclude` three shards on the fast platforms -- is wrong in the way this whole
+        # repository is about: `exclude` removes LEGS, it does not change what the surviving
+        # leg runs. Ubuntu would still run `--shard 1/4`, go green having run 11 of 45
+        # suites, and be indistinguishable from a leg that ran all 45.
+        #
+        # Only Windows needs splitting. Measured on f5433e2: windows-latest 1,305s,
+        # ubuntu-latest 162s, and macos-latest was never the slow one either. Four boots and
+        # four full-history checkouts on a platform that finishes in under three minutes is
+        # overhead bought for nothing -- and macOS runners are the scarcest of the three, so
+        # holding four of them is the version of this change most likely to queue.
+        #
+        # 1/1 is a real spelling, not a special case: run-all.sh takes it through the same
+        # round-robin as any other shard, and tests/test-run-all-shard.sh asserts it runs
+        # every suite.
+        include:
+          - { os: ubuntu-latest,  shard: 1, shards: 1 }
+          - { os: macos-latest,   shard: 1, shards: 1 }
+          - { os: windows-latest, shard: 1, shards: 4 }
+          - { os: windows-latest, shard: 2, shards: 4 }
+          - { os: windows-latest, shard: 3, shards: 4 }
+          - { os: windows-latest, shard: 4, shards: 4 }
     # windows-latest would otherwise run these steps in pwsh, where a `| head -1`
     # pipeline is not a shell pipeline at all. Git Bash ships on the runner.
     defaults:
@@ -83,7 +140,69 @@ jobs:
           Add-MpPreference -ExclusionPath "${{ github.workspace }}"
           Add-MpPreference -ExclusionPath "$env:RUNNER_TEMP"
       - name: Run hook test suites
-        run: bash tests/run-all.sh
+        run: bash tests/run-all.sh --shard ${{ matrix.shard }}/${{ matrix.shards }}
+
+  # --- The names branch protection pins ------------------------------------------------
+  #
+  # `main` requires three checks BY NAME: `hooks (ubuntu-latest)`, `hooks (macos-latest)`
+  # and `hooks (windows-latest)`. Sharding renamed the matrix legs, so those three stopped
+  # existing -- and a required check that can never report is not a check that failed, it is
+  # a pull request BLOCKED forever waiting for something that will never arrive. Caught on
+  # #324's own merge, which refused with BLOCKED while every leg was green.
+  #
+  # So the workflow satisfies the gate rather than the gate chasing the workflow. These
+  # three exist only to carry the pinned names; the work is in `hooks` above.
+  #
+  # ONE HONEST LIMIT, stated here because it cannot be fixed from inside a matrix: a matrix
+  # job reports ONE result for all its legs, so these three cannot tell which platform went
+  # red. A failure on any leg fails all three. That over-reports and never under-reports --
+  # the direction that matters for a gate -- but do not read `hooks (macos-latest)` red as
+  # "macOS failed". The per-leg truth is the job list, where each leg is named.
+  #
+  # `if: always()` because a `needs:` job is SKIPPED when its dependency fails, and GitHub
+  # can count a skipped required check as satisfied. Skipped would be the same silent pass
+  # this whole file exists to refuse. The result is tested explicitly instead.
+  hooks-gate-ubuntu:
+    name: hooks (ubuntu-latest)
+    needs: hooks
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every hooks leg must have succeeded
+        run: |
+          echo "hooks matrix result: ${{ needs.hooks.result }}"
+          [ "${{ needs.hooks.result }}" = "success" ] || {
+            echo "A leg of the hooks matrix did not succeed. See the job list for which."
+            exit 1
+          }
+
+  hooks-gate-macos:
+    name: hooks (macos-latest)
+    needs: hooks
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every hooks leg must have succeeded
+        run: |
+          echo "hooks matrix result: ${{ needs.hooks.result }}"
+          [ "${{ needs.hooks.result }}" = "success" ] || {
+            echo "A leg of the hooks matrix did not succeed. See the job list for which."
+            exit 1
+          }
+
+  hooks-gate-windows:
+    name: hooks (windows-latest)
+    needs: hooks
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every hooks leg must have succeeded
+        run: |
+          echo "hooks matrix result: ${{ needs.hooks.result }}"
+          [ "${{ needs.hooks.result }}" = "success" ] || {
+            echo "A leg of the hooks matrix did not succeed. See the job list for which."
+            exit 1
+          }
 
   shellcheck:
     runs-on: ubuntu-latest

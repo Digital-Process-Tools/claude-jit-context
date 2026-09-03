@@ -153,6 +153,71 @@ OUT=$(cd "$CLEAN" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --file "src/
 assert_contains "path rule fired" "$OUT" "billing.md"
 
 echo ""
+echo "=== --file is repeatable, and the tree is linted once for all of them (#307) ==="
+# The cost of a --file call is ~73% full-tree lint and ~27% the two hook spawns it is
+# actually asked for (measured: a bare run with no sample flag costs 0.64s against 0.87s
+# for the same run carrying one --file). A caller with N files to sample paid that lint N
+# times over a tree that cannot change between them -- tests/test-dogfood-entries.sh pays
+# it 39 times in one run, which is most of the 442s that suite costs on the Windows leg.
+#
+# A dedicated tree rather than CLEAN: two path rules are needed to prove each file is
+# answered for ITSELF, and adding a second rule to the shared fixture would change what
+# every other assertion above lints.
+MULTI=$(mktemp -d)
+make_tree "$MULTI"
+# Split literal: this suite's own tools/ rule refuses a Bash command carrying a redirect
+# next to the generated index's name, and the workaround is the one its body names.
+MULTI_PIDX="$MULTI/.claude/jit-context/paths/00-manual/00-index"
+printf 'Payroll/\tpayroll.md\n' >> "$MULTI_PIDX.tsv"
+echo "payroll body" > "$MULTI/.claude/jit-context/paths/00-manual/payroll.md"
+
+OUT=$(cd "$MULTI" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" \
+  --file "src/Billing/Total.php" --file "src/Payroll/Run.php" 2>&1) && ST=0 || ST=$?
+assert_status "exit 0 with two --file samples" "$ST" "0"
+
+# Scoped to ONE subject's own lines, never to the whole report. Phase 1 lists every rule
+# in the tree by name on its way past, so `assert_contains "$OUT" billing.md` is true
+# before any sample has run at all -- both of these assertions passed against the
+# unmodified script, which answers only the LAST --file, and said nothing. That is the
+# vacuous-pass defect this whole directory exists to refuse, committed in the test for it.
+sample_block() {
+  awk -v want="  file: $1" '
+    $0 == want { on = 1; next }
+    on && /^  file: / { exit }
+    on { print }
+  ' <<<"$2"
+}
+BILLING=$(sample_block "src/Billing/Total.php" "$OUT")
+PAYROLL=$(sample_block "src/Payroll/Run.php" "$OUT")
+
+assert_contains "the first file is answered for itself" "$BILLING" "billing.md"
+assert_not_contains "and not with the other file's rule" "$BILLING" "payroll.md"
+assert_contains "the second file is answered for itself" "$PAYROLL" "payroll.md"
+assert_not_contains "and not with the first file's rule" "$PAYROLL" "billing.md"
+
+# Positive control for the four above: sample_block returns nothing at all when the
+# subject line is missing, and an empty string satisfies both assert_not_contains calls
+# and nothing else. Without this, a script that printed no subject lines whatsoever would
+# score two of those four as passes.
+assert_contains "control: the first sample's block was found" "$BILLING" "pre-path-hook.sh"
+assert_contains "control: the second sample's block was found" "$PAYROLL" "pre-path-hook.sh"
+
+# The whole point, and the only assertion here that would still hold if the loop were
+# written as N full invocations: the lint ran ONCE. `tree:` is the first line of the
+# report and a run prints exactly one of them.
+TREE_LINES=$(grep -c '^tree:' <<<"$OUT")
+assert_status "the tree was linted once, not once per file" "$TREE_LINES" "1"
+
+# A single --file prints its subject too. The report shape must not depend on how many
+# files were passed -- a shape that changes with the argument count is one nobody can
+# grep and two things to keep true.
+OUT=$(cd "$MULTI" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" \
+  --file "src/Billing/Total.php" 2>&1) && ST=0 || ST=$?
+ONE=$(sample_block "src/Billing/Total.php" "$OUT")
+assert_contains "one --file names its subject as well" "$ONE" "pre-path-hook.sh"
+assert_contains "and still answers" "$ONE" "billing.md"
+
+echo ""
 echo "=== the injected refusal notice is not reported as a rule that fired ==="
 # The notice header is "# JIT Context: N rule(s) could not be evaluated". Reading rule
 # names out of the injected text naively picks up N and prints it as a fired rule --

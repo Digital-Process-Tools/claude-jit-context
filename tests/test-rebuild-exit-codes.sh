@@ -107,10 +107,13 @@ write_entry paths/00-manual/hooks-file.md \
   "description: Hooks never fail hard." \
   "match: (^|/)scripts/[a-z-]+-hook[.]sh$"
 
-write_entry vocabulary/00-manual/widget.md \
-  "title: Widget" \
-  "description: What a widget is here." \
-  "keywords: widget-alpha, widget-core"
+# No baseline vocabulary/00-manual entry here on purpose (#321): a vocabulary directory
+# with any keyword in it makes every rebuild() call below pay rebuild-tsv.sh's
+# generic-word classification against the shipped ~1MB wordlist, and nothing in
+# sections A-D, F or G ever asserts on a vocabulary row -- profiled at roughly a fifth
+# of this suite's wall time, paid on calls that test the tools/paths exit-code paths
+# only. Section E still writes its own vocabulary entries where that classification
+# is the thing under test.
 
 echo "=== A. a tree whose every row can be honoured exits 0 ==="
 rebuild

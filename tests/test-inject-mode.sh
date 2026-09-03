@@ -245,7 +245,18 @@ run_path()   { printf '%s' "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\
 # jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
+  # Bash substring match, not `grep -qF <<<`: a fork per assertion is the dominant cost
+  # of this suite under a slow-fork shell (measured: ~6ms/call on macOS's own grep, and
+  # a Windows git-bash fork is far more expensive than that) -- #323. `[[ == *lit* ]]`
+  # is byte-for-byte equivalent to `grep -qF` here: quoting "$expected" inside the
+  # pattern strips its glob meaning, so a needle containing `*`, `?` or `[` still
+  # matches literally. `grep -qF` itself matches per LINE, not across the whole
+  # blob -- a needle containing a literal newline would OR-match each of its own
+  # lines against each line of input, which `[[ == *lit* ]]` does not reproduce.
+  # That divergence is never reached here: no needle at any assert_contains /
+  # assert_not_contains / assert_blocked call site in this file embeds a newline,
+  # so every needle can only ever land inside a single line of $output either way.
+  if [[ "$output" == *"$expected"* ]]; then
     PASS=$((PASS + 1)); echo "  PASS: $desc"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
@@ -256,7 +267,7 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
+  if [[ "$output" == *"$unexpected"* ]]; then
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: ${output:0:300}"
@@ -268,7 +279,7 @@ assert_not_contains() {
 # jit-drive: assert_blocked blocked capture
 assert_blocked() {
   local desc="$1" output="$2"
-  if grep -qF '"decision":"block"' <<<"$output"; then
+  if [[ "$output" == *'"decision":"block"'* ]]; then
     PASS=$((PASS + 1)); echo "  PASS: $desc"
   else
     FAIL=$((FAIL + 1)); echo "  FAIL: $desc"

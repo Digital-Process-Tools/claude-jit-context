@@ -117,16 +117,23 @@ assert_marker_lacks() {
   else ok "$1"; fi
 }
 # --- A fresh project tree per case --------------------------------------------
+# Only 00-manual is created per dimension: no case in this file ever writes into
+# 10-auto/20-grouped/30-crosscutting. What actually makes that safe is downstream of
+# jit_scan_layers() (common.sh), not the glob in it alone: every consumer here reads a
+# layer's index through awk getline (pre-tool-hook.sh) or "[ -f ] || continue" (common.sh
+# jit_missing_requires()), and both treat a missing file and a present-but-empty one
+# identically -- getline returns 0/-1 either way, the loop body never runs. So a layer
+# this fixture no longer creates reads exactly like the empty one it used to create.
+# #318: the other three layers x three dimensions were 9 of the 12 mkdir calls and 18
+# of the 24 touch calls this fixture used to make, for zero assertions that read them.
 new_proj() {
-  local p b d l
+  local p b d l="00-manual"
   p=$(mktemp -d)
   b="$p/.claude/jit-context"
   for d in tools paths vocabulary; do
-    for l in 00-manual 10-auto 20-grouped 30-crosscutting; do
-      mkdir -p "$b/$d/$l"
-      : > "$b/$d/$l/00-index.tsv"
-      : > "$b/$d/$l/01-paths.tsv"
-    done
+    mkdir -p "$b/$d/$l"
+    : > "$b/$d/$l/00-index.tsv"
+    : > "$b/$d/$l/01-paths.tsv"
   done
   echo "$p"
 }
@@ -601,11 +608,20 @@ fm172() {   # locale field fixture -> bytes into $OUT, diagnostics into $CLIPERR
 }
 
 # jit_frontmatter() as source text, for the one check that has to hold where 172b cannot run.
+#
+# BOTH halves, and that is the point rather than thoroughness: the awk program moved out of
+# the function body into $JIT_AWK_FRONTMATTER, so it could be shared with the batched
+# jit_frontmatter_many() (#307 follow-on). Extracting the function alone still found a
+# `jit_frontmatter() {` to report and still passed -- over source text that no longer
+# contains a regex at all. A check that cannot fail is the defect this whole directory is
+# about, and it arrived here by a change that had nothing to do with bytes or locales.
 src172() {
-  # Comment lines are dropped: the block inside the function names classes in prose, and a
+  # Comment lines are dropped: the block inside the program names classes in prose, and a
   # check that could not tell the prose from the regex would fail on the fixed code.
-  awk '/^jit_frontmatter\(\) \{/, /^\}/' "$SCRIPTS/common.sh" \
-    | awk '$0 !~ /^[ \t]*#/' > "$OUT" 2>/dev/null
+  {
+    awk '/^JIT_AWK_FRONTMATTER=/, /^.$/' "$SCRIPTS/common.sh"
+    awk '/^jit_frontmatter\(\) \{/, /^\}/' "$SCRIPTS/common.sh"
+  } | awk '$0 !~ /^[ \t]*#/' > "$OUT" 2>/dev/null
 }
 
 # jit_frontmatter() prints with awk `print`, so every expected value carries the record
