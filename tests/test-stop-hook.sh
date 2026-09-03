@@ -249,6 +249,19 @@ OUT="$(run_stop "$P" "sess-h")"; RC=$?
 assert_rc0 "the hook exits 0 on 600 distinct fired entries" "$RC"
 assert_contains "the reported total accounts for all 600" "$OUT" "$JIT_HI entries injected"
 assert_contains "the overflow past the cap is named, not silently dropped" "$OUT" "more past this hook's own"
+# Explore self-review finding: 100 of the 600 fired names sit past JIT_FIRED_MAX (500)
+# and are never individually checked against 00-manual, so even though every one of
+# the 600 genuinely has a real 00-manual file, the reported count must not claim
+# certainty it does not have -- "at least 500", never a flat "500", and the mixed
+# wording (never the flat "none updated" sentence, which would claim the overflow
+# names could not possibly be the reader's own).
+assert_contains "the overflow forces the split wording, not the flat 'none updated' claim" "$OUT" "of them yours and not updated"
+assert_contains "the checked-manual count is hedged as a floor, not an exact claim" "$OUT" "at least 500 of them yours"
+if grep -qF -- ": $JIT_HI entries injected this session, none updated" <<<"$OUT"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: an overflowed session rendered the flat all-yours sentence"
+else
+  PASS=$((PASS + 1)); echo "  PASS: an overflowed session did not render the flat all-yours sentence"
+fi
 
 echo ""
 echo "=== I: stop_hook_active=true -- a re-entry caused by this hook's own output, never re-report ==="
