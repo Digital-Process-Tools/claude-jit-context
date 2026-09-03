@@ -147,6 +147,11 @@ echo "=== D: composition control -- CLAUDE_PROJECT_DIR unset, entry fired and NO
 
 P="$(new_project d)"
 mkdir -p "$(state_of "$P")"
+# #291/#295: stop-hook.sh now only reports a fired entry as "none updated" when a real
+# 00-manual file backs it (there is nobody else to curate it) -- this fixture's whole
+# point is that entry, so it needs a real file the same way test-stop-hook.sh's own
+# sections do.
+: > "$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
 printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-d.txt"
 OUT="$(run_stop_no_project_dir "$P" "sess-d")"; RC=$?
 assert_rc0 "the hook exits 0" "$RC"
