@@ -23,9 +23,61 @@ FAIL=0
 # directory, so running this from tests/ made EVERY sample return nothing — and the
 # assert_silent cases all passed on that emptiness. A vacuous pass is the exact defect
 # this suite is about, so the guard below fails loudly instead of trusting the silence.
+#
+# Memoised by path (#307), on disk rather than in a bash array. jit-dry-run.sh --file
+# does a full-tree lint on every invocation -- pattern, index and config.env checks
+# over the whole of this repository's own .claude/jit-context/ -- before it ever gets
+# to the one sample line this helper reads (that lint is ~95% of each call's cost,
+# measured: a bare `jit-dry-run.sh` with no sample flag at all costs the same ~1.3s as
+# one with --file). The tree does not change between assertions in one run of this
+# suite, so a path already queried by an earlier assertion is answered from cache
+# rather than re-linting the whole tree to read the same line again. 59 call sites
+# query only 39 distinct paths -- 20 of those calls were paying for a lint whose
+# answer this run already had.
+#
+# On disk, not in a CACHE_PATHS=()/CACHE_OUT=() pair of bash arrays, because every real
+# call site reads this helper through command substitution -- out=$(fired_for "$path")
+# -- and command substitution always forks a subshell. A subshell's array mutations die
+# with it; an in-memory cache populated that way is invisible to the very next call and
+# never hits, which a caching helper under test only through direct, unsubstituted
+# calls will not catch (an earlier version of this fix shipped exactly that: green on
+# its own targeted test, silently uncached everywhere the suite actually calls it).
+# Files under $FIRED_FOR_CACHE_DIR persist across subshells because they are on disk.
+#
+# The manifest maps path -> cache-file-number with one line per miss; no path is ever
+# hashed into a filename, which would risk two distinct paths colliding into the same
+# slot. What each assertion CHECKS is untouched: the cache is keyed on the exact query
+# string, so two assertions reading two different rules off the same path still both
+# see that path's real output, and a path queried once is never queried with different
+# arguments and merged into it.
+FIRED_FOR_CACHE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jit-dogfood-fired-for.XXXXXXXX" 2>/dev/null)" || {
+  echo "  FAIL: could not create a cache dir for fired_for() memoisation"
+  exit 1
+}
+trap 'rm -rf "$FIRED_FOR_CACHE_DIR"' EXIT
+FIRED_FOR_MANIFEST="$FIRED_FOR_CACHE_DIR/manifest"
+: > "$FIRED_FOR_MANIFEST"
+
 fired_for() {
-  (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$DRYRUN" --file "$1" 2>&1) \
-    | awk '/pre-path-hook\.sh/ { $1=""; print }'
+  local path="$1" n out
+  n=$(awk -F'\t' -v p="$path" '$2==p{print $1; exit}' "$FIRED_FOR_MANIFEST")
+  if [ -n "$n" ]; then
+    cat "$FIRED_FOR_CACHE_DIR/$n"
+    return
+  fi
+  out=$( (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$DRYRUN" --file "$path" 2>&1) \
+    | awk '/pre-path-hook\.sh/ { $1=""; print }' )
+  n=$(($(wc -l <"$FIRED_FOR_MANIFEST") + 1))
+  printf '%s\n' "$out" >"$FIRED_FOR_CACHE_DIR/$n"
+  printf '%s\t%s\n' "$n" "$path" >>"$FIRED_FOR_MANIFEST"
+  cat "$FIRED_FOR_CACHE_DIR/$n"
+}
+
+# How many distinct paths have actually been evaluated so far -- read from disk so it
+# is correct even when the last call to fired_for() ran, and updated the manifest,
+# inside a subshell this function's own caller never sees.
+fired_for_misses() {
+  wc -l <"$FIRED_FOR_MANIFEST" | tr -d '[:space:]'
 }
 
 # Proves the harness can see the tree at all. Without it, every assert_silent below
@@ -38,6 +90,36 @@ if ! grep -q "hooks.md" <<<"$harness_probe"; then
   echo "  FAIL: harness cannot evaluate this repo's own tree — every result below would be vacuous"
   exit 1
 fi
+
+# Load-bearing for the memoisation above (#307), not a timing assertion -- this suite
+# carries no threshold that fails a build on slowness, and never will. Two queries
+# against the SAME path must cost one full-tree evaluation, not two: that is the whole
+# of the fix, and a cache that stops working here would still pass every assertion
+# below it, because none of them read fired_for_misses(). Only this one does.
+#
+# Through out=$(fired_for ...), the exact calling convention every assert_fires/
+# assert_silent call site below actually uses -- not a direct, unsubstituted call. An
+# earlier version of this cache was in-memory (bash arrays) and this same test called
+# fired_for directly, unsubstituted; that made the test pass while the cache was
+# invisible to every real call site, all of which go through command substitution and
+# therefore fork a subshell the array mutations could not survive. Routing the test
+# through $( ) is what makes it prove the thing the suite actually needs.
+#
+# A path fired_for has not yet been asked about -- "scripts/pre-path-hook.sh" was
+# already answered by harness_probe above, so a second query against it would be a
+# cache hit before this test made any call of its own, and the diff below would read
+# as 0 for the wrong reason.
+misses_before=$(fired_for_misses)
+out=$(fired_for "scripts/rebuild-tsv.sh")
+out=$(fired_for "scripts/rebuild-tsv.sh")
+misses_after=$(fired_for_misses)
+if [ "$((misses_after - misses_before))" -eq 1 ]; then
+  PASS=$((PASS + 1)); echo "  PASS: fired_for answers a repeated path from cache, not a second evaluation"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: fired_for re-evaluated an already-queried path"
+  echo "    expected exactly 1 subprocess invocation for two identical queries, got $((misses_after - misses_before))"
+fi
+unset out
 
 # jit-drive: none -- every helper here runs a real hook from a path or a payload and captures it itself; none takes hook output as an argument
 assert_fires() {
