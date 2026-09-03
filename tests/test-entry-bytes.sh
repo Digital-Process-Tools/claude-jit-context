@@ -127,15 +127,13 @@ assert_marker_lacks() {
 # #318: the other three layers x three dimensions were 9 of the 12 mkdir calls and 18
 # of the 24 touch calls this fixture used to make, for zero assertions that read them.
 new_proj() {
-  local p b d l
+  local p b d l="00-manual"
   p=$(mktemp -d)
   b="$p/.claude/jit-context"
   for d in tools paths vocabulary; do
-    for l in 00-manual; do
-      mkdir -p "$b/$d/$l"
-      : > "$b/$d/$l/00-index.tsv"
-      : > "$b/$d/$l/01-paths.tsv"
-    done
+    mkdir -p "$b/$d/$l"
+    : > "$b/$d/$l/00-index.tsv"
+    : > "$b/$d/$l/01-paths.tsv"
   done
   echo "$p"
 }
