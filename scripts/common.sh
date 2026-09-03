@@ -2,7 +2,68 @@
 # Shared functions for claude-jit-context hooks and pipeline scripts.
 # Source this at the top of every script: source "$(dirname "$0")/common.sh"
 
-_ms() { perl -MTime::HiRes -e 'printf("%.0f\n",Time::HiRes::time()*1000)'; }
+# --- Splitting a path, without forking to do it (#307-follow-on) ---------------------
+#
+# `$(dirname X)` and `$(basename X)` were 121 of the 346 external commands one bare
+# jit-dry-run.sh lint spawned over a 17-entry tree -- `$(basename "$(dirname "$tsv")")`
+# is two of them, per index file, per dimension, per layer.
+#
+# These ASSIGN INTO A NAMED VARIABLE rather than printing, and that is the point rather
+# than a style choice: a helper that printed would be read as `$(jit_path_dir "$x")`,
+# which still forks a subshell to capture the output. Cheaper than fork+exec of
+# /usr/bin/dirname, and not free -- and a fork is precisely what is expensive on the leg
+# this is about. `printf -v` writes the answer in the caller's own shell.
+#
+# Naive parameter expansion is not a drop-in for either, and both wrong answers look like
+# right ones. `${x%/*}` returns x UNCHANGED when there is no slash, where dirname says
+# ".", so a bare filename would become its own directory. `${x%/*}` on "/c.md" is the
+# empty string, which is what dirname's "/" means here and is left as-is because every
+# caller reattaches a "/" itself. bash 3.2 throughout: no version gate, no fallback.
+jit_path_dir() {
+  case "$2" in
+    */*) printf -v "$1" '%s' "${2%/*}" ;;
+    *)   printf -v "$1" '%s' "." ;;
+  esac
+}
+
+jit_path_base() {
+  printf -v "$1" '%s' "${2##*/}"
+}
+
+# Epoch milliseconds, without a process where the shell can answer (#307-follow-on).
+#
+# $EPOCHREALTIME is a bash 5.0 builtin holding "<seconds>.<microseconds>". Git Bash ships
+# 5.2 and Linux CI runs 5.x, so on the two legs where a process spawn is the expensive
+# thing this costs nothing at all; macOS ships bash 3.2, has no such variable, and keeps
+# the perl call below. That is a fallback, not a degrade: both paths answer the same
+# number, and tests/test-hook-spawn-count.sh drives each of them.
+#
+# Three things this parse has to get right, and each is a way to produce a plausible wrong
+# number rather than an error:
+#   * the separator is locale-dependent. bash writes $EPOCHREALTIME through the locale, so
+#     an fr_FR session reads "1000000000,500000" -- matching on [.,] rather than on "."
+#     keeps that out of arithmetic, which would otherwise be handed the whole string.
+#   * the microseconds field is zero-padded, and bash reads a leading-zero literal as
+#     OCTAL. 040000 base 8 is 16384, so without `10#` this answers ...016 instead of
+#     ...040 -- wrong by a plausible amount, in silence.
+#   * a field shorter or longer than six digits (nothing promises six) is padded and cut
+#     to six rather than trusted.
+# Anything that does not parse falls through to perl instead of guessing.
+_ms() {
+  local e="${EPOCHREALTIME:-}" s f
+  case "$e" in
+    *[.,]*)
+      s="${e%%[.,]*}"
+      f="${e##*[.,]}000000"
+      f="${f:0:6}"
+      case "$s$f" in
+        ''|*[!0-9]*) ;;
+        *) printf '%s\n' "$(( s * 1000 + 10#$f / 1000 ))"; return ;;
+      esac
+      ;;
+  esac
+  perl -MTime::HiRes -e 'printf("%.0f\n",Time::HiRes::time()*1000)'
+}
 
 # #266: the fallback used to be "${CLAUDE_PROJECT_DIR:-.}", which leaves JIT_BASE
 # RELATIVE whenever CLAUDE_PROJECT_DIR is unset. post-tool-hook.sh's edit-marker gate
@@ -45,7 +106,14 @@ JIT_BASE="${CLAUDE_PROJECT_DIR:-${PWD:-.}}/.claude/jit-context"
 # the first line any hook runs.
 JIT_HOST="unknown"
 JIT_HOST_REFUSAL_STATE="refusal-not-established"
-_jit_host_sh="$(dirname "${BASH_SOURCE[0]}")/host.sh"
+# Parameter expansion, not a `dirname` fork: this runs on every invocation of every hook,
+# on every platform, for a string operation bash does natively. `${x%/*}` returns x
+# UNCHANGED when there is no slash to strip, where dirname answers ".", so the no-slash
+# case is spelled out rather than left to coincide.
+case "${BASH_SOURCE[0]}" in
+  */*) _jit_host_sh="${BASH_SOURCE[0]%/*}/host.sh" ;;
+  *)   _jit_host_sh="./host.sh" ;;
+esac
 if [ -r "$_jit_host_sh" ]; then
   # shellcheck disable=SC1090
   source "$_jit_host_sh" 2>/dev/null && \
@@ -658,8 +726,45 @@ jit_tmp_open() {
   return 0
 }
 
-# Timestamp with ms precision (single perl call, ~11ms)
-_ts() { perl -MTime::HiRes -MPOSIX -e 'my $t=Time::HiRes::time(); printf("%s.%03d\n", strftime("%H:%M:%S",localtime($t)), ($t*1000)%1000)'; }
+# Local HH:MM:SS.mmm for the log line. Same split as _ms() above: answered by the shell
+# where the shell can, by one perl call where it cannot.
+#
+# This needs TWO things _ms() does not, so it is gated on both rather than on a version
+# number: $EPOCHREALTIME for the microseconds, and printf's `%()T` conversion (bash 4.2+)
+# to turn epoch seconds into local wall-clock without a `date` fork. The probe below runs
+# the conversion and CHECKS ITS OUTPUT rather than reading BASH_VERSINFO -- on a bash that
+# does not know `%()T`, printf can succeed and write the format string through verbatim,
+# so a status test alone would put "%(%H:%M:%S)T" into the log and call it a timestamp.
+# It runs once at source time, not per call, and forks nothing either way.
+_jit_printf_time=0
+if printf -v _jit_probe '%(%H:%M:%S)T' -1 2>/dev/null; then
+  case "$_jit_probe" in
+    [0-9][0-9]:[0-9][0-9]:[0-9][0-9]) _jit_printf_time=1 ;;
+  esac
+fi
+unset _jit_probe
+
+_ts() {
+  local e="${EPOCHREALTIME:-}" s f out
+  if [ "$_jit_printf_time" = 1 ]; then
+    case "$e" in
+      *[.,]*)
+        s="${e%%[.,]*}"
+        f="${e##*[.,]}000000"
+        f="${f:0:6}"
+        case "$s$f" in
+          ''|*[!0-9]*) ;;
+          *)
+            printf -v out '%(%H:%M:%S)T' "$s"
+            printf '%s.%03d\n' "$out" "$(( 10#$f / 1000 ))"
+            return
+            ;;
+        esac
+        ;;
+    esac
+  fi
+  perl -MTime::HiRes -MPOSIX -e 'my $t=Time::HiRes::time(); printf("%s.%03d\n", strftime("%H:%M:%S",localtime($t)), ($t*1000)%1000)'
+}
 
 # --- Optional per-project settings ------------------------------------------
 # config.env lives INSIDE the project, so it arrives with the repository. It used to be
@@ -950,15 +1055,29 @@ _log() {
 # in ISO-8859-1 made the entry vanish from the index instead of being written through and
 # refused at load. Under `C` the same awk has nothing to decode and copies the byte out
 # verbatim on all three engines, which is what lets report_bad_bytes() catch it downstream.
-jit_frontmatter() {
-  # $1 field name, $2 entry file
-  LC_ALL=C awk -v f="$1" '
-    /^---$/ { n++; next }
-    n == 1 && index($0, f ":") == 1 {
-      sub("^" f ": *", "")
+JIT_FM_NL="
+"
+
+# The value rules for one frontmatter field, in ONE place and one awk program (#307
+# follow-on). It used to be a program per CALL: jit-dry-run.sh asks for up to six fields
+# of the same entry and paid six awk processes, each re-reading the same file, and that
+# was 42 of the 142 awks one bare lint spawned.
+#
+# So the program takes a LIST of fields and prints `<field><TAB><value>` for each one it
+# finds. jit_frontmatter() below still takes a single field and still returns a bare
+# value -- it passes a one-element list and strips the prefix with parameter expansion --
+# so there is exactly one implementation of the rules below and no second copy to drift.
+JIT_AWK_FRONTMATTER='
+  BEGIN { nf = split(fl, want, " ") }
+  /^---$/ { n++; if (n == 2) exit; next }
+  n == 1 {
+    for (i = 1; i <= nf; i++) {
+      f = want[i]
+      if (f == "" || seen[f]) continue
+      if (index($0, f ":") != 1) continue
+      line = $0
+      sub("^" f ": *", "", line)
       # mode is a comma-separated token list, so every space goes.
-      if (f == "mode") { gsub(/ /, "") }
-      else {
         # Every other field is free text, and a `match:` value is an awk ERE where a
         # double quote is an ordinary character an author has real reason to write --
         # `["]` is how you anchor on a quoted argument. Deleting every quote in the value
@@ -1008,14 +1127,59 @@ jit_frontmatter() {
         # tests/test-entry-bytes.sh drives both directions per engine, 172b drives the byte
         # under a probed single-byte locale, and 172c refuses a POSIX class in the source of
         # this function on the CI legs where no such locale exists.
-        v = $0
+      if (f == "mode") { gsub(/ /, "", line) }
+      else {
+        v = line
         sub(/[ \t\n\v\f\r]+$/, "", v)
-        if (v ~ /^"[^"]*"$/) $0 = substr(v, 2, length(v) - 2)
+        if (v ~ /^"[^"]*"$/) line = substr(v, 2, length(v) - 2)
       }
-      print
-      exit
+      seen[f] = 1
+      printf "%s\t%s\n", f, line
+      next
     }
-  ' "$2"
+  }
+'
+
+# Every requested field of one entry, in one process. VAR receives a memo string, one
+# `<field><TAB><value>` record per line; read it with jit_fm_get(), which forks nothing.
+jit_frontmatter_many() {   # VAR, entry file, field...
+  # A positional slice rather than a two-step positional discard. The other spelling makes
+  # tests/test-arg-flag-values.sh classify this file as a flag parser whose argument loop
+  # it cannot read, and report it as a rotted parser -- it is right to flag that shape in a
+  # CLI, and this is a sourced library with no flags at all. The honest fix is to write
+  # what is meant rather than to teach the classifier an exception. Its sweep reads the
+  # source as text, comments included, so the token itself is not written here either.
+  local _v="$1" _file="$2" _fields="${*:3}"
+  printf -v "$_v" '%s%s' "$JIT_FM_NL" \
+    "$(LC_ALL=C awk -v fl="$_fields" "$JIT_AWK_FRONTMATTER" "$_file")"
+}
+
+# Reads one field out of a jit_frontmatter_many() memo. Parameter expansion only -- a fork
+# here would be one per field, which is the cost jit_frontmatter_many() just removed.
+# A field the entry does not carry is a miss: VAR is left empty and the status is 1, which
+# is the same answer jit_frontmatter() gives for an absent field.
+jit_fm_get() {   # VAR, memo, field
+  local _key="$JIT_FM_NL$3	" _rest
+  case "$2" in
+    *"$_key"*)
+      _rest="${2#*"$_key"}"
+      printf -v "$1" '%s' "${_rest%%"$JIT_FM_NL"*}"
+      ;;
+    *) printf -v "$1" '%s' ""; return 1 ;;
+  esac
+}
+
+jit_frontmatter() {
+  # $1 field name, $2 entry file. One field, bare value, unchanged contract -- the shared
+  # program above is what applies the rules.
+  local _out
+  _out="$(LC_ALL=C awk -v fl="$1" "$JIT_AWK_FRONTMATTER" "$2")"
+  [ -n "$_out" ] || return 0
+  # The trailing newline is part of the contract, not an accident of the old
+  # implementation: this used to print through awk's `print`, every caller reads it
+  # through $( ) which strips it, and tests/test-entry-bytes.sh asserts on the raw bytes
+  # and so sees it. Dropping it broke 54 assertions there and no caller.
+  printf '%s\n' "${_out#*	}"
 }
 
 # --- Invocation macros -------------------------------------------------------

@@ -19,7 +19,7 @@
 # Now: the markers are keyed on session_id and live in the project (see common.sh), so this
 # clears exactly the two files this session will use and nothing else. The wildcard is gone
 # with the /tmp path it swept; a hook removes its own log temp on the way out.
-SCRIPT_DIR="$(dirname "$0")"
+case "$0" in */*) SCRIPT_DIR="${0%/*}" ;; *) SCRIPT_DIR="." ;; esac
 source "$SCRIPT_DIR/common.sh"
 
 # The payload carries session_id, and it is read with the SAME parser and the same bare-name

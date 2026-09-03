@@ -39,7 +39,7 @@
 # real edit to this project's own tree or an attempt to look like one.
 #
 # A hook must never fail hard (hooks.md): every exit below answers `{}`.
-SCRIPT_DIR="$(dirname "$0")"
+case "$0" in */*) SCRIPT_DIR="${0%/*}" ;; *) SCRIPT_DIR="." ;; esac
 source "$SCRIPT_DIR/common.sh"
 
 # One awk pass, the same JSON macros every other hook here already shares
@@ -57,7 +57,9 @@ source "$SCRIPT_DIR/common.sh"
 # on its line (common.sh): everything with a shape bash can trust comes first, and the
 # one field that cannot be trusted to fit on one line comes after there is nothing left
 # for it to misalign.
-PT_PARSED="$(cat | LC_ALL=C awk "$JIT_AWK_JSON"'
+# `awk` reads stdin itself; the `cat` in front of it was one fork per invocation buying
+# nothing. The `$(cat)` further down is a different question and stays -- see there.
+PT_PARSED="$(LC_ALL=C awk "$JIT_AWK_JSON"'
 { input = input $0 }
 END {
   n = jit_json_fields(input, raw, fs, fe)

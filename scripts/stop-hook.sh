@@ -52,7 +52,7 @@
 # degraded state of something the reader asked not to hear about, so they go quiet with
 # the rest rather than surviving as noise with no subject. `JIT_STOP_REPORT=1` restores
 # every shape below byte-for-byte.
-SCRIPT_DIR="$(dirname "$0")"
+case "$0" in */*) SCRIPT_DIR="${0%/*}" ;; *) SCRIPT_DIR="." ;; esac
 source "$SCRIPT_DIR/common.sh"
 
 # A person can run this by hand with no stdin at all, the same case session-start-hook.sh
@@ -71,8 +71,11 @@ if [ ! -t 0 ]; then
   ' 2>/dev/null)"
   _jit_awk_rc=$?
   if [ "$_jit_awk_rc" -eq 0 ]; then
-    SESSION_ID="$(printf '%s\n' "$_jit_parsed" | sed -n 1p)"
-    STOP_HOOK_ACTIVE="$(printf '%s\n' "$_jit_parsed" | sed -n 2p)"
+    # Two `read`s, not two `sed -n Np` forks over a string this shell is already
+    # holding. The here-string supplies the trailing newline both reads need, and a
+    # second line that is missing leaves STOP_HOOK_ACTIVE empty -- which the case below
+    # already renders as "unknown", exactly as an empty `sed -n 2p` did.
+    { IFS= read -r SESSION_ID; IFS= read -r STOP_HOOK_ACTIVE; } <<<"$_jit_parsed"
     case "$STOP_HOOK_ACTIVE" in
       true|false) ;;
       *) STOP_HOOK_ACTIVE="unknown" ;;

@@ -6,7 +6,7 @@
 # the tokens, once over the ones bash confirmed exist. See the candidate section below;
 # every other payload still costs exactly one awk process.
 
-SCRIPT_DIR="$(dirname "$0")"
+case "$0" in */*) SCRIPT_DIR="${0%/*}" ;; *) SCRIPT_DIR="." ;; esac
 source "$SCRIPT_DIR/common.sh"
 T_START=$(_ms)
 
@@ -622,7 +622,9 @@ jit_path_awk() {
     "$JIT_PATH_PROG"
 }
 
-cat | jit_path_awk 0
+# No `cat |` in front of it: jit_path_awk() is a wrapper around one awk, awk reads stdin
+# itself, and the second call site below already invokes this function outside a pipeline.
+jit_path_awk 0
 
 # --- The question awk cannot ask: does this token name a file? (#85) ----------
 # `[ -f ]` and `[ -L ]` are shell BUILTINS -- this forks nothing, and it is the same trade

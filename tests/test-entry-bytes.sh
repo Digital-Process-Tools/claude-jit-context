@@ -608,11 +608,20 @@ fm172() {   # locale field fixture -> bytes into $OUT, diagnostics into $CLIPERR
 }
 
 # jit_frontmatter() as source text, for the one check that has to hold where 172b cannot run.
+#
+# BOTH halves, and that is the point rather than thoroughness: the awk program moved out of
+# the function body into $JIT_AWK_FRONTMATTER, so it could be shared with the batched
+# jit_frontmatter_many() (#307 follow-on). Extracting the function alone still found a
+# `jit_frontmatter() {` to report and still passed -- over source text that no longer
+# contains a regex at all. A check that cannot fail is the defect this whole directory is
+# about, and it arrived here by a change that had nothing to do with bytes or locales.
 src172() {
-  # Comment lines are dropped: the block inside the function names classes in prose, and a
+  # Comment lines are dropped: the block inside the program names classes in prose, and a
   # check that could not tell the prose from the regex would fail on the fixed code.
-  awk '/^jit_frontmatter\(\) \{/, /^\}/' "$SCRIPTS/common.sh" \
-    | awk '$0 !~ /^[ \t]*#/' > "$OUT" 2>/dev/null
+  {
+    awk '/^JIT_AWK_FRONTMATTER=/, /^.$/' "$SCRIPTS/common.sh"
+    awk '/^jit_frontmatter\(\) \{/, /^\}/' "$SCRIPTS/common.sh"
+  } | awk '$0 !~ /^[ \t]*#/' > "$OUT" 2>/dev/null
 }
 
 # jit_frontmatter() prints with awk `print`, so every expected value carries the record

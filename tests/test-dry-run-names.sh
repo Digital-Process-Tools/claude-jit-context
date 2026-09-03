@@ -667,10 +667,45 @@ fi
 # take one. `local label="$1"` is a parameter binding and is excluded - it receives a label
 # somebody else already built, and including it would make this check pass on a caller that
 # built one raw.
-LABEL_SITES=$(grep -nE '^[[:space:]]*label=|check_row_bytes |list_whole ' \
-  "$SCRIPT_DIR/scripts/jit-dry-run.sh" | grep -vE '\(\) \{|^[0-9]+:#')
+# `index_label ` counts as going through the policy, and the assertion directly below is
+# what earns that -- it is the one place the indirection is proven rather than assumed.
+# Six of these sites used to spell the whole thing out, `"<dim>/$(report_layer "$(basename
+# "$(dirname "$tsv")")")"`, and were factored into index_label() (#307 follow-on). Accepting
+# the helper's NAME without checking what the helper does would turn this whole check into
+# one that passes on a function that stopped calling report_layer, which is the shape this
+# file exists to refuse.
+# An empty initialisation is excluded for the same reason `local label="$1"` is: it builds
+# no label. jit-dry-run.sh declares these at the top because shellcheck cannot follow the
+# `printf -v` that fills them (SC2154), and counting a declaration as a build would make
+# this check fail on a file that is doing the right thing.
+LABEL_SITES=$(grep -nE '^[[:space:]]*label=|index_label |check_row_bytes |list_whole ' \
+  "$SCRIPT_DIR/scripts/jit-dry-run.sh" \
+  | grep -vE '\(\) \{|^[0-9]+:#' | grep -vE '^[0-9]+:[[:space:]]*(label|rb_label)=""$')
 N_LABEL=$(printf '%s\n' "$LABEL_SITES" | grep -c . | tr -d ' ')
-LABEL_BAD=$(printf '%s\n' "$LABEL_SITES" | grep -v 'report_layer ')
+# `$rb_label` is accepted for the same reason `index_label ` is, and earns it the same way:
+# the assertion below proves index_label() is what fills that variable. Without it, any
+# variable named rb_label would pass here whatever built it.
+LABEL_BAD=$(printf '%s\n' "$LABEL_SITES" | grep -vE 'report_layer |index_label |\$rb_label')
+
+if grep -q '^[[:space:]]*index_label rb_label ' "$SCRIPT_DIR/scripts/jit-dry-run.sh"; then
+  PASS=$((PASS + 1)); echo "  PASS: \$rb_label is filled by index_label(), so naming it above is not a hole"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: nothing fills \$rb_label through index_label()"
+  echo "      every '\$rb_label' site accepted above is unchecked"
+fi
+
+# index_label() itself must reach report_layer(), or the acceptance above is unearned.
+INDEX_LABEL_BODY=$(awk '/^index_label\(\) \{/, /^\}/' "$SCRIPT_DIR/scripts/jit-dry-run.sh")
+if grep -q 'report_layer ' <<<"$INDEX_LABEL_BODY"; then
+  PASS=$((PASS + 1)); echo "  PASS: index_label() reaches report_layer(), so naming it above is not a hole"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: index_label() does not call report_layer()"
+  echo "      every 'index_label ' site accepted above is unchecked"
+  printf '%s\n' "${INDEX_LABEL_BODY:-<no index_label() found at all>}" | sed 's/^/      /'
+fi
+
 if [ "${N_LABEL:-0}" -ge 7 ] && [ -z "$LABEL_BAD" ]; then
   PASS=$((PASS + 1)); echo "  PASS: all $N_LABEL label-building sites go through report_layer()"
 else
