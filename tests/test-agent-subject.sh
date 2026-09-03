@@ -306,12 +306,26 @@ echo "=== G: the census is bounded, and says so, and cannot be cut by the OTHER 
 # the whole total. G2 builds a tree where both lists overflow on one call.
 PROJ="$TMPROOT/g"; BASE="$PROJ/.claude/jit-context"
 mk_tool_entry "$BASE" 00-manual gctrl Bash 'ctrltarget' remind
+rebuild "$PROJ"
+
+# #315: the 200 TodoWrite rows below exercise pre-tool-hook.sh's own census/cap
+# arithmetic, not rebuild-tsv.sh's frontmatter parsing -- nothing in G1 asserts that
+# these rows came from real files rebuild-tsv.sh reparsed one at a time (that plumbing
+# is already covered elsewhere in this suite). Writing 200 real *.md fixtures and
+# reparsing all 201 files through rebuild-tsv.sh cost ~13s of this section on its own
+# (measured, macOS) for rows this loop never needs read back out of frontmatter -- only
+# out of the index rebuild-tsv.sh would have produced. Appending them straight into the
+# index, in the exact shape rebuild-tsv.sh itself writes a row
+# (tool\tmatch\tfilename\tmode\trequire\tforbid\trequires), is the same technique G2
+# already uses two blocks below for its own 200 rows, and for the same reason: the
+# rows exist to overflow a byte cap in pre-tool-hook.sh, not to prove rebuild-tsv.sh can
+# parse frontmatter, which is asserted elsewhere in this suite (section A).
+IDX="$BASE/tools/00-manual/00-index.tsv"
 i=1
 while [ "$i" -le 200 ]; do
-  mk_tool_entry "$BASE" 00-manual "gtodo$i" TodoWrite "tok$i" remind
+  printf 'TodoWrite\ttok%s\tgtodo%s.md\tremind\t\t\t\n' "$i" "$i" >> "$IDX"
   i=$((i + 1))
 done
-rebuild "$PROJ"
 
 OUT=$(run_bash "$PROJ" "ctrltarget now")
 assert_contains "G POSITIVE CONTROL: the Bash rule fires in this tree" "$OUT" "TOOLBODY-gctrl"
@@ -322,8 +336,12 @@ assert_contains "G1 and says the list was cut rather than stopping quietly" "$OU
 
 # G2: both lists overflow on the same call. The 200 rows appended here are refused by
 # jit_bad_entry_file (a separator in the file column) BEFORE the tool test, so they land
-# in `refused` whatever tool is dispatched, while the 200 rebuilt rows above land in the
-# census. Written after the rebuild, because rebuild-tsv.sh cannot produce such a column.
+# in `refused` whatever tool is dispatched, while the 200 rows appended directly above
+# land in the census -- both written straight into the index rather than through a
+# rebuild, but for different reasons: these G2 rows because rebuild-tsv.sh could never
+# produce such a column (a `/` in a *.md glob basename), the G1 rows above them only
+# because rebuild-tsv.sh reparsing 200 real fixture files just to get 200 rows back out
+# was the slow part of this section (#315).
 IDX="$BASE/tools/00-manual/00-index.tsv"
 i=1
 while [ "$i" -le 200 ]; do
