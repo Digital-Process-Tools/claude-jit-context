@@ -232,39 +232,59 @@ echo '=== the builtin clock arithmetic, driven with a frozen $EPOCHREALTIME ==='
 # -- it says nothing about whether bash 5 populates the variable, which is bash's job --
 # but it is the difference between an untested conversion and an untested builtin.
 #
-# 1000000000.500000 is 1000000000500 ms exactly. A conversion that truncated the
-# fractional part, multiplied in the wrong order, or lost a leading zero in the
-# microseconds field lands on a different number, and each of those is a real way to get
-# this wrong in shell arithmetic.
-frozen_ms=$(bash -c "EPOCHREALTIME=1000000000.500000; . \"$REPO/scripts/common.sh\" 2>/dev/null; _ms")
-if [ "$frozen_ms" = "1000000000500" ]; then
-  pass 'the builtin path converts $EPOCHREALTIME to whole milliseconds'
+# $EPOCHREALTIME is DYNAMIC on the bash that has it: bash regenerates the value on every
+# read, so an assignment does not stick and `EPOCHREALTIME=1000000000.5` is followed
+# immediately by the real clock. That is not a detail -- it means the frozen-clock checks
+# below can only run on a bash where the variable is an ordinary one, which is exactly the
+# bash that does NOT take the builtin path. So they test the conversion on the platform
+# that does not use it. The arithmetic is the same code, so that is worth having; it is
+# not the same claim, and the skip below says so rather than reading as coverage.
+#
+# Found by CI, not here. This section passed on the bash 3.2 it was written against and
+# failed on both other legs, reporting the real clock as a wrong conversion -- a false red
+# in the suite whose whole job is catching false greens.
+#
+# Probed rather than gated on a version number: assign a known value and read it back.
+frozen_probe=$(bash -c 'EPOCHREALTIME=1000000000.500000; printf %s "$EPOCHREALTIME"')
+if [ "$frozen_probe" != "1000000000.500000" ]; then
+  echo "  SKIPPED: \$EPOCHREALTIME is dynamic on this bash (${BASH_VERSION:-unknown}), so it"
+  echo "           cannot be frozen and the conversion cannot be driven against a known"
+  echo "           value here. Covered on a bash where the variable is an ordinary one."
 else
-  fail 'the builtin path converts $EPOCHREALTIME to whole milliseconds' \
-    "expected 1000000000500, got: ${frozen_ms:-<nothing>}"
-fi
+  # 1000000000.500000 is 1000000000500 ms exactly. A conversion that truncated the
+  # fractional part, multiplied in the wrong order, or lost a leading zero in the
+  # microseconds field lands on a different number, and each of those is a real way to get
+  # this wrong in shell arithmetic.
+  frozen_ms=$(bash -c "EPOCHREALTIME=1000000000.500000; . \"$REPO/scripts/common.sh\" 2>/dev/null; _ms")
+  if [ "$frozen_ms" = "1000000000500" ]; then
+    pass 'the builtin path converts $EPOCHREALTIME to whole milliseconds'
+  else
+    fail 'the builtin path converts $EPOCHREALTIME to whole milliseconds' \
+      "expected 1000000000500, got: ${frozen_ms:-<nothing>}"
+  fi
 
-# A microsecond field with leading zeros. `10#` is what stops bash reading 040000 as
-# octal, and octal is the failure that produces a plausible wrong number rather than an
-# error -- 040000 base 8 is 16384, so this would answer ...016 instead of ...040.
-frozen_ms=$(bash -c "EPOCHREALTIME=1000000000.040000; . \"$REPO/scripts/common.sh\" 2>/dev/null; _ms")
-if [ "$frozen_ms" = "1000000000040" ]; then
-  pass 'a microsecond field with leading zeros is not read as octal'
-else
-  fail 'a microsecond field with leading zeros is not read as octal' \
-    "expected 1000000000040, got: ${frozen_ms:-<nothing>}"
-fi
+  # A microsecond field with leading zeros. `10#` is what stops bash reading 040000 as
+  # octal, and octal is the failure that produces a plausible wrong number rather than an
+  # error -- 040000 base 8 is 16384, so this would answer ...016 instead of ...040.
+  frozen_ms=$(bash -c "EPOCHREALTIME=1000000000.040000; . \"$REPO/scripts/common.sh\" 2>/dev/null; _ms")
+  if [ "$frozen_ms" = "1000000000040" ]; then
+    pass 'a microsecond field with leading zeros is not read as octal'
+  else
+    fail 'a microsecond field with leading zeros is not read as octal' \
+      "expected 1000000000040, got: ${frozen_ms:-<nothing>}"
+  fi
 
-# A locale whose decimal separator is a comma. bash writes $EPOCHREALTIME through the
-# locale, so on a fr_FR session the variable reads `1000000000,500000` -- and a split on
-# "." then hands the whole string to arithmetic and fails. The hooks already pin LC_ALL=C
-# around every awk for the same class of reason.
-frozen_ms=$(bash -c "EPOCHREALTIME=1000000000,500000; . \"$REPO/scripts/common.sh\" 2>/dev/null; _ms")
-case "$frozen_ms" in
-  ''|*[!0-9]*) fail 'a comma decimal separator still answers whole milliseconds' \
-                 "got: ${frozen_ms:-<nothing>}" ;;
-  *)           pass 'a comma decimal separator still answers whole milliseconds' ;;
-esac
+  # A locale whose decimal separator is a comma. bash writes $EPOCHREALTIME through the
+  # locale, so on a fr_FR session the variable reads `1000000000,500000` -- and a split on
+  # "." then hands the whole string to arithmetic and fails. The hooks already pin LC_ALL=C
+  # around every awk for the same class of reason.
+  frozen_ms=$(bash -c "EPOCHREALTIME=1000000000,500000; . \"$REPO/scripts/common.sh\" 2>/dev/null; _ms")
+  case "$frozen_ms" in
+    ''|*[!0-9]*) fail 'a comma decimal separator still answers whole milliseconds' \
+                   "got: ${frozen_ms:-<nothing>}" ;;
+    *)           pass 'a comma decimal separator still answers whole milliseconds' ;;
+  esac
+fi
 
 echo "=== no hook puts a cat in front of something that reads stdin itself ==="
 # Four hooks opened with `cat | awk` (or `cat | jit_path_awk`, a two-line wrapper around
@@ -430,20 +450,31 @@ done
 # An attempt to assert it version-independently (tr must not outnumber wc) was written and
 # removed: it is arithmetic that happens to hold on one platform, not a statement about
 # either source, and on bash 3.2 it is false while nothing is wrong.
+# One tr is legitimate and stays: `tr '\t' '\002'` converts the index's tabs to STX before
+# the row loop reads it, because bash `read` treats a tab in IFS as IFS WHITESPACE and
+# collapses a run of them whatever IFS is set to (#203). It is one process per index loop,
+# not per row, and it is the reason this is a ceiling rather than a floor of zero. CI is
+# what established the number: the first version of this assertion demanded zero, and the
+# two legs with the fold builtin reported the two STX conversions as a defect.
+IDX_FILES=$(find "$REPO/.claude/jit-context" -name 00-index.tsv 2>/dev/null | grep -c . | tr -d '[:space:]')
 tr_n=$(spawns_of tr)
 wc_n=$(spawns_of wc)
 if [ "${BASH_VERSINFO[0]:-0}" -ge 4 ]; then
-  if [ "$tr_n" -eq 0 ]; then
-    pass "jit-dry-run.sh forks no tr (wc=$wc_n)"
+  if [ "$tr_n" -le "${IDX_FILES:-0}" ]; then
+    pass "jit-dry-run.sh forks tr at most once per index file ($tr_n over ${IDX_FILES:-?}, wc=$wc_n)"
   else
-    fail "jit-dry-run.sh forks no tr" \
-      "counted $tr_n, wc=$wc_n -- either the wc padding strip or the inject fold is still forking"
+    fail "jit-dry-run.sh forks tr at most once per index file" \
+      "counted $tr_n over ${IDX_FILES:-?} index file(s), wc=$wc_n" \
+      "one per index is the STX conversion (#203); anything above that is the wc padding" \
+      "strip or the inject fold still forking"
   fi
 else
   echo "  SKIPPED: this bash is ${BASH_VERSION:-unknown}, so the inject fold still forks tr"
-  echo "           by design and a count cannot separate it from the wc padding strip."
+  echo "           by design (two per row) and a count cannot separate it from the wc"
+  echo "           padding strip or the per-index STX conversion."
   echo "           Untested here: that the wc strip is gone. Covered on the Linux and"
-  echo "           Windows legs, where the fold is a builtin and the honest count is 0."
+  echo "           Windows legs, where the fold is a builtin and the only tr left is the"
+  echo "           one STX conversion per index file."
 fi
 
 echo ""
