@@ -34,6 +34,15 @@ DYNAMIC_RULES_KEYWORD_BLACKLIST="^(count|output|input|name|file|files)$"
 # duplicate context. Turn it on for autonomous runs, which send a single prompt
 # for the whole run — before they know which part of the codebase they will touch.
 DYNAMIC_RULES_VOCAB_PATHS=0
+
+# The Stop hook's own "N entries injected this session, none updated" report (and
+# its could-not-tell variants). Off by default (#291, #295): the audience is a human
+# curating .claude/jit-context/, not the model whose turn it fires into — a completed
+# subagent has woken to answer this line as though it were a task. hooks.log gets the
+# same detail either way, on every session, flag or no flag; this setting only decides
+# whether a copy of it also reaches the model's own context. Only 0 and 1 are
+# implemented — anything else is refused, the same as an unknown JIT_CONTEXT_INJECT.
+JIT_CONTEXT_STOP_REPORT=0
 ```
 
 **This file is read, not executed.** One `KEY=VALUE` per line; `#` comments and blank lines are ignored, surrounding quotes are stripped, and a leading `export` is accepted. Nothing inside a value is expanded — a `$`, a backtick or a `$(…)` is a literal character.
