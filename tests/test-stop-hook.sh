@@ -545,8 +545,44 @@ else
 fi
 
 echo ""
+echo "=== R: a 00-manual directory that cannot be READ -- COULD NOT TELL, never silence ==="
+# Self-review (oss:auditor) on this same change (#291/#295) caught this: the membership
+# scan added above globs each dimension's 00-manual directory, and a directory that
+# exists but cannot be opened (permissions, not absence) makes that glob return nothing
+# -- silently, with no distinguishable signal. That is byte-identical to a 00-manual
+# layer that genuinely holds nothing manual, so a session where the fired entry MIGHT be
+# the reader's own, but this run could not tell, was rendering as the P/Q silent case
+# above. #244's own three-states rule already refuses exactly this shape for the state
+# directory (section D); this fixture forces the same refusal for the 00-manual layer
+# the new scan reads.
+
+R_SKIPPED=0
+P="$(new_project r)"
+mkdir -p "$(state_of "$P")"
+manual_entry "$P" vocabulary blocked.md
+printf 'blocked.md\n' > "$(state_of "$P")/vocab-shown-sess-r.txt"
+chmod 000 "$P/.claude/jit-context/vocabulary/00-manual" 2>/dev/null
+if [ -r "$P/.claude/jit-context/vocabulary/00-manual" ]; then
+  R_SKIPPED=1
+  echo "  SKIP-NOTE: chmod did not remove read permission here (running as root, or a"
+  echo "             filesystem without POSIX modes). Section R tested nothing."
+else
+  OUT="$(run_stop "$P" "sess-r")"; RC=$?
+  assert_rc0 "the hook exits 0" "$RC"
+  assert_contains "it says it could not tell" "$OUT" "could not tell"
+  assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
+  if [ "$OUT" = "{}" ]; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: an unreadable 00-manual directory rendered as silence"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: an unreadable 00-manual directory did not render as silence"
+  fi
+fi
+chmod 755 "$P/.claude/jit-context/vocabulary/00-manual" 2>/dev/null
+
+echo ""
 echo "=========================================="
-if [ "$D_SKIPPED" -eq 0 ]; then
+SKIP_TOTAL=$((D_SKIPPED + R_SKIPPED))
+if [ "$SKIP_TOTAL" -eq 0 ]; then
   echo "Results: $PASS passed, $FAIL failed"
 else
   # The same third state this whole file exists to test for, one level up: a section
@@ -557,10 +593,11 @@ else
   # test-log-containment.sh already use for a chmod that could not bite (root, or a
   # filesystem without POSIX modes). Followed here rather than invented: D_SKIPPED
   # existed with nothing reading it, which is the identical defect class section D is
-  # itself about, one layer up.
-  echo "Results: $PASS passed, $FAIL failed, 1 section(s) SKIPPED"
+  # itself about, one layer up. R_SKIPPED is the same guard for the same reason, one
+  # section down.
+  echo "Results: $PASS passed, $FAIL failed, $SKIP_TOTAL section(s) SKIPPED"
 fi
 echo "=========================================="
 [ "$FAIL" -eq 0 ] || exit 1
-[ "$D_SKIPPED" -eq 0 ] || exit 2
+[ "$SKIP_TOTAL" -eq 0 ] || exit 2
 exit 0

@@ -204,12 +204,26 @@ fi
 # own age table further down: that table is deliberately silent whenever a whole
 # 00-manual layer's mtimes look like a checkout (#243), and reusing it here would fold
 # "not yours" and "yours, but this run could not tell its age" into the same false
-# answer. A degraded read (an unreadable 00-manual directory) undercounts rather than
-# fails hard, the same posture every scan in this hook already takes.
+# answer.
+#
+# oss:auditor self-review on this change (finding, live-reproduced): a 00-manual
+# directory that EXISTS but cannot be opened (permissions, not absence) makes the glob
+# below return nothing -- silently, with no way to tell that apart from a 00-manual
+# layer that genuinely holds nothing manual. JIT_MANUAL_SCAN_DEGRADED below names that
+# case so the branch further down can render it as its own "could not tell" state
+# (section R) rather than let it undercount into the silent P/Q case, the same "third
+# state renders as the first" shape #244's own header already refuses for the state
+# directory (case D). A dimension whose 00-manual directory simply does not EXIST is
+# not degraded -- that is the ordinary, common case this hook must not warn about.
+JIT_MANUAL_SCAN_DEGRADED=0
 JIT_MANUAL_NAMES=""
 for _jit_dim in vocabulary tools paths; do
   _jit_manual_dir="$JIT_BASE/$_jit_dim/00-manual"
   [ -d "$_jit_manual_dir" ] || continue
+  if [ ! -r "$_jit_manual_dir" ] || [ ! -x "$_jit_manual_dir" ]; then
+    JIT_MANUAL_SCAN_DEGRADED=1
+    continue
+  fi
   for _jit_mf in "$_jit_manual_dir"/*; do
     [ -f "$_jit_mf" ] && [ ! -L "$_jit_mf" ] || continue
     JIT_MANUAL_NAMES="$JIT_MANUAL_NAMES${JIT_MANUAL_NAMES:+$JIT_NL}${_jit_mf##*/}"
@@ -234,6 +248,14 @@ unset _jit_mname
 # the silent one: reporting an uncertain split is the safe direction, the same
 # principle #284's "unknown takes the safe branch" already applies to STOP_HOOK_ACTIVE.
 if [ "$JIT_MANUAL_FIRED_N" -eq 0 ] && [ "$JIT_FIRED_OVERFLOW" -eq 0 ]; then
+  # oss:auditor self-review finding: a degraded 00-manual read (above) means "zero
+  # confirmed manual entries" here could equally mean "genuinely zero" or "could not
+  # look" -- distinct from the ordinary silent case, this says so rather than folding
+  # into it, the same posture case D already takes for the state directory itself.
+  if [ "$JIT_MANUAL_SCAN_DEGRADED" = 1 ]; then
+    printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): could not tell whether any fired entry is yours (a 00-manual directory could not be read)"}}\n'
+    exit 0
+  fi
   echo '{}'
   exit 0
 fi
