@@ -12,7 +12,12 @@
 #
 #   * entries fired this session and NONE were edited -- one line, framed as
 #     informational and non-actionable (#292); the numbered, per-entry detail #233
-#     originally asked for is unchanged, it just moved to hooks.log.
+#     originally asked for is unchanged, it just moved to hooks.log. #291/#295 split
+#     this state in two, further down: a flat "N entries injected... none updated" when
+#     every one of them is backed by a real 00-manual file (the reader authored all of
+#     them), or "N entries injected... M of them yours and not updated" when only SOME
+#     are -- the entries outside 00-manual have no author this reader can point at, so
+#     the flat count used to overstate what was theirs to fix.
 #   * entries fired and SOME were edited -- silence. The healthy case, the same posture
 #     SessionStart's own "ok, nothing recurs" already takes (session-start-hook.sh):
 #     a hook must never fail hard, and here that includes not nagging about a session
@@ -20,10 +25,15 @@
 #   * COULD NOT TELL whether anything was edited -- the state directory degraded to
 #     empty (common.sh: an unwritable checkout, a linked ancestor), so neither the fired
 #     count nor the edit marker can be trusted. This says so rather than falling through
-#     to the silent, healthy-looking branch above.
+#     to the silent, healthy-looking branch above. #291/#295 add a SECOND could-not-tell
+#     shape further down: the state directory is fine, but a 00-manual directory itself
+#     could not be read, so this hook cannot tell whether a fired entry is the reader's.
 #
 # A fourth kind of silence is not one of the three: nothing fired this session at all,
-# so there is nothing to compare and nothing worth saying either way.
+# so there is nothing to compare and nothing worth saying either way. #291/#295 add a
+# FIFTH kind, further down: entries fired, but every one of them resolves to a layer
+# outside 00-manual -- there is nobody for this message to ask, which is the same
+# "nothing to compare" shape as the fourth kind, just discovered later in the scan.
 #
 # THE TRAP THIS HOOK DOES NOT REACH FOR: jit_scan_entry_ages() (common.sh) reads
 # filesystem mtimes and inherits #243 -- a fresh clone reports every file as "0d old"
@@ -102,7 +112,7 @@ fi
 # so there is no fired count and no edit signal to compare: this is state three, and it
 # must say so rather than fall through to the silent branches below.
 if [ -z "$JIT_STATE_DIR" ] || [ -z "$SESSION_ID" ]; then
-  printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (informational only, no action needed): could not tell whether any entry fired or was edited this session (no session state to read back)"}}\n'
+  printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): could not tell whether any entry fired or was edited this session (no session state to read back)"}}\n'
   exit 0
 fi
 
@@ -184,7 +194,79 @@ fi
 # unknown, checked above): this says so explicitly rather than falling through to the
 # "none updated" list below, which would misreport a refused write as a clean session.
 if [ -f "$EDIT_DECLINED_MARK" ] && [ ! -L "$EDIT_DECLINED_MARK" ]; then
-  printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (informational only, no action needed): an edit under this tree may have happened this session but could not be confirmed (marker write was declined)"}}\n'
+  printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): an edit under this tree may have happened this session but could not be confirmed (marker write was declined)"}}\n'
+  exit 0
+fi
+
+# #291/#295: the report below is aimed at whoever authors .claude/jit-context/00-manual
+# -- the only layer with a human owner, the same reason jit_scan_entry_ages() below
+# only ever asks about that layer. An entry that fired from any OTHER layer (plugin-
+# shipped, generated) has no file this reader can curate, so counting it toward "none
+# updated" asks for maintenance nobody can perform -- #291 documented a completed
+# subagent waking three times to answer that line as though it were a task, and #295
+# measured a real project where EVERY fired entry lived outside 00-manual, so the nag
+# fired on nearly every session with nothing to act on.
+#
+# This is the SAME "nothing to compare" rule the "nothing fired at all" branch above
+# already takes: when no fired name is backed by a real 00-manual file, this exits
+# exactly like that branch -- no message, no hooks.log write, because there is nothing
+# to log either. Membership is a plain file-existence check, not jit_scan_entry_ages()'s
+# own age table further down: that table is deliberately silent whenever a whole
+# 00-manual layer's mtimes look like a checkout (#243), and reusing it here would fold
+# "not yours" and "yours, but this run could not tell its age" into the same false
+# answer.
+#
+# oss:auditor self-review on this change (finding, live-reproduced): a 00-manual
+# directory that EXISTS but cannot be opened (permissions, not absence) makes the glob
+# below return nothing -- silently, with no way to tell that apart from a 00-manual
+# layer that genuinely holds nothing manual. JIT_MANUAL_SCAN_DEGRADED below names that
+# case so the branch further down can render it as its own "could not tell" state
+# (test section S) rather than let it undercount into the silent Q/R case, the same
+# "third state renders as the first" shape #244's own header already refuses for the state
+# directory (case D). A dimension whose 00-manual directory simply does not EXIST is
+# not degraded -- that is the ordinary, common case this hook must not warn about.
+JIT_MANUAL_SCAN_DEGRADED=0
+JIT_MANUAL_NAMES=""
+for _jit_dim in vocabulary tools paths; do
+  _jit_manual_dir="$JIT_BASE/$_jit_dim/00-manual"
+  [ -d "$_jit_manual_dir" ] || continue
+  if [ ! -r "$_jit_manual_dir" ] || [ ! -x "$_jit_manual_dir" ]; then
+    JIT_MANUAL_SCAN_DEGRADED=1
+    continue
+  fi
+  for _jit_mf in "$_jit_manual_dir"/*; do
+    [ -f "$_jit_mf" ] && [ ! -L "$_jit_mf" ] || continue
+    JIT_MANUAL_NAMES="$JIT_MANUAL_NAMES${JIT_MANUAL_NAMES:+$JIT_NL}${_jit_mf##*/}"
+  done
+done
+unset _jit_dim _jit_manual_dir _jit_mf
+
+JIT_MANUAL_FIRED_N=0
+while IFS= read -r _jit_mname; do
+  [ -n "$_jit_mname" ] || continue
+  case "$JIT_NL$JIT_MANUAL_NAMES$JIT_NL" in
+    *"$JIT_NL$_jit_mname$JIT_NL"*) JIT_MANUAL_FIRED_N=$((JIT_MANUAL_FIRED_N + 1)) ;;
+  esac
+done <<EOF_MANUAL_CHECK
+$JIT_FIRED
+EOF_MANUAL_CHECK
+unset _jit_mname
+
+# JIT_FIRED_OVERFLOW names entered past the JIT_FIRED_MAX cap above and were never
+# individually checked here -- their 00-manual membership is genuinely unknown, not
+# "not yours", so their presence forces the split-reporting branch below rather than
+# the silent one: reporting an uncertain split is the safe direction, the same
+# principle #284's "unknown takes the safe branch" already applies to STOP_HOOK_ACTIVE.
+if [ "$JIT_MANUAL_FIRED_N" -eq 0 ] && [ "$JIT_FIRED_OVERFLOW" -eq 0 ]; then
+  # oss:auditor self-review finding: a degraded 00-manual read (above) means "zero
+  # confirmed manual entries" here could equally mean "genuinely zero" or "could not
+  # look" -- distinct from the ordinary silent case, this says so rather than folding
+  # into it, the same posture case D already takes for the state directory itself.
+  if [ "$JIT_MANUAL_SCAN_DEGRADED" = 1 ]; then
+    printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): could not tell whether any fired entry is yours (a 00-manual directory could not be read)"}}\n'
+    exit 0
+  fi
+  echo '{}'
   exit 0
 fi
 
@@ -281,6 +363,27 @@ fi
 # detail the model-facing line below no longer carries -- the maintainer curating
 # .claude/jit-context/ reads that file; the model reads only the one line handed to
 # additionalContext.
-jit_log_write "$(printf '[%s] stop: %s entries fired this session, none updated. %s' "$(_ts)" "$JIT_TOTAL" "$JIT_LOG_LIST")"
-
-printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (informational only, no action needed): %s entries injected this session, none updated -- fired: %s"}}\n' "$JIT_TOTAL" "$JIT_NAMES"
+#
+# #291/#295: "mixed" here means either a genuine non-00-manual entry among the fired
+# set, or the JIT_FIRED_OVERFLOW uncertainty named above -- either way the reader did
+# not author every fired entry, so the flat "none updated" sentence overstates what is
+# theirs to fix. JIT_MANUAL_FIRED_N against JIT_FIRED_N (not JIT_TOTAL, which folds in
+# the overflow count) is deliberate: an overflow-only session with every checked name
+# manual-owned still counts as mixed, because the un-checked overflow names are
+# unknown, not confirmed non-manual.
+#
+# Explore self-review finding: when overflow names exist, JIT_MANUAL_FIRED_N is a
+# FLOOR, not an exact count -- some of the unchecked overflow names could be manual
+# too, and the flat "M of them yours" phrasing read as an exact claim it did not have
+# the evidence for. "at least " only appears when that floor is genuinely inexact.
+JIT_YOURS_QUALIFIER=""
+if [ "$JIT_FIRED_OVERFLOW" -gt 0 ]; then
+  JIT_YOURS_QUALIFIER="at least "
+fi
+if [ "$JIT_MANUAL_FIRED_N" -lt "$JIT_FIRED_N" ] || [ "$JIT_FIRED_OVERFLOW" -gt 0 ]; then
+  jit_log_write "$(printf '[%s] stop: %s entries fired this session, %s%s of them yours and not updated. %s' "$(_ts)" "$JIT_TOTAL" "$JIT_YOURS_QUALIFIER" "$JIT_MANUAL_FIRED_N" "$JIT_LOG_LIST")"
+  printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): %s entries injected this session, %s%s of them yours and not updated -- fired: %s"}}\n' "$JIT_TOTAL" "$JIT_YOURS_QUALIFIER" "$JIT_MANUAL_FIRED_N" "$JIT_NAMES"
+else
+  jit_log_write "$(printf '[%s] stop: %s entries fired this session, none updated. %s' "$(_ts)" "$JIT_TOTAL" "$JIT_LOG_LIST")"
+  printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): %s entries injected this session, none updated -- fired: %s"}}\n' "$JIT_TOTAL" "$JIT_NAMES"
+fi
