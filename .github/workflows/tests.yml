@@ -135,6 +135,68 @@ jobs:
       - name: Run hook test suites
         run: bash tests/run-all.sh --shard ${{ matrix.shard }}/${{ matrix.shards }}
 
+  # --- The names branch protection pins ------------------------------------------------
+  #
+  # `main` requires three checks BY NAME: `hooks (ubuntu-latest)`, `hooks (macos-latest)`
+  # and `hooks (windows-latest)`. Sharding renamed the matrix legs, so those three stopped
+  # existing -- and a required check that can never report is not a check that failed, it is
+  # a pull request BLOCKED forever waiting for something that will never arrive. Caught on
+  # #324's own merge, which refused with BLOCKED while every leg was green.
+  #
+  # So the workflow satisfies the gate rather than the gate chasing the workflow. These
+  # three exist only to carry the pinned names; the work is in `hooks` above.
+  #
+  # ONE HONEST LIMIT, stated here because it cannot be fixed from inside a matrix: a matrix
+  # job reports ONE result for all its legs, so these three cannot tell which platform went
+  # red. A failure on any leg fails all three. That over-reports and never under-reports --
+  # the direction that matters for a gate -- but do not read `hooks (macos-latest)` red as
+  # "macOS failed". The per-leg truth is the job list, where each leg is named.
+  #
+  # `if: always()` because a `needs:` job is SKIPPED when its dependency fails, and GitHub
+  # can count a skipped required check as satisfied. Skipped would be the same silent pass
+  # this whole file exists to refuse. The result is tested explicitly instead.
+  hooks-gate-ubuntu:
+    name: hooks (ubuntu-latest)
+    needs: hooks
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every hooks leg must have succeeded
+        run: |
+          echo "hooks matrix result: ${{ needs.hooks.result }}"
+          [ "${{ needs.hooks.result }}" = "success" ] || {
+            echo "A leg of the hooks matrix did not succeed. See the job list for which."
+            exit 1
+          }
+
+  hooks-gate-macos:
+    name: hooks (macos-latest)
+    needs: hooks
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every hooks leg must have succeeded
+        run: |
+          echo "hooks matrix result: ${{ needs.hooks.result }}"
+          [ "${{ needs.hooks.result }}" = "success" ] || {
+            echo "A leg of the hooks matrix did not succeed. See the job list for which."
+            exit 1
+          }
+
+  hooks-gate-windows:
+    name: hooks (windows-latest)
+    needs: hooks
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every hooks leg must have succeeded
+        run: |
+          echo "hooks matrix result: ${{ needs.hooks.result }}"
+          [ "${{ needs.hooks.result }}" = "success" ] || {
+            echo "A leg of the hooks matrix did not succeed. See the job list for which."
+            exit 1
+          }
+
   shellcheck:
     runs-on: ubuntu-latest
     steps:
