@@ -371,6 +371,67 @@ else
 fi
 
 echo ""
+echo "=== P: awk engine matrix -- a raw NUL ahead of stop_hook_active desyncs only one-true-awk (#287) ==="
+# Measured in the 0.7.1 gate-3 audit across all three awks: a raw NUL byte placed in
+# cwd, ahead of the "stop_hook_active" key, is read correctly by gawk and mawk (both
+# carry the embedded NUL through and keep scanning past it) but truncates the accumulated
+# input record under one-true-awk, so jit_json_fields() never reaches the key at all --
+# it reads as ABSENT, which jit_stop_hook_active()'s own fallthrough renders as false,
+# not as unknown. The real stop_hook_active:true is lost and this session's fired
+# entries are reported: the exact re-entry shape #279/#284 exist to prevent.
+#
+# Filed informational rather than a misreport at weight: RFC 8259 forbids a raw NUL
+# inside a JSON string and the real harness never emits one -- it escapes the byte
+# instead -- so this input is not reachable through the real producer. Still worth
+# pinning: the macos-latest CI leg runs one-true-awk, and nothing before this asserted
+# the divergence, so a change that made the input reachable would not be caught.
+ENGINE_BIN=$(mktemp -d)
+ENGINES=""
+ENGINE_SEEN=""
+for cand in awk gawk nawk mawk; do
+  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  case " $ENGINE_SEEN " in *" $cand_path "*) continue ;; esac
+  ENGINE_SEEN="$ENGINE_SEEN $cand_path"
+  mkdir -p "$ENGINE_BIN/$cand"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$cand_path" > "$ENGINE_BIN/$cand/awk"
+  chmod +x "$ENGINE_BIN/$cand/awk"
+  ENGINES="$ENGINES $cand"
+done
+
+if [ -z "$ENGINES" ]; then
+  echo "  SKIP-NOTE: no awk/gawk/nawk/mawk found on PATH -- this section could not run"
+else
+  P="$(new_project p)"
+  mkdir -p "$(state_of "$P")"
+  printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-p.txt"
+
+  # Written straight to a file with printf's own octal escape, never through a shell
+  # variable or a $( ) capture -- bash truncates a variable at an embedded NUL the same
+  # way this hook's own captures would (paths/00-manual/tests.md), which would make the
+  # byte disappear before any engine ever saw it.
+  NUL_PAYLOAD="$TMP/nul-payload-p.json"
+  printf '{"session_id":"sess-p","cwd":"/x\000y","stop_hook_active":true}' > "$NUL_PAYLOAD"
+
+  for eng in $ENGINES; do
+    OUT="$(PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" < "$NUL_PAYLOAD" 2>&1)"; RC=$?
+    assert_rc0 "[$eng] the hook exits 0 on a raw NUL ahead of the key" "$RC"
+    case "$eng" in
+      awk)
+        assert_contains "[one-true-awk] a NUL ahead of the key hides the real stop_hook_active:true and the fired report leaks through (measured, #287)" "$OUT" "bridge.md"
+        ;;
+      gawk|mawk)
+        assert_empty_json "[$eng] a NUL ahead of the key does not hide the real stop_hook_active:true" "$OUT"
+        ;;
+      *)
+        echo "  SKIP-NOTE: [$eng] not one of the three engines this measurement covers -- not asserted either way"
+        ;;
+    esac
+  done
+  unset OUT RC eng
+fi
+unset ENGINE_BIN ENGINES ENGINE_SEEN cand cand_path NUL_PAYLOAD
+
+echo ""
 echo "=========================================="
 if [ "$D_SKIPPED" -eq 0 ]; then
   echo "Results: $PASS passed, $FAIL failed"
