@@ -221,8 +221,8 @@ fi
 # below return nothing -- silently, with no way to tell that apart from a 00-manual
 # layer that genuinely holds nothing manual. JIT_MANUAL_SCAN_DEGRADED below names that
 # case so the branch further down can render it as its own "could not tell" state
-# (section R) rather than let it undercount into the silent P/Q case, the same "third
-# state renders as the first" shape #244's own header already refuses for the state
+# (test section S) rather than let it undercount into the silent Q/R case, the same
+# "third state renders as the first" shape #244's own header already refuses for the state
 # directory (case D). A dimension whose 00-manual directory simply does not EXIST is
 # not degraded -- that is the ordinary, common case this hook must not warn about.
 JIT_MANUAL_SCAN_DEGRADED=0

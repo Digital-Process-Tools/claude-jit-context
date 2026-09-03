@@ -27,8 +27,9 @@
 # this line as though it were a task addressed to it. #295 measured a real project
 # where every fired entry lived outside 00-manual and the nag fired on nearly every
 # session anyway. So this suite also drives: every fired entry outside 00-manual
-# (silence, section P); a mix of 00-manual and non-manual (the split is reported,
-# section Q); and the message's own wording says what it is and who it is not for
+# (silence, section Q); a mix of 00-manual and non-manual (the split is reported,
+# section R); a 00-manual directory that cannot be read (its own could-not-tell state,
+# section S); and the message's own wording says what it is and who it is not for
 # (asserted alongside section A).
 #
 # jit-drive: assert_contains contains capture
@@ -232,7 +233,7 @@ echo "=== H: the dedup scan is bounded, not quadratic in an untrusted marker fil
 # session produces still answers, and answers with every name accounted for one way
 # or the other (listed, or named in the overflow line). Every one of the 600 is also
 # given a real 00-manual file, since this section is about the bound, not about the
-# #291/#295 layer split -- sections P/Q below cover that split on their own, smaller
+# #291/#295 layer split -- sections Q/R below cover that split on their own, smaller
 # fixtures.
 
 P="$(new_project h)"
@@ -558,29 +559,29 @@ else
 fi
 
 echo ""
-echo "=== R: a 00-manual directory that cannot be READ -- COULD NOT TELL, never silence ==="
+echo "=== S: a 00-manual directory that cannot be READ -- COULD NOT TELL, never silence ==="
 # Self-review (oss:auditor) on this same change (#291/#295) caught this: the membership
 # scan added above globs each dimension's 00-manual directory, and a directory that
 # exists but cannot be opened (permissions, not absence) makes that glob return nothing
 # -- silently, with no distinguishable signal. That is byte-identical to a 00-manual
 # layer that genuinely holds nothing manual, so a session where the fired entry MIGHT be
-# the reader's own, but this run could not tell, was rendering as the P/Q silent case
+# the reader's own, but this run could not tell, was rendering as the Q/R silent case
 # above. #244's own three-states rule already refuses exactly this shape for the state
 # directory (section D); this fixture forces the same refusal for the 00-manual layer
 # the new scan reads.
 
-R_SKIPPED=0
-P="$(new_project r)"
+S_SKIPPED=0
+P="$(new_project s)"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary blocked.md
-printf 'blocked.md\n' > "$(state_of "$P")/vocab-shown-sess-r.txt"
+printf 'blocked.md\n' > "$(state_of "$P")/vocab-shown-sess-s.txt"
 chmod 000 "$P/.claude/jit-context/vocabulary/00-manual" 2>/dev/null
 if [ -r "$P/.claude/jit-context/vocabulary/00-manual" ]; then
-  R_SKIPPED=1
+  S_SKIPPED=1
   echo "  SKIP-NOTE: chmod did not remove read permission here (running as root, or a"
-  echo "             filesystem without POSIX modes). Section R tested nothing."
+  echo "             filesystem without POSIX modes). Section S tested nothing."
 else
-  OUT="$(run_stop "$P" "sess-r")"; RC=$?
+  OUT="$(run_stop "$P" "sess-s")"; RC=$?
   assert_rc0 "the hook exits 0" "$RC"
   assert_contains "it says it could not tell" "$OUT" "could not tell"
   assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
@@ -594,7 +595,7 @@ chmod 755 "$P/.claude/jit-context/vocabulary/00-manual" 2>/dev/null
 
 echo ""
 echo "=========================================="
-SKIP_TOTAL=$((D_SKIPPED + R_SKIPPED))
+SKIP_TOTAL=$((D_SKIPPED + S_SKIPPED))
 if [ "$SKIP_TOTAL" -eq 0 ]; then
   echo "Results: $PASS passed, $FAIL failed"
 else
@@ -606,7 +607,7 @@ else
   # test-log-containment.sh already use for a chmod that could not bite (root, or a
   # filesystem without POSIX modes). Followed here rather than invented: D_SKIPPED
   # existed with nothing reading it, which is the identical defect class section D is
-  # itself about, one layer up. R_SKIPPED is the same guard for the same reason, one
+  # itself about, one layer up. S_SKIPPED is the same guard for the same reason, one
   # section down.
   echo "Results: $PASS passed, $FAIL failed, $SKIP_TOTAL section(s) SKIPPED"
 fi
