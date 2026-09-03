@@ -109,8 +109,13 @@ NEEDLE="NEEDLEXYZ"
 ABSENT="ABSENTXYZ"
 FILLER="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 BIG="$NEEDLE"
+# 13 doublings, not 15: the assertion below only requires >= 1,000,000 bytes, and
+# i=12 already lands at 1,154,940 -- 15 doublings overshot to ~4.6MB for no reason
+# the floor check asks for. #306 measured this suite driving 351 assertion helper
+# calls against this payload, which is where nearly all of the suite's cost sits;
+# a ~4x smaller payload cuts that cost without weakening what the floor guarantees.
 i=0
-while [ "$i" -lt 15 ]; do
+while [ "$i" -lt 13 ]; do
   BIG="$BIG
 $FILLER"
   BIG="$BIG$BIG"
