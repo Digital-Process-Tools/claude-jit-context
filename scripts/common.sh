@@ -809,6 +809,20 @@ jit_load_config() {
           ;;
       esac
     fi
+    # #300: JIT_CONTEXT_STOP_REPORT gates stop-hook.sh's whole model-facing report --
+    # off by default, per #291/#295 (the audience is a human curating .claude/jit-context/,
+    # not a model mid-session). Only 0 and 1 are implemented; anything else must not
+    # silently read as either value, the same reason JIT_CONTEXT_INJECT refuses an
+    # unimplemented mode above rather than falling through.
+    if [ "$key" = JIT_CONTEXT_STOP_REPORT ]; then
+      case "$value" in
+        0|1) ;;
+        *)
+          jit_config_refuse "$lineno" "not a stop-report toggle (0 or 1)"
+          continue
+          ;;
+      esac
+    fi
     printf -v "$key" '%s' "$value"
   done < "$file"
 }
@@ -893,6 +907,24 @@ JIT_INJECT="${JIT_CONTEXT_INJECT:-full}"
 case "$JIT_INJECT" in
   summary|full) ;;
   *) JIT_INJECT=full ;;
+esac
+
+# #300: JIT_CONTEXT_STOP_REPORT gates the whole model-facing report stop-hook.sh can
+# emit. Off by default -- the opposite fallback direction from JIT_INJECT above, and
+# deliberately so: JIT_INJECT defaults to `full` for upgrade safety (a tree that
+# already relies on the whole-body behaviour must not lose it silently), while this
+# setting is brand new, so there is no existing behaviour to preserve by defaulting on.
+# #291/#295's own conclusion was that the report has no audience until a project asks
+# for it -- an installed plugin that says nothing until asked is the correct posture,
+# so absent, `0`, and any value this code cannot honour all fall to the same off state.
+# The config.env path above already refuses an unimplemented value by line number and
+# never lets it reach here; this clamp is for every OTHER way the variable can arrive
+# (an exported environment variable from a runner or a test), the same shape JIT_INJECT
+# already gives its own clamp just above.
+JIT_STOP_REPORT="${JIT_CONTEXT_STOP_REPORT:-0}"
+case "$JIT_STOP_REPORT" in
+  0|1) ;;
+  *) JIT_STOP_REPORT=0 ;;
 esac
 
 # Pipeline log: _log "step" duration_ms "message"  → [HH:MM:SS.mmm] step 42ms | message

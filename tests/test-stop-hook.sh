@@ -96,6 +96,16 @@ manual_entry() {
   : > "$p/.claude/jit-context/$dim/00-manual/$name"
 }
 
+# #300: JIT_CONTEXT_STOP_REPORT is off by default now, so every section below that
+# asserts model-facing MESSAGE CONTENT (as opposed to silence) needs this to reach the
+# behaviour it is actually testing. Written directly rather than through jit_load_config
+# -- this is a fixture, not a parser test; the parser itself is exercised separately
+# (section U).
+enable_stop_report() {
+  local p="$1"
+  printf 'JIT_CONTEXT_STOP_REPORT=1\n' > "$p/.claude/jit-context/config.env"
+}
+
 run_stop() {
   local p="$1" sid="$2" active="${3:-false}"
   printf '{"session_id":"%s","hook_event_name":"Stop","stop_hook_active":%s}' "$sid" "$active" \
@@ -105,6 +115,7 @@ run_stop() {
 echo "=== A: entries fired, nothing edited -- one line, framed as informational (#292/#291) ==="
 
 P="$(new_project a)"
+enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 manual_entry "$P" vocabulary cache.md
@@ -154,6 +165,7 @@ echo "=== D: an unwritable tree -- COULD NOT TELL, never silence ==="
 
 D_SKIPPED=0
 P="$(new_project d)"
+enable_stop_report "$P"
 chmod 555 "$P/.claude/jit-context" 2>/dev/null
 if [ -w "$P/.claude/jit-context" ]; then
   D_SKIPPED=1
@@ -190,6 +202,7 @@ echo ""
 echo "=== F: sentinel keys in the shown marks are not reported as fired entries ==="
 
 P="$(new_project f)"
+enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 printf 'bridge.md\njit-refused-vocab\njit-no-subject\n' > "$(state_of "$P")/vocab-shown-sess-f.txt"
@@ -210,6 +223,7 @@ echo ""
 echo "=== G: the same entry fired through both marker files is only counted once ==="
 
 P="$(new_project g)"
+enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-g.txt"
@@ -237,6 +251,7 @@ echo "=== H: the dedup scan is bounded, not quadratic in an untrusted marker fil
 # fixtures.
 
 P="$(new_project h)"
+enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 JIT_HI=600
 _jit_seq=1
@@ -286,6 +301,7 @@ echo "=== J: stop_hook_active is missing from the payload entirely -- treated as
 # older harness, or a hand-run reproduction, can omit the field outright.
 
 P="$(new_project j)"
+enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-j.txt"
@@ -344,6 +360,7 @@ echo "=== M: a fired session with a REAL awk and stop_hook_active=false is the p
 # single fired entry) so a reader can compare the two runs directly.
 
 P="$(new_project m)"
+enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-m.txt"
@@ -360,6 +377,7 @@ echo "=== N: a symlink-refused edit marker (#285) renders as its own fourth stat
 # from both.
 
 P="$(new_project n)"
+enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-n.txt"
 : > "$(state_of "$P")/edited-declined-sess-n.txt"
@@ -395,6 +413,7 @@ echo "=== O: past the 200-name cap -- the cap bounds the model line only, never 
 # 205 gets a real 00-manual file for the same reason section H does.
 
 P="$(new_project o)"
+enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 : > "$(state_of "$P")/vocab-shown-sess-o.txt"
 _jit_o=1
@@ -467,6 +486,7 @@ if [ -z "$ENGINES" ]; then
   echo "  SKIP-NOTE: no awk/gawk/nawk/mawk found on PATH -- this section could not run"
 else
   P="$(new_project p)"
+  enable_stop_report "$P"
   mkdir -p "$(state_of "$P")"
   # #291/#295 (rebase note): stop-hook.sh now only renders the fired-entries report
   # when at least one fired name is backed by a real 00-manual file -- otherwise it
@@ -542,6 +562,7 @@ echo "=== R: a mixed session -- some 00-manual, some not -- reports the split, n
 # (auto-entry.md) that is not theirs to edit.
 
 P="$(new_project r)"
+enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 printf 'bridge.md\nauto-entry.md\n' > "$(state_of "$P")/vocab-shown-sess-r.txt"
@@ -572,6 +593,7 @@ echo "=== S: a 00-manual directory that cannot be READ -- COULD NOT TELL, never 
 
 S_SKIPPED=0
 P="$(new_project s)"
+enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary blocked.md
 printf 'blocked.md\n' > "$(state_of "$P")/vocab-shown-sess-s.txt"
@@ -594,8 +616,145 @@ fi
 chmod 755 "$P/.claude/jit-context/vocabulary/00-manual" 2>/dev/null
 
 echo ""
+echo "=== T: #300 -- default (no config.env at all) is OFF: the none-updated shape emits {}, hooks.log still gets the line ==="
+# The exact fixture from section A, its own positive control for this state, minus
+# enable_stop_report -- proving the SAME fired/none-updated session that produces a
+# message with the flag on produces {} with no config.env at all, which is the
+# documented default. hooks.log must still carry the line: #300 is explicit that the
+# signal moves to the reader who wants it, it is not deleted.
+
+P="$(new_project t)"
+mkdir -p "$(state_of "$P")"
+manual_entry "$P" vocabulary bridge.md
+manual_entry "$P" vocabulary cache.md
+printf 'bridge.md\ncache.md\n' > "$(state_of "$P")/vocab-shown-sess-t.txt"
+OUT="$(run_stop "$P" "sess-t")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_empty_json "no config.env at all -- the report is silent by default" "$OUT"
+LOG_T="$P/.claude/jit-context/.discovery/logs/hooks.log"
+if [ -f "$LOG_T" ]; then
+  assert_contains "hooks.log still gets the fired-entries line with the report off" "$(cat "$LOG_T")" "none updated"
+  assert_contains "and still names the fired entries" "$(cat "$LOG_T")" "bridge.md"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: hooks.log was not written even though the report is only silenced, not disabled"
+fi
+
+echo ""
+echo "=== U: #300 -- JIT_CONTEXT_STOP_REPORT=0 explicit is the same OFF state as absent ==="
+# The same fixture again, this time with config.env explicitly writing 0 rather than
+# omitting the file -- proving the explicit off value takes the identical branch as
+# no config.env at all (section T), not some other silent-but-different path.
+
+P="$(new_project u)"
+printf 'JIT_CONTEXT_STOP_REPORT=0\n' > "$P/.claude/jit-context/config.env"
+mkdir -p "$(state_of "$P")"
+manual_entry "$P" vocabulary bridge.md
+manual_entry "$P" vocabulary cache.md
+printf 'bridge.md\ncache.md\n' > "$(state_of "$P")/vocab-shown-sess-u.txt"
+OUT="$(run_stop "$P" "sess-u")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_empty_json "JIT_CONTEXT_STOP_REPORT=0 -- the report stays silent" "$OUT"
+LOG_U="$P/.claude/jit-context/.discovery/logs/hooks.log"
+if [ -f "$LOG_U" ]; then
+  assert_contains "hooks.log still gets the fired-entries line with =0" "$(cat "$LOG_U")" "none updated"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: hooks.log was not written with JIT_CONTEXT_STOP_REPORT=0"
+fi
+
+echo ""
+echo "=== V: #300 -- the state-dir-unknown could-not-tell shape is silent by default too (twin of D) ==="
+# Section D's own fixture, minus enable_stop_report: proving the report-off gate
+# reaches the could-not-tell branches too, not only the ordinary fired/none-updated
+# one -- #300 is explicit that all five shapes are gated, not just the headline one.
+
+V_SKIPPED=0
+P="$(new_project v)"
+chmod 555 "$P/.claude/jit-context" 2>/dev/null
+if [ -w "$P/.claude/jit-context" ]; then
+  V_SKIPPED=1
+  echo "  SKIP-NOTE: chmod did not remove write permission here (running as root, or a"
+  echo "             filesystem without POSIX modes). Section V tested nothing."
+else
+  OUT="$(run_stop "$P" "sess-v")"; RC=$?
+  assert_rc0 "the hook exits 0" "$RC"
+  assert_empty_json "the state-dir-unknown shape is silent with the report off" "$OUT"
+fi
+chmod 755 "$P/.claude/jit-context" 2>/dev/null
+
+echo ""
+echo "=== W: #300 -- the edit-declined shape is silent by default too (twin of N) ==="
+
+P="$(new_project w)"
+mkdir -p "$(state_of "$P")"
+printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-w.txt"
+: > "$(state_of "$P")/edited-declined-sess-w.txt"
+OUT="$(run_stop "$P" "sess-w")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_empty_json "the edit-declined shape is silent with the report off" "$OUT"
+
+echo ""
+echo "=== X: #300 -- the mixed (some-yours) shape is silent by default too, hooks.log still carries the split (twin of R) ==="
+
+P="$(new_project x)"
+mkdir -p "$(state_of "$P")"
+manual_entry "$P" vocabulary bridge.md
+printf 'bridge.md\nauto-entry.md\n' > "$(state_of "$P")/vocab-shown-sess-x.txt"
+OUT="$(run_stop "$P" "sess-x")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_empty_json "the mixed shape is silent with the report off" "$OUT"
+LOG_X="$P/.claude/jit-context/.discovery/logs/hooks.log"
+if [ -f "$LOG_X" ]; then
+  assert_contains "hooks.log still carries the split with the report off" "$(cat "$LOG_X")" "of them yours and not updated"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: hooks.log was not written for a mixed session with the report off"
+fi
+
+echo ""
+echo "=== Y: #300 -- the 00-manual-unreadable could-not-tell shape is silent by default too (twin of S) ==="
+
+Y_SKIPPED=0
+P="$(new_project y)"
+mkdir -p "$(state_of "$P")"
+manual_entry "$P" vocabulary blocked.md
+printf 'blocked.md\n' > "$(state_of "$P")/vocab-shown-sess-y.txt"
+chmod 000 "$P/.claude/jit-context/vocabulary/00-manual" 2>/dev/null
+if [ -r "$P/.claude/jit-context/vocabulary/00-manual" ]; then
+  Y_SKIPPED=1
+  echo "  SKIP-NOTE: chmod did not remove read permission here (running as root, or a"
+  echo "             filesystem without POSIX modes). Section Y tested nothing."
+else
+  OUT="$(run_stop "$P" "sess-y")"; RC=$?
+  assert_rc0 "the hook exits 0" "$RC"
+  assert_empty_json "the 00-manual-unreadable shape is silent with the report off" "$OUT"
+fi
+chmod 755 "$P/.claude/jit-context/vocabulary/00-manual" 2>/dev/null
+
+echo ""
+echo "=== Z: #300 -- an unparseable JIT_CONTEXT_STOP_REPORT value is refused, not silently read as on ==="
+# jit_load_config() (common.sh) already refuses an unimplemented value by line number
+# for JIT_CONTEXT_INJECT; JIT_CONTEXT_STOP_REPORT follows the same idiom. A value of
+# "yes" must be refused and logged, and the setting must fall back to the safe (off)
+# default -- never silently treated as 1.
+
+P="$(new_project z)"
+printf 'JIT_CONTEXT_STOP_REPORT=yes\n' > "$P/.claude/jit-context/config.env"
+mkdir -p "$(state_of "$P")"
+manual_entry "$P" vocabulary bridge.md
+printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-z.txt"
+OUT="$(run_stop "$P" "sess-z")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_empty_json "an unparseable value falls back to off, never silently on" "$OUT"
+LOG_Z="$P/.claude/jit-context/.discovery/logs/hooks.log"
+if [ -f "$LOG_Z" ]; then
+  assert_contains "the refusal is logged by line number, the existing config.env channel" "$(cat "$LOG_Z")" "line 1"
+  assert_contains "and names what was refused" "$(cat "$LOG_Z")" "stop-report toggle"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: hooks.log was not written at all for the refused-config session"
+fi
+
+echo ""
 echo "=========================================="
-SKIP_TOTAL=$((D_SKIPPED + S_SKIPPED))
+SKIP_TOTAL=$((D_SKIPPED + S_SKIPPED + V_SKIPPED + Y_SKIPPED))
 if [ "$SKIP_TOTAL" -eq 0 ]; then
   echo "Results: $PASS passed, $FAIL failed"
 else

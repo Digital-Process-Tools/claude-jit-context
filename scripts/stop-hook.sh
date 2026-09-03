@@ -42,6 +42,16 @@
 # to decide the fired-vs-edited question itself. Reusing it for that boolean is the
 # exact defect #244's own issue body names as the reason this shipped separately from
 # #233's other two parts.
+#
+# #300: EVERY model-facing shape above -- the flat "none updated" line, the "M of them
+# yours" split, and all three could-not-tell states -- is gated on JIT_CONTEXT_STOP_REPORT
+# (common.sh, JIT_STOP_REPORT), off unless a project asks for it. #291/#295 found the
+# audience for this report is a human curating .claude/jit-context/, who does not read
+# a model's turn -- they read hooks.log, written unconditionally in every branch below,
+# flag or no flag. With the report off, the three could-not-tell shapes describe the
+# degraded state of something the reader asked not to hear about, so they go quiet with
+# the rest rather than surviving as noise with no subject. `JIT_STOP_REPORT=1` restores
+# every shape below byte-for-byte.
 SCRIPT_DIR="$(dirname "$0")"
 source "$SCRIPT_DIR/common.sh"
 
@@ -112,7 +122,16 @@ fi
 # so there is no fired count and no edit signal to compare: this is state three, and it
 # must say so rather than fall through to the silent branches below.
 if [ -z "$JIT_STATE_DIR" ] || [ -z "$SESSION_ID" ]; then
-  printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): could not tell whether any entry fired or was edited this session (no session state to read back)"}}\n'
+  # #300: the whole model-facing report is gated on JIT_STOP_REPORT (common.sh),
+  # off by default. The degraded state this branch describes is a property of
+  # something the reader asked not to hear about with the report off, so it has
+  # no subject left to speak to -- {} is the same silent shape every other gated
+  # branch below takes when the flag is off.
+  if [ "$JIT_STOP_REPORT" = "1" ]; then
+    printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): could not tell whether any entry fired or was edited this session (no session state to read back)"}}\n'
+  else
+    echo '{}'
+  fi
   exit 0
 fi
 
@@ -194,7 +213,13 @@ fi
 # unknown, checked above): this says so explicitly rather than falling through to the
 # "none updated" list below, which would misreport a refused write as a clean session.
 if [ -f "$EDIT_DECLINED_MARK" ] && [ ! -L "$EDIT_DECLINED_MARK" ]; then
-  printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): an edit under this tree may have happened this session but could not be confirmed (marker write was declined)"}}\n'
+  # #300: gated the same way as every other model-facing shape below -- {} when the
+  # reader has not asked for the report.
+  if [ "$JIT_STOP_REPORT" = "1" ]; then
+    printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): an edit under this tree may have happened this session but could not be confirmed (marker write was declined)"}}\n'
+  else
+    echo '{}'
+  fi
   exit 0
 fi
 
@@ -263,7 +288,12 @@ if [ "$JIT_MANUAL_FIRED_N" -eq 0 ] && [ "$JIT_FIRED_OVERFLOW" -eq 0 ]; then
   # look" -- distinct from the ordinary silent case, this says so rather than folding
   # into it, the same posture case D already takes for the state directory itself.
   if [ "$JIT_MANUAL_SCAN_DEGRADED" = 1 ]; then
-    printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): could not tell whether any fired entry is yours (a 00-manual directory could not be read)"}}\n'
+    # #300: gated -- {} when the reader has not asked for the report.
+    if [ "$JIT_STOP_REPORT" = "1" ]; then
+      printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): could not tell whether any fired entry is yours (a 00-manual directory could not be read)"}}\n'
+    else
+      echo '{}'
+    fi
     exit 0
   fi
   echo '{}'
@@ -380,10 +410,22 @@ JIT_YOURS_QUALIFIER=""
 if [ "$JIT_FIRED_OVERFLOW" -gt 0 ]; then
   JIT_YOURS_QUALIFIER="at least "
 fi
+# #300: hooks.log is written EXACTLY as before, on every branch, regardless of the
+# flag -- that is the whole point of the change, the signal moves to the reader who
+# wants it rather than being deleted. Only the printf that reaches the model below is
+# gated.
 if [ "$JIT_MANUAL_FIRED_N" -lt "$JIT_FIRED_N" ] || [ "$JIT_FIRED_OVERFLOW" -gt 0 ]; then
   jit_log_write "$(printf '[%s] stop: %s entries fired this session, %s%s of them yours and not updated. %s' "$(_ts)" "$JIT_TOTAL" "$JIT_YOURS_QUALIFIER" "$JIT_MANUAL_FIRED_N" "$JIT_LOG_LIST")"
-  printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): %s entries injected this session, %s%s of them yours and not updated -- fired: %s"}}\n' "$JIT_TOTAL" "$JIT_YOURS_QUALIFIER" "$JIT_MANUAL_FIRED_N" "$JIT_NAMES"
+  if [ "$JIT_STOP_REPORT" = "1" ]; then
+    printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): %s entries injected this session, %s%s of them yours and not updated -- fired: %s"}}\n' "$JIT_TOTAL" "$JIT_YOURS_QUALIFIER" "$JIT_MANUAL_FIRED_N" "$JIT_NAMES"
+  else
+    echo '{}'
+  fi
 else
   jit_log_write "$(printf '[%s] stop: %s entries fired this session, none updated. %s' "$(_ts)" "$JIT_TOTAL" "$JIT_LOG_LIST")"
-  printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): %s entries injected this session, none updated -- fired: %s"}}\n' "$JIT_TOTAL" "$JIT_NAMES"
+  if [ "$JIT_STOP_REPORT" = "1" ]; then
+    printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): %s entries injected this session, none updated -- fired: %s"}}\n' "$JIT_TOTAL" "$JIT_NAMES"
+  else
+    echo '{}'
+  fi
 fi
