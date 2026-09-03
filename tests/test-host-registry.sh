@@ -253,6 +253,24 @@ MARKETPLACE="$REPO/.agents/plugins/marketplace.json"
 assert_eq "a Codex plugin manifest ships"    "yes" "$( [ -r "$CODEX_MANIFEST" ] && echo yes || echo no )"
 assert_eq "a Codex hooks manifest ships"     "yes" "$( [ -r "$CODEX_HOOKS" ] && echo yes || echo no )"
 assert_eq "a self-referential marketplace entry ships" "yes" "$( [ -r "$MARKETPLACE" ] && echo yes || echo no )"
+
+# #252: a live `codex plugin marketplace add .` on this repo's own manifest was
+# observed to refuse outright -- "marketplace 'dpt-plugins' is already added from a
+# different source; remove it before adding this source" -- because Codex keys a
+# local marketplace by its declared "name", globally, across every repo registered
+# on the machine, and claude-remember's own .agents/plugins/marketplace.json already
+# claims "dpt-plugins" for itself. Both repos copied the *fleet* marketplace name
+# (the one the real Digital-Process-Tools/claude-marketplace repo legitimately owns
+# for Claude Code installs) into a *local* dev/Codex manifest, and a machine can only
+# ever have one local marketplace of a given name. This is not a guess at the fix --
+# it is the collision, reproduced live, and claude-oss's own local marketplace
+# (.claude-plugin/marketplace.json, "name": "claude-oss-dev") already shows the
+# convention that avoids it: a name unique to the repo, not the fleet name.
+marketplace_name() {
+  LC_ALL=C awk -F'"' '/"name"[[:space:]]*:/ { print $4; exit }' "$1"
+}
+assert_eq "the local marketplace name is not the shared fleet name (observed collision, #252)" \
+  "no" "$( [ "$(marketplace_name "$MARKETPLACE")" = "dpt-plugins" ] && echo yes || echo no )"
 assert_eq "the Codex manifest points at the Codex hooks file, relatively" \
   "yes" "$(grep -q '"\./hooks/hooks\.codex\.json"' "$CODEX_MANIFEST" 2>/dev/null && echo yes || echo no)"
 assert_eq "the Codex hooks manifest uses PLUGIN_ROOT, not CLAUDE_PLUGIN_ROOT" \
