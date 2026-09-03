@@ -21,6 +21,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Least privilege for every job here: this workflow only reads the tree and runs tests.
+# No job writes to the repository, posts a comment, or uploads an asset. A workflow with no
+# permissions block inherits the repository default, which on many repositories is a write
+# token -- that is what CodeQL flagged on the two gate jobs.
+permissions:
+  contents: read
+
 jobs:
   hooks:
     runs-on: ${{ matrix.os }}
