@@ -371,6 +371,95 @@ else
 fi
 
 echo ""
+echo "=== P: awk engine matrix -- a raw NUL ahead of stop_hook_active desyncs a NUL-truncating awk (#287) ==="
+# Measured in the 0.7.1 gate-3 audit across the three awks on that machine: a raw NUL
+# byte placed in cwd, ahead of the "stop_hook_active" key, is read correctly by an awk
+# that carries an embedded NUL through getline (gawk, mawk on that machine) but truncates
+# the accumulated input record under one-true-awk, so jit_json_fields() never reaches the
+# key at all -- it reads as ABSENT, which jit_stop_hook_active()'s own fallthrough
+# renders as false, not as unknown. The real stop_hook_active:true is lost and this
+# session's fired entries are reported: the exact re-entry shape #279/#284 exist to
+# prevent.
+#
+# Filed informational rather than a misreport at weight: RFC 8259 forbids a raw NUL
+# inside a JSON string and the real harness never emits one -- it escapes the byte
+# instead -- so this input is not reachable through the real producer. Still worth
+# pinning: the macos-latest CI leg's plain `awk` truncates, and nothing before this
+# asserted the divergence, so a change that made the input reachable would not be caught.
+#
+# WHICH engine truncates is a property of the BINARY, not of the PATH name it answers to
+# on a given platform -- Debian/Ubuntu's default `/usr/bin/awk` is mawk (NUL-transparent),
+# not one-true-awk, and Git Bash on Windows ships only a gawk-backed `awk` with no
+# separate gawk/nawk/mawk binary at all. A first draft of this section keyed the expected
+# assertion off the candidate NAME (`awk` => expect truncation, `gawk`/`mawk` => expect
+# transparency) and would have asserted the wrong thing, loudly, on both of those --
+# self-review (an Explore reviewer and oss:auditor, run in parallel against the committed
+# diff) caught it before this shipped. Classified by a tiny probe instead:
+# `length($0)` on a 3-byte NUL-carrying record is 1 if the read truncated at the NUL, 3
+# if the engine carried it through -- this needs no shell variable to hold the raw byte,
+# only the printed digit, so it is exempt from the very $( ) truncation this file's own
+# convention warns about.
+ENGINE_BIN=$(mktemp -d)
+ENGINES=""
+ENGINE_SEEN=""
+for cand in awk gawk nawk mawk; do
+  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  case " $ENGINE_SEEN " in *" $cand_path "*) continue ;; esac
+  ENGINE_SEEN="$ENGINE_SEEN $cand_path"
+  mkdir -p "$ENGINE_BIN/$cand"
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$cand_path" > "$ENGINE_BIN/$cand/awk"
+  chmod +x "$ENGINE_BIN/$cand/awk"
+  ENGINES="$ENGINES $cand"
+done
+
+if [ -z "$ENGINES" ]; then
+  echo "  SKIP-NOTE: no awk/gawk/nawk/mawk found on PATH -- this section could not run"
+else
+  P="$(new_project p)"
+  mkdir -p "$(state_of "$P")"
+  printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-p.txt"
+
+  # Written straight to a file with printf's own octal escape, never through a shell
+  # variable or a $( ) capture -- bash truncates a variable at an embedded NUL the same
+  # way this hook's own captures would (paths/00-manual/tests.md), which would make the
+  # byte disappear before any engine ever saw it.
+  NUL_PAYLOAD="$TMP/nul-payload-p.json"
+  printf '{"session_id":"sess-p","cwd":"/x\000y","stop_hook_active":true}' > "$NUL_PAYLOAD"
+
+  P_SAW_TRUNCATING=0
+  P_SAW_TRANSPARENT=0
+  for eng in $ENGINES; do
+    # The classifying probe: 3 bytes in, and only the DIGIT crosses back through $( ),
+    # never the NUL itself.
+    P_LEN="$(printf 'a\000b' | PATH="$ENGINE_BIN/$eng:$PATH" awk '{print length($0)}' 2>/dev/null)"
+    OUT="$(PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" < "$NUL_PAYLOAD" 2>&1)"; RC=$?
+    assert_rc0 "[$eng] the hook exits 0 on a raw NUL ahead of the key" "$RC"
+    case "$P_LEN" in
+      1)
+        P_SAW_TRUNCATING=1
+        assert_contains "[$eng, measured NUL-truncating] a NUL ahead of the key hides the real stop_hook_active:true and the fired report leaks through (#287)" "$OUT" "bridge.md"
+        ;;
+      3)
+        P_SAW_TRANSPARENT=1
+        assert_empty_json "[$eng, measured NUL-transparent] a NUL ahead of the key does not hide the real stop_hook_active:true" "$OUT"
+        ;;
+      *)
+        echo "  SKIP-NOTE: [$eng] the classifying probe returned '$P_LEN', neither 1 nor 3 -- not asserted either way"
+        ;;
+    esac
+  done
+  if [ "$P_SAW_TRUNCATING" -eq 0 ]; then
+    echo "  SKIP-NOTE: no NUL-truncating awk was found among:$ENGINES -- the truncation half of #287 went unexercised on this run"
+  fi
+  if [ "$P_SAW_TRANSPARENT" -eq 0 ]; then
+    echo "  SKIP-NOTE: no NUL-transparent awk was found among:$ENGINES -- the positive control for the truncation half went unexercised"
+  fi
+  unset OUT RC eng P_LEN P_SAW_TRUNCATING P_SAW_TRANSPARENT
+fi
+rm -rf "$ENGINE_BIN"
+unset ENGINE_BIN ENGINES ENGINE_SEEN cand cand_path NUL_PAYLOAD
+
+echo ""
 echo "=========================================="
 if [ "$D_SKIPPED" -eq 0 ]; then
   echo "Results: $PASS passed, $FAIL failed"
