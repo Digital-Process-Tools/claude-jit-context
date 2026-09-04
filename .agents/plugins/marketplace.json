@@ -1,5 +1,5 @@
 {
-  "name": "dpt-plugins",
+  "name": "claude-jit-context-dev",
   "interface": {
     "displayName": "Digital Process Tools plugins"
   },
