@@ -307,6 +307,21 @@ echo "rebuild-tsv: writing JIT_BASE=$JIT_BASE (CLAUDE_PROJECT_DIR=${CLAUDE_PROJE
 # the reader still gets the two components that say which index this was (#113).
 truncate_index() {
   local tsv="$1" disp="${2:-$1}" why=""
+  # A SYMBOLIC LINK at this path is checked BEFORE the truncating redirect below, not
+  # after: `: > "$tsv"` truncates through a link exactly as readily as it truncates a
+  # real file, so by the time the redirect below could fail on anything, the outside
+  # target is already gone (#332). git clone recreates a committed symlink, so cloning a
+  # hostile tree is the whole attack -- the same one test-symlink-entry.sh already closed
+  # for an ENTRY file, one write site over. `[ -L ]` never follows, so this sees the link
+  # itself even when its target does not exist.
+  if [ -L "$tsv" ]; then
+    echo "FATAL    $disp: could not be written -- that path is a SYMBOLIC LINK, not a file" >&2
+    echo "         -- refusing to truncate or write through a symlinked index path" >&2
+    echo "         -- that index was NOT rebuilt and is now stale." >&2
+    echo "         -- under JIT_BASE=$JIT_BASE" >&2
+    jit_rc 2
+    return 1
+  fi
   # `2>/dev/null` BEFORE the redirection it is meant to silence, and this was a real leak.
   # Redirections are applied left to right, so `: > "$tsv" 2>/dev/null` set up the failing
   # one while stderr was still the terminal: bash printed its own diagnostic, carrying the
@@ -330,6 +345,61 @@ truncate_index() {
   return 1
 }
 
+# A LAYER DIRECTORY that is itself a symbolic link is the other half of #332:
+# `[ -d "$dir" ]` follows it exactly like any other directory read, so a committed
+# `tools/evil -> /outside` is indexed as though it were a real layer, with its
+# 00-index.tsv written wherever the link points -- an attacker needs nothing else
+# inside the tree but the link. Checked once here and called from every loop that
+# walks a dimension's layer directories, writers and the bad-bytes reporter alike.
+#
+# $1 the directory (already stripped of its trailing `/`), $2 the label for the message.
+# Skips THIS ONE layer and lets the run continue (jit_rc 2, never exit): the layers are
+# independent, and one clone-supplied symlink should not take the rest of the tree down
+# -- the same skip-and-continue truncate_index() already uses for a directory conflict.
+jit_layer_symlinked() {
+  if [ -L "$1" ]; then
+    echo "FATAL    $2: refusing a SYMBOLIC LINK layer directory -- not indexed (#332)" >&2
+    jit_rc 2
+    return 0
+  fi
+  return 1
+}
+
+# --- TSV column-forging guard (#333) -----------------------------------------
+# Every row below is TAB-joined, and every field going into one is attacker-controlled
+# frontmatter text. jit_frontmatter() only trims TRAILING whitespace on an ordinary
+# field (mode loses its spaces entirely, but not a tab) -- an interior literal tab
+# survives untouched and SHIFTS every column after it, so an entry whose frontmatter
+# reads, to a human reviewer, as a narrow "mode: remind" rule can forge column 4 (mode)
+# into "block" and column 2 (match) into a wildcard, simply by hiding a tab inside an
+# EARLIER field such as tool:. requires: already got exactly this treatment in #203, for
+# the narrower reason that a stray trailing tab there widened the row past the 7th
+# column pre-tool-hook.sh reads it back as -- this is the same strip, applied to every
+# OTHER column that ends up in a row, for the wider reason that an interior tab anywhere
+# forges every column after it, not just the last one.
+#
+# A newline cannot actually appear mid-value here (frontmatter is record-oriented: awk's
+# default RS splits on a newline before a value could ever carry one), so stripping it is
+# defence in depth rather than a closed hole -- kept for the same reason the requires:
+# precedent keeps it, so a value copy-pasted from somewhere that DID carry one does not
+# resurrect the newline-based row-injection #11 already closed for the entry-name column.
+jit_tsv_field() {
+  local v="$1"
+  v="${v//$'\t'/ }"
+  v="${v//$'\r'/ }"
+  v="${v//$'\n'/ }"
+  printf '%s' "$v"
+}
+
+# The only mode: values the hooks give meaning to (docs/writing-entries.md; pre-tool-hook.sh
+# reads "block" and "once" as substrings of this column, everything else defaults to a
+# reminder). Whitelisting the ASSEMBLED value closes the block-flip independently of the
+# tab-stripping above: a column-shift is one route to a forged mode, not necessarily the
+# only one, and this check does not care which route produced an unrecognised value.
+# "remind" is accepted even though the hook never tests for it -- it is the field's own
+# documented default spelling and an author may write it explicitly.
+JIT_VALID_MODE_RE='^(remind|block|once)(,(remind|block|once))*$'
+
 # --- Tool rules: parse frontmatter from .md files ---
 # Extracts tool, match, mode, require, forbid, requires from YAML frontmatter
 build_tool_tsv() {
@@ -347,22 +417,36 @@ build_tool_tsv() {
     local filename
     filename=$(basename "$md")
     [ "$filename" = "00-README.md" ] && continue
+    filename=$(jit_tsv_field "$filename")
 
-    # Parse frontmatter fields
+    # Parse frontmatter fields. Every one is TAB/CR/LF-stripped (#333): the row below is
+    # tab-joined, and an interior tab surviving in an EARLIER field shifts every column
+    # after it -- see jit_tsv_field()'s own comment for the worked example.
     local tool match mode require forbid requires
-    tool=$(jit_frontmatter tool "$md")
-    match=$(jit_frontmatter match "$md")
-    mode=$(jit_frontmatter mode "$md")
-    require=$(jit_frontmatter require "$md")
-    forbid=$(jit_frontmatter forbid "$md")
+    tool=$(jit_tsv_field "$(jit_frontmatter tool "$md")")
+    match=$(jit_tsv_field "$(jit_frontmatter match "$md")")
+    mode=$(jit_tsv_field "$(jit_frontmatter mode "$md")")
+    require=$(jit_tsv_field "$(jit_frontmatter require "$md")")
+    forbid=$(jit_tsv_field "$(jit_frontmatter forbid "$md")")
     # (#203) The binary a mode: block / require: / forbid: rule depends on for its OWN
     # remedy. A single bare name, never a list -- one binary is the case #203 was filed
     # about, and a list opens a policy question (all of them? any of them?) nothing has
-    # asked for yet. Read here so a stray trailing tab or newline in the value cannot
-    # widen the row past the 7th TSV column pre-tool-hook.sh reads it back as.
+    # asked for yet. jit_tsv_field() above now does the same stripping this line always
+    # did; kept explicit here too since #203 is the reason this column exists at all.
     requires=$(jit_frontmatter requires "$md")
     requires="${requires//$'\t'/ }"
     requires="${requires//$'\n'/ }"
+
+    # Whitelist mode: at index time (#333, second half): a column-shift is one route to
+    # a forged mode value, not necessarily the only one, so this checks the ASSEMBLED
+    # value rather than trusting the strip above to have caught everything. Refuses the
+    # ENTRY rather than silently normalising it to a safe default -- a mode value nobody
+    # can explain should be looked at, not quietly rewritten into something that runs.
+    if [ -n "$mode" ] && ! printf '%s' "$mode" | LC_ALL=C grep -Eq "$JIT_VALID_MODE_RE"; then
+      jit_unindexed "$label" "$filename" "mode: \"$(jit_report_keyword "$mode")\" is not one of remind/block/once -- entry skipped rather than indexed with an unverified mode"
+      jit_rc 1
+      continue
+    fi
 
     if [ -z "$tool" ] || [ -z "$match" ]; then
       # Not `[ -z x ] || [ -z y ] && continue`: that is one AND-OR list evaluated left to
@@ -396,6 +480,7 @@ for dir in "$TOOLS_BASE"/*/; do
   [ -d "$dir" ] || continue
   dir="${dir%/}"
   label="tools/$(jit_report_name "$(basename "$dir")")"
+  jit_layer_symlinked "$dir" "$label" && continue
   build_tool_tsv "$dir" "$dir/00-index.tsv" "$label"
 done
 
@@ -598,6 +683,7 @@ build_vocab_tsv() {
     local filename
     filename=$(basename "$md")
     [ "$filename" = "00-README.md" ] && continue
+    filename=$(jit_tsv_field "$filename")
 
     # Extract keywords line from frontmatter (between first --- and second ---).
     #
@@ -865,6 +951,7 @@ for dir in "$VOCAB_BASE"/*/; do
   [ -d "$dir" ] || continue
   dir="${dir%/}"
   label="vocabulary/$(jit_report_name "$(basename "$dir")")"
+  jit_layer_symlinked "$dir" "$label" && continue
   build_vocab_tsv "$dir" "$dir/00-index.tsv" "$label"
 done
 
@@ -888,6 +975,7 @@ build_vocab_path_tsv() {
     local filename mod_rc
     filename=$(basename "$md")
     [ "$filename" = "00-README.md" ] && continue
+    filename=$(jit_tsv_field "$filename")
 
     # Body of the "## Modules" section: everything until the next heading or EOF.
     #
@@ -945,6 +1033,7 @@ for dir in "$VOCAB_BASE"/*/; do
   # this was, in the position a path component occupies, so `vocabulary/00-manual/paths`
   # went into a FATAL line pointing at something that has never existed on disk (#153).
   label="vocabulary/$(jit_report_name "$(basename "$dir")")"
+  jit_layer_symlinked "$dir" "$label" && continue
   build_vocab_path_tsv "$dir" "$dir/01-paths.tsv" "$label"
 done
 
@@ -964,9 +1053,10 @@ build_path_tsv() {
     local filename
     filename=$(basename "$md")
     [ "$filename" = "00-README.md" ] && continue
+    filename=$(jit_tsv_field "$filename")
 
     local match_line
-    match_line=$(jit_frontmatter match "$md")
+    match_line=$(jit_tsv_field "$(jit_frontmatter match "$md")")
     if [ -z "$match_line" ]; then
       jit_unindexed "$label" "$filename" "no match: in its frontmatter"
       continue
@@ -989,6 +1079,7 @@ for dir in "$PATHS_BASE"/*/; do
   [ -d "$dir" ] || continue
   dir="${dir%/}"
   label="paths/$(jit_report_name "$(basename "$dir")")"
+  jit_layer_symlinked "$dir" "$label" && continue
   build_path_tsv "$dir" "$dir/00-index.tsv" "$label"
 done
 
@@ -1036,14 +1127,17 @@ report_bad_bytes() {
 
 for dir in "$TOOLS_BASE"/*/; do
   [ -d "$dir" ] || continue
+  [ -L "${dir%/}" ] && continue
   report_bad_bytes "${dir%/}/00-index.tsv" "tools/$(jit_report_name "$(basename "${dir%/}")")" 3
 done
 for dir in "$PATHS_BASE"/*/; do
   [ -d "$dir" ] || continue
+  [ -L "${dir%/}" ] && continue
   report_bad_bytes "${dir%/}/00-index.tsv" "paths/$(jit_report_name "$(basename "${dir%/}")")" 2
 done
 for dir in "$VOCAB_BASE"/*/; do
   [ -d "$dir" ] || continue
+  [ -L "${dir%/}" ] && continue
   _jit_vlabel="vocabulary/$(jit_report_name "$(basename "${dir%/}")")"
   # The LEAF, unlike the tools and paths calls above (#162): this is the one dimension
   # that calls report_bad_bytes() twice for one layer, once per index, and both calls
