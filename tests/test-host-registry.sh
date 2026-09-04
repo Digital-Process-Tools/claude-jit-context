@@ -312,6 +312,27 @@ done
 assert_eq "hooks.codex.json names only events Codex documents" "" "$_undocumented"
 
 echo ""
+echo "=== #328: PostToolUse matcher strings must match between the two manifests ==="
+# #301 widened hooks.json's PostToolUse matcher from Write|Edit to Write|Edit|Bash so
+# a tree that routes every edit through Bash (this repo's own harness-write-tools-blocked
+# rule, or any wrapper that shells out) still gets an edited-<session>.txt marker
+# written. hooks.codex.json is a hand-duplicated manifest (#252) and was never widened
+# alongside it, so the identical bug -- permanent false "none updated" -- still exists
+# on a Codex-host install. This compares the matcher STRINGS themselves, not just which
+# hook scripts each manifest names (the loop above already covers that), so a future
+# single-sided matcher edit fails here instead of drifting silently again.
+posttooluse_matcher() {
+  awk '/"PostToolUse"/ { f=1 } f && /"matcher"/ { print; exit }' "$1" | \
+    sed -E 's/.*"matcher": *"([^"]*)".*/\1/'
+}
+CLAUDE_PT_MATCHER="$(posttooluse_matcher "$CLAUDE_HOOKS")"
+CODEX_PT_MATCHER="$(posttooluse_matcher "$CODEX_HOOKS")"
+assert_eq "hooks.json's own PostToolUse matcher is not empty (positive control)" \
+  "yes" "$( [ -n "$CLAUDE_PT_MATCHER" ] && echo yes || echo no )"
+assert_eq "hooks.codex.json's PostToolUse matcher matches hooks.json's, Bash included (#328)" \
+  "$CLAUDE_PT_MATCHER" "$CODEX_PT_MATCHER"
+
+echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))
 echo "  $PASS/$TOTAL passed, $FAIL failed"
