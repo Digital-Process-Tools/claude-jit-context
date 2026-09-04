@@ -170,12 +170,44 @@ JIT_FIRED_MAX=500
 JIT_FIRED=""
 JIT_FIRED_N=0
 JIT_FIRED_OVERFLOW=0
+# #297: pre-tool-hook.sh marks a fired `tools` (once-mode) rule as `key = "rule:" r_file`
+# -- namespacing it against a vocabulary mark that happens to share a filename. That
+# prefix is an internal composed key, not a name: left on the line, it survives every
+# exclusion below (it is not empty, carries no slash or backslash, and matches neither
+# sentinel), reaches jit_report_name() intact, and its `:` is exactly the byte that
+# guard exists to refuse -- so every well-formed `tools` entry rendered as
+# `<withheld: not a plain name>`, unconditionally, on every session that ever fired
+# one (#297's own reproduction). The prefix is stripped HERE, once, at collection time,
+# so every reader further down (the 00-manual membership scan, jit_age_for(), the
+# display loop) sees the same bare name a vocabulary or path entry already carries --
+# never a second "is this composed" question re-asked at each site. `JIT_TOOL_NAMES`
+# remembers which bare names arrived this way, so the display loop can still say WHICH
+# dimension fired (#297 direction 2: `how-work-lands.md (tools)`, strictly more useful
+# to a reader curating entries than the bare name a vocabulary hit gets, per the issue's
+# own stated preference) without threading a second field through every accumulator
+# below. `jit_report_name()`'s own byte set is untouched -- #297 is explicit that
+# widening it is the wrong fix; the composed key never reaches it in the first place now.
+JIT_TOOL_NAMES=""
 for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
   [ -f "$_jit_mf" ] && [ ! -L "$_jit_mf" ] || continue
   while IFS= read -r _jit_name || [ -n "$_jit_name" ]; do
     case "$_jit_name" in
       ''|*/*|*\\*) continue ;;
       jit-refused-*|jit-no-subject) continue ;;
+    esac
+    _jit_is_tool=0
+    case "$_jit_name" in
+      rule:*)
+        _jit_name="${_jit_name#rule:}"
+        _jit_is_tool=1
+        # The stripped name still has to pass the same bare-name shape the raw marker
+        # line was already checked against above -- a `rule:` prefix in front of an
+        # otherwise-empty or slash-carrying remainder is not a name either, and must
+        # not be treated as one just because the known prefix matched.
+        case "$_jit_name" in
+          ''|*/*|*\\*) continue ;;
+        esac
+        ;;
     esac
     if [ "$JIT_FIRED_N" -ge "$JIT_FIRED_MAX" ]; then
       # Past the cap, a name is counted but not deduped or stored -- the accumulator
@@ -187,13 +219,28 @@ for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
       continue
     fi
     case "$JIT_NL$JIT_FIRED$JIT_NL" in
-      *"$JIT_NL$_jit_name$JIT_NL"*) continue ;;
+      *"$JIT_NL$_jit_name$JIT_NL"*)
+        # Already collected (from either marker file, or a bare and a `rule:`-prefixed
+        # mark that happen to share a name) -- still worth recording the tool tag if
+        # this occurrence carries one and an earlier one did not, so a later "(tools)"
+        # tag is not lost to whichever marker file this loop happened to read first.
+        if [ "$_jit_is_tool" -eq 1 ]; then
+          case "$JIT_NL$JIT_TOOL_NAMES$JIT_NL" in
+            *"$JIT_NL$_jit_name$JIT_NL"*) ;;
+            *) JIT_TOOL_NAMES="$JIT_TOOL_NAMES${JIT_TOOL_NAMES:+$JIT_NL}$_jit_name" ;;
+          esac
+        fi
+        continue
+        ;;
     esac
     JIT_FIRED="$JIT_FIRED${JIT_FIRED:+$JIT_NL}$_jit_name"
     JIT_FIRED_N=$((JIT_FIRED_N + 1))
+    if [ "$_jit_is_tool" -eq 1 ]; then
+      JIT_TOOL_NAMES="$JIT_TOOL_NAMES${JIT_TOOL_NAMES:+$JIT_NL}$_jit_name"
+    fi
   done < "$_jit_mf"
 done
-unset _jit_mf _jit_name
+unset _jit_mf _jit_name _jit_is_tool
 
 # Nothing fired this session at all -- there is no injected-vs-edited comparison to
 # make, which is not the same claim as "nothing was edited" and gets no message either
@@ -357,6 +404,13 @@ while IFS= read -r _jit_name; do
   JIT_I=$((JIT_I + 1))
   _jit_age="$(jit_age_for "$_jit_name")"
   _jit_shown="$(jit_report_name "$_jit_name")"
+  # #297 direction 2: a name that arrived via the "rule:" prefix (stripped above, into
+  # JIT_TOOL_NAMES) is a `tools` entry -- tagged here, after jit_report_name() has
+  # already decided whether the bare name itself is printable or withheld, so the tag
+  # rides on either outcome rather than only the happy one.
+  case "$JIT_NL$JIT_TOOL_NAMES$JIT_NL" in
+    *"$JIT_NL$_jit_name$JIT_NL"*) _jit_shown="$_jit_shown (tools)" ;;
+  esac
   # "; " rather than a literal "\n": hooks.log is one physical line per record
   # (jit-misses.sh parses it that way -- paths/00-manual/hooks.md), so an escaped
   # newline embedded in the text here would be misleading bytes on disk, not an

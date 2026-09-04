@@ -289,6 +289,104 @@ OUT="$(run_post_tool "$P" "sess-j3" "Edit" "$FP")"; RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_no_file "a name-collision sibling directory marks nothing" "$(state_of "$P")/edited-sess-j3.txt"
 
+
+echo "=== K: an edit routed through Bash still drops the marker (#301) ==="
+# hooks/hooks.json's own PostToolUse matcher used to be Write|Edit only. A tree that
+# routes every edit through Bash instead (a mode: block tools rule on
+# Edit|Write|MultiEdit|NotebookEdit, or any wrapper/formatter that shells out) produced
+# a real edit under $JIT_BASE that this hook never observed at all -- no marker, ever,
+# on that tree -- and stop-hook.sh read the marker's permanent absence as the positive
+# claim "none updated", unsilenceable by doing the right thing. This section is the
+# positive control: a Bash command that plainly WRITES into the tree (the redirect
+# form, the supertool paste:/edit: form this project's own contributors actually use,
+# and an in-place sed) must mark, the same as an Edit/Write call already does.
+
+run_post_tool_bash() {
+  local p="$1" sid="$2" cmd="$3"
+  printf '{"session_id":"%s","tool_name":"Bash","tool_input":{"command":"%s"}}' "$sid" "$cmd" \
+    | CLAUDE_PROJECT_DIR="$p" bash "$SCRIPTS/post-tool-hook.sh" 2>&1
+}
+
+P="$(new_project k)"
+FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
+CMD="printf 'x' > $FP"
+CMD="${CMD//\\/\\\\}"; CMD="${CMD//\"/\\\"}"
+OUT="$(run_post_tool_bash "$P" "sess-k1" "$CMD")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_empty_json "the hook answers empty JSON" "$OUT"
+assert_file "a plain redirect into the tree via Bash marks (#301)" "$(state_of "$P")/edited-sess-k1.txt"
+
+echo ""
+echo "--- K2: a supertool paste:/edit: payload naming a path under the tree also marks ---"
+
+P="$(new_project k2)"
+FP="$P/.claude/jit-context/vocabulary/00-manual/new.md"
+CMD="supertool 'paste:@-' <<'TOML'\npath = \\\"$FP\\\"\ncontent = '''hi'''\nTOML"
+OUT="$(run_post_tool_bash "$P" "sess-k2" "$CMD")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_file "a supertool paste: call under the tree marks" "$(state_of "$P")/edited-sess-k2.txt"
+
+echo ""
+echo "--- K3: a Bash command that only READS the tree marks nothing (paired negative control) ---"
+
+P="$(new_project k3)"
+FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
+CMD="cat $FP"
+OUT="$(run_post_tool_bash "$P" "sess-k3" "$CMD")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_no_file "a Bash command that merely reads the tree marks nothing" "$(state_of "$P")/edited-sess-k3.txt"
+
+echo ""
+echo "--- K4: a Bash command naming nothing under the tree marks nothing (paired negative control) ---"
+
+P="$(new_project k4)"
+OUT="$(run_post_tool_bash "$P" "sess-k4" "git status")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_no_file "an unrelated Bash command marks nothing" "$(state_of "$P")/edited-sess-k4.txt"
+
+echo ""
+echo "--- K5: an in-place sed on a file under the tree marks (#301) ---"
+
+P="$(new_project k5)"
+FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
+: > "$FP"
+CMD="sed -i '' 's/x/y/' $FP"
+OUT="$(run_post_tool_bash "$P" "sess-k5" "$CMD")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_file "an in-place sed on a tree file marks" "$(state_of "$P")/edited-sess-k5.txt"
+
+echo ""
+echo "--- K6: a non-in-place sed whose target filename merely CONTAINS '-i' does not mark (Explore review finding) ---"
+# `sed 's/x/y/' -- <path>` never writes anything (no -i, no redirect) -- but the last
+# path component here is "-improved.md", and an unanchored `*'sed'*'-i'*` substring
+# test cannot tell that "-i" apart from a real `-i` flag: it appears in the filename
+# purely because the filename happens to start with those two letters. Reproduced
+# live against the pre-fix heuristic (Explore self-review on #301): this exact
+# fixture created a marker for a command that wrote nothing.
+
+P="$(new_project k6)"
+FP="$P/.claude/jit-context/vocabulary/00-manual/-improved.md"
+: > "$FP"
+CMD="sed 's/x/y/' $FP"
+OUT="$(run_post_tool_bash "$P" "sess-k6" "$CMD")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_no_file "a non-in-place sed on a '-i'-prefixed filename marks nothing" "$(state_of "$P")/edited-sess-k6.txt"
+
+echo ""
+echo "--- K7: an echo that only MENTIONS a supertool write op marks nothing (Explore review finding) ---"
+# The literal text "supertool 'edit:" appearing inside an unrelated echo argument is
+# not an invocation of supertool at all -- an unanchored substring test cannot tell
+# prose from a command. Reproduced live against the pre-fix heuristic: this exact
+# echo, which writes nothing, created a marker.
+
+P="$(new_project k7)"
+FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
+CMD="echo reminder: never run supertool XeditX:@- against $FP without review"
+CMD="${CMD//X/\'}"
+OUT="$(run_post_tool_bash "$P" "sess-k7" "$CMD")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_no_file "an echo merely naming a supertool op marks nothing" "$(state_of "$P")/edited-sess-k7.txt"
+
 echo ""
 echo "=========================================="
 echo "Results: $PASS passed, $FAIL failed"
