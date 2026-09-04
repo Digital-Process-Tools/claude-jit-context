@@ -1237,6 +1237,80 @@ assert_not_contains "control: and does not leak the other subject's cwd file eit
 
 rm -rf "$GLOB_ROOT" "$GLOB_CWD"
 
+echo "=== #343: grep -c -x -F needs -- or the count for a hyphen-led entry name is wrong ==="
+# report_hook() counts how many times an entry name fired with
+# `grep -c -x -F "$nm"`, no `--`/`-e` marking the end of options. $nm comes from .md
+# entry names decoded out of the hook's own output (tree text, not this script's own
+# literal), so a name that starts with a hyphen is parsed by grep as a flag instead of
+# as the pattern -- confirmed directly: `printf 'a\n-e.md\nb\n' | grep -c -x -F "-e.md"`
+# prints 0 at a nonzero exit even though line 2 matches byte for byte.
+#
+# The miscount is invisible on a single hit (both the buggy 0 and the honest 1 land in
+# the same branch below), so this needs two entries sharing one basename, so the "count"
+# actually has to be more than one to matter. The shown-by-name dedup in
+# pre-path-hook.sh's own path scan (`if (rule_file in shown) continue`) makes two paths
+# rows with the same basename collide, so the two live in different index files instead:
+# a paths/ row (mode: full, injected whole) and a vocabulary/ row under
+# JIT_CONTEXT_VOCAB_PATHS=1 (mode: summary), both named "-e.md" and both matching the
+# same sample path -- pre-path-hook.sh tracks those in separate shown/vshown sets, so
+# both inject in one call and $names carries the name twice.
+#
+# jit_report_name() withholds a hyphen-led name from DISPLAY (it requires an alnum first
+# byte), but that governs $nmd, never the real $nm the grep line searches for -- so the
+# miscount is still live even though the entry itself always renders as
+# `<withheld: not a plain name>`. What is decisive is the annotation that follows it,
+# built off the (buggy or honest) fired count: with the bug, `fired` reads 0 for a name
+# that actually fired twice, so `summarised >= fired` (1 >= 0) is true and the report
+# says only "(summary)" -- silently dropping the WHOLE BODY half. Fixed, `fired` reads 2,
+# `1 >= 2` is false, and the report says what actually happened: a summary AND a whole
+# body, two entries sharing the name.
+IDXNAME="00-index"; IDXNAME="$IDXNAME.tsv"
+HY_ROOT=$(mktemp -d)
+HY_BASE="$HY_ROOT/.claude/jit-context"
+make_tree "$HY_ROOT"
+
+printf 'Hyph/\t-e.md\n' > "$HY_BASE/paths/00-manual/$IDXNAME"
+printf -- '---\ntitle: Full\ndescription: d\nmatch: Hyph/\n---\nWhole body text.\n' \
+  > "$HY_BASE/paths/00-manual/-e.md"
+
+printf 'Hyph/\t-e.md\n' > "$HY_BASE/vocabulary/00-manual/01-paths.tsv"
+printf -- '---\ntitle: Summ\ndescription: d\nmatch: Hyph/\ninject: summary\n---\nSummary body text.\n' \
+  > "$HY_BASE/vocabulary/00-manual/-e.md"
+
+HY_OUT=$(CLAUDE_PROJECT_DIR="$HY_ROOT" JIT_CONTEXT_VOCAB_PATHS=1 bash "$DRYRUN" \
+  --base "$HY_BASE" --file "src/Hyph/Thing.php" 2>&1) && HY_ST=0 || HY_ST=$?
+assert_status "exit 0 -- both rows are honest, nothing refused" "$HY_ST" "0"
+assert_contains "a hyphen-led shared name reports both halves, correctly counted" \
+  "$HY_OUT" "2 entries share this name"
+assert_not_contains "and not the undercounted single-branch report" \
+  "$HY_OUT" "<withheld: not a plain name>(summary) ["
+
+rm -rf "$HY_ROOT"
+
+# Positive control: the identical shape with an ORDINARY (non-hyphen-led) basename must
+# report the same way. Without this, a harness bug that always printed "2 entries share
+# this name" regardless of what fired would pass the assertion above for the wrong
+# reason -- this pins the mechanism itself, not just the one hostile name.
+HY2_ROOT=$(mktemp -d)
+HY2_BASE="$HY2_ROOT/.claude/jit-context"
+make_tree "$HY2_ROOT"
+
+printf 'Hyph/\tshared.md\n' > "$HY2_BASE/paths/00-manual/$IDXNAME"
+printf -- '---\ntitle: Full\ndescription: d\nmatch: Hyph/\n---\nWhole body text.\n' \
+  > "$HY2_BASE/paths/00-manual/shared.md"
+
+printf 'Hyph/\tshared.md\n' > "$HY2_BASE/vocabulary/00-manual/01-paths.tsv"
+printf -- '---\ntitle: Summ\ndescription: d\nmatch: Hyph/\ninject: summary\n---\nSummary body text.\n' \
+  > "$HY2_BASE/vocabulary/00-manual/shared.md"
+
+HY2_OUT=$(CLAUDE_PROJECT_DIR="$HY2_ROOT" JIT_CONTEXT_VOCAB_PATHS=1 bash "$DRYRUN" \
+  --base "$HY2_BASE" --file "src/Hyph/Thing.php" 2>&1) && HY2_ST=0 || HY2_ST=$?
+assert_status "control: exit 0 -- both rows are honest, nothing refused" "$HY2_ST" "0"
+assert_contains "control: an ordinary shared name still reports both halves" \
+  "$HY2_OUT" "shared.md(summary and WHOLE BODY, 2 entries share this name)"
+
+rm -rf "$HY2_ROOT"
+
 echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))

@@ -1757,7 +1757,7 @@ END {
     for nm in $names; do
       case "$seen" in *" $nm "*) continue ;; esac
       seen="$seen$nm "
-      fired=$(printf '%s\n' $names | grep -c -x -F "$nm")
+      fired=$(printf '%s\n' $names | grep -c -x -F -- "$nm")
       summarised=$(printf '%s' "$out" | grep -o -F "/$nm for the entry" | grep -c .)
       nmd="$(jit_report_name "$nm")"
       if [ "$summarised" -eq 0 ]; then
