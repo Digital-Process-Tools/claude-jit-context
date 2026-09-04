@@ -155,7 +155,7 @@ Copy this directory to `<your-project>/.claude/claude-jit-context/` and register
     ],
     "PostToolUse": [
       {
-        "matcher": "Write|Edit",
+        "matcher": "Write|Edit|Bash",
         "hooks": [
           {
             "type": "command",

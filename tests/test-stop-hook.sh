@@ -768,6 +768,37 @@ else
 fi
 
 echo ""
+echo "=== AA: a fired 'tools' entry no longer renders <withheld: not a plain name> (#297) ==="
+# pre-tool-hook.sh marks a fired 'tools' (once-mode) rule with key = "rule:" r_file --
+# the marker line in the vocab-shown file is "rule:how-work-lands.md", not the bare
+# name. Before the fix: the collection loop keeps the "rule:" prefix (it matches none
+# of the sentinel/slash/backslash exclusions), and jit_report_name() then refuses the
+# ":" byte outright, so every single 'tools' entry renders as
+# "<withheld: not a plain name>" -- unconditionally, on every session that ever fires
+# one. This section is the positive control: a real 'tools' 00-manual file, marked the
+# way pre-tool-hook.sh actually marks it, must print its own name, tagged with the
+# dimension it fired from (direction 2 of #297 -- strictly more useful than the bare
+# name a vocabulary entry gets, since a reader curating entries wants to know which
+# dimension they are looking at).
+
+P="$(new_project aa)"
+enable_stop_report "$P"
+mkdir -p "$(state_of "$P")"
+manual_entry "$P" tools how-work-lands.md
+manual_entry "$P" vocabulary bridge.md
+printf 'bridge.md\nrule:how-work-lands.md\n' > "$(state_of "$P")/vocab-shown-sess-aa.txt"
+OUT="$(run_stop "$P" "sess-aa")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_contains "the tools entry's real name is printed" "$OUT" "how-work-lands.md"
+assert_contains "and tagged with its dimension (#297 direction 2)" "$OUT" "how-work-lands.md (tools)"
+assert_contains "the vocabulary entry keeps rendering as before" "$OUT" "bridge.md"
+if grep -qF -- '<withheld' <<<"$OUT"; then
+  FAIL=$((FAIL + 1)); echo "  FAIL: a well-formed tools entry still renders as withheld"
+else
+  PASS=$((PASS + 1)); echo "  PASS: no withheld placeholder for a well-formed tools entry"
+fi
+
+echo ""
 echo "=========================================="
 SKIP_TOTAL=$((D_SKIPPED + S_SKIPPED + V_SKIPPED + Y_SKIPPED))
 if [ "$SKIP_TOTAL" -eq 0 ]; then
