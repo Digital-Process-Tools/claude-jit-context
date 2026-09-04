@@ -30,7 +30,8 @@
       "lane-index",
       "lane-docs",
       "lane-tests"
-    ]
+    ],
+    "filed_by_loop": "filed-by-loop"
   },
   "milestones": [],
   "release": {
