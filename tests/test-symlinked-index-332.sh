@@ -322,6 +322,56 @@ assert_not_contains "the outside file's NAME never appears in the run's own outp
 assert_contains "the sibling vocabulary layer still rebuilt" \
   "$(cat "$P/.claude/jit-context/vocabulary/00-manual/$TSV_NAME" 2>/dev/null)" "ordinary.md"
 
+# =====================================================================================
+# S5: a symlinked DIMENSION directory (tools/ itself, not a layer beneath it) does not
+# leak the outside target's file name/size through the "what a match costs" report
+# either (#338). S3 above already proves the WRITER refuses this shape; S4 already
+# proves the READ-ONLY reports close the shape one level down (a symlinked LAYER). This
+# is the fourth cell of the 2x2 {layer, dimension} x {write, read} -- S1/S2/S3 closed the
+# write column and the layer half of the read column, S4 closed the layer half of the
+# read column for a DIFFERENT report (keyword-collision); this closes the dimension half
+# of the read column for the "what a match costs" report specifically. The layer-level
+# `[ -L "$(dirname "$md")" ]` guard on that report tests only the FILE's immediate
+# parent, which is one level too shallow to see a symlinked tools/ two levels up --
+# exactly S3's own mechanism, one glob over.
+# =====================================================================================
+echo ""
+echo "=== S5: a symlinked DIMENSION directory's file never appears in the cost report ==="
+
+P="$(new_project s5)"
+mkdir -p "$P/.claude/jit-context"
+rm -rf "$P/.claude/jit-context/tools"
+OUTSIDE_DIM_S5="$OUTSIDE/s5-dimension"
+mkdir -p "$OUTSIDE_DIM_S5/realsubdir"
+CANARY_NAME_S5="s5-secret-outside-file.md"
+printf '%s\n' \
+  "---" \
+  "title: Secret S5" \
+  "description: this must never be read through the symlinked dimension" \
+  "tool: Bash" \
+  "match: git s5" \
+  "mode: remind" \
+  "---" \
+  "" \
+  "SECRET-OUTSIDE-BODY-S5" > "$OUTSIDE_DIM_S5/realsubdir/$CANARY_NAME_S5"
+ln -sfn "$OUTSIDE_DIM_S5" "$P/.claude/jit-context/tools"
+mkdir -p "$P/.claude/jit-context/paths/00-manual"
+printf '%s\n' \
+  "---" \
+  "title: Sibling dimension entry S5" \
+  "description: a normal rule in an unrelated dimension" \
+  "match: src/.*" \
+  "---" \
+  "" \
+  "body" > "$P/.claude/jit-context/paths/00-manual/sibling.md"
+
+run_rebuild "$P"
+assert_not_contains "the outside file's NAME never appears in the cost report" "$OUT" "$CANARY_NAME_S5"
+COST_SECTION_S5="$(awk '/=== What a match costs/{p=1} p' <<<"$OUT")"
+assert_not_contains "...nor within the cost-report section specifically" "$COST_SECTION_S5" "$CANARY_NAME_S5"
+assert_contains "an unrelated dimension (paths/) still appears in the cost report" \
+  "$COST_SECTION_S5" "sibling.md"
+
 echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))

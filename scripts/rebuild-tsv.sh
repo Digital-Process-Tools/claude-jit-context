@@ -1414,14 +1414,27 @@ echo "Project default: JIT_CONTEXT_INJECT=$JIT_INJECT" >&2
 echo "" >&2
 
 # A glob and not `find`: no fork, and no filename can be split on its own characters.
+#
+# Built from the three already-redirected TOOLS_BASE/PATHS_BASE/VOCAB_BASE, NOT a single
+# glob rooted at JIT_BASE (#338). Those three variables are the mechanism every writer
+# loop above already trusts: each one gets pointed at a path that cannot exist the moment
+# its own dimension directory is a symlink (see the `[ -L "$TOOLS_BASE" ]` guard and its
+# two siblings), so a glob built FROM them is empty for that dimension by construction --
+# no second `[ -L ]` check to keep in sync with those three, and no fourth call site added
+# the day this loop existed if a fourth dimension ever does. A single `"$JIT_BASE"/*/*/*.md`
+# does not get that for free: it follows a symlinked DIMENSION directory exactly as
+# readily as a real one, so every real file reachable through it enumerated here and had
+# its path and exact byte size printed to this run's own stderr -- a disclosure leak, not
+# a write, but a leak all the same, and a different cell of the same 2x2 the `[ -L
+# "$(dirname "$md")" ]` check right below still closes: THAT one is the LAYER directory
+# one level down, the sibling of #332's write-side fix, and it stays for the ordinary case
+# of a symlinked layer under an otherwise-real dimension -- the *_BASE redirection above
+# only ever empties a glob for a symlinked DIMENSION, never for a symlinked LAYER beneath
+# a real one.
 INJ_LIST=()
-for md in "$JIT_BASE"/*/*/*.md; do
+for md in "$TOOLS_BASE"/*/*.md "$PATHS_BASE"/*/*.md "$VOCAB_BASE"/*/*.md; do
   [ -f "$md" ] || continue
   [ "$(basename "$md")" = "00-README.md" ] && continue
-  # Same reason as the vocabulary-collision loop above (#332): the LAYER directory
-  # component of this glob (its dirname) is followed exactly like a real one, so a
-  # symlinked layer would otherwise have this report open a file outside the tree and
-  # print its size and path into the run's own stderr output.
   [ -L "$(dirname "$md")" ] && continue
   INJ_LIST[${#INJ_LIST[@]}]="$md"
 done
