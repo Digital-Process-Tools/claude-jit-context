@@ -153,18 +153,56 @@ if [ "$PT_TOOL" = "Bash" ]; then
   # A command that only reads or greps the tree -- `cat`, `grep`, `ls`, an argument
   # that merely NAMES a jit-context path -- passes gate 1 and fails gate 2, so it
   # marks nothing, the same as a Write/Edit call outside the tree does below.
+  #
+  # oss:auditor self-review on #301 (reasoned, not observed): this literal is
+  # forward-slash only, the same as the Write/Edit path's own substring test below.
+  # A Bash command built around a backslash-separated path (a native Windows tool
+  # invoked from inside Git Bash, say) would miss this gate and mark nothing --
+  # already the accepted direction for this heuristic (see the false-negative-bias
+  # note above), not a new failure mode, and the Windows CI leg's own shell is Git
+  # Bash, which itself emits forward-slash paths -- so the gap is narrow in
+  # practice and untested here rather than measured as reachable.
   case "$PT_FP" in
     *"/.claude/jit-context/"*) ;;
     *) echo '{}'; exit 0 ;;
   esac
-  # "-i" alone is the whole test for an in-place sed/perl: "--in-place" contains the
-  # same two characters as a substring, so a separate pattern for it would never be
-  # reached (shellcheck SC2222) -- one glob covers both spellings.
-  case "$PT_FP" in
-    *'>'*|*'tee '*|*'sed'*'-i'*|*'perl'*'-i'*| \
-    *"supertool"*"'edit:"*|*"supertool"*"'paste:"*|*"supertool"*"'git-commit:"*) ;;
-    *) echo '{}'; exit 0 ;;
-  esac
+  # Explore self-review on #301 (live-reproduced, both fixed here):
+  #
+  #   1. An unanchored `*'sed'*'-i'*` substring test cannot tell a real `-i` FLAG
+  #      from those same two letters appearing inside an argument for an unrelated
+  #      reason -- `sed 's/x/y/' -- ./-improved.md` never writes anything (no -i,
+  #      no redirect), but its last path component starts with "-i" and used to
+  #      mark regardless.
+  #   2. An unanchored `*"supertool"*"'edit:"*` substring test cannot tell the
+  #      words "supertool 'edit:" actually being INVOKED from those same bytes
+  #      merely appearing inside an unrelated argument -- `echo "reminder: never
+  #      run supertool 'edit:@-' carelessly"` writes nothing and used to mark too.
+  #
+  # Both are still substring tests, not a parse -- the "no honest general answer"
+  # limit tools/00-manual/no-shell-writes-to-the-index.md documents for the sibling
+  # problem still applies -- but each is now anchored on a command-word BOUNDARY
+  # (start of string, or after `;`, `&`, `|`), the same anchoring idiom that rule's
+  # own regex already uses for the identical reason. That closes both live
+  # reproductions above without claiming a level of precision this heuristic was
+  # never going to have; a case still exists where `-i` is a flag to a DIFFERENT
+  # program on the same command line and gets swept in by the trailing `.*` -- the
+  # same over-approximation the sibling rule accepts for the same class of input.
+  #
+  # `grep -E`, not another `case`, because a command-word boundary needs
+  # alternation across an anchor a POSIX glob cannot express; this branch only
+  # reaches here after gate 1 above has already limited it to commands that
+  # mention this tree, so the one extra fork is bounded to that narrow subset, not
+  # paid by every Bash call in the session.
+  if LC_ALL=C printf '%s' "$PT_FP" | grep -Eq \
+    '(^|[;&|])[[:space:]]*(sed|perl)([[:space:]][^;&|]*)?[[:space:]](-[a-z]*i|--in-place)[^;&|]*|(^|[;&|])[[:space:]]*tee([[:space:]]|$)|(^|[;&|])[[:space:]]*supertool[[:space:]]+.(edit|paste|git-commit):'
+  then
+    :
+  elif printf '%s' "$PT_FP" | grep -qF '>'; then
+    :
+  else
+    echo '{}'
+    exit 0
+  fi
   EDIT_MARK="$JIT_STATE_DIR/edited-$PT_SESSION.txt"
   if [ ! -L "$EDIT_MARK" ]; then
     : 2>/dev/null > "$EDIT_MARK"

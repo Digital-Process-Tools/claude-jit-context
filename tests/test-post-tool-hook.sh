@@ -356,6 +356,38 @@ assert_rc0 "the hook exits 0" "$RC"
 assert_file "an in-place sed on a tree file marks" "$(state_of "$P")/edited-sess-k5.txt"
 
 echo ""
+echo "--- K6: a non-in-place sed whose target filename merely CONTAINS '-i' does not mark (Explore review finding) ---"
+# `sed 's/x/y/' -- <path>` never writes anything (no -i, no redirect) -- but the last
+# path component here is "-improved.md", and an unanchored `*'sed'*'-i'*` substring
+# test cannot tell that "-i" apart from a real `-i` flag: it appears in the filename
+# purely because the filename happens to start with those two letters. Reproduced
+# live against the pre-fix heuristic (Explore self-review on #301): this exact
+# fixture created a marker for a command that wrote nothing.
+
+P="$(new_project k6)"
+FP="$P/.claude/jit-context/vocabulary/00-manual/-improved.md"
+: > "$FP"
+CMD="sed 's/x/y/' $FP"
+OUT="$(run_post_tool_bash "$P" "sess-k6" "$CMD")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_no_file "a non-in-place sed on a '-i'-prefixed filename marks nothing" "$(state_of "$P")/edited-sess-k6.txt"
+
+echo ""
+echo "--- K7: an echo that only MENTIONS a supertool write op marks nothing (Explore review finding) ---"
+# The literal text "supertool 'edit:" appearing inside an unrelated echo argument is
+# not an invocation of supertool at all -- an unanchored substring test cannot tell
+# prose from a command. Reproduced live against the pre-fix heuristic: this exact
+# echo, which writes nothing, created a marker.
+
+P="$(new_project k7)"
+FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
+CMD="echo reminder: never run supertool XeditX:@- against $FP without review"
+CMD="${CMD//X/\'}"
+OUT="$(run_post_tool_bash "$P" "sess-k7" "$CMD")"; RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_no_file "an echo merely naming a supertool op marks nothing" "$(state_of "$P")/edited-sess-k7.txt"
+
+echo ""
 echo "=========================================="
 echo "Results: $PASS passed, $FAIL failed"
 echo "=========================================="
