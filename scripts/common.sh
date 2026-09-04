@@ -1156,8 +1156,12 @@ jit_frontmatter_many() {   # VAR, entry file, field...
 
 # Reads one field out of a jit_frontmatter_many() memo. Parameter expansion only -- a fork
 # here would be one per field, which is the cost jit_frontmatter_many() just removed.
-# A field the entry does not carry is a miss: VAR is left empty and the status is 1, which
-# is the same answer jit_frontmatter() gives for an absent field.
+# A field the entry does not carry is a miss: VAR is left empty and the status is 0 --
+# unified with jit_frontmatter()'s own `[ -n "$_out" ] || return 0` on the same case
+# (#339: this comment used to claim the two already agreed, while the code below
+# returned 1). No caller checks either function's exit status today -- every call site
+# in jit-dry-run.sh tests the OUTPUT variable with `[ -n "$var" ]` instead -- so a
+# nonzero miss bought nothing and was one `set -e` away from being a landmine.
 jit_fm_get() {   # VAR, memo, field
   local _key="$JIT_FM_NL$3	" _rest
   case "$2" in
@@ -1165,7 +1169,7 @@ jit_fm_get() {   # VAR, memo, field
       _rest="${2#*"$_key"}"
       printf -v "$1" '%s' "${_rest%%"$JIT_FM_NL"*}"
       ;;
-    *) printf -v "$1" '%s' ""; return 1 ;;
+    *) printf -v "$1" '%s' "" ;;
   esac
 }
 
