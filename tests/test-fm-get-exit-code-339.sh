@@ -11,6 +11,11 @@
 # contract: both functions return 0 on an absent field, and both leave VAR empty.
 #
 # Usage: bash tests/test-fm-get-exit-code-339.sh
+#
+# jit-drive: none -- assert_status/assert_equals compare an exit code or an exact
+# string against a fixed expected value; neither is a needle-in-payload check this
+# harness's drive_declared() semantics (contains/not_contains/blocked/token_row) can
+# drive.
 
 set -uo pipefail
 
