@@ -1745,6 +1745,15 @@ END {
     # entries into one row and understate the budget.
     annotated=""
     seen=" "
+    # $names is tree text, not this script's own literal (#334): it is decoded out of
+    # the hook's own output, built from entry FILE NAMES an author chose. Both
+    # expansions below are unquoted on purpose, for the word split on spaces -- but an
+    # unquoted expansion also undergoes pathname expansion, and an entry literally
+    # named "*.md" then globs against the CALLER's cwd instead of staying the literal
+    # string it is. `set -f` is scoped to exactly this loop (both expansions live
+    # inside it) and turned back off the moment it ends, since nothing else in this
+    # function relies on globbing being off.
+    set -f
     for nm in $names; do
       case "$seen" in *" $nm "*) continue ;; esac
       seen="$seen$nm "
@@ -1759,6 +1768,7 @@ END {
         annotated="$annotated$nmd(summary and WHOLE BODY, $fired entries share this name) "
       fi
     done
+    set +f
     printf '  %s%-20s %s[%s bytes injected]\n' "$verdict" "$1" "$annotated" "$(injected_bytes "$out")"
   fi
 }

@@ -1178,6 +1178,58 @@ assert_contains "and the target list now names --agent" "$OUT" "or --agent"
 rm -rf "$AGENT_ROOT"
 
 echo ""
+echo "=== #334: an entry named *.md must not glob against the caller's cwd ==="
+# report_hook() splits $names unquoted, twice: once as the for-loop subject and once
+# fed back into `printf ... | grep -c -x -F`. Both are word-split deliberately (space
+# separated names) but pathname expansion rides along uninvited. An entry whose file
+# column IS the glob pattern "*.md" then expands against whatever the CALLER's cwd
+# holds, so real files that never fired at all get annotated (and counted) as though
+# they had.
+GLOB_ROOT=$(mktemp -d)
+GLOB_BASE="$GLOB_ROOT/.claude/jit-context"
+make_tree "$GLOB_ROOT"
+GLOB_IDXNAME="00-index"; GLOB_IDXNAME="$GLOB_IDXNAME.tsv"
+printf 'Glob/\t*.md\n' >> "$GLOB_BASE/paths/00-manual/$GLOB_IDXNAME"
+echo "glob body" > "$GLOB_BASE/paths/00-manual/*.md"
+
+# The cwd the script runs from -- NOT the tree being linted -- holds ordinary .md files
+# that a glob on "*.md" would happily match. Neither of these ever fired anything.
+GLOB_CWD=$(mktemp -d)
+echo "leaked one" > "$GLOB_CWD/leaked-one.md"
+echo "leaked two" > "$GLOB_CWD/leaked-two.md"
+
+OUT=$(cd "$GLOB_CWD" && CLAUDE_PROJECT_DIR="$GLOB_CWD" bash "$DRYRUN" --base "$GLOB_BASE" \
+  --file "src/Billing/Total.php" --file "src/Glob/Thing.php" 2>&1) && ST=0 || ST=$?
+assert_status "exit 0 -- a glob-shaped name is not a refusal" "$ST" "0"
+
+BILLING_BLOCK=$(sample_block "src/Billing/Total.php" "$OUT")
+GLOB_BLOCK=$(sample_block "src/Glob/Thing.php" "$OUT")
+
+# The glob-named entry did fire (its own rule matched "src/Glob/Thing.php"), and its
+# name carries a byte outside jit_report_name()'s set, so it is withheld rather than
+# printed verbatim -- same policy as the HOSTILE_NAME section above.
+assert_contains "the glob-shaped entry name is withheld rather than printed" \
+  "$GLOB_BLOCK" "withheld: not a plain name"
+
+# The decisive assertions: neither leaked cwd file is a fired entry. If $names is
+# word-split with globbing still on, "*.md" expands to "leaked-one.md leaked-two.md"
+# in that cwd and both get annotated as though they had fired.
+assert_not_contains "a file that never fired is not reported as fired (1/2)" \
+  "$GLOB_BLOCK" "leaked-one.md"
+assert_not_contains "a file that never fired is not reported as fired (2/2)" \
+  "$GLOB_BLOCK" "leaked-two.md"
+
+# Positive control: an ordinary, non-glob-shaped entry name must still report
+# correctly in the same run -- pairs the "must not misreport" assertions above with a
+# "must still report" one, so a broken assertion (or a harness that stopped actually
+# linting anything) cannot slip through unnoticed.
+assert_contains "control: an ordinary entry still names itself" "$BILLING_BLOCK" "billing.md"
+assert_not_contains "control: and does not leak the other subject's cwd files either" \
+  "$BILLING_BLOCK" "leaked-one.md"
+
+rm -rf "$GLOB_ROOT" "$GLOB_CWD"
+
+echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))
 echo "  $PASS/$TOTAL passed, $FAIL failed"
