@@ -42,6 +42,17 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local desc="$1" output="$2" unexpected="$3"
+  if grep -qF -- "$unexpected" <<<"$output"; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    echo "    should NOT contain: $unexpected"
+    echo "    got: ${output:-<EMPTY STDOUT>}"
+  else
+    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  fi
+}
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -216,6 +227,100 @@ else
 fi
 assert_contains "layer one rebuilt" "$(cat "$P/.claude/jit-context/tools/00-manual/$TSV_NAME" 2>/dev/null)" "a.md"
 assert_contains "layer two rebuilt" "$(cat "$P/.claude/jit-context/tools/another-layer/$TSV_NAME" 2>/dev/null)" "b.md"
+
+# =====================================================================================
+# S3: the DIMENSION directory itself (tools/, not a layer beneath it) is a symlink.
+# The layer-directory guard above (jit_layer_symlinked) tests a layer ONE LEVEL BELOW
+# each dimension -- it does nothing for `tools/` itself being the link, and the glob
+# `"$TOOLS_BASE"/*/` follows a symlinked ancestor exactly as readily as it follows a
+# symlinked layer: every real subdirectory of the outside target then enumerates as an
+# ordinary (non-symlink) "layer" and gets written straight through. Found in review.
+# =====================================================================================
+echo ""
+echo "=== S3: a symlinked DIMENSION directory (tools/ itself) is refused ==="
+
+P="$(new_project s3)"
+mkdir -p "$P/.claude/jit-context"
+rm -rf "$P/.claude/jit-context/tools"
+OUTSIDE_DIM="$OUTSIDE/s3-dimension"
+mkdir -p "$OUTSIDE_DIM/realsubdir"
+printf 'PRISTINE-OUTSIDE-DIMENSION-CONTENT\n' > "$OUTSIDE_DIM/realsubdir/$TSV_NAME"
+ln -sfn "$OUTSIDE_DIM" "$P/.claude/jit-context/tools"
+mkdir -p "$P/.claude/jit-context/paths/00-manual"
+printf '%s\n' \
+  "---" \
+  "title: Sibling dimension entry" \
+  "description: a normal rule in an unrelated dimension" \
+  "match: src/.*" \
+  "---" \
+  "" \
+  "body" > "$P/.claude/jit-context/paths/00-manual/sibling.md"
+
+run_rebuild "$P"
+assert_contains "the run names the symlinked dimension as refused" "$OUT" "SYMBOLIC LINK dimension directory"
+DIM_CONTENT="$(cat "$OUTSIDE_DIM/realsubdir/$TSV_NAME")"
+if [ "$DIM_CONTENT" = "PRISTINE-OUTSIDE-DIMENSION-CONTENT" ]; then
+  PASS=$((PASS + 1)); echo "  PASS: the outside dimension's real subdirectory index was NOT touched"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the outside dimension's index was modified: $DIM_CONTENT"
+fi
+assert_contains "an unrelated dimension (paths/) still rebuilt (skip-and-continue)" \
+  "$(cat "$P/.claude/jit-context/paths/00-manual/$TSV_NAME" 2>/dev/null)" "sibling.md"
+
+# Positive control: an ordinary (non-symlinked) tools/ dimension rebuilds fine, proving
+# the S3 refusal is about the symlink and not about tools/ existing at all.
+echo ""
+echo "=== Control: an ORDINARY tools/ dimension directory rebuilds fine ==="
+P="$(new_project s3-control)"
+mkdir -p "$P/.claude/jit-context/tools/00-manual"
+printf '%s\n' "---" "title: C" "description: c" "tool: Bash" "match: git c" "mode: remind" "---" "" "c" \
+  > "$P/.claude/jit-context/tools/00-manual/c.md"
+run_rebuild "$P"
+if [ "$RC" -eq 0 ]; then
+  PASS=$((PASS + 1)); echo "  PASS: the control run exits 0"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: the control run exited $RC: $OUT"
+fi
+assert_contains "the ordinary tools/ dimension rebuilt" "$(cat "$P/.claude/jit-context/tools/00-manual/$TSV_NAME" 2>/dev/null)" "c.md"
+
+# =====================================================================================
+# S4: a symlinked vocabulary LAYER does not leak the outside target's file name/size
+# through the READ-ONLY reports (the keyword-collision report and the "what a match
+# costs" report), which walk the tree again, independently of the writers. Found in
+# review: the writer correctly refuses to INDEX the layer, but a report built from a
+# fresh glob over the tree can still OPEN a file through the same symlink and print it.
+# =====================================================================================
+echo ""
+echo "=== S4: a symlinked vocabulary layer's outside file never appears in the reports ==="
+
+P="$(new_project s4)"
+mkdir -p "$P/.claude/jit-context/vocabulary"
+OUTSIDE_VOCAB_LAYER="$OUTSIDE/s4-vocab-layer"
+mkdir -p "$OUTSIDE_VOCAB_LAYER"
+CANARY_NAME="s4-secret-outside-file.md"
+printf '%s\n' \
+  "---" \
+  "title: Secret" \
+  "description: this must never be read through the symlink" \
+  "keywords: sentinel-term-that-should-never-appear" \
+  "---" \
+  "" \
+  "SECRET-OUTSIDE-BODY" > "$OUTSIDE_VOCAB_LAYER/$CANARY_NAME"
+ln -sfn "$OUTSIDE_VOCAB_LAYER" "$P/.claude/jit-context/vocabulary/evil"
+mkdir -p "$P/.claude/jit-context/vocabulary/00-manual"
+printf '%s\n' \
+  "---" \
+  "title: Ordinary vocab entry" \
+  "description: an ordinary vocabulary entry" \
+  "keywords: ordinary-sibling-term" \
+  "---" \
+  "" \
+  "ORDINARY-BODY" > "$P/.claude/jit-context/vocabulary/00-manual/ordinary.md"
+
+run_rebuild "$P"
+assert_not_contains "the outside file's NAME never appears in the run's own output" "$OUT" "$CANARY_NAME"
+assert_contains "the sibling vocabulary layer still rebuilt" \
+  "$(cat "$P/.claude/jit-context/vocabulary/00-manual/$TSV_NAME" 2>/dev/null)" "ordinary.md"
 
 echo ""
 echo "========================"

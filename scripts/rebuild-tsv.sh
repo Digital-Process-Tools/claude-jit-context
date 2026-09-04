@@ -349,8 +349,21 @@ truncate_index() {
 # `[ -d "$dir" ]` follows it exactly like any other directory read, so a committed
 # `tools/evil -> /outside` is indexed as though it were a real layer, with its
 # 00-index.tsv written wherever the link points -- an attacker needs nothing else
-# inside the tree but the link. Checked once here and called from every loop that
-# walks a dimension's layer directories, writers and the bad-bytes reporter alike.
+# inside the tree but the link. Called from every WRITER loop below, so nothing under
+# .claude/jit-context/ is ever written through a symlinked layer or a symlinked
+# dimension directory (tools/, paths/, vocabulary/ themselves, guarded separately at
+# each *_BASE assignment).
+#
+# NOT a blanket guarantee that a symlinked layer is inert everywhere in this file: the
+# three `report_bad_bytes` loops duplicate this same `[ -L ]` test inline rather than
+# calling this function (their own comment says why -- a read, not a write, so no
+# jit_rc bump), and two READ-ONLY reports further down (the keyword-collision report and
+# the "what a match costs" report) carry their own, separate `[ -L ]` checks for the
+# identical reason: each walks the tree again, independently, after the writers have
+# already run, and a glob follows a symlinked layer exactly as readily as a real one
+# every time it is asked to. A change to what "the layers a run walks" means has four
+# call sites to update, not one -- this comment names them so the count survives past
+# whoever adds the fifth.
 #
 # $1 the directory (already stripped of its trailing `/`), $2 the label for the message.
 # Skips THIS ONE layer and lets the run continue (jit_rc 2, never exit): the layers are
@@ -476,6 +489,18 @@ build_tool_tsv() {
 }
 
 TOOLS_BASE="$JIT_BASE/tools"
+# The DIMENSION directory itself being a symlink is the sibling of #332 one level up
+# jit_layer_symlinked() catches a symlinked LAYER (tools/evil -> /outside): the glob
+# below still follows a symlinked tools/ ITSELF, so every real subdirectory under the
+# outside target enumerates as an ordinary (non-symlink) "layer" and writes straight
+# through. Redirecting TOOLS_BASE at a path that cannot exist empties every glob built
+# from it below -- both this writer loop and the report_bad_bytes loop further down --
+# without touching either loop's body.
+if [ -L "$TOOLS_BASE" ]; then
+  echo "FATAL    tools: refusing a SYMBOLIC LINK dimension directory -- not indexed (#332)" >&2
+  jit_rc 2
+  TOOLS_BASE="$JIT_BASE/.jit-refused-symlinked-dimension-tools"
+fi
 for dir in "$TOOLS_BASE"/*/; do
   [ -d "$dir" ] || continue
   dir="${dir%/}"
@@ -947,6 +972,14 @@ build_vocab_tsv() {
 }
 
 VOCAB_BASE="$JIT_BASE/vocabulary"
+# See the identical guard above TOOLS_BASE for why this checks the DIMENSION directory,
+# not just a layer beneath it -- redirecting VOCAB_BASE empties every glob built from it
+# below, across all three loops that walk it.
+if [ -L "$VOCAB_BASE" ]; then
+  echo "FATAL    vocabulary: refusing a SYMBOLIC LINK dimension directory -- not indexed (#332)" >&2
+  jit_rc 2
+  VOCAB_BASE="$JIT_BASE/.jit-refused-symlinked-dimension-vocabulary"
+fi
 for dir in "$VOCAB_BASE"/*/; do
   [ -d "$dir" ] || continue
   dir="${dir%/}"
@@ -1075,6 +1108,13 @@ build_path_tsv() {
 }
 
 PATHS_BASE="$JIT_BASE/paths"
+# See the identical guard above TOOLS_BASE for why this checks the DIMENSION directory,
+# not just a layer beneath it.
+if [ -L "$PATHS_BASE" ]; then
+  echo "FATAL    paths: refusing a SYMBOLIC LINK dimension directory -- not indexed (#332)" >&2
+  jit_rc 2
+  PATHS_BASE="$JIT_BASE/.jit-refused-symlinked-dimension-paths"
+fi
 for dir in "$PATHS_BASE"/*/; do
   [ -d "$dir" ] || continue
   dir="${dir%/}"
@@ -1186,6 +1226,14 @@ out=$(
   for tsv in "$VOCAB_BASE"/*/00-index.tsv; do
     [ -f "$tsv" ] || continue
     layerdir="$(dirname "$tsv")"
+    # A symlinked LAYER directory is refused when the index was BUILT (jit_layer_symlinked,
+    # #332), but this report reads the tsv back off disk independently, later, and a glob
+    # follows a symlinked layer exactly as readily as a real one -- so without this check a
+    # committed `vocabulary/evil -> /outside` carrying its OWN pre-existing 00-index.tsv
+    # would have this report open and byte-count whatever file that index names, outside
+    # the tree entirely. Skipped rather than counted: this report has no row to attribute
+    # a symlinked layer to that a real one would not also produce.
+    [ -L "$layerdir" ] && continue
     # Dimension included, like every other layer label this script prints (#150).
     layer="vocabulary/$(jit_report_name "$(basename "$layerdir")")"
     LC_ALL=C awk -F'\t' -v layerdir="$layerdir" -v layer="$layer" "$JIT_AWK_REPORT_NAME"'
@@ -1370,6 +1418,11 @@ INJ_LIST=()
 for md in "$JIT_BASE"/*/*/*.md; do
   [ -f "$md" ] || continue
   [ "$(basename "$md")" = "00-README.md" ] && continue
+  # Same reason as the vocabulary-collision loop above (#332): the LAYER directory
+  # component of this glob (its dirname) is followed exactly like a real one, so a
+  # symlinked layer would otherwise have this report open a file outside the tree and
+  # print its size and path into the run's own stderr output.
+  [ -L "$(dirname "$md")" ] && continue
   INJ_LIST[${#INJ_LIST[@]}]="$md"
 done
 
