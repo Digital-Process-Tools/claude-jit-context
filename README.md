@@ -107,6 +107,23 @@ To update later:
 
 **Restart Claude Code after installing.** Hook registrations are read at session start, so a plugin enabled mid-session has no hooks wired for the rest of it.
 
+### Codex
+
+The same hooks, from a separate catalogue. Claude Code reads `.claude-plugin/marketplace.json` and Codex reads `.agents/plugins/marketplace.json`, so the two marketplaces are two repositories — but the plugin id is the same on both.
+
+```
+codex plugin marketplace add Digital-Process-Tools/codex-marketplace
+codex plugin add claude-jit-context@dpt-plugins
+```
+
+**Then trust the hooks, or none of this runs.** Codex skips an untrusted hook the way it skips a hook that is not there: no warning, no non-zero exit, no transcript line, the tool call simply proceeds. So the symptom is that nothing happens, and nothing happening is also what a rule that does not match looks like. Count them before you debug a rule — six is the number for this plugin:
+
+```
+grep -c trusted_hash ~/.codex/config.toml
+```
+
+Driven on codex-cli 0.150.1, from an empty `CODEX_HOME`: the two commands above install it, a prompt keyword injects the entry body, a path rule fires on the file being touched, and a `mode: block` tools rule refuses the call. The payload carries `session_id`, so each entry still fires once per session rather than once per prompt.
+
 ### Manual
 
 Copy this directory to `<your-project>/.claude/claude-jit-context/` and register the hooks in `.claude/settings.json`:
