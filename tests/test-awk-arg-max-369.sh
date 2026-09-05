@@ -38,6 +38,11 @@
 # push rather than after. -uo pipefail (not -e): a genuinely broken sourcing chain must
 # still let this test report FAIL rather than silently exiting.
 #
+# jit-drive: none -- every check here is a byte-count comparison against a fixed
+# threshold, printed and counted inline; nothing takes captured hook output or a
+# needle, so there is no payload-shaped helper here for test-assertion-helpers.sh
+# to drive.
+#
 # Usage: bash tests/test-awk-arg-max-369.sh
 
 set -uo pipefail
