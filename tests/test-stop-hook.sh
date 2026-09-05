@@ -502,7 +502,65 @@ assert_contains "and tagged with its dimension (#297 direction 2)" "$(cat "$LOG_
 assert_not_contains "no withheld placeholder for a well-formed tools entry" "$(cat "$LOG_S")" '<withheld'
 
 echo ""
-echo "=== T: a 00-manual directory that cannot be READ -- COULD NOT TELL, never silence ==="
+echo "=== S2: #299 -- a malformed loc: mark degrades to unknown, never to a confident 'yours' ==="
+# Self-review finding on the first cut of this change: only the NAME component was
+# validated, so "loc::00-manual:foo.md" -- an empty dimension, which no writer here
+# produces but a hand-edited or truncated marker can -- was classified as the reader's
+# own with full confidence, off a layer field nothing had vouched for. Both halves the
+# classification is read off are checked now, and anything else is UNKNOWN. The
+# positive control is the well-formed mark beside it: without that pair, "nothing was
+# reported as yours" would also be true of a hook that classified nothing at all.
+
+P="$(new_project s2)"
+mkdir -p "$(state_of "$P")"
+manual_entry "$P" vocabulary bridge.md
+printf 'loc:vocabulary:00-manual:bridge.md\nloc::00-manual:forged.md\nloc:vocabulary::alsoforged.md\n' \
+  > "$(state_of "$P")/vocab-shown-sess-s2.txt"
+OUT="$(run_stop "$P" "sess-s2")"
+RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_contains "all three are counted" "$OUT" "3 entries this session"
+assert_contains "and the two malformed ones are hedged, not claimed" "$OUT" "2 of unknown origin"
+LOG_S2="$(log_of "$P")"
+assert_contains "hooks.log claims exactly the one well-formed mark as yours" "$(cat "$LOG_S2")" "1 yours, 0 not yours, 2 unknown"
+assert_contains "the well-formed entry is still named (positive control)" "$(cat "$LOG_S2")" "bridge.md"
+
+echo ""
+echo "=== S3: #299/#297 -- a legacy rule: mark from a pre-#299 hook keeps its real name ==="
+# The mixed-version window this change creates: a hook from before #299 fired earlier
+# in the same session and wrote #297's "rule:<file>" key. Dropping #297's own strip
+# put the literal "rule:adv.md" -- colon included -- through jit_report_name(), which
+# refuses that byte, so every such mark rendered as "<withheld: not a plain name>":
+# #297's exact defect, reintroduced for the transitional case. The prefix says `tools`
+# and says nothing about a layer, so the dimension is kept and the class stays unknown.
+
+P="$(new_project s3)"
+mkdir -p "$(state_of "$P")"
+manual_entry "$P" tools legacy-rule.md
+printf 'rule:legacy-rule.md\n' > "$(state_of "$P")/vocab-shown-sess-s3.txt"
+OUT="$(run_stop "$P" "sess-s3")"
+RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_contains "it is counted" "$OUT" "1 entry this session"
+assert_contains "and hedged, because a rule: key carries no layer" "$OUT" "1 of unknown origin"
+LOG_S3="$(log_of "$P")"
+assert_contains "hooks.log prints its real name, not the withheld placeholder" "$(cat "$LOG_S3")" "legacy-rule.md"
+assert_contains "tagged with the dimension the prefix does establish" "$(cat "$LOG_S3")" "legacy-rule.md (tools)"
+assert_not_contains "and never renders as withheld (#297's own defect shape)" "$(cat "$LOG_S3")" "<withheld"
+
+echo ""
+echo "=== T: an unreadable 00-manual directory no longer destroys an answer the marks already carry ==="
+# This section used to assert the OPPOSITE, and asserting it is how the regression got
+# in: before #299, globbing 00-manual was the only way to answer "is this fired name
+# the reader's own", so a directory that existed and could not be opened genuinely made
+# the answer unknowable. A `loc:` mark answers that by itself now -- the layer is IN
+# the mark -- so the old scan decided nothing and cost plenty: any one unreadable
+# 00-manual directory, in any dimension, even one holding nothing that fired, replaced
+# a fully known Y/N/U split with "cannot tell" and returned before hooks.log was
+# written at all. A reviewer on this change caught the test encoding that as intended.
+#
+# What must hold instead: the classification is unchanged by the directory mode, and
+# hooks.log still gets its line.
 
 T_SKIPPED=0
 P="$(new_project t)"
@@ -518,13 +576,14 @@ else
   OUT="$(run_stop "$P" "sess-t")"
   RC=$?
   assert_rc0 "the hook exits 0" "$RC"
-  assert_contains "it says it could not tell" "$OUT" "cannot tell if any fired entry is yours"
-  if [ "$OUT" = "{}" ]; then
-    FAIL=$((FAIL + 1))
-    echo "  FAIL: an unreadable 00-manual directory rendered as silence"
+  assert_contains "the entry is still counted" "$OUT" "1 entry this session"
+  assert_not_contains "and nothing is hedged -- the mark said which layer it fired from" "$OUT" "unknown origin"
+  LOG_T="$(log_of "$P")"
+  if [ -f "$LOG_T" ]; then
+    assert_contains "hooks.log still carries the split an unreadable directory used to swallow" "$(cat "$LOG_T")" "1 yours, 0 not yours, 0 unknown"
   else
-    PASS=$((PASS + 1))
-    echo "  PASS: an unreadable 00-manual directory did not render as silence"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: hooks.log was not written at all -- the old early-return is still there"
   fi
 fi
 chmod 755 "$P/.claude/jit-context/vocabulary/00-manual" 2> /dev/null

@@ -186,8 +186,10 @@ EDIT_DECLINED_MARK="$JIT_STATE_DIR/edited-declined-$SESSION_ID.txt"
 # a basename but differ in dimension or layer are no longer collapsed into one fired
 # entry, which is the same collision #299 measured as `rector.md` (vocabulary/00-manual
 # against vocabulary/10-auto) reaching THIS accumulator too, not only the once-per-call
-# dedup inside each writer hook. Verified with a fixture (tests/test-marker-loc-299.sh)
-# rather than assumed: the issue itself asks this to be checked, not silently patched.
+# dedup inside each writer hook. Verified rather than assumed -- the issue itself asks
+# this to be checked, not silently patched -- by the rector.md section of
+# tests/test-stop-hook.sh, which fires two same-named entries from two layers of one
+# dimension and asserts both are counted.
 JIT_FIRED_MAX=500
 JIT_FIRED_KEYS=""
 JIT_FIRED_N=0
@@ -228,11 +230,54 @@ for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
             case "$_jit_name" in
               '' | */* | *\\*) continue ;;
             esac
-            _jit_class="N"
-            [ "$_jit_layer" = "00-manual" ] && _jit_class="Y"
+            # Self-review finding: the NAME was checked and the two components the
+            # CLASSIFICATION is read off were not, so "loc::00-manual:foo.md" -- an
+            # empty dimension, which no writer here can produce but a hand-edited or
+            # truncated marker can -- was classified `Y` (yours) with full confidence
+            # off a layer field nothing had vouched for. Both are validated against
+            # jit_report_name()s own byte set (a layer directory is already held to it
+            # by jit_scan_layers(), and the dimension is a literal the writer hooks
+            # spell), and anything else degrades to UNKNOWN rather than to a guess:
+            # this whole change exists to stop a third state rendering as one of the
+            # first two.
+            case "$_jit_dim" in
+              '' | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
+                _jit_dim=""
+                _jit_layer=""
+                _jit_class="U"
+                ;;
+              *)
+                case "$_jit_layer" in
+                  '' | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
+                    _jit_dim=""
+                    _jit_layer=""
+                    _jit_class="U"
+                    ;;
+                  00-manual) _jit_class="Y" ;;
+                  *) _jit_class="N" ;;
+                esac
+                ;;
+            esac
             ;;
           *) continue ;;
         esac
+        ;;
+      # #297s own composed key, from a hook that predates #299 and fired earlier in
+      # THIS session (the mixed-version case #299 is explicit is still reachable for
+      # one session across an upgrade). Self-review finding: dropping the strip that
+      # #297 added put the literal "rule:adv.md" -- colon included -- through
+      # jit_report_name(), which refuses that byte, so every legacy tools mark rendered
+      # as `<withheld: not a plain name>`: #297s exact defect, reintroduced for the one
+      # window this change created. The prefix says `tools` and says nothing about the
+      # layer, so the dimension is kept and the CLASS stays unknown -- which is the
+      # honest reading of a key that never carried a layer.
+      rule:*)
+        _jit_name="${_jit_line#rule:}"
+        case "$_jit_name" in
+          '' | */* | *\\* | *:*) continue ;;
+        esac
+        _jit_dim="tools"
+        _jit_class="U"
         ;;
       */* | *\\*) continue ;;
       *)
@@ -286,30 +331,22 @@ if [ -f "$EDIT_DECLINED_MARK" ] && [ ! -L "$EDIT_DECLINED_MARK" ]; then
   exit 0
 fi
 
-# #291/#295/#299: a 00-manual directory that EXISTS but cannot be OPENED (permissions,
-# not absence) is a systemic readability question, answered once per dimension and
-# independent of which entries actually fired -- unlike #299's per-entry Y/N/U
-# classification above, which needs no directory read at all, because a `loc:` key
-# already says which layer an entry fired from. A dimension whose 00-manual directory
-# simply does not exist is the ordinary case and is not degraded.
-JIT_MANUAL_SCAN_DEGRADED=0
-for _jit_dim in vocabulary tools paths; do
-  _jit_manual_dir="$JIT_BASE/$_jit_dim/00-manual"
-  [ -d "$_jit_manual_dir" ] || continue
-  if [ ! -r "$_jit_manual_dir" ] || [ ! -x "$_jit_manual_dir" ]; then
-    JIT_MANUAL_SCAN_DEGRADED=1
-  fi
-done
-unset _jit_dim _jit_manual_dir
-
-if [ "$JIT_MANUAL_SCAN_DEGRADED" = 1 ]; then
-  if [ "$JIT_STATUS" != "off" ]; then
-    printf '{"systemMessage":"JIT : cannot tell if any fired entry is yours (00-manual unreadable)"}\n'
-  else
-    echo '{}'
-  fi
-  exit 0
-fi
+# #291/#295's 00-manual READABILITY scan was here and is gone (#299 self-review, found
+# by a reviewer on the first cut of this change). Before #299 that directory listing
+# was load-bearing: globbing 00-manual was the ONLY way to answer "is this fired name
+# the reader's own", so a directory that existed and could not be opened genuinely made
+# the answer unknowable and had to say so. A `loc:` mark answers that question by
+# itself now -- the layer it fired from is IN the mark -- so the scan decided nothing,
+# and leaving it in place actively destroyed information: any one unreadable 00-manual
+# directory, in any dimension, even one holding nothing that fired, replaced a fully
+# known Y/N/U split with "cannot tell" AND returned before jit_log_write(), so
+# hooks.log lost the per-entry detail it could have written from the marks alone.
+#
+# The could-not-tell state itself is NOT dropped, it moved to its real trigger: a mark
+# this hook could not classify (a bare name from an older hook mid-upgrade, or a
+# malformed composed key), counted as JIT_UNKNOWN_N below. That is the only shape left
+# in which this hook genuinely cannot say whose an entry is -- and unlike a directory
+# mode, it is a property of the thing actually being reported on.
 
 # Ages are read for the MAINTENANCE LOG ONLY (#292), on entries this hook has already
 # decided (from the real edit marker above) were not edited. Only 00-manual is asked,
@@ -438,8 +475,21 @@ jit_log_write "$(printf '[%s] stop: %s entries fired this session, %s yours, %s 
 # #367: the human-facing line is the total alone -- JIT_CONTEXT_STATUS=fired and
 # =summary render it identically here, because "fired" already said one line per entry
 # AS IT FIRED, in the hook that fired it; Stop only ever adds the running total.
+#
+# #299: and the could-not-tell state, when there is one. A mark this hook could not
+# classify -- a bare name written by a hook from before this change, earlier in the
+# same session, or a composed key whose dimension or layer did not survive whatever
+# wrote it -- is counted but NOT claimed as anyone's, and the line says so rather than
+# rounding it into the confident part of the count. Silent when there is nothing to
+# hedge, which is every ordinary session.
 if [ "$JIT_STATUS" != "off" ]; then
-  printf '{"systemMessage":"JIT : %s %s this session"}\n' "$JIT_TOTAL" "$([ "$JIT_TOTAL" = 1 ] && echo entry || echo entries)"
+  if [ "$JIT_TOTAL" = 1 ]; then JIT_NOUN=entry; else JIT_NOUN=entries; fi
+  if [ "$JIT_UNKNOWN_N" -gt 0 ]; then
+    printf '{"systemMessage":"JIT : %s %s this session (%s of unknown origin -- cannot tell if those are yours)"}\n' \
+      "$JIT_TOTAL" "$JIT_NOUN" "$JIT_UNKNOWN_N"
+  else
+    printf '{"systemMessage":"JIT : %s %s this session"}\n' "$JIT_TOTAL" "$JIT_NOUN"
+  fi
 else
   echo '{}'
 fi

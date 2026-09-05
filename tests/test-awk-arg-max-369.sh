@@ -91,17 +91,27 @@ path = os.environ["SIZE_HOOK"]
 script_dir = os.environ["SIZE_SCRIPT_DIR"]
 text = open(path, "r", encoding="utf-8", errors="surrogateescape").read()
 
-# Every macro this repo's hooks concatenate, in the order common.sh defines them.
-# Reading common.sh's OWN source for these -- not re-deriving the awk text by any
-# other means -- is deliberate: a macro this test does not know about growing later
-# must silently pass ONE bad check (that macro is measured as zero bytes here) rather
-# than the whole test refusing to run, matching this repo's own "never fail hard,
-# degrade to a named third state" posture one file over. Missing macros are counted
-# as a warning line rather than a silent zero.
-macro_names = [
-    "JIT_AWK_GUARD", "JIT_AWK_ENTRY", "JIT_AWK_INJECT", "JIT_AWK_JSON",
-    "JIT_AWK_FOLD", "JIT_AWK_BLK_BUILD", "JIT_AWK_ENVELOPE",
-]
+# WHICH macros a hook concatenates is read off the HOOK, not off a list kept here
+# (#299/#367 self-review, found by oss:auditor). This block used to hold a hardcoded
+# seven-name list plus a hardcoded boundary marker, "$JIT_AWK_ENVELOPE" followed by a
+# double quote and a single quote -- and both halves went silently blind the moment a
+# hook stopped matching them. `pre-prompt-hook.sh` gained an eighth macro
+# ($JIT_AWK_ENVELOPE_SYSMSG) at the END of its concatenation, so the marker no longer
+# occurred in the file at all and `literal_len` fell back to its silent 0: the test
+# went on printing a confident, passing, WRONG byte count (57782 against a real 79675)
+# that could never grow again, for exactly the hook whose growth it exists to watch.
+# `pre-path-hook.sh` had been blind the same way since before that change, because its
+# concatenation is a bare VAR=$JIT_AWK_...' assignment with no double quote for the
+# marker to anchor on -- nobody noticed, because a silent zero reads exactly like a
+# small literal.
+#
+# So the shape is matched instead: one or more adjacent $JIT_AWK_<NAME> references,
+# optionally wrapped in double quotes, immediately followed by the single quote that
+# opens the literal awk source. That covers both shapes this repo actually writes, and
+# a hook that matches NEITHER is reported as unmeasurable rather than measured as
+# zero -- the same "a third state must not render as the first" rule this repository
+# applies to its hooks, applied to the test watching them.
+import re
 
 common_path = os.path.join(script_dir, "scripts", "common.sh")
 common_text = open(common_path, "r", encoding="utf-8", errors="surrogateescape").read()
@@ -121,6 +131,13 @@ def macro_len(name):
         return None
     return j - i
 
+run_re = re.compile(r'(?:\$JIT_AWK_[A-Z_]+)+' + chr(34) + '?' + chr(39))
+m = run_re.search(text)
+if m is None:
+    print("UNMEASURABLE")
+    raise SystemExit(0)
+
+macro_names = re.findall(r'\$(JIT_AWK_[A-Z_]+)', m.group(0))
 macro_total = 0
 missing = []
 for name in macro_names:
@@ -130,20 +147,13 @@ for name in macro_names:
     else:
         macro_total += n
 
-# The literal awk program text embedded directly in the hook file, after the macro
-# concatenation. Every one of these four hooks builds its command as
-# LC_ALL=C awk ... -v ... "$JIT_AWK_..."'<literal source>', so the boundary is the
-# LAST macro variable name immediately followed by a double quote then a single quote
-# (closing the double-quoted expansion, opening the single-quoted literal), and the
-# literal ends at the next unescaped single quote.
-start_marker = "$JIT_AWK_ENVELOPE" + chr(34) + chr(39)
-i = text.find(start_marker)
-literal_len = 0
-if i != -1:
-    i += len(start_marker)
-    j = text.find(chr(39), i)
-    if j != -1:
-        literal_len = j - i
+# The literal awk source runs from the single quote this match ends on to the next one.
+i = m.end()
+j = text.find(chr(39), i)
+if j == -1:
+    print("UNMEASURABLE")
+    raise SystemExit(0)
+literal_len = j - i
 
 total = macro_total + literal_len
 print(total)
@@ -154,9 +164,12 @@ PYEOF
   )
   rc=$?
 
-  if [ "$rc" -ne 0 ] || [ -z "$total" ]; then
+  if [ "$rc" -ne 0 ] || [ -z "$total" ] || [ "$total" = "UNMEASURABLE" ]; then
     FAIL=$((FAIL + 1))
-    echo "  FAIL: $hook -- could not measure the awk program size at all"
+    echo "  FAIL: $hook -- could not find its macro-concatenation/literal boundary, so its"
+    echo "        awk program size was NOT measured. This is the silent-zero shape #369's"
+    echo "        own guard fell into once already: fix the extraction above rather than"
+    echo "        letting an unmeasured hook read as a small one."
     continue
   fi
 

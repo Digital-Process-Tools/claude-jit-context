@@ -940,9 +940,11 @@ jit_load_config() {
           ;;
       esac
     fi
-    # #300: JIT_CONTEXT_STOP_REPORT gates stop-hook.sh's whole model-facing report --
-    # off by default, per #291/#295 (the audience is a human curating .claude/jit-context/,
-    # not a model mid-session). Only 0 and 1 are implemented; anything else must not
+    # #300: JIT_CONTEXT_STOP_REPORT used to gate stop-hook.sh's model-facing report.
+    # #367 moved that report to systemMessage and put it behind JIT_CONTEXT_STATUS
+    # below, so this setting now gates NOTHING -- it is still parsed and refused here,
+    # unchanged, so a config.env that carries it keeps working rather than being
+    # reported as an unknown key. Only 0 and 1 are implemented; anything else must not
     # silently read as either value, the same reason JIT_CONTEXT_INJECT refuses an
     # unimplemented mode above rather than falling through.
     if [ "$key" = JIT_CONTEXT_STOP_REPORT ]; then
@@ -1055,8 +1057,10 @@ case "$JIT_INJECT" in
   *) JIT_INJECT=full ;;
 esac
 
-# #300: JIT_CONTEXT_STOP_REPORT gates the whole model-facing report stop-hook.sh can
-# emit. Off by default -- the opposite fallback direction from JIT_INJECT above, and
+# #300: JIT_CONTEXT_STOP_REPORT gated the whole model-facing report stop-hook.sh used
+# to emit; #367 retired that report (it moved to systemMessage, gated by
+# JIT_CONTEXT_STATUS below) and nothing reads this variable any more. Kept, parsed and
+# clamped exactly as before so an existing config.env keeps loading. Off by default -- the opposite fallback direction from JIT_INJECT above, and
 # deliberately so: JIT_INJECT defaults to `full` for upgrade safety (a tree that
 # already relies on the whole-body behaviour must not lose it silently), while this
 # setting is brand new, so there is no existing behaviour to preserve by defaulting on.
