@@ -124,16 +124,33 @@ ARG_LOOP='/^while \[ \$# -gt 0 \]; do/'
 has_arg_loop() { awk "$ARG_LOOP"' { found = 1 } END { exit !found }' "$1"; }
 
 # Every case arm in a script own argument loop that consumes a value.
+#
+# The arm label and its `shift 2` are not necessarily on the same line, so the label is
+# remembered from the arm opener and used when the `shift 2` arrives. That reads both
+# shapes: a one-line arm, and one split across lines by a formatter (#357).
+#
+# The opener is matched on what a case pattern may contain rather than on "a line with a
+# `)` in it". A line INSIDE an arm can carry its own -- `FILES+=("$2")`, a command
+# substitution -- and taking the last such line as the label drops the flag whose arm it
+# sits in, silently, while every other assertion here still passes.
 valued_flags() {
   awk "$ARG_LOOP"' { inloop = 1; next }
     inloop && /^done$/           { inloop = 0 }
-    inloop && /shift 2/ {
-      n = $0
-      sub(/^[[:space:]]*/, "", n)
-      sub(/\).*$/, "", n)
-      k = split(n, part, "|")
-      for (j = 1; j <= k; j++) if (part[j] ~ /^--[A-Za-z]/) print part[j]
+    inloop && /^[[:space:]]*\(?[-A-Za-z0-9_*?.|[:space:]]+\)/ {
+      arm = $0
+      sub(/^[[:space:]]*/, "", arm)
+      sub(/\).*$/, "", arm)
     }
+    inloop && /shift 2/ && arm != "" {
+      k = split(arm, part, "|")
+      for (j = 1; j <= k; j++) {
+        f = part[j]
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", f)
+        if (f ~ /^--[A-Za-z]/) print f
+      }
+      arm = ""
+    }
+    inloop && /;;/ { arm = "" }
   ' "$1"
 }
 
@@ -443,6 +460,34 @@ done
 echo "ok $BASE"
 FIXTURE
 
+# #357: a formatter splits a one-line case arm across four lines, so the arm label and
+# its `shift 2` stop sharing a line -- and one of those lines can itself carry a `)`, from
+# an array append or a command substitution. This fixture names two flags in that shape,
+# so extracting one of the two is red here rather than quiet.
+cat > "$META/scripts/split-arm.sh" << 'FIXTURE'
+#!/bin/bash
+set -uo pipefail
+BASE=""
+FILES=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --base)
+      BASE="$2"
+      shift 2
+      ;;
+    --file)
+      FILES+=("$2")
+      shift 2
+      ;;
+    *)
+      echo "unknown flag: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+echo "ok $BASE ${FILES[*]:-}"
+FIXTURE
+
 # #193: a non-bash tool under scripts/ matches none of the bash argument-loop shapes
 # above, so without this fixture it would quietly classify as no-flags and be reported
 # as having nothing to drive -- whatever its actual argument handling does. It is
@@ -481,7 +526,8 @@ if [ "$META_READY" -eq 0 ]; then
 else
   META_LIST="$(tracked_scripts "$META")"
   for want in scripts/jit-newtool.sh scripts/plain-hook.sh scripts/odd-parse.sh \
-              scripts/bool-only.sh scripts/hidden-value.sh scripts/not-bash.py; do
+              scripts/bool-only.sh scripts/hidden-value.sh scripts/not-bash.py \
+              scripts/split-arm.sh; do
     if grep -qxF "$want" <<<"$META_LIST"; then
       ok "the enumeration finds $want, which is named nowhere in this file"
     else
@@ -503,6 +549,19 @@ else
            "$META/scripts/hidden-value.sh" "loop-no-flags"
   class_is "a non-bash tool under scripts/ is refused rather than read as no-flags (#193)" \
            "$META/scripts/not-bash.py" "not-bash-script"
+  class_is "an arm split across lines by a formatter is still DRIVEN (#357)" \
+           "$META/scripts/split-arm.sh" "drive"
+
+  # The control the classifier alone cannot give: `drive` says the parser read SOMETHING,
+  # not that it read every flag. A line inside an arm carrying its own `)` is what would
+  # cost `--file` here, so this asserts the whole set rather than its emptiness.
+  SPLIT_FLAGS="$(valued_flags "$META/scripts/split-arm.sh" | tr '\n' ' ')"
+  if [ "$SPLIT_FLAGS" = "--base --file " ]; then
+    ok "both flags of a split arm are extracted, not just the first (#357)"
+  else
+    bad "both flags of a split arm are extracted, not just the first (#357)" \
+        "expected '--base --file ', got '${SPLIT_FLAGS:-<nothing>}'"
+  fi
 
   # The red, executed rather than reasoned about. An unlisted tool routes into
   # drive_script, which has no positive control for it and has to say so. Run in a subshell
