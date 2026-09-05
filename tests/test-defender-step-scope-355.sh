@@ -49,20 +49,48 @@ fi
 
 # Isolate each step's own block: from its "- name:" line to the line before the next
 # "- name:" (or end of file). Two-space-indented list markers, matching this file's style.
+#
+# Scoped to the "hooks:" job alone, not the whole file: the review of #355 flagged that
+# an unscoped search binds to the FIRST line anywhere in the file whose step name
+# contains the wanted substring, which is only correct today because no other job
+# happens to declare a step by either of these two names. A later step named e.g. "Run
+# hook test suites (retry)" earlier in file order -- or a name that merely contains this
+# one as a substring -- would silently isolate the wrong block and validate it instead,
+# a false PASS with the real "hooks:" step never checked. Restricting the scan to start
+# only after "  hooks:" and stop at the next job key closes that, and uniqueness within
+# that job is asserted by the caller below rather than assumed here.
 step_block() {
   awk -v want="$1" '
+    /^  hooks:$/ { in_job = 1; next }
+    in_job && /^  [A-Za-z_-]+:/ { exit }
+    !in_job { next }
     /^      - name:/ {
       if (in_block) exit
       if (index($0, want) > 0) { in_block = 1; print; next }
       next
     }
-    # A line back out to job level (two-space indent, no "- ") ends the last step of a
-    # job -- without this, the final step of "hooks" ran on into the next job own
-    # steps, because there is no further "- name:" line inside this job to stop at.
-    in_block && /^  [A-Za-z_-]+:/ { exit }
     in_block { print }
   ' "$WORKFLOW"
 }
+
+# Fail loudly on a step name that is not unique within the "hooks:" job -- the case the
+# review of #355 named, rather than let step_block() silently bind to whichever
+# occurrence it happens to see first.
+assert_unique_step_name() {
+  local name="$1"
+  local count
+  count="$(awk '/^  hooks:$/ { in_job = 1; next } in_job && /^  [A-Za-z_-]+:/ { exit } in_job' "$WORKFLOW" \
+    | grep -cF -- "- name: $name")"
+  if [ "$count" != "1" ]; then
+    bad "step name '$name' occurs $count times in the hooks: job, not exactly 1" \
+        "step_block() cannot isolate a unique block -- fix the workflow's step names before trusting anything below"
+    return 1
+  fi
+  return 0
+}
+
+assert_unique_step_name "Exclude the checkout and temp dir from Windows Defender scanning"
+assert_unique_step_name "Run hook test suites"
 
 DEFENDER_BLOCK="$(step_block "Exclude the checkout and temp dir from Windows Defender scanning")"
 TEST_BLOCK="$(step_block "Run hook test suites")"
