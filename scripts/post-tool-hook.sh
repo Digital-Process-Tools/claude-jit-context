@@ -106,6 +106,56 @@ PT_FP=""
   PT_FP="$(cat)"
 } <<< "$PT_PARSED"
 
+# #365: PT_TOOL is expanded onto the canonical vocabulary the case below is written
+# against BEFORE that case ever runs, the same normalisation #364 applies to the tools
+# dimension one hook over. Codex own tool_name for a file edit is apply_patch, never
+# Write or Edit -- this gate could never match it, no marker was ever written for a
+# real in-tree Codex edit, and stop-hook.sh read that permanent absence as the
+# positive claim "none updated": the #301 shape one tool name over, sharing #364 own
+# root cause rather than a defect of its own. jit_canonical_tool() (scripts/host.sh)
+# is a pure, no-I/O function -- safe to call unconditionally, on every call, even the
+# overwhelming majority naming a tool this alias table says nothing about, where it is
+# the identity function and PT_TOOL is left exactly as it arrived.
+#
+# oss:auditor self-review: matched by WORD, not by a padded-string glob. A prior draft
+# compared `" $canon "` against `*" Write "*`, which is a substring test on a string
+# built out of the very payload tool_name it is judging -- exact-token equality is
+# strictly safer and costs nothing more. This particular substring form turned out to
+# be unreachable in practice (the awk parse above already bounds PT_TOOL to
+# `^[A-Za-z_]+$` before this line ever runs, and that alphabet has no space to inject),
+# but jit_canonical_tool() has no such bound baked into IT, and a bound living only in
+# this hook own upstream parse is not a property of the function a future caller could
+# rely on without re-deriving it -- so this is fixed at the comparison, not left to the
+# accident of where it is called from today.
+#
+# Priority order below (Bash, then Write, then Edit) only matters for a host whose one
+# tool name maps to more than one canonical name (codex own apply_patch=Edit;Write) and
+# happens to also share a canonical name with Bash, which no host does today -- named
+# so the order is a decision on record rather than an accident of which loop iteration
+# happens to run last.
+PT_TOOL_PRIORITY=0
+for pt_variant in $(jit_canonical_tool "$JIT_TOOL_ALIASES" "$PT_TOOL"); do
+  case "$pt_variant" in
+    Bash)
+      PT_TOOL="Bash"
+      break
+      ;;
+    Write)
+      if [ "$PT_TOOL_PRIORITY" -lt 2 ]; then
+        PT_TOOL="Write"
+        PT_TOOL_PRIORITY=2
+      fi
+      ;;
+    Edit)
+      if [ "$PT_TOOL_PRIORITY" -lt 1 ]; then
+        PT_TOOL="Edit"
+        PT_TOOL_PRIORITY=1
+      fi
+      ;;
+  esac
+done
+unset PT_TOOL_PRIORITY pt_variant
+
 # #301: `hooks/hooks.json`'s PostToolUse matcher used to be Write|Edit only, so a tree
 # that routes every edit through Bash instead -- a `mode: block` tools rule refusing
 # Edit/Write/MultiEdit/NotebookEdit, or any wrapper/formatter that shells out -- had a

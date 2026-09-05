@@ -54,6 +54,45 @@
 #                        "refusal-not-established" -- a host we have not watched
 #                        refuse a call, which must never be read as either of the
 #                        other two. See jit_host_refusal_state() below.
+#   8  tool_aliases      #364: comma-separated `hostname=canon1;canon2` pairs mapping
+#                        this host's OWN tool_name value onto the canonical vocabulary
+#                        every entry's `tool:` field is written against (Claude Code's
+#                        own names -- Edit, Write, Bash, ... -- see below for why that
+#                        one is canonical). "" when the host's own names already ARE
+#                        the canonical set. Semicolon, not the column-2/4 comma: this
+#                        column's own VALUES are themselves a comma-joined list of
+#                        pairs, so a second list nested inside one pair needs a third
+#                        character or a rule's `Edit|Write` could never round-trip
+#                        through it.
+#
+#                        DIRECTION: host name onto canonical, never the reverse. No
+#                        entry, example, or template ever learns a second host's
+#                        tool_name -- that is the whole reason this is a column on the
+#                        registry rather than the alternation-stopgap #364 refused
+#                        (`tool: Edit|Write|apply_patch` in every block rule anyone
+#                        ever writes, in files this project does not control, that
+#                        degrades silently the day a fourth host arrives with a fifth
+#                        name).
+#
+#                        LOOKUP IS HOST-AGNOSTIC ON PURPOSE, not gated behind
+#                        jit_host_detect(). The comment above already establishes
+#                        detection is BEST-EFFORT and non-load-bearing -- a genuine
+#                        Codex hook launched from inside a Claude Code shell inherits
+#                        CLAUDE_CODE_ENTRYPOINT and misdetects as claude-code, and a
+#                        standalone Codex hook carries no signature at all and
+#                        misdetects as unknown. $JIT_HOST can be "codex" only when a
+#                        caller passes that literal by hand (a test, or a future
+#                        signature this file does not have yet) -- it is never the
+#                        live value during a real Codex PreToolUse call. Gating
+#                        `apply_patch`'s normalisation behind a correct "codex"
+#                        detection would make the REFUSAL contract depend on the one
+#                        thing this file says must never be load-bearing, and would
+#                        reproduce #364 exactly on the misdetected path. So
+#                        jit_all_tool_aliases() (below) unions every row's column 8
+#                        rather than reading one host's row: `apply_patch` is a name
+#                        no other host uses for anything, so mapping it unconditionally
+#                        costs nothing on claude-code or an unknown host and closes the
+#                        gap on every Codex path, detected or not.
 #
 # Ordered most-specific-signature-first, same posture as remember's REGISTRY: a row
 # with a real signature is tried before one with none, so an empty signature can never
@@ -75,19 +114,43 @@
 # normal way this plugin gets exercised, and no environment variable survives it.
 #
 # It costs nothing on the wire, which is the point: #288 observed that Codex takes the
-# SAME envelope Claude Code does, both directions. Same payload field names
+# SAME envelope Claude Code does, both directions. Same payload field NAMES
 # (tool_name, tool_input.command), same {"decision":"block"}, same hookSpecificOutput.
-# So the two rows carry identical contracts, tests/test-host-registry.sh asserts they
-# stay identical, and a misdetection between them cannot change a byte emitted.
+# So the two rows carry identical envelope columns (5-7), tests/test-host-registry.sh
+# asserts they stay identical, and a misdetection between them cannot change a byte
+# emitted.
+#
+# #364 (Codex's own comment, third one) is the correction to a line that used to sit
+# here claiming the two rows carry "identical contracts" outright: that was right about
+# the field NAMES and wrong about the VALUES they carry. `tool_name` arrives under that
+# exact name on both hosts and carries `apply_patch` on one and `Edit`/`Write` on the
+# other for the identical user action -- a same-schema, different-vocabulary split this
+# file conflated until a live Codex run reproduced it (the block never fired: the rule
+# never got as far as deciding, because `apply_patch` matched no alternative in
+# `tool: Edit|Write`). Column 8 exists because "same schema" was never "same
+# vocabulary".
 #
 # gemini-cli carries no signature and no known variables at all: Gemini CLI documents
 # none for command hooks, which remember's own registry notes is not a gap in what it
 # records -- "it is what UNKNOWN already behaves like." It is also the design's real
 # test (BeforeTool/AfterTool), and nothing in #288 speaks to it.
+# codex's column 8 maps `apply_patch` to BOTH `Edit` and `Write`, not to whichever one
+# guesses right. Codex has one file-writing tool where Claude Code has two, so no
+# mapping recovers the distinction a rule author drew by writing `tool: Write` versus
+# `tool: Edit` -- mapping to one guesses wrong on the other half of Codex's own calls,
+# and mapping to neither reproduces #364. Mapping to both over-refuses a `mode: block`
+# rule that named only one of the two (it now also fires on a Codex CREATE if it said
+# `tool: Write` and meant only an edit-in-place, or on a Codex EDIT if it said
+# `tool: Edit` and meant only a fresh file). Over-refusing is the safe direction and
+# the sibling rule one file over (tools/00-manual/no-shell-writes-to-the-index.md)
+# already takes the identical trade for its own pattern -- naming three write forms
+# broader than the one the author had in mind, rather than a narrower rule a real
+# write slips past. An injecting (non-block) rule is unaffected either way: it was
+# always going to fire on the wider of the two sets it named.
 JIT_HOST_REGISTRY='
-claude-code|CLAUDE_CODE_ENTRYPOINT,CLAUDE_CODE_SESSION_ID|CLAUDE_PROJECT_DIR|CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block
-codex||CLAUDE_PROJECT_DIR|PLUGIN_ROOT,CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block
-gemini-cli||||UNKNOWN|UNKNOWN|refusal-not-established
+claude-code|CLAUDE_CODE_ENTRYPOINT,CLAUDE_CODE_SESSION_ID|CLAUDE_PROJECT_DIR|CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block|
+codex||CLAUDE_PROJECT_DIR|PLUGIN_ROOT,CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block|apply_patch=Edit;Write
+gemini-cli||||UNKNOWN|UNKNOWN|refusal-not-established|
 '
 
 # jit_host_row NAME -- echoes NAME's whole pipe-delimited row on stdout and returns 0,
@@ -147,7 +210,7 @@ jit_host_state() {
     printf 'UNKNOWN\n'
     return 0
   }
-  IFS='|' read -r _ _ _ _ state _ _ <<< "$row"
+  IFS='|' read -r _ _ _ _ state _ _ _ <<< "$row"
   printf '%s\n' "${state:-UNKNOWN}"
 }
 
@@ -158,7 +221,7 @@ jit_host_inject_envelope() {
     printf 'UNKNOWN\n'
     return 0
   }
-  IFS='|' read -r _ _ _ _ _ inject _ <<< "$row"
+  IFS='|' read -r _ _ _ _ _ inject _ _ <<< "$row"
   printf '%s\n' "${inject:-UNKNOWN}"
 }
 
@@ -199,7 +262,7 @@ jit_host_refusal_state() {
     printf 'refusal-not-established\n'
     return 0
   }
-  IFS='|' read -r _ _ _ _ _ _ refusal <<< "$row"
+  IFS='|' read -r _ _ _ _ _ _ refusal _ <<< "$row"
   printf '%s\n' "${refusal:-refusal-not-established}"
 }
 
@@ -226,4 +289,69 @@ jit_host_refusal_honoured() {
     claude-decision-block) printf 'yes\n' ;;
     *) printf 'no\n' ;;
   esac
+}
+
+# jit_host_tool_aliases NAME -- column 8, raw, for one named row. "" for a row with
+# nothing in that column, an unrecognised NAME, or the empty string. Exists mainly so
+# tests and jit-doctor.sh can ask what one row's own column says; the hooks never call
+# this one (see jit_all_tool_aliases() below for why).
+jit_host_tool_aliases() {
+  local row aliases
+  row=$(jit_host_row "${1:-}") || {
+    printf '\n'
+    return 0
+  }
+  IFS='|' read -r _ _ _ _ _ _ _ aliases <<< "$row"
+  printf '%s\n' "${aliases:-}"
+}
+
+# jit_all_tool_aliases -- every row's column 8, concatenated with commas, empties
+# dropped. This is what a hook actually sources (see #364's own comment on column 8,
+# above the registry, for why the lookup is not gated behind jit_host_detect()): a
+# host-agnostic table it can hand jit_canonical_tool() unconditionally, on every call,
+# regardless of which host this process thinks it is running under.
+jit_all_tool_aliases() {
+  local line aliases all="" sep=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    aliases="${line##*|}"
+    [ -n "$aliases" ] || continue
+    all="$all$sep$aliases"
+    sep=","
+  done <<< "$JIT_HOST_REGISTRY"
+  printf '%s\n' "$all"
+}
+
+# jit_canonical_tool ALIASES RAW -- RAW's canonical name(s), space-separated, or RAW
+# itself unchanged when ALIASES names no mapping for it (the identity case every host
+# whose own vocabulary already IS canonical takes, and the safe default for a RAW
+# nobody has written an alias for yet). ALIASES is jit_all_tool_aliases()'s own output
+# shape: comma-joined `key=v1;v2` pairs. Pure function, no state, no I/O -- callable
+# from a plain bash context (post-tool-hook.sh's own tool-name gate) without sourcing
+# anything beyond this file.
+#
+# One raw name can map to SEVERAL canonical ones (codex's own `apply_patch=Edit;Write`,
+# see the registry comment above for why mapping to both rather than choosing one is
+# the deliberate, over-refusing direction) -- the semicolon-joined right-hand side
+# becomes a space-joined result here so a caller can `for` over it with a plain
+# word-split, the same shape jit_scan_layers() already hands back for its own
+# space-separated layer list.
+jit_canonical_tool() {
+  local aliases="${1:-}" raw="${2:-}" entry key vals
+  [ -n "$aliases" ] && [ -n "$raw" ] || {
+    printf '%s\n' "$raw"
+    return 0
+  }
+  local old_ifs="$IFS"
+  IFS=','
+  for entry in $aliases; do
+    IFS="$old_ifs"
+    key="${entry%%=*}"
+    [ "$key" = "$raw" ] || continue
+    vals="${entry#*=}"
+    printf '%s\n' "${vals//;/ }"
+    return 0
+  done
+  IFS="$old_ifs"
+  printf '%s\n' "$raw"
 }

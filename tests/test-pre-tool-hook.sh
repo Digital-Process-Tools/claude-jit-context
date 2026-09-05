@@ -993,6 +993,51 @@ done
 
 rm -rf "$ENGINE_BIN"
 
+# --- #364: a Codex `apply_patch` payload must fire an Edit|Write rule ---------------
+# Codex's tool_name for a file edit is `apply_patch`, never `Edit` or `Write` -- a block
+# rule declaring `tool: Edit|Write` (this repo's own no-hand-editing-the-index.md is a
+# real one) could never match it, so the call proceeded, nothing errored, nothing
+# warned. scripts/host.sh's tool_aliases column is supposed to normalise `apply_patch`
+# onto `Edit`/`Write` before this loop's exact-match test runs. Two "must fire" cases --
+# the Codex-shaped payload AND an ordinary Claude-Code-shaped payload against the SAME
+# rule -- so the fix is not silently vacuous for the host it already worked on.
+IDX364="$TOOLS_DIR"
+IDX364="$IDX364/00-index.tsv"
+printf 'Edit|Write\tindex364\tindex364.md\tblock\t\t\n' >> "$IDX364"
+echo "364 block rule body" > "$TOOLS_DIR/index364.md"
+
+OUT=$(run_hook '{"tool_name":"apply_patch","tool_input":{"file_path":"/tmp/index364.tsv"}}')
+assert_blocked "#364: a Codex apply_patch payload fires an Edit|Write block rule" "$OUT"
+
+OUT=$(run_hook '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/index364.tsv"}}')
+assert_blocked "#364: control -- an ordinary Claude-Code Edit payload still fires it" "$OUT"
+
+OUT=$(run_hook '{"tool_name":"Write","tool_input":{"file_path":"/tmp/index364.tsv"}}')
+assert_blocked "#364: control -- an ordinary Claude-Code Write payload still fires it" "$OUT"
+
+# A tool this row never named must still not fire -- the alias must not widen the rule
+# to match everything.
+OUT=$(run_hook '{"tool_name":"Read","tool_input":{"file_path":"/tmp/index364.tsv"}}')
+assert_not_contains "#364: an unrelated tool name is not swept in by the alias" "$OUT" '"decision":"block"'
+
+# Explore self-review on #364: the RAW name is UNIONED onto the canonical expansion,
+# never replaced by it. A rule written literally as `tool: apply_patch` -- a plausible
+# hand-rolled workaround someone wrote before this fix existed -- matched and blocked
+# before this change; reverting to only the canonical set (dropping the raw name) would
+# have silently stopped that same rule from firing, the identical silent-failure shape
+# this fix exists to close, just on the opposite input. Reproduced live against the
+# pre-fix code: the row below blocked before jit_expand_tool_alias existed.
+#
+# The match keyword and path are deliberately NOT a substring of "index364" (the
+# earlier row in this same fixture) -- a first draft used "index364raw", which
+# contains "index364" as a substring and let the EARLIER Edit|Write row fire on the
+# canonical Edit/Write expansion alone, passing regardless of whether raw is unioned
+# in at all. "rawpatch364" shares no substring with any earlier row in this file.
+printf 'apply_patch\trawpatch364\trawpatch364.md\tblock\t\t\n' >> "$IDX364"
+echo "364 raw-name block rule body" > "$TOOLS_DIR/rawpatch364.md"
+OUT=$(run_hook '{"tool_name":"apply_patch","tool_input":{"file_path":"/tmp/rawpatch364.tsv"}}')
+assert_blocked "#364: a rule written tool: apply_patch still fires on that raw name" "$OUT"
+
 # --- Cleanup ---
 rm -rf "$TEST_DIR"
 
