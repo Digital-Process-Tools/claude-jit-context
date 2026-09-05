@@ -1195,6 +1195,8 @@ jit_frontmatter() {
 # agreement from drifting the way it did before #347 was filed.
 # "remind" is accepted even though the hook never tests for it -- it is the field's own
 # documented default spelling and an author may write it explicitly.
+# Consumed by rebuild-tsv.sh and jit-dry-run.sh, which shellcheck cannot see.
+# shellcheck disable=SC2034
 JIT_VALID_MODE_RE='^(remind|block|once)(,(remind|block|once))*$'
 
 # --- Invocation macros -------------------------------------------------------
