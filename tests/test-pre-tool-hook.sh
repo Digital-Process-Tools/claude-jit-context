@@ -229,6 +229,28 @@ OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"./supertool read:sr
 assert_contains "pipeline vocab via command path token" "$OUT" "pipeline vocabulary"
 
 echo ""
+echo "=== Vocab: a path token survives when CLAUDE_PROJECT_DIR is unset (issue #361) ==="
+# Under Codex, CLAUDE_PROJECT_DIR is never set, so the awk-side `project` var (a `-v`
+# fallback of the single byte ".") used to reach gsub(project "/", "", tt) UNESCAPED --
+# and "." is an ERE wildcard, so the pattern matched "any char, then /" at every slash
+# in `tt`, not just a leading project prefix. `src/pipeline/config.yml` was mangled to
+# `srpipelinconfig.yml`, which no longer contains the keyword "pipeline" at all: a real
+# vocabulary match silently stopped firing, not just a cosmetic log truncation.
+#
+# `cd` into TEST_DIR rather than relying on $PWD alone -- common.sh's own JIT_BASE
+# fallback is "${CLAUDE_PROJECT_DIR:-${PWD:-.}}" (#266), so the bash-side tree
+# resolution is unaffected either way; only the awk-side `-v project=` fallback still
+# reads the bare ".", which is what this test pins.
+T361_LOG="$TEST_DIR/.claude/jit-context/.discovery/logs/hooks.log"
+: > "$T361_LOG"
+T361_OUT=$(cd "$TEST_DIR" && env -u CLAUDE_PROJECT_DIR bash "$HOOK" \
+  <<< '{"tool_name":"Bash","tool_input":{"command":"./supertool read:src/pipeline/config.yml"}}' \
+  2> /dev/null)
+assert_contains "[#361] pipeline vocab still matches with no CLAUDE_PROJECT_DIR" "$T361_OUT" "pipeline vocabulary"
+assert_path_contains "[#361] the log tail keeps every slash" "$T361_LOG" "src/pipeline/config.yml"
+assert_path_not_contains "[#361] the log tail is not missing the dropped bytes" "$T361_LOG" "srpipelinconfig.yml"
+
+echo ""
 echo "=== Vocab: keyword only in command VERB/non-path (no false fire) ==="
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"check the blog runner"}}')
 assert_not_contains "blog NOT matched from non-path command word" "$OUT" "blog vocabulary"

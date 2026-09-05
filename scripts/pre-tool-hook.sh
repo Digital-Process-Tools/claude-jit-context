@@ -88,7 +88,7 @@ LC_ALL=C awk \
   -v project="${CLAUDE_PROJECT_DIR:-.}" \
   -v log_tmp="$JIT_TMP" \
   -v missing_bins="$JIT_MISSING_REQUIRES" \
-  "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD"'
+  "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -120,6 +120,31 @@ function jit_json_escape(s,   k, c) {
     if (index(s, c) > 0) gsub(c, sprintf("\\u%04x", k), s)
   }
   return s
+}
+# gsub(home "/", ...) and gsub(project "/", ...) below build their pattern by string
+# CONCATENATION, and gsub takes that result as an ERE -- awk does not know the caller
+# meant a literal prefix. home/project are -v values from the environment, not
+# constants this repository controls: $HOME is normally metacharacter-free, but
+# CLAUDE_PROJECT_DIR is a Claude-Code-specific variable, unset under every other host,
+# and its fallback here is the single byte ".". As a regex, "." matches ANY character,
+# so gsub("." "/", "", tt) deletes one arbitrary byte plus the "/" that follows it --
+# at EVERY slash in tt, not just a leading project prefix (issue #361). That is a
+# vocabulary-matching bug, not just a log one: tt feeds both the padded/stale lookup
+# below and the log tail written at the bottom of this hook, so a path token loses a
+# byte at every "/" and a real keyword can silently stop matching (reproduced: src/
+# pipeline/config.yml becomes srpipelinconfig.yml, and "pipeline" no longer matches).
+#
+# Fixed by escaping regex metacharacters in the literal string before it reaches gsub,
+# character by character rather than gsub-on-gsub, so escaping this awk functions own
+# output is never itself a place a metacharacter could leak back in.
+function jit_re_lit(s,    i, c, out, special) {
+  special = "\\.^$*+?()[]{}|"
+  out = ""
+  for (i = 1; i <= length(s); i++) {
+    c = substr(s, i, 1)
+    out = out (index(special, c) > 0 ? "\\" c : c)
+  }
+  return out
 }
 { input = input $0 }
 END {
@@ -899,8 +924,8 @@ END {
     if (index(ptoks[pi], "/") > 0) cmd_paths = cmd_paths " " ptoks[pi]
   }
   tt = f_file_path " " cmd_paths
-  gsub(home "/", "", tt)
-  gsub(project "/", "", tt)
+  gsub(jit_re_lit(home) "/", "", tt)
+  gsub(jit_re_lit(project) "/", "", tt)
 
   # Word-boundary match prep:
   # 1. Split CamelCase: "SiProjectModule" -> "Si Project Module"
@@ -1206,14 +1231,14 @@ END {
     # the whole test for what belongs in block_tail, and it only holds if the things that
     # do have one still get to use it.
     blocked = jit_json_escape(blocked block_tail)
-    printf "{\"decision\":\"block\",\"reason\":\"%s\"}", blocked
+    printf "%s", jit_envelope_block(blocked)
   } else if ((matched = jit_blk_join()) != "") {
     # jit_blk_join() (common.sh, JIT_AWK_BLK_BUILD, #230) assembles the "# JIT-CTX-BLOCKS"
     # manifest from nblk/blk[] the same way pre-prompt-hook.sh always has -- this hook
     # never built one before, so a consumer walking additionalContext always fell back to
     # searching it for "\n---\n", a separator an entry body can forge.
     matched = jit_json_escape(matched)
-    printf "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"%s\"}}", matched
+    printf "%s", jit_envelope_inject("PreToolUse", matched)
   } else {
     print "{}"
   }

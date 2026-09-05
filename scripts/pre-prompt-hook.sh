@@ -63,7 +63,7 @@ LC_ALL=C awk \
   -v state_dir="$JIT_STATE_DIR" \
   -v inject_default="$JIT_INJECT" \
   -v log_tmp="$JIT_TMP" \
-  "$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD"'
+  "$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -418,7 +418,7 @@ END {
   # --- Output JSON ---
   if (matched != "") {
     matched = jit_json_escape(matched)
-    printf "{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"%s\"}}", matched
+    printf "%s", jit_envelope_inject("UserPromptSubmit", matched)
   } else {
     print "{}"
   }
