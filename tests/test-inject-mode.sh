@@ -127,14 +127,14 @@ printf '%s\n' \
   "WEIRDNODESC-BODY-MARKER" > "$V/weirdnodesc.md"
 
 printf '%s\t%s\n' \
-  billing  billing.md \
+  billing billing.md \
   payments payments.md \
-  nodesc   nodesc.md \
-  bare     bare.md \
-  weird    weird.md \
+  nodesc nodesc.md \
+  bare bare.md \
+  weird weird.md \
   weirdnodesc weirdnodesc.md \
-  optin    optin.md \
-  pinned   pinned.md \
+  optin optin.md \
+  pinned pinned.md \
   longdesc longdesc.md > "$V/00-index.tsv"
 
 printf '%s\n' \
@@ -191,10 +191,10 @@ printf '%s\n' \
   "FETCH-BODY-MARKER" > "$T/fetch.md"
 
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-  Bash "bin/phpunit" phpunit.md remind ""          "" \
-  Bash "git push"    gitpush.md  block  ""          "" \
-  Bash "bin/deploy"  deploy.md   remind "--dry-run" "" \
-  Bash "bin/fetch"   fetch.md    remind ""          "--insecure" > "$T/00-index.tsv"
+  Bash "bin/phpunit" phpunit.md remind "" "" \
+  Bash "git push" gitpush.md block "" "" \
+  Bash "bin/deploy" deploy.md remind "--dry-run" "" \
+  Bash "bin/fetch" fetch.md remind "" "--insecure" > "$T/00-index.tsv"
 
 # A block rule whose entry file carries no frontmatter and no text (#135). rebuild-tsv.sh
 # cannot have produced this pair itself -- a file with no frontmatter has no tool: and no
@@ -222,10 +222,10 @@ printf '\n\n  \n' > "$T/wsrequire.md"
 # carrying one cannot be typed by an agent editing this file at all.
 IDX_TOOLS="$T/00-index.tsv"
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-  Bash "git shove" emptyblock.md block  "" ""        \
-  Bash "git nudge" emptyadv.md   remind "" ""        \
-  Bash "git heave" wsblock.md    block  "" ""        \
-  Bash "git haul"  wsrequire.md  remind "--safe" ""  >> "$IDX_TOOLS"
+  Bash "git shove" emptyblock.md block "" "" \
+  Bash "git nudge" emptyadv.md remind "" "" \
+  Bash "git heave" wsblock.md block "" "" \
+  Bash "git haul" wsrequire.md remind "--safe" "" >> "$IDX_TOOLS"
 
 # --- Helpers -----------------------------------------------------------------
 
@@ -233,9 +233,9 @@ set_config() {
   if [ -z "${1:-}" ]; then rm -f "$BASE/config.env"; else printf '%s\n' "$1" > "$BASE/config.env"; fi
 }
 
-run_prompt() { printf '%s' "{\"prompt\":\"$1\"}" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PROMPT_HOOK" 2>/dev/null; }
-run_tool()   { printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$1\"}}" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2>/dev/null; }
-run_path()   { printf '%s' "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$1\"}}" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PATH_HOOK" 2>/dev/null; }
+run_prompt() { printf '%s' "{\"prompt\":\"$1\"}" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PROMPT_HOOK" 2> /dev/null; }
+run_tool() { printf '%s' "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$1\"}}" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2> /dev/null; }
+run_path() { printf '%s' "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$1\"}}" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PATH_HOOK" 2> /dev/null; }
 
 # The two below take (description, CAPTURED OUTPUT, needle), the shape most helpers in this
 # tree carry. The `jit-drive:` lines are what puts them under `test-assertion-helpers.sh`'s
@@ -257,9 +257,11 @@ assert_contains() {
   # assert_not_contains / assert_blocked call site in this file embeds a newline,
   # so every needle can only ever land inside a single line of $output either way.
   if [[ "$output" == *"$expected"* ]]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:0:300}"
   fi
@@ -268,11 +270,13 @@ assert_contains() {
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
   if [[ "$output" == *"$unexpected"* ]]; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: ${output:0:300}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
@@ -280,9 +284,11 @@ assert_not_contains() {
 assert_blocked() {
   local desc="$1" output="$2"
   if [[ "$output" == *'"decision":"block"'* ]]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected a block payload"
     echo "    got: ${output:0:300}"
   fi
@@ -295,9 +301,11 @@ assert_blocked() {
 assert_silent() {
   local desc="$1" output="$2"
   if [ "$output" = "{}" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected: {}"
     echo "    got: ${output:0:300}"
   fi
@@ -313,27 +321,27 @@ assert_silent() {
 echo "=== No config.env: a match injects the whole body, as it always has ==="
 set_config ""
 OUT=$(run_prompt "what about the billing")
-assert_contains     "the entry is named"       "$OUT" "Vocabulary: billing.md"
-assert_contains     "the body arrives whole"   "$OUT" "BILLING-BODY-MARKER"
+assert_contains "the entry is named" "$OUT" "Vocabulary: billing.md"
+assert_contains "the body arrives whole" "$OUT" "BILLING-BODY-MARKER"
 assert_not_contains "and nothing tells the agent to go and read it" "$OUT" "Summary only"
 
 echo ""
 echo "=== The same entry, project opted in to summary ==="
 set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_prompt "what about the billing")
-assert_contains     "the entry is still named"        "$OUT" "Vocabulary: billing.md"
-assert_contains     "the author description arrives"  "$OUT" "How invoice totals are computed"
-assert_contains     "the title arrives"               "$OUT" "Billing amounts"
-assert_not_contains "the body does NOT arrive"        "$OUT" "BILLING-BODY-MARKER"
-assert_contains     "the agent is told where to read it" "$OUT" ".claude/jit-context/vocabulary/00-manual/billing.md"
+assert_contains "the entry is still named" "$OUT" "Vocabulary: billing.md"
+assert_contains "the author description arrives" "$OUT" "How invoice totals are computed"
+assert_contains "the title arrives" "$OUT" "Billing amounts"
+assert_not_contains "the body does NOT arrive" "$OUT" "BILLING-BODY-MARKER"
+assert_contains "the agent is told where to read it" "$OUT" ".claude/jit-context/vocabulary/00-manual/billing.md"
 
 echo ""
 echo "=== An entry can opt in on its own, under the default ==="
 set_config ""
 OUT=$(run_prompt "the optin one and the billing")
-assert_contains     "an entry that says inject: summary is summarised" "$OUT" "Summary only"
-assert_not_contains "even though the project default is full"          "$OUT" "OPTIN-BODY-MARKER"
-assert_contains     "paired: its neighbour under the default still arrives whole" "$OUT" "BILLING-BODY-MARKER"
+assert_contains "an entry that says inject: summary is summarised" "$OUT" "Summary only"
+assert_not_contains "even though the project default is full" "$OUT" "OPTIN-BODY-MARKER"
+assert_contains "paired: its neighbour under the default still arrives whole" "$OUT" "BILLING-BODY-MARKER"
 
 # =============================================
 # SECTION 2: the per-entry override, both directions
@@ -342,9 +350,9 @@ echo ""
 echo "=== Project summary, entry says inject: full ==="
 set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_prompt "billing and payments together")
-assert_contains     "the overriding entry arrives whole" "$OUT" "PAYMENTS-BODY-MARKER"
+assert_contains "the overriding entry arrives whole" "$OUT" "PAYMENTS-BODY-MARKER"
 assert_not_contains "its neighbour in the same match does not" "$OUT" "BILLING-BODY-MARKER"
-assert_contains     "and the neighbour still has its description" "$OUT" "How invoice totals are computed"
+assert_contains "and the neighbour still has its description" "$OUT" "How invoice totals are computed"
 
 echo ""
 echo "=== Project full, entry says nothing: still full ==="
@@ -360,11 +368,11 @@ echo ""
 echo "=== Frontmatter with no description: named, not injected ==="
 set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_prompt "the nodesc thing and the billing")
-assert_contains     "the entry is named"                  "$OUT" "Vocabulary: nodesc.md"
-assert_not_contains "its body is NOT injected"            "$OUT" "NODESC-BODY-MARKER"
-assert_contains     "the absence is stated, not hidden"   "$OUT" "no description:"
-assert_contains     "positive control: a described neighbour still says what it holds" \
-                    "$OUT" "How invoice totals are computed"
+assert_contains "the entry is named" "$OUT" "Vocabulary: nodesc.md"
+assert_not_contains "its body is NOT injected" "$OUT" "NODESC-BODY-MARKER"
+assert_contains "the absence is stated, not hidden" "$OUT" "no description:"
+assert_contains "positive control: a described neighbour still says what it holds" \
+  "$OUT" "How invoice totals are computed"
 
 echo ""
 echo "=== The same entry under full: the body arrives ==="
@@ -379,7 +387,7 @@ echo ""
 echo "=== No frontmatter: there is nothing to summarise, so the body is the entry ==="
 set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_prompt "a bare entry and the billing")
-assert_contains     "the frontmatter-less body arrives" "$OUT" "BARE-BODY-MARKER"
+assert_contains "the frontmatter-less body arrives" "$OUT" "BARE-BODY-MARKER"
 assert_not_contains "paired: the entry WITH frontmatter beside it does not" "$OUT" "BILLING-BODY-MARKER"
 
 # =============================================
@@ -389,9 +397,9 @@ echo ""
 echo "=== inject: gated in an entry -- unknown, so the project default applies ==="
 set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_prompt "the weird one")
-assert_not_contains "the body does not arrive"     "$OUT" "WEIRD-BODY-MARKER"
-assert_contains     "the description does"         "$OUT" "Wants a mode that does not exist"
-assert_contains     "and the unknown value is named, not silently dropped" "$OUT" "is not summary or full"
+assert_not_contains "the body does not arrive" "$OUT" "WEIRD-BODY-MARKER"
+assert_contains "the description does" "$OUT" "Wants a mode that does not exist"
+assert_contains "and the unknown value is named, not silently dropped" "$OUT" "is not summary or full"
 assert_not_contains "the value itself is never echoed back" "$OUT" "gated"
 
 # The same entry on the path almost every project is on. `full` is the default, so a tree
@@ -408,7 +416,7 @@ echo "=== inject: gated under the project default, which is full and is configur
 set_config ""
 OUT=$(run_prompt "the weird one")
 assert_contains "the body still arrives, so the fallback happened" "$OUT" "WEIRD-BODY-MARKER"
-assert_contains "and the unknown value is named under full too"    "$OUT" "is not summary or full"
+assert_contains "and the unknown value is named under full too" "$OUT" "is not summary or full"
 
 # Both directions, same tree: a good inject: must produce no notice at all. On its own that
 # assertion passes against a hook that injected nothing, so the body marker beside it is
@@ -416,17 +424,17 @@ assert_contains "and the unknown value is named under full too"    "$OUT" "is no
 echo ""
 echo "=== Paired: a recognised inject: value produces no notice ==="
 OUT=$(run_prompt "payments please")
-assert_contains     "positive control: the entry fired and arrived whole" "$OUT" "PAYMENTS-BODY-MARKER"
-assert_not_contains "and nothing was said about its inject: value"        "$OUT" "is not summary or full"
+assert_contains "positive control: the entry fired and arrived whole" "$OUT" "PAYMENTS-BODY-MARKER"
+assert_not_contains "and nothing was said about its inject: value" "$OUT" "is not summary or full"
 
 # And explicitly configured full, not just defaulted into: `full` reaches the same return.
 echo ""
 echo "=== The same pair with JIT_CONTEXT_INJECT=full spelled out ==="
 set_config "JIT_CONTEXT_INJECT=full"
 OUT=$(run_prompt "the weird one and payments")
-assert_contains     "the mistyped entry is named"            "$OUT" "is not summary or full"
-assert_contains     "paired: its neighbour arrived too"      "$OUT" "PAYMENTS-BODY-MARKER"
-assert_contains     "and the mistyped entry still injected"  "$OUT" "WEIRD-BODY-MARKER"
+assert_contains "the mistyped entry is named" "$OUT" "is not summary or full"
+assert_contains "paired: its neighbour arrived too" "$OUT" "PAYMENTS-BODY-MARKER"
+assert_contains "and the mistyped entry still injected" "$OUT" "WEIRD-BODY-MARKER"
 
 # =============================================
 # SECTION 3b: the LOG can tell a typo from a decision (#130)
@@ -447,7 +455,8 @@ JIT_LOG="$BASE/.discovery/logs/hooks.log"
 # negative ones for free.
 read_log() {
   if [ ! -s "$JIT_LOG" ]; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $1 -- hooks.log is missing or empty, so nothing below is evidence"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $1 -- hooks.log is missing or empty, so nothing below is evidence"
     LOGTEXT=""
     return 1
   fi
@@ -458,14 +467,14 @@ echo ""
 echo "=== The log distinguishes a mistyped inject: from a deliberate full ==="
 set_config "JIT_CONTEXT_INJECT=full"
 rm -f "$JIT_LOG"
-run_prompt "the weird one and payments" >/dev/null
+run_prompt "the weird one and payments" > /dev/null
 if read_log "full default"; then
-  assert_contains     "the mistyped entry is logged as a fallback, not a decision" \
-                      "$LOGTEXT" "weird.md(weird)[full:badmode]"
-  assert_contains     "paired: the entry that really asked for full says so plainly" \
-                      "$LOGTEXT" "payments.md(payments)[full]"
+  assert_contains "the mistyped entry is logged as a fallback, not a decision" \
+    "$LOGTEXT" "weird.md(weird)[full:badmode]"
+  assert_contains "paired: the entry that really asked for full says so plainly" \
+    "$LOGTEXT" "payments.md(payments)[full]"
   assert_not_contains "so the two no longer write the same token" \
-                      "$LOGTEXT" "weird.md(weird)[full]"
+    "$LOGTEXT" "weird.md(weird)[full]"
 fi
 
 # The same blindness one default over, which is the half the issue did not name: a project
@@ -477,34 +486,34 @@ echo ""
 echo "=== The same distinction under a summary default, on all three outcomes ==="
 set_config "JIT_CONTEXT_INJECT=summary"
 rm -f "$JIT_LOG"
-run_prompt "the weird one and weirdnodesc and optin" >/dev/null
+run_prompt "the weird one and weirdnodesc and optin" > /dev/null
 if read_log "summary default"; then
-  assert_contains     "a mistyped entry rendered as a summary says both" \
-                      "$LOGTEXT" "weird.md(weird)[summary:badmode]"
-  assert_contains     "and one with nothing to summarise says all three facts" \
-                      "$LOGTEXT" "weirdnodesc.md(weirdnodesc)[summary:no-description:badmode]"
-  assert_contains     "paired: an entry that asked for summary is still plain" \
-                      "$LOGTEXT" "optin.md(optin)[summary]"
+  assert_contains "a mistyped entry rendered as a summary says both" \
+    "$LOGTEXT" "weird.md(weird)[summary:badmode]"
+  assert_contains "and one with nothing to summarise says all three facts" \
+    "$LOGTEXT" "weirdnodesc.md(weirdnodesc)[summary:no-description:badmode]"
+  assert_contains "paired: an entry that asked for summary is still plain" \
+    "$LOGTEXT" "optin.md(optin)[summary]"
   assert_not_contains "and the mistyped one is not confusable with it" \
-                      "$LOGTEXT" "weird.md(weird)[summary]"
+    "$LOGTEXT" "weird.md(weird)[summary]"
 fi
 
 echo ""
 echo "=== JIT_CONTEXT_INJECT=gated in config.env -- refused like any other bad line ==="
 set_config "JIT_CONTEXT_INJECT=gated"
 OUT=$(run_prompt "what about the billing")
-assert_contains     "the refusal is reported"   "$OUT" "were refused"
+assert_contains "the refusal is reported" "$OUT" "were refused"
 # The default is `full`, so an unknown value falling back to it is the SAFE direction:
 # a project that mistyped its setting keeps what it had rather than losing it.
-assert_contains     "and the default still applied" "$OUT" "BILLING-BODY-MARKER"
-assert_contains     "positive control: the entry still fired" "$OUT" "Vocabulary: billing.md"
+assert_contains "and the default still applied" "$OUT" "BILLING-BODY-MARKER"
+assert_contains "positive control: the entry still fired" "$OUT" "Vocabulary: billing.md"
 
 echo ""
 echo "=== JIT_CONTEXT_INJECT=full in config.env -- honoured, and NOT refused ==="
 set_config "JIT_CONTEXT_INJECT=full"
 OUT=$(run_prompt "what about the billing")
 assert_not_contains "a valid value raises no refusal" "$OUT" "were refused"
-assert_contains     "and it takes effect"             "$OUT" "BILLING-BODY-MARKER"
+assert_contains "and it takes effect" "$OUT" "BILLING-BODY-MARKER"
 
 # =============================================
 # SECTION 6: a description cannot become a body
@@ -513,10 +522,10 @@ echo ""
 echo "=== A very long description is clipped ==="
 set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_prompt "longdesc please")
-assert_contains     "the start of it arrives" "$OUT" "LONGDESCSTART"
-assert_not_contains "the end of it does not"  "$OUT" "LONGDESCEND"
-assert_contains     "paired: a short description arrives whole" \
-                    "$(run_prompt "what about the billing")" "and why the getter lies."
+assert_contains "the start of it arrives" "$OUT" "LONGDESCSTART"
+assert_not_contains "the end of it does not" "$OUT" "LONGDESCEND"
+assert_contains "paired: a short description arrives whole" \
+  "$(run_prompt "what about the billing")" "and why the getter lies."
 
 # =============================================
 # SECTION 7: paths and tools carry the same rule
@@ -525,21 +534,21 @@ echo ""
 echo "=== Paths dimension ==="
 set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_path "src/Commands/Deploy.php")
-assert_contains     "the description arrives" "$OUT" "Every command extends CommandBase"
-assert_not_contains "the body does not"       "$OUT" "COMMANDS-BODY-MARKER"
+assert_contains "the description arrives" "$OUT" "Every command extends CommandBase"
+assert_not_contains "the body does not" "$OUT" "COMMANDS-BODY-MARKER"
 set_config "JIT_CONTEXT_INJECT=full"
 OUT=$(run_path "src/Commands/Deploy.php")
-assert_contains "under full, the body does"   "$OUT" "COMMANDS-BODY-MARKER"
+assert_contains "under full, the body does" "$OUT" "COMMANDS-BODY-MARKER"
 
 echo ""
 echo "=== Tools dimension, a remind rule ==="
 set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_tool "bin/phpunit tests/")
-assert_contains     "the description arrives" "$OUT" "Coverage runs take eight minutes"
-assert_not_contains "the body does not"       "$OUT" "PHPUNIT-BODY-MARKER"
+assert_contains "the description arrives" "$OUT" "Coverage runs take eight minutes"
+assert_not_contains "the body does not" "$OUT" "PHPUNIT-BODY-MARKER"
 set_config "JIT_CONTEXT_INJECT=full"
 OUT=$(run_tool "bin/phpunit tests/")
-assert_contains "under full, the body does"   "$OUT" "PHPUNIT-BODY-MARKER"
+assert_contains "under full, the body does" "$OUT" "PHPUNIT-BODY-MARKER"
 
 # =============================================
 # SECTION 8: a refusal is never a summary
@@ -553,19 +562,19 @@ echo "=== A block rule injects its whole body even under summary ==="
 set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_tool "git push origin main")
 assert_contains "the block reason is the whole entry" "$OUT" "GITPUSH-BODY-MARKER"
-assert_contains "and it is a block"                   "$OUT" '"decision":"block"'
+assert_contains "and it is a block" "$OUT" '"decision":"block"'
 
 echo ""
 echo "=== A require: block injects its whole body even under summary ==="
 OUT=$(run_tool "bin/deploy production")
 assert_contains "the block reason is the whole entry" "$OUT" "DEPLOY-BODY-MARKER"
-assert_contains "and it names what was missing"       "$OUT" "Missing required"
+assert_contains "and it names what was missing" "$OUT" "Missing required"
 
 echo ""
 echo "=== Paired: the same rule NOT blocking is a summary ==="
 OUT=$(run_tool "bin/deploy production --dry-run")
-assert_contains     "the description arrives" "$OUT" "The deploy script has no undo"
-assert_not_contains "the body does not"       "$OUT" "DEPLOY-BODY-MARKER"
+assert_contains "the description arrives" "$OUT" "The deploy script has no undo"
+assert_not_contains "the body does not" "$OUT" "DEPLOY-BODY-MARKER"
 
 # A forbid: refusal is the same contract as require:, and it was NOT covered here.
 # Both refusal paths read `body` and never `content` -- a rebase that resolved one of
@@ -574,13 +583,13 @@ echo ""
 echo "=== A forbid: block injects its whole body even under summary ==="
 OUT=$(run_tool "bin/fetch --insecure https://example.invalid")
 assert_contains "the block reason is the whole entry" "$OUT" "FETCH-BODY-MARKER"
-assert_contains "and it names what was forbidden"     "$OUT" "Forbidden"
+assert_contains "and it names what was forbidden" "$OUT" "Forbidden"
 
 echo ""
 echo "=== Paired: the same forbid rule NOT blocking is a summary ==="
 OUT=$(run_tool "bin/fetch https://example.invalid")
-assert_contains     "the description arrives" "$OUT" "The fetch helper refuses --insecure"
-assert_not_contains "the body does not"       "$OUT" "FETCH-BODY-MARKER"
+assert_contains "the description arrives" "$OUT" "The fetch helper refuses --insecure"
+assert_not_contains "the body does not" "$OUT" "FETCH-BODY-MARKER"
 
 # =============================================
 # SECTION 8b: a block rule with nothing to say still refuses (#135)
@@ -597,15 +606,15 @@ echo ""
 echo "=== A block rule whose entry has no text refuses anyway, under summary ==="
 set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_tool "git shove origin main")
-assert_blocked  "the call is refused" "$OUT"
+assert_blocked "the call is refused" "$OUT"
 assert_contains "and the reason says the text is missing rather than being blank" \
-                "$OUT" "was not delivered"
+  "$OUT" "was not delivered"
 
 echo ""
 echo "=== The same tree under full -- the mode may not decide whether a rule enforces ==="
 set_config "JIT_CONTEXT_INJECT=full"
 OUT=$(run_tool "git shove origin main")
-assert_blocked  "the call is refused here too"    "$OUT"
+assert_blocked "the call is refused here too" "$OUT"
 assert_contains "with the same substitute reason" "$OUT" "was not delivered"
 
 # The other direction, same fixture: a NON-blocking row whose file has no text must inject
@@ -631,9 +640,9 @@ printf '\n' > "$T/emptyadv.md"
 echo ""
 echo "=== Blank lines are not a reason either ==="
 OUT=$(run_tool "git heave origin main")
-assert_blocked  "a whitespace-only entry still refuses" "$OUT"
+assert_blocked "a whitespace-only entry still refuses" "$OUT"
 assert_contains "and says why the reason is absent, rather than refusing blankly" \
-                "$OUT" "was not delivered"
+  "$OUT" "was not delivered"
 
 # `require:` refuses through a different branch, and its reason is built as
 # "BLOCKED: Missing required: X. " plus the body -- so a text-less entry used to end that
@@ -641,7 +650,7 @@ assert_contains "and says why the reason is absent, rather than refusing blankly
 echo ""
 echo "=== A require: refusal from a text-less entry says why too ==="
 OUT=$(run_tool "git haul the thing")
-assert_blocked  "the requirement is absent, so the call is refused" "$OUT"
+assert_blocked "the requirement is absent, so the call is refused" "$OUT"
 assert_contains "and the refusal names the requirement" "$OUT" "Missing required: --safe"
 assert_contains "with the substitute where the body would be" "$OUT" "was not delivered"
 
@@ -653,10 +662,10 @@ assert_contains "with the substitute where the body would be" "$OUT" "was not de
 # This is the retirement of the "pre-existing behaviour ... not what this change is
 # about" scoping a prior lane wrote at #165 -- deliberately, per #170s own framing.
 OUT=$(run_tool "git haul the thing --safe")
-assert_contains     "control: the same row still fires when satisfied" "$OUT" "JIT Context: wsrequire.md"
-assert_not_contains "and does not refuse"                              "$OUT" '"decision":"block"'
-assert_contains     "and says the entry has no text, rather than a bare header (#170)" \
-                    "$OUT" "has no text to inject"
+assert_contains "control: the same row still fires when satisfied" "$OUT" "JIT Context: wsrequire.md"
+assert_not_contains "and does not refuse" "$OUT" '"decision":"block"'
+assert_contains "and says the entry has no text, rather than a bare header (#170)" \
+  "$OUT" "has no text to inject"
 
 # =============================================
 # SECTION 9: the pull is observable
@@ -669,11 +678,12 @@ echo "=== A read of an entry file is recorded in hooks.log ==="
 set_config ""
 LOG="$BASE/.discovery/logs/hooks.log"
 rm -f "$LOG"
-run_path "$TEST_DIR/.claude/jit-context/vocabulary/00-manual/billing.md" >/dev/null
+run_path "$TEST_DIR/.claude/jit-context/vocabulary/00-manual/billing.md" > /dev/null
 if [ -f "$LOG" ]; then
   assert_contains "the pull shows up in the log" "$(cat "$LOG")" "vocabulary/00-manual/billing.md"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: no hooks.log was written"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: no hooks.log was written"
 fi
 
 # =============================================
@@ -700,7 +710,7 @@ printf 'quoted\tquoted.md\n' >> "$V/00-index.tsv"
 
 OUT=$(run_prompt "the quoted one")
 assert_contains "the hook honours the quoted value" "$OUT" "QUOTED-BODY-MARKER"
-REPORT=$(CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh" 2>&1 >/dev/null)
+REPORT=$(CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh" 2>&1 > /dev/null)
 # Scoped to the "What a match costs" section alone (#232's own advisory-report pattern,
 # lifted from test-generic-keywords-232.sh's IDCOL extraction): REPORT is rebuild-tsv.sh's
 # WHOLE stderr, and it is not the only section entitled to name a file by path. The
@@ -710,7 +720,7 @@ REPORT=$(CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh
 # of ordinary word that list is meant to catch, so billing.md legitimately appears THERE
 # for a reason that has nothing to do with the injection-cost question this pair of
 # assertions is about. It is the LAST section rebuild-tsv.sh prints, so this reads to EOF.
-COST_SECTION="$(awk '/=== What a match costs/{p=1} p' <<<"$REPORT")"
+COST_SECTION="$(awk '/=== What a match costs/{p=1} p' <<< "$REPORT")"
 assert_contains "and rebuild-tsv counts it as arriving whole" "$COST_SECTION" "quoted.md"
 # Paired, in the same section: the entry that is genuinely a summary is NOT counted.
 assert_not_contains "and does not count a summary entry as whole" "$COST_SECTION" "billing.md"
@@ -720,16 +730,16 @@ assert_not_contains "and does not count a summary entry as whole" "$COST_SECTION
 # would be measuring the rebuild rather than the hooks. Every fixture, or the next
 # section is quietly testing a smaller tree than the one it was written against.
 printf '%s\t%s\n' \
-  billing  billing.md \
+  billing billing.md \
   payments payments.md \
-  nodesc   nodesc.md \
-  bare     bare.md \
-  weird    weird.md \
+  nodesc nodesc.md \
+  bare bare.md \
+  weird weird.md \
   weirdnodesc weirdnodesc.md \
-  optin    optin.md \
-  pinned   pinned.md \
+  optin optin.md \
+  pinned pinned.md \
   longdesc longdesc.md \
-  quoted   quoted.md > "$V/00-index.tsv"
+  quoted quoted.md > "$V/00-index.tsv"
 
 # =============================================
 # SECTION 9c: the exit condition is a number, not a slogan
@@ -741,14 +751,14 @@ printf '%s\t%s\n' \
 echo ""
 echo "=== rebuild-tsv reports what a match costs, and what blocks the flip ==="
 set_config ""
-REPORT=$(CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh" 2>&1 >/dev/null)
-assert_contains "it says which default is in force"   "$REPORT" "JIT_CONTEXT_INJECT=full"
+REPORT=$(CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh" 2>&1 > /dev/null)
+assert_contains "it says which default is in force" "$REPORT" "JIT_CONTEXT_INJECT=full"
 assert_contains "it prices one match, not the corpus" "$REPORT" "cost of ONE match, not a total"
-assert_contains "with a summarised figure beside it"  "$REPORT" "summarised"
+assert_contains "with a summarised figure beside it" "$REPORT" "summarised"
 # nodesc.md and bare.md carry no usable description: -- that is the distance between this
 # tree and being able to flip, and it has to be named rather than counted in silence.
 assert_contains "it names the entries that block the flip" "$REPORT" "carry no description:"
-assert_contains "and names one of them"                    "$REPORT" "nodesc.md"
+assert_contains "and names one of them" "$REPORT" "nodesc.md"
 # Paired, in the same report: an entry that CAN be summarised is not listed as blocking.
 assert_not_contains "and does not name one that can be summarised" "$REPORT" "  .claude/jit-context/vocabulary/00-manual/billing.md"
 # And the other kind of non-blocker, which is the one that is easy to get wrong: an entry
@@ -761,7 +771,7 @@ assert_not_contains "and does not name one that can be summarised" "$REPORT" "  
 # since an entry with no frontmatter has no keywords: and therefore no row. An assertion
 # about one section must name that section's own line shape.
 assert_not_contains "nor an entry pinned to full by its own frontmatter" "$REPORT" "  .claude/jit-context/vocabulary/00-manual/pinned.md"
-assert_not_contains "nor one with no frontmatter at all"                "$REPORT" "  .claude/jit-context/vocabulary/00-manual/bare.md"
+assert_not_contains "nor one with no frontmatter at all" "$REPORT" "  .claude/jit-context/vocabulary/00-manual/bare.md"
 # And the positive half of the same needle shape: nodesc.md IS in that list, indented,
 # under the full path. Without it the two above pass against a report that lists nothing.
 assert_contains "the blocking entry is listed in that same shape" "$REPORT" "  .claude/jit-context/vocabulary/00-manual/nodesc.md"
@@ -772,25 +782,25 @@ CLEAN_DIR=$(mktemp -d)
 mkdir -p "$CLEAN_DIR/.claude/jit-context/vocabulary/00-manual"
 printf '%s\n' "---" "title: Clean" "description: Has one." "keywords: clean" "---" "" "body" \
   > "$CLEAN_DIR/.claude/jit-context/vocabulary/00-manual/clean.md"
-CLEAN_REPORT=$(CLAUDE_PROJECT_DIR="$CLEAN_DIR" bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh" 2>&1 >/dev/null)
-assert_contains     "a tree with nothing in the way says the flip is available" \
-                    "$CLEAN_REPORT" "can move to summary"
+CLEAN_REPORT=$(CLAUDE_PROJECT_DIR="$CLEAN_DIR" bash "$SCRIPT_DIR/scripts/rebuild-tsv.sh" 2>&1 > /dev/null)
+assert_contains "a tree with nothing in the way says the flip is available" \
+  "$CLEAN_REPORT" "can move to summary"
 assert_not_contains "and does not also claim something blocks it" \
-                    "$CLEAN_REPORT" "carry no description:"
+  "$CLEAN_REPORT" "carry no description:"
 rm -rf "$CLEAN_DIR"
 
 # rebuild-tsv.sh rewrote the fixture indexes again.
 printf '%s\t%s\n' \
-  billing  billing.md \
+  billing billing.md \
   payments payments.md \
-  nodesc   nodesc.md \
-  bare     bare.md \
-  weird    weird.md \
+  nodesc nodesc.md \
+  bare bare.md \
+  weird weird.md \
   weirdnodesc weirdnodesc.md \
-  optin    optin.md \
-  pinned   pinned.md \
+  optin optin.md \
+  pinned pinned.md \
   longdesc longdesc.md \
-  quoted   quoted.md > "$V/00-index.tsv"
+  quoted quoted.md > "$V/00-index.tsv"
 
 # =============================================
 # SECTION 10: awk engine matrix -- a clipped multibyte description
@@ -829,7 +839,7 @@ ENGINE_BIN=$(mktemp -d)
 ENGINES=""
 ENGINE_SEEN=""
 for cand in awk gawk nawk mawk; do
-  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  cand_path=$(command -v "$cand" 2> /dev/null) || continue
   case " $ENGINE_SEEN " in *" $cand_path "*) continue ;; esac
   ENGINE_SEEN="$ENGINE_SEEN $cand_path"
   mkdir -p "$ENGINE_BIN/$cand"
@@ -841,19 +851,21 @@ done
 for eng in $ENGINES; do
   OUTF=$(mktemp)
   printf '%s' '{"prompt":"the multibyte one"}' \
-    | PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PROMPT_HOOK" > "$OUTF" 2>/dev/null
+    | PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PROMPT_HOOK" > "$OUTF" 2> /dev/null
   # Read from the FILE, never a $( ) capture: bash drops bytes a capture cannot carry,
   # so an assertion on a shell variable can pass against output that is already broken.
   if perl -0777 -ne 'my $x = $_; exit(utf8::decode($x) ? 0 : 1)' "$OUTF"; then
-    PASS=$((PASS + 1)); echo "  PASS: [$eng] the clipped description is valid UTF-8"
+    PASS=$((PASS + 1))
+    echo "  PASS: [$eng] the clipped description is valid UTF-8"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: [$eng] the clipped description is NOT valid UTF-8"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: [$eng] the clipped description is NOT valid UTF-8"
   fi
   # Paired: the assertion above passes trivially against a hook that injected nothing.
   assert_contains "[$eng] positive control: something was actually injected" \
-                  "$(cat "$OUTF")" "Multibyte"
+    "$(cat "$OUTF")" "Multibyte"
   assert_not_contains "[$eng] and it was clipped, not delivered whole" \
-                  "$(cat "$OUTF")" "MB-BODY-MARKER"
+    "$(cat "$OUTF")" "MB-BODY-MARKER"
   rm -f "$OUTF"
 done
 rm -rf "$ENGINE_BIN"
@@ -932,12 +944,12 @@ printf '%s\n' \
 printf '\n\n' > "$T/blankfull.md"
 
 printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-  Bash "~git hurl|$LONG_PAT"  longsum.md   remind "" "" \
-  Bash "~git lob|$LONG_PAT"   longfull.md  remind "" "" \
-  Bash "~git chuck|$LONG_PAT" longblock.md block  "" "" \
-  Bash "~git fling"           "$LONG_FILE" remind "" "" \
+  Bash "~git hurl|$LONG_PAT" longsum.md remind "" "" \
+  Bash "~git lob|$LONG_PAT" longfull.md remind "" "" \
+  Bash "~git chuck|$LONG_PAT" longblock.md block "" "" \
+  Bash "~git fling" "$LONG_FILE" remind "" "" \
   Bash "~git shunt|$LONG_PAT" blankfull.md remind "" "" \
-  Bash "~git toss|$LONG_PAT"  missingentry.md remind "" "" >> "$IDX_TOOLS"
+  Bash "~git toss|$LONG_PAT" missingentry.md remind "" "" >> "$IDX_TOOLS"
 
 # The project is pinned to `full` here on purpose, and the word `default` is deliberately
 # not used: SECTION 10 left `summary` in config.env, so this is an explicit override and
@@ -947,32 +959,32 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
 # got wrong.
 set_config "JIT_CONTEXT_INJECT=full"
 OUT=$(run_tool "git hurl at the wall")
-assert_contains     "the entry is still named"                    "$OUT" "longsum.md"
-assert_contains     "the head of the pattern still identifies it" "$OUT" "matched: ~git hurl|LONGPATSTART"
-assert_contains     "and the header says it was cut"              "$OUT" "[clipped]"
-assert_not_contains "the rest of the pattern does not arrive"     "$OUT" "LONGPATEND"
-assert_contains     "control: the summary itself still arrives"   "$OUT" "far larger than the entry"
+assert_contains "the entry is still named" "$OUT" "longsum.md"
+assert_contains "the head of the pattern still identifies it" "$OUT" "matched: ~git hurl|LONGPATSTART"
+assert_contains "and the header says it was cut" "$OUT" "[clipped]"
+assert_not_contains "the rest of the pattern does not arrive" "$OUT" "LONGPATEND"
+assert_contains "control: the summary itself still arrives" "$OUT" "far larger than the entry"
 
 echo ""
 echo "=== Paired: a full entry has no budget to protect, so its header is untouched ==="
 OUT=$(run_tool "git lob a brick")
-assert_contains "the whole pattern is echoed back"    "$OUT" "LONGPATEND"
+assert_contains "the whole pattern is echoed back" "$OUT" "LONGPATEND"
 assert_contains "control: and the body arrives whole" "$OUT" "LONGFULL-BODY-MARKER"
 
 echo ""
 echo "=== Paired: a refusal still carries its header whole, under summary (#141) ==="
 set_config "JIT_CONTEXT_INJECT=summary"
 OUT=$(run_tool "git chuck it over there")
-assert_blocked  "the call is refused"                          "$OUT"
-assert_contains "the refusal header keeps the whole pattern"   "$OUT" "LONGPATEND"
+assert_blocked "the call is refused" "$OUT"
+assert_contains "the refusal header keeps the whole pattern" "$OUT" "LONGPATEND"
 assert_contains "and the whole body, as a refusal always does" "$OUT" "LONGBLOCK-BODY-MARKER"
 
 echo ""
 echo "=== The entry-file column is bounded on the same path, or the bound moves over ==="
 OUT=$(run_tool "git fling it away")
 assert_not_contains "the file column does not arrive whole" "$OUT" "LONGFILEEND"
-assert_contains     "control: the row still says its text could not be delivered" \
-                    "$OUT" "was not delivered"
+assert_contains "control: the row still says its text could not be delivered" \
+  "$OUT" "was not delivered"
 
 # ...and the same two rows under the DEFAULT, which is `full` and is what every project
 # that configured nothing is on. This is the leg the first version of this section did not
@@ -986,12 +998,12 @@ echo "=== A row with no deliverable text is bounded whatever the mode says ==="
 set_config ""
 OUT=$(run_tool "git fling it away")
 assert_not_contains "the file column is still bounded under the default" "$OUT" "LONGFILEEND"
-assert_contains     "control: the row still reports itself" "$OUT" "was not delivered"
+assert_contains "control: the row still reports itself" "$OUT" "was not delivered"
 
 OUT=$(run_tool "git toss it out")
 assert_not_contains "and so is the pattern beside it" "$OUT" "LONGPATEND"
-assert_contains     "control: that row reports itself too" "$OUT" "was not delivered"
-assert_contains     "control: and it is still named"      "$OUT" "missingentry.md"
+assert_contains "control: that row reports itself too" "$OUT" "was not delivered"
+assert_contains "control: and it is still named" "$OUT" "missingentry.md"
 
 # Paired, and this is what keeps the bound above from reading as `full is now clipped`:
 # the SAME default, a row whose file reads fine, still echoes its whole pattern.
@@ -1014,16 +1026,16 @@ assert_contains "a full entry whose body arrived keeps its whole header" "$OUT" 
 echo ""
 echo "=== An entry with no body has nothing to exempt, so its header is bounded (#165) ==="
 OUT=$(run_tool "git shunt it sideways")
-assert_contains     "the entry is still named"                "$OUT" "blankfull.md"
-assert_contains     "and the head of the pattern identifies it" \
-                    "$OUT" "matched: ~git shunt|LONGPATSTART"
-assert_contains     "and the header says it was cut"          "$OUT" "[clipped]"
+assert_contains "the entry is still named" "$OUT" "blankfull.md"
+assert_contains "and the head of the pattern identifies it" \
+  "$OUT" "matched: ~git shunt|LONGPATSTART"
+assert_contains "and the header says it was cut" "$OUT" "[clipped]"
 assert_not_contains "the rest of the pattern does not arrive" "$OUT" "LONGPATEND"
 # The same fixture is #170s: a bare header with nothing under it, because content is
 # "\n\n" rather than "". Paired with the wsrequire.md leg in SECTION 8 so the report is
 # not tied to one call site of the guard.
-assert_contains     "and what IS under the header says the entry is empty (#170)" \
-                    "$OUT" "has no text to inject"
+assert_contains "and what IS under the header says the entry is empty (#170)" \
+  "$OUT" "has no text to inject"
 
 # The control that makes the four above mean anything, and the only one that isolates the
 # BODY as the cause: the same row, the same command, the same 60,000-byte pattern, with
@@ -1032,7 +1044,7 @@ assert_contains     "and what IS under the header says the entry is empty (#170)
 printf 'SHUNT-BODY-MARKER\n' > "$T/blankfull.md"
 OUT=$(run_tool "git shunt it sideways")
 assert_contains "control: the same row fires once its file has text" "$OUT" "SHUNT-BODY-MARKER"
-assert_contains "control: and its header is whole again"             "$OUT" "LONGPATEND"
+assert_contains "control: and its header is whole again" "$OUT" "LONGPATEND"
 printf '\n\n' > "$T/blankfull.md"
 
 # The other direction: the row must still be silent on a command it does not match. A
@@ -1040,7 +1052,7 @@ printf '\n\n' > "$T/blankfull.md"
 # from the side above.
 OUT=$(run_tool "ls -la")
 assert_not_contains "and a command it does not match reaches no header at all" \
-                    "$OUT" "blankfull.md"
+  "$OUT" "blankfull.md"
 
 echo ""
 echo "========================"

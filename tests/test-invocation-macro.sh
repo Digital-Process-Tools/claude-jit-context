@@ -21,14 +21,22 @@ DRYRUN="$REPO/scripts/jit-dry-run.sh"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+}
 
 # jit-drive: assert_contains contains capture
 # jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" out="$2" want="$3"
-  if grep -qF -- "$want" <<<"$out"; then
+  if grep -qF -- "$want" <<< "$out"; then
     ok "$desc"
   else
     bad "$desc" "expected to contain: $want"
@@ -38,7 +46,7 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" out="$2" unwanted="$3"
-  if grep -qF -- "$unwanted" <<<"$out"; then
+  if grep -qF -- "$unwanted" <<< "$out"; then
     bad "$desc" "must NOT contain: $unwanted"
     echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
   else
@@ -78,18 +86,18 @@ write_entry tools/00-manual/supertool-arg.md \
   "match: ~@invocation-quoted-arg supertool" \
   "mode: remind"
 
-rebuild >/dev/null 2>&1
+rebuild > /dev/null 2>&1
 
 echo "=== the macro is expanded at index time, so the hook never sees an @ ==="
 INDEX="$(cat "$BASE/tools/00-manual/00-index.tsv")"
 assert_not_contains "no unexpanded macro survives into the index" "$INDEX" "@invocation"
-assert_contains     "the expansion is a real anchored ERE"        "$INDEX" "(^|[;&|\n] *)"
+assert_contains "the expansion is a real anchored ERE" "$INDEX" "(^|[;&|\n] *)"
 
 # --- Driving the real hook ----------------------------------------------------
 drive() {
   # $1 command, already JSON-escaped
   printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \
-    | CLAUDE_PROJECT_DIR="$ROOT" bash "$HOOK" 2>/dev/null
+    | CLAUDE_PROJECT_DIR="$ROOT" bash "$HOOK" 2> /dev/null
 }
 
 verdict() {
@@ -97,8 +105,8 @@ verdict() {
   out="$(drive "$1")"
   case "$out" in
     *'"decision":"block"'*) echo "BLOCK" ;;
-    *'JIT Context'*)        echo "REMIND" ;;
-    *)                      echo "silent" ;;
+    *'JIT Context'*) echo "REMIND" ;;
+    *) echo "silent" ;;
   esac
 }
 
@@ -114,37 +122,37 @@ assert_verdict() {
 
 echo ""
 echo "=== @invocation — command-with-options, both directions ==="
-assert_verdict "the bare invocation"           "git push"                            BLOCK
-assert_verdict "an option carrying a value"    "git -C /tmp push"                    BLOCK
-assert_verdict "a long option"                 "git --no-verify push"                BLOCK
-assert_verdict "behind a wrapper"              "rtk git push"                        BLOCK
-assert_verdict "behind an env assignment"      "git_ssh_command=x git push"          BLOCK
-assert_verdict "after a chain operator"        "cd /tmp && git push"                 BLOCK
-assert_verdict "on a later line"               "cd /tmp\ngit push"                   BLOCK
+assert_verdict "the bare invocation" "git push" BLOCK
+assert_verdict "an option carrying a value" "git -C /tmp push" BLOCK
+assert_verdict "a long option" "git --no-verify push" BLOCK
+assert_verdict "behind a wrapper" "rtk git push" BLOCK
+assert_verdict "behind an env assignment" "git_ssh_command=x git push" BLOCK
+assert_verdict "after a chain operator" "cd /tmp && git push" BLOCK
+assert_verdict "on a later line" "cd /tmp\ngit push" BLOCK
 # The near-misses. The first two were BLOCKED by the hand-rolled anchor this replaces.
-assert_verdict "a subcommand is not an option" "git stash push"                      silent
-assert_verdict "the words inside a message"    'git commit -m \"fix git push here\"' silent
-assert_verdict "a different command"           "echo push"                           silent
-assert_verdict "the word inside a path"        "cat /etc/git/push.conf"              silent
-assert_verdict "a longer command word"         "gitk push"                           silent
-assert_verdict "a longer final word"           "git pushall"                         silent
+assert_verdict "a subcommand is not an option" "git stash push" silent
+assert_verdict "the words inside a message" 'git commit -m \"fix git push here\"' silent
+assert_verdict "a different command" "echo push" silent
+assert_verdict "the word inside a path" "cat /etc/git/push.conf" silent
+assert_verdict "a longer command word" "gitk push" silent
+assert_verdict "a longer final word" "git pushall" silent
 
 echo ""
 echo "=== @invocation-quoted-arg — command-with-quoted-argument, both directions ==="
-assert_verdict "a single-quoted argument"      "supertool 'gh-pr:1' | head"          REMIND
-assert_verdict "a double-quoted argument"      'supertool \"read:x\"'                REMIND
-assert_verdict "an option before the quote"    "supertool -q 'read:x'"               REMIND
-assert_verdict "no argument at all"            "supertool | tail"                    silent
-assert_verdict "an unquoted argument"          "supertool ops"                       silent
-assert_verdict "the name inside a path"        "cat /opt/supertool 'x'"              silent
+assert_verdict "a single-quoted argument" "supertool 'gh-pr:1' | head" REMIND
+assert_verdict "a double-quoted argument" 'supertool \"read:x\"' REMIND
+assert_verdict "an option before the quote" "supertool -q 'read:x'" REMIND
+assert_verdict "no argument at all" "supertool | tail" silent
+assert_verdict "an unquoted argument" "supertool ops" silent
+assert_verdict "the name inside a path" "cat /opt/supertool 'x'" silent
 
 echo ""
 echo "=== a macro nobody defined is refused at build time and named ==="
 write_entry tools/00-manual/bogus.md \
   "title: Bogus" "tool: Bash" "match: ~@invokation git push" "mode: block"
-BUILD_ERR="$(rebuild 2>&1 >/dev/null)"
+BUILD_ERR="$(rebuild 2>&1 > /dev/null)"
 assert_contains "rebuild names the unknown macro" "$BUILD_ERR" "@invokation"
-assert_contains "rebuild names the entry"         "$BUILD_ERR" "bogus.md"
+assert_contains "rebuild names the entry" "$BUILD_ERR" "bogus.md"
 
 # The row is written through UNEXPANDED on purpose: the hook then refuses it by name
 # rather than compiling `@invokation git push` as a literal regex that matches nothing.
@@ -159,7 +167,7 @@ assert_contains "the hook says the row did not run" "$OUT" "could not be evaluat
 # By ROW, not by name. The index arrives with the repository, so its file-name column is
 # untrusted text and the notice fires with nothing matched (#35). The name an author needs
 # is in the rebuild error asserted above, in hooks.log, and in jit-dry-run.sh.
-assert_contains "and locates the row"               "$OUT" "tools/00-manual row"
+assert_contains "and locates the row" "$OUT" "tools/00-manual row"
 assert_not_contains "without quoting the index back" "$OUT" "bogus.md"
 assert_contains "and the linter still names the entry for the author" \
   "$(bash "$DRYRUN" --base "$BASE" 2>&1)" "bogus.md"
@@ -169,14 +177,14 @@ assert_contains "the honoured rule still fires" "$(drive "git push")" '"decision
 echo ""
 echo "=== the macros are command shapes, so a paths entry is refused ==="
 write_entry paths/00-manual/wrong.md "title: Wrong dimension" "match: @invocation git push"
-PATH_ERR="$(rebuild 2>&1 >/dev/null)"
+PATH_ERR="$(rebuild 2>&1 > /dev/null)"
 assert_contains "rebuild refuses a macro in paths" "$PATH_ERR" "wrong.md"
 rm -f "$BASE/paths/00-manual/wrong.md" "$BASE/tools/00-manual/bogus.md"
-rebuild >/dev/null 2>&1
+rebuild > /dev/null 2>&1
 
 echo ""
 echo "=== an index that no longer matches its frontmatter is named by the dry-run ==="
-CLEAN_OUT="$( (cd "$ROOT" && bash "$DRYRUN" --base "$BASE") 2>&1 )"
+CLEAN_OUT="$( (cd "$ROOT" && bash "$DRYRUN" --base "$BASE") 2>&1)"
 CLEAN_RC=$?
 assert_not_contains "a freshly rebuilt tree is clean" "$CLEAN_OUT" "STALE"
 if [ "$CLEAN_RC" -eq 0 ]; then ok "a freshly rebuilt tree exits 0"; else bad "a freshly rebuilt tree exits 0" "exit $CLEAN_RC"; fi
@@ -189,7 +197,7 @@ write_entry tools/00-manual/git-push.md \
   "tool: Bash" \
   "match: ~@invocation git tag" \
   "mode: block"
-STALE_OUT="$( (cd "$ROOT" && bash "$DRYRUN" --base "$BASE") 2>&1 )"
+STALE_OUT="$( (cd "$ROOT" && bash "$DRYRUN" --base "$BASE") 2>&1)"
 STALE_RC=$?
 # One assertion, on the STALE line itself: git-push.md also appears on the `ok` line
 # above it, so a bare name grep would pass on a tree the lint had nothing to say about.
@@ -200,27 +208,27 @@ if [ "$STALE_RC" -ne 0 ]; then ok "a stale tree exits non-zero"; else bad "a sta
 # `match` is not the only column an index row carries. A rule silently downgraded from
 # block to remind, or retargeted at another tool, is the same defect in different clothes
 # -- and unlike a changed pattern it is invisible in the injected context too.
-rebuild >/dev/null 2>&1
+rebuild > /dev/null 2>&1
 stale_after() {
   # $1 description, $2.. the frontmatter of git-push.md as it is now written
   local desc="$1" out
   shift
   write_entry tools/00-manual/git-push.md "$@"
-  out="$( (cd "$ROOT" && bash "$DRYRUN" --base "$BASE") 2>&1 )"
+  out="$( (cd "$ROOT" && bash "$DRYRUN" --base "$BASE") 2>&1)"
   assert_contains "$desc" "$(printf '%s' "$out" | grep STALE || true)" "git-push.md"
-  rebuild >/dev/null 2>&1
+  rebuild > /dev/null 2>&1
 }
-stale_after "a downgraded mode is stale"    "title: T" "tool: Bash" "match: ~@invocation git tag" "mode: remind"
-stale_after "a retargeted tool is stale"    "title: T" "tool: Edit" "match: ~@invocation git tag" "mode: block"
-stale_after "a dropped require is stale"    "title: T" "tool: Bash" "match: ~@invocation git tag" "mode: block" "require: --dry-run"
-stale_after "an added forbid is stale"      "title: T" "tool: Bash" "match: ~@invocation git tag" "mode: block" "forbid: --force"
+stale_after "a downgraded mode is stale" "title: T" "tool: Bash" "match: ~@invocation git tag" "mode: remind"
+stale_after "a retargeted tool is stale" "title: T" "tool: Edit" "match: ~@invocation git tag" "mode: block"
+stale_after "a dropped require is stale" "title: T" "tool: Bash" "match: ~@invocation git tag" "mode: block" "require: --dry-run"
+stale_after "an added forbid is stale" "title: T" "tool: Bash" "match: ~@invocation git tag" "mode: block" "forbid: --force"
 
 write_entry tools/00-manual/git-push.md \
   "title: Open a merge request instead" \
   "tool: Bash" \
   "match: ~@invocation git tag" \
   "mode: block"
-STALE_OUT="$( (cd "$ROOT" && bash "$DRYRUN" --base "$BASE") 2>&1 )"
+STALE_OUT="$( (cd "$ROOT" && bash "$DRYRUN" --base "$BASE") 2>&1)"
 STALE_RC=$?
 # One assertion, on the STALE line itself: git-push.md also appears on the `ok` line
 # above it, so a bare name grep would pass on a tree the lint had nothing to say about.

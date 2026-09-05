@@ -27,18 +27,22 @@ FAIL=0
 assert_rc0() {
   local desc="$1" rc="$2"
   if [ "$rc" -eq 0 ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc (exit $rc)"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (exit $rc)"
   fi
 }
 
 assert_empty_json() {
   local desc="$1" output="$2"
   if [ "$output" = "{}" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected exactly {} - got: ${output:-<EMPTY>}"
   fi
 }
@@ -46,9 +50,11 @@ assert_empty_json() {
 assert_file() {
   local desc="$1" path="$2"
   if [ -f "$path" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    this path should exist and be a regular file: $path"
   fi
 }
@@ -56,10 +62,12 @@ assert_file() {
 assert_no_file() {
   local desc="$1" path="$2"
   if [ -e "$path" ]; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    this path should not exist: $path"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
@@ -85,7 +93,8 @@ echo "=== A: an Edit under the tree drops a marker ==="
 
 P="$(new_project a)"
 FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
-OUT="$(run_post_tool "$P" "sess-a" "Edit" "$FP")"; RC=$?
+OUT="$(run_post_tool "$P" "sess-a" "Edit" "$FP")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "the hook answers empty JSON" "$OUT"
 assert_file "an edit marker is written for this session" "$(state_of "$P")/edited-sess-a.txt"
@@ -97,7 +106,8 @@ echo "=== B: a Write under the tree also drops a marker ==="
 
 P="$(new_project b)"
 FP="$P/.claude/jit-context/vocabulary/00-manual/new.md"
-OUT="$(run_post_tool "$P" "sess-b" "Write" "$FP")"; RC=$?
+OUT="$(run_post_tool "$P" "sess-b" "Write" "$FP")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_file "a write marker is written for this session too" "$(state_of "$P")/edited-sess-b.txt"
 assert_no_file "no declined-marker trace on the ordinary, ungated path (#285 negative control)" \
@@ -108,7 +118,8 @@ echo "=== C: a tool this hook does not watch marks nothing (the negative half of
 
 P="$(new_project c)"
 FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
-OUT="$(run_post_tool "$P" "sess-c" "Read" "$FP")"; RC=$?
+OUT="$(run_post_tool "$P" "sess-c" "Read" "$FP")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "the hook answers empty JSON" "$OUT"
 assert_no_file "no marker was written for a tool that only reads" "$(state_of "$P")/edited-sess-c.txt"
@@ -118,7 +129,8 @@ echo "=== D: a path outside the tree marks nothing (the negative half of A) ==="
 
 P="$(new_project d)"
 FP="$P/src/app.php"
-OUT="$(run_post_tool "$P" "sess-d" "Edit" "$FP")"; RC=$?
+OUT="$(run_post_tool "$P" "sess-d" "Edit" "$FP")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_no_file "no marker was written for a file outside the tree" "$(state_of "$P")/edited-sess-d.txt"
 
@@ -127,7 +139,8 @@ echo "=== E: a traversal riding on the prefix is refused, not treated as inside 
 
 P="$(new_project e)"
 FP="$P/.claude/jit-context/vocabulary/00-manual/../../../../etc/passwd"
-OUT="$(run_post_tool "$P" "sess-e" "Edit" "$FP")"; RC=$?
+OUT="$(run_post_tool "$P" "sess-e" "Edit" "$FP")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_no_file "no marker was written for a path that escapes via .." "$(state_of "$P")/edited-sess-e.txt"
 
@@ -137,13 +150,16 @@ echo "=== F: no session_id means no marker, never a wrong guess (same posture as
 P="$(new_project f)"
 FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
 OUT="$(printf '{"tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$FP" \
-  | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"; RC=$?
+  | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
-if [ -d "$(state_of "$P")" ] && [ -n "$(ls -A "$(state_of "$P")" 2>/dev/null)" ]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: no session_id wrote a marker anyway"
+if [ -d "$(state_of "$P")" ] && [ -n "$(ls -A "$(state_of "$P")" 2> /dev/null)" ]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: no session_id wrote a marker anyway"
   ls -A "$(state_of "$P")"
 else
-  PASS=$((PASS + 1)); echo "  PASS: no session_id wrote no marker at all"
+  PASS=$((PASS + 1))
+  echo "  PASS: no session_id wrote no marker at all"
 fi
 
 echo ""
@@ -152,7 +168,8 @@ echo "=== G: a project with no jit-context tree at all stays inert ==="
 P="$TMP/g"
 mkdir -p "$P"
 OUT="$(printf '{"session_id":"sess-g","tool_name":"Edit","tool_input":{"file_path":"%s/x.md"}}' "$P" \
-  | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"; RC=$?
+  | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "the hook answers empty JSON" "$OUT"
 assert_no_file "no .claude directory is materialised" "$P/.claude"
@@ -165,7 +182,8 @@ echo "--- H0: a canonical CLAUDE_PROJECT_DIR (no trailing slash, no symlink, abs
 
 P="$(new_project h0)"
 FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
-OUT="$(run_post_tool "$P" "sess-h0" "Edit" "$FP")"; RC=$?
+OUT="$(run_post_tool "$P" "sess-h0" "Edit" "$FP")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_file "a canonical path still marks (positive control)" "$(state_of "$P")/edited-sess-h0.txt"
 
@@ -175,7 +193,8 @@ echo "--- H1: a trailing slash on CLAUDE_PROJECT_DIR must not blind the marker -
 P="$(new_project h1)"
 FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
 OUT="$(printf '{"session_id":"sess-h1","tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$FP" \
-  | CLAUDE_PROJECT_DIR="$P/" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"; RC=$?
+  | CLAUDE_PROJECT_DIR="$P/" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_file "a trailing slash on CLAUDE_PROJECT_DIR still marks" "$(state_of "$P")/edited-sess-h1.txt"
 
@@ -189,7 +208,8 @@ mkdir -p "$REAL/.claude/jit-context/vocabulary/00-manual"
 ln -s "$REAL" "$LINK"
 FP="$REAL/.claude/jit-context/vocabulary/00-manual/bridge.md"
 OUT="$(printf '{"session_id":"sess-h2","tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$FP" \
-  | CLAUDE_PROJECT_DIR="$LINK" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"; RC=$?
+  | CLAUDE_PROJECT_DIR="$LINK" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_file "a symlinked CLAUDE_PROJECT_DIR still marks the file the symlink resolves to" \
   "$REAL/.claude/jit-context/.discovery/state/edited-sess-h2.txt"
@@ -200,7 +220,8 @@ echo "--- H3: a relative CLAUDE_PROJECT_DIR must not blind the marker ---"
 P="$(new_project h3)"
 FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
 OUT="$(cd "$TMP" && printf '{"session_id":"sess-h3","tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$FP" \
-  | CLAUDE_PROJECT_DIR="h3" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"; RC=$?
+  | CLAUDE_PROJECT_DIR="h3" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_file "a relative CLAUDE_PROJECT_DIR still marks" "$(state_of "$P")/edited-sess-h3.txt"
 
@@ -215,11 +236,11 @@ mkdir -p "$TMP/h4-elsewhere/src"
 ln -s "$REAL2" "$LINK2"
 FP="$TMP/h4-elsewhere/src/app.php"
 OUT="$(printf '{"session_id":"sess-h4","tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$FP" \
-  | CLAUDE_PROJECT_DIR="$LINK2" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"; RC=$?
+  | CLAUDE_PROJECT_DIR="$LINK2" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_no_file "an unrelated file under a symlinked project still marks nothing" \
   "$REAL2/.claude/jit-context/.discovery/state/edited-sess-h4.txt"
-
 
 echo ""
 echo "=== I: the marker write is refused via a symlink at the marker path -- a distinguishable trace is left (#285) ==="
@@ -232,13 +253,16 @@ P="$(new_project i)"
 mkdir -p "$(state_of "$P")"
 ln -s "$TMP/i-nowhere" "$(state_of "$P")/edited-sess-i.txt"
 FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
-OUT="$(run_post_tool "$P" "sess-i" "Edit" "$FP")"; RC=$?
+OUT="$(run_post_tool "$P" "sess-i" "Edit" "$FP")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "the hook still answers empty JSON" "$OUT"
 if [ -L "$(state_of "$P")/edited-sess-i.txt" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the symlink at the marker path was not written through"
+  PASS=$((PASS + 1))
+  echo "  PASS: the symlink at the marker path was not written through"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the symlink at the marker path is gone or was replaced"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the symlink at the marker path is gone or was replaced"
 fi
 assert_file "a distinguishable declined-marker trace was left instead" "$(state_of "$P")/edited-declined-sess-i.txt"
 
@@ -255,7 +279,8 @@ OUTSIDE="$TMP/j-outside"
 mkdir -p "$OUTSIDE"
 ln -sfn "$OUTSIDE" "$P/.claude/jit-context/esc"
 FP="$P/.claude/jit-context/esc/x.md"
-OUT="$(run_post_tool "$P" "sess-j" "Edit" "$FP")"; RC=$?
+OUT="$(run_post_tool "$P" "sess-j" "Edit" "$FP")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_no_file "an edit that physically escapes via an in-tree symlink marks nothing" "$(state_of "$P")/edited-sess-j.txt"
 
@@ -264,7 +289,8 @@ echo "--- J1: the paired positive control -- an ordinary in-tree edit (lexical h
 
 P="$(new_project j1)"
 FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
-OUT="$(run_post_tool "$P" "sess-j1" "Edit" "$FP")"; RC=$?
+OUT="$(run_post_tool "$P" "sess-j1" "Edit" "$FP")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_file "an ordinary lexical-hit, physical-hit edit still marks" "$(state_of "$P")/edited-sess-j1.txt"
 
@@ -275,7 +301,8 @@ P="$(new_project j2)"
 OTHER="$(new_project j2-other)"
 FP="$OTHER/.claude/jit-context/vocabulary/00-manual/bridge.md"
 OUT="$(printf '{"session_id":"sess-j2","tool_name":"Edit","tool_input":{"file_path":"%s"}}' "$FP" \
-  | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"; RC=$?
+  | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/post-tool-hook.sh" 2>&1)"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_no_file "an edit under a different project's tree marks nothing here" "$(state_of "$P")/edited-sess-j2.txt"
 
@@ -285,10 +312,10 @@ echo "--- J3: a name-collision sibling (jit-contextual, not jit-context) marks n
 P="$(new_project j3)"
 mkdir -p "$P/.claude/jit-contextual/vocabulary/00-manual"
 FP="$P/.claude/jit-contextual/vocabulary/00-manual/bridge.md"
-OUT="$(run_post_tool "$P" "sess-j3" "Edit" "$FP")"; RC=$?
+OUT="$(run_post_tool "$P" "sess-j3" "Edit" "$FP")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_no_file "a name-collision sibling directory marks nothing" "$(state_of "$P")/edited-sess-j3.txt"
-
 
 echo "=== K: an edit routed through Bash still drops the marker (#301) ==="
 # hooks/hooks.json's own PostToolUse matcher used to be Write|Edit only. A tree that
@@ -310,8 +337,10 @@ run_post_tool_bash() {
 P="$(new_project k)"
 FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
 CMD="printf 'x' > $FP"
-CMD="${CMD//\\/\\\\}"; CMD="${CMD//\"/\\\"}"
-OUT="$(run_post_tool_bash "$P" "sess-k1" "$CMD")"; RC=$?
+CMD="${CMD//\\/\\\\}"
+CMD="${CMD//\"/\\\"}"
+OUT="$(run_post_tool_bash "$P" "sess-k1" "$CMD")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "the hook answers empty JSON" "$OUT"
 assert_file "a plain redirect into the tree via Bash marks (#301)" "$(state_of "$P")/edited-sess-k1.txt"
@@ -322,7 +351,8 @@ echo "--- K2: a supertool paste:/edit: payload naming a path under the tree also
 P="$(new_project k2)"
 FP="$P/.claude/jit-context/vocabulary/00-manual/new.md"
 CMD="supertool 'paste:@-' <<'TOML'\npath = \\\"$FP\\\"\ncontent = '''hi'''\nTOML"
-OUT="$(run_post_tool_bash "$P" "sess-k2" "$CMD")"; RC=$?
+OUT="$(run_post_tool_bash "$P" "sess-k2" "$CMD")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_file "a supertool paste: call under the tree marks" "$(state_of "$P")/edited-sess-k2.txt"
 
@@ -332,7 +362,8 @@ echo "--- K3: a Bash command that only READS the tree marks nothing (paired nega
 P="$(new_project k3)"
 FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
 CMD="cat $FP"
-OUT="$(run_post_tool_bash "$P" "sess-k3" "$CMD")"; RC=$?
+OUT="$(run_post_tool_bash "$P" "sess-k3" "$CMD")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_no_file "a Bash command that merely reads the tree marks nothing" "$(state_of "$P")/edited-sess-k3.txt"
 
@@ -340,7 +371,8 @@ echo ""
 echo "--- K4: a Bash command naming nothing under the tree marks nothing (paired negative control) ---"
 
 P="$(new_project k4)"
-OUT="$(run_post_tool_bash "$P" "sess-k4" "git status")"; RC=$?
+OUT="$(run_post_tool_bash "$P" "sess-k4" "git status")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_no_file "an unrelated Bash command marks nothing" "$(state_of "$P")/edited-sess-k4.txt"
 
@@ -351,7 +383,8 @@ P="$(new_project k5)"
 FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
 : > "$FP"
 CMD="sed -i '' 's/x/y/' $FP"
-OUT="$(run_post_tool_bash "$P" "sess-k5" "$CMD")"; RC=$?
+OUT="$(run_post_tool_bash "$P" "sess-k5" "$CMD")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_file "an in-place sed on a tree file marks" "$(state_of "$P")/edited-sess-k5.txt"
 
@@ -368,7 +401,8 @@ P="$(new_project k6)"
 FP="$P/.claude/jit-context/vocabulary/00-manual/-improved.md"
 : > "$FP"
 CMD="sed 's/x/y/' $FP"
-OUT="$(run_post_tool_bash "$P" "sess-k6" "$CMD")"; RC=$?
+OUT="$(run_post_tool_bash "$P" "sess-k6" "$CMD")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_no_file "a non-in-place sed on a '-i'-prefixed filename marks nothing" "$(state_of "$P")/edited-sess-k6.txt"
 
@@ -383,7 +417,8 @@ P="$(new_project k7)"
 FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
 CMD="echo reminder: never run supertool XeditX:@- against $FP without review"
 CMD="${CMD//X/\'}"
-OUT="$(run_post_tool_bash "$P" "sess-k7" "$CMD")"; RC=$?
+OUT="$(run_post_tool_bash "$P" "sess-k7" "$CMD")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_no_file "an echo merely naming a supertool op marks nothing" "$(state_of "$P")/edited-sess-k7.txt"
 

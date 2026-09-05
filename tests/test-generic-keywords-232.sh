@@ -25,23 +25,37 @@ PROMPT_HOOK="$REPO/scripts/pre-prompt-hook.sh"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+}
 
 assert_contains() {
   local desc="$1" out="$2" want="$3"
-  if grep -qF -- "$want" <<<"$out"; then ok "$desc"
-  else bad "$desc" "expected to contain: $want"; echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
+  if grep -qF -- "$want" <<< "$out"; then
+    ok "$desc"
+  else
+    bad "$desc" "expected to contain: $want"
+    echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
   fi
 }
 assert_not_contains() {
   local desc="$1" out="$2" unwanted="$3"
-  if grep -qF -- "$unwanted" <<<"$out"; then bad "$desc" "must NOT contain: $unwanted"; echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
-  else ok "$desc"
+  if grep -qF -- "$unwanted" <<< "$out"; then
+    bad "$desc" "must NOT contain: $unwanted"
+    echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
+  else
+    ok "$desc"
   fi
 }
 
-ROOT="$(mktemp -d 2>/dev/null || mktemp -d -t jit232)"
+ROOT="$(mktemp -d 2> /dev/null || mktemp -d -t jit232)"
 trap 'chmod -R u+rwX "$ROOT" 2>/dev/null; rm -rf "$ROOT"' EXIT
 PROJ="$ROOT/proj"
 BASE="$PROJ/.claude/jit-context"
@@ -76,7 +90,7 @@ write_entry acronym-entry.md \
   "keywords: API, HTML"
 
 echo "=== A. rebuild-tsv.sh writes a third column: generic verdict ==="
-CLAUDE_PROJECT_DIR="$PROJ" bash "$REBUILD" >/dev/null 2>"$ROOT/rebuild.err"
+CLAUDE_PROJECT_DIR="$PROJ" bash "$REBUILD" > /dev/null 2> "$ROOT/rebuild.err"
 IDX="$BASE/vocabulary/00-manual/00-index.tsv"
 [ -f "$IDX" ] || bad "index was written" "no such file: $IDX"
 assert_contains "the generic keyword's row is marked generic" "$(cat "$IDX")" "$(printf 'context\tgeneric-entry.md\tgeneric')"
@@ -118,7 +132,7 @@ echo "=== C. pre-prompt-hook.sh: a match on the generic keyword alone injects su
 run_prompt() {
   local text="$1"
   printf '{"session_id":"jit232-test-session","prompt":"%s"}' "$text" \
-    | CLAUDE_PROJECT_DIR="$PROJ" bash "$PROMPT_HOOK" 2>/dev/null
+    | CLAUDE_PROJECT_DIR="$PROJ" bash "$PROMPT_HOOK" 2> /dev/null
 }
 OUT1=$(run_prompt "what is the context here")
 assert_contains "the title/description still arrive" "$OUT1" "Generic entry description line."
@@ -138,7 +152,7 @@ write_entry specific-only.md \
   "title: Specific only" \
   "description: Never mind the description." \
   "keywords: onlyspecifickeyword232"
-CLAUDE_PROJECT_DIR="$PROJ" bash "$REBUILD" >/dev/null 2>/dev/null
+CLAUDE_PROJECT_DIR="$PROJ" bash "$REBUILD" > /dev/null 2> /dev/null
 OUT4=$(run_prompt "onlyspecifickeyword232 please")
 assert_contains "full body on first match" "$OUT4" "BODY-MARKER-FOR-specific-only"
 OUT5=$(run_prompt "onlyspecifickeyword232 again")

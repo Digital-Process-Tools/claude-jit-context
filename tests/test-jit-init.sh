@@ -26,15 +26,24 @@ ENTRY_REL="vocabulary/00-manual/writing-rules.md"
 PASS=0
 FAIL=0
 
-TMP="$(mktemp -d 2>/dev/null)" || TMP=""
+TMP="$(mktemp -d 2> /dev/null)" || TMP=""
 if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
   echo "  SKIPPED: mktemp -d produced no directory, so no fixture can be built here."
   exit 2
 fi
 trap 'rm -rf "$TMP"' EXIT
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -gt 0 ] && echo "    $*"; return 0; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -gt 0 ] && echo "    $*"
+  return 0
+}
 
 # The hook output goes to a file and the assertion reads the file: $( ) silently drops
 # NUL bytes, so a captured variable makes an assertion pass against output it never saw.
@@ -43,7 +52,7 @@ bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -gt 0 ] && echo "    
 run_prompt() {
   # $1 project dir, $2 prompt text
   printf '{"prompt":"%s"}' "$2" > "$TMP/payload.json"
-  CLAUDE_PROJECT_DIR="$1" bash "$PROMPT_HOOK" < "$TMP/payload.json" > "$TMP/prompt-out.txt" 2>/dev/null
+  CLAUDE_PROJECT_DIR="$1" bash "$PROMPT_HOOK" < "$TMP/payload.json" > "$TMP/prompt-out.txt" 2> /dev/null
 }
 
 # jit-drive: none -- both helpers run the prompt hook themselves and assert against the file it wrote; neither takes output as an argument
@@ -101,7 +110,7 @@ if [ -s "$P1/.claude/jit-context/vocabulary/00-manual/00-index.tsv" ]; then
   ok "the index was rebuilt, so the seeded entry is not inert"
 else
   bad "the index was rebuilt, so the seeded entry is not inert" \
-      "00-index.tsv absent or empty -- the entry exists on disk and can never fire"
+    "00-index.tsv absent or empty -- the entry exists on disk and can never fire"
 fi
 
 echo ""
@@ -121,21 +130,21 @@ ok 'the seeded entry fires on "how do I write a jit entry"'
 
 echo ""
 echo '=== it answers "how do I make this plugin do something" ==='
-assert_prompt_fires "asking for an entry"     "$P1" "how do I add a jit entry for the billing module" "writing-rules.md"
-assert_prompt_fires "naming the layer"        "$P1" "what belongs in 00-manual"                       "writing-rules.md"
-assert_prompt_fires "naming the index build"  "$P1" "do I need to run rebuild-tsv after this"         "writing-rules.md"
-assert_prompt_fires "naming the plugin"       "$P1" "how does jit-context decide what to inject"      "writing-rules.md"
+assert_prompt_fires "asking for an entry" "$P1" "how do I add a jit entry for the billing module" "writing-rules.md"
+assert_prompt_fires "naming the layer" "$P1" "what belongs in 00-manual" "writing-rules.md"
+assert_prompt_fires "naming the index build" "$P1" "do I need to run rebuild-tsv after this" "writing-rules.md"
+assert_prompt_fires "naming the plugin" "$P1" "how does jit-context decide what to inject" "writing-rules.md"
 
 echo ""
 echo '=== and never "what does vocabulary mean" ==='
 # Each of these is an ordinary sentence somebody types in a project that happens to have
 # the plugin installed. An entry that fires on any of them is a tax on every session.
-assert_prompt_silent "an ML tokeniser"    "$P1" "the tokeniser vocabulary is 50k tokens, can we shrink it" "writing-rules.md"
-assert_prompt_silent "i18n content"       "$P1" "we need a French vocabulary list for the i18n strings"    "writing-rules.md"
-assert_prompt_silent "linguistics"        "$P1" "vocabulary and grammar are separate concerns here"        "writing-rules.md"
-assert_prompt_silent "an unrelated rule"  "$P1" "add a rule to the eslint config"                          "writing-rules.md"
-assert_prompt_silent "unrelated writing"  "$P1" "write an entry in the changelog"                          "writing-rules.md"
-assert_prompt_silent "unrelated context"  "$P1" "the context window is full"                               "writing-rules.md"
+assert_prompt_silent "an ML tokeniser" "$P1" "the tokeniser vocabulary is 50k tokens, can we shrink it" "writing-rules.md"
+assert_prompt_silent "i18n content" "$P1" "we need a French vocabulary list for the i18n strings" "writing-rules.md"
+assert_prompt_silent "linguistics" "$P1" "vocabulary and grammar are separate concerns here" "writing-rules.md"
+assert_prompt_silent "an unrelated rule" "$P1" "add a rule to the eslint config" "writing-rules.md"
+assert_prompt_silent "unrelated writing" "$P1" "write an entry in the changelog" "writing-rules.md"
+assert_prompt_silent "unrelated context" "$P1" "the context window is full" "writing-rules.md"
 
 echo ""
 echo "=== jit-dry-run.sh reports the rule it seeded ==="
@@ -165,14 +174,14 @@ if grep -qE '^[1-9][0-9]* vocabulary keyword' "$TMP/dryrun.txt"; then
   ok "the tally accounts for the vocabulary rules in the tree"
 else
   bad "the tally accounts for the vocabulary rules in the tree" \
-      "the summary never counts the one rule that just fired"
+    "the summary never counts the one rule that just fired"
   cat "$TMP/dryrun.txt"
 fi
 # Paired control: the same line must read zero on a tree that genuinely has no keywords,
 # so the assertion above is about the count and not about the sentence existing.
 P4="$TMP/p4"
 mkdir -p "$P4/.claude/jit-context/paths/00-manual"
-cat > "$P4/.claude/jit-context/paths/00-manual/only-a-path.md" <<'MD'
+cat > "$P4/.claude/jit-context/paths/00-manual/only-a-path.md" << 'MD'
 ---
 title: Command conventions
 match: (^|/)Commands/
@@ -220,7 +229,7 @@ echo ""
 echo "=== an existing project keeps its own entries ==="
 P3="$TMP/p3"
 mkdir -p "$P3/.claude/jit-context/vocabulary/00-manual"
-cat > "$P3/.claude/jit-context/vocabulary/00-manual/billing.md" <<'MD'
+cat > "$P3/.claude/jit-context/vocabulary/00-manual/billing.md" << 'MD'
 ---
 title: Billing amounts
 description: How invoice totals are computed.
@@ -237,9 +246,9 @@ else
   bad "seeding a project that already has entries exits 0" "exit=$INIT3_RC"
   cat "$TMP/init3.txt"
 fi
-assert_prompt_fires "the project own entry still fires"  "$P3" "how are invoice totals computed" "billing.md"
-assert_prompt_fires "and the seeded one fires too"       "$P3" "how do I write a jit entry"       "writing-rules.md"
-assert_prompt_silent "the seeded one does not shadow it" "$P3" "how are invoice totals computed"  "writing-rules.md"
+assert_prompt_fires "the project own entry still fires" "$P3" "how are invoice totals computed" "billing.md"
+assert_prompt_fires "and the seeded one fires too" "$P3" "how do I write a jit entry" "writing-rules.md"
+assert_prompt_silent "the seeded one does not shadow it" "$P3" "how are invoice totals computed" "writing-rules.md"
 
 echo ""
 echo "=== a linked component is refused, not followed ==="
@@ -248,9 +257,9 @@ echo "=== a linked component is refused, not followed ==="
 # "seeded <project>/..." for a file that is not in the project. Refuse instead.
 LINK_PROBE="$TMP/link-probe"
 mkdir -p "$LINK_PROBE/target"
-if ln -s "$LINK_PROBE/target" "$LINK_PROBE/link" 2>/dev/null && [ -L "$LINK_PROBE/link" ]; then
+if ln -s "$LINK_PROBE/target" "$LINK_PROBE/link" 2> /dev/null && [ -L "$LINK_PROBE/link" ]; then
   for part in .claude .claude/jit-context .claude/jit-context/vocabulary \
-              .claude/jit-context/vocabulary/00-manual; do
+    .claude/jit-context/vocabulary/00-manual; do
     OUT="$TMP/outside-$(echo "$part" | tr '/.' '__')"
     PL="$TMP/pl-$(echo "$part" | tr '/.' '__')"
     mkdir -p "$OUT" "$PL/$(dirname "$part")"
@@ -264,7 +273,7 @@ if ln -s "$LINK_PROBE/target" "$LINK_PROBE/link" 2>/dev/null && [ -L "$LINK_PROB
       cat "$TMP/initlink.txt"
     fi
     # The refusal has to mean nothing was written, not that the write was reported oddly.
-    if [ -z "$(find "$OUT" -type f 2>/dev/null)" ]; then
+    if [ -z "$(find "$OUT" -type f 2> /dev/null)" ]; then
       ok "and nothing was written through it"
     else
       bad "and nothing was written through it" "files landed outside the named tree"
@@ -300,7 +309,7 @@ echo "=== a symbolic link ABOVE .claude is followed, and the receipt says where 
 # place the file is not is the defect.
 SYMA="$TMP/syma"
 mkdir -p "$SYMA/proj/sym" "$SYMA/proj/escape"
-if ln -s ../escape "$SYMA/proj/sym/link" 2>/dev/null && [ -L "$SYMA/proj/sym/link" ]; then
+if ln -s ../escape "$SYMA/proj/sym/link" 2> /dev/null && [ -L "$SYMA/proj/sym/link" ]; then
   ESCAPE_PHYS="$(cd "$SYMA/proj/escape" && pwd -P)"
   bash "$INIT" --base "$SYMA/proj/sym/link/.claude/jit-context" > "$TMP/initsym.txt" 2>&1
   SYM_RC=$?
@@ -314,13 +323,13 @@ if ln -s ../escape "$SYMA/proj/sym/link" 2>/dev/null && [ -L "$SYMA/proj/sym/lin
     ok "the entry landed in the link target, which is where --base points"
   else
     bad "the entry landed in the link target, which is where --base points" \
-        "nothing at $ESCAPE_PHYS/.claude/jit-context/$ENTRY_REL"
+      "nothing at $ESCAPE_PHYS/.claude/jit-context/$ENTRY_REL"
   fi
   if grep -qF "seeded  $ESCAPE_PHYS/.claude/jit-context/$ENTRY_REL" "$TMP/initsym.txt"; then
     ok "and the receipt names the resolved location, not the link"
   else
     bad "and the receipt names the resolved location, not the link" \
-        "expected: seeded  $ESCAPE_PHYS/.claude/jit-context/$ENTRY_REL"
+      "expected: seeded  $ESCAPE_PHYS/.claude/jit-context/$ENTRY_REL"
     cat "$TMP/initsym.txt"
   fi
   # Not just the "seeded" line: the follow-up commands it prints are copy-pasted, and a
@@ -356,7 +365,7 @@ if grep -qF "seeded  $P7_PHYS/.claude/jit-context/$ENTRY_REL" "$TMP/init7.txt"; 
   ok "and its receipt is the physical path of that tree"
 else
   bad "and its receipt is the physical path of that tree" \
-      "expected: seeded  $P7_PHYS/.claude/jit-context/$ENTRY_REL"
+    "expected: seeded  $P7_PHYS/.claude/jit-context/$ENTRY_REL"
   cat "$TMP/init7.txt"
 fi
 
@@ -377,7 +386,7 @@ if grep -qF "seeded  $P8_PHYS/.claude/jit-context/$ENTRY_REL" "$TMP/init8.txt"; 
   ok "and the receipt has no .. left in it"
 else
   bad "and the receipt has no .. left in it" \
-      "expected: seeded  $P8_PHYS/.claude/jit-context/$ENTRY_REL"
+    "expected: seeded  $P8_PHYS/.claude/jit-context/$ENTRY_REL"
   cat "$TMP/init8.txt"
 fi
 
@@ -402,7 +411,7 @@ if [ -s "$P6/.claude/jit-context/vocabulary/00-manual/00-index.tsv" ]; then
   ok "and its index is built in that same tree, so the entry is not inert"
 else
   bad "and its index is built in that same tree, so the entry is not inert" \
-      "the entry was seeded and indexed nowhere"
+    "the entry was seeded and indexed nowhere"
 fi
 assert_prompt_fires "and the entry fires there" "$P6" "how do I write a jit entry" "writing-rules.md"
 

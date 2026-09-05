@@ -24,8 +24,16 @@ COMMON="$REPO/scripts/common.sh"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+}
 
 assert_status() {
   local desc="$1" got="$2" want="$3"
@@ -66,7 +74,7 @@ jit_frontmatter_many fm "$ENTRY" match
 out=""
 jit_fm_get out "$fm" match
 status=$?
-assert_status "jit_fm_get() exit status on a miss"  "$status"  0
+assert_status "jit_fm_get() exit status on a miss" "$status" 0
 assert_equals "jit_fm_get() leaves VAR empty on a miss" "$out" ""
 
 echo ""

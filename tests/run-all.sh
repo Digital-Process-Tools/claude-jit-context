@@ -55,8 +55,8 @@ while [ $# -gt 0 ]; do
           ;;
         *) shard_refuse "--shard '$2' is not N/M" ;;
       esac
-      [ "$SHARD_N" -ge 1 ] 2>/dev/null || shard_refuse "--shard '$2': M must be 1 or more"
-      [ "$SHARD_I" -ge 1 ] 2>/dev/null || shard_refuse "--shard '$2': N must be 1 or more"
+      [ "$SHARD_N" -ge 1 ] 2> /dev/null || shard_refuse "--shard '$2': M must be 1 or more"
+      [ "$SHARD_I" -ge 1 ] 2> /dev/null || shard_refuse "--shard '$2': N must be 1 or more"
       [ "$SHARD_I" -le "$SHARD_N" ] || shard_refuse "--shard '$2': N must not exceed M"
       shift 2
       ;;
@@ -113,7 +113,7 @@ for t in test-*.sh; do
   # Round-robin, 1-based: suite k goes to shard ((k - 1) mod M) + 1. With M=1 this is
   # every suite, which is what makes the unsharded path the same code rather than a
   # branch around it.
-  [ "$(( (SUITE_N - 1) % SHARD_N + 1 ))" -eq "$SHARD_I" ] || continue
+  [ "$(((SUITE_N - 1) % SHARD_N + 1))" -eq "$SHARD_I" ] || continue
   SELECTED=$((SELECTED + 1))
   echo ""
   echo "########## $t ##########"

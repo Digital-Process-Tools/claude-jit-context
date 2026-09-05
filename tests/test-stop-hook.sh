@@ -46,18 +46,22 @@ FAIL=0
 assert_rc0() {
   local desc="$1" rc="$2"
   if [ "$rc" -eq 0 ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc (exit $rc)"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (exit $rc)"
   fi
 }
 
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:-<EMPTY>}"
   fi
@@ -66,9 +70,11 @@ assert_contains() {
 assert_empty_json() {
   local desc="$1" output="$2"
   if [ "$output" = "{}" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected exactly {} - got: ${output:-<EMPTY>}"
   fi
 }
@@ -125,7 +131,8 @@ mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 manual_entry "$P" vocabulary cache.md
 printf 'bridge.md\ncache.md\n' > "$(state_of "$P")/vocab-shown-sess-a.txt"
-OUT="$(run_stop "$P" "sess-a")"; RC=$?
+OUT="$(run_stop "$P" "sess-a")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_contains "the message names the fired entry" "$OUT" "bridge.md"
 assert_contains "and the other one too" "$OUT" "cache.md"
@@ -133,10 +140,12 @@ assert_contains "and says none were updated" "$OUT" "none updated"
 assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
 assert_contains "and says what it concerns (#291)" "$OUT" "entry files"
 assert_contains "and says it is not addressed to the reader (#291)" "$OUT" "not addressed to you"
-if grep -qF -- '\n' <<<"$OUT"; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: the fired-entries message still renders as a multi-line list"
+if grep -qF -- '\n' <<< "$OUT"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the fired-entries message still renders as a multi-line list"
 else
-  PASS=$((PASS + 1)); echo "  PASS: the fired-entries message collapsed to one line"
+  PASS=$((PASS + 1))
+  echo "  PASS: the fired-entries message collapsed to one line"
 fi
 
 echo ""
@@ -149,7 +158,8 @@ mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-b.txt"
 : > "$(state_of "$P")/edited-sess-b.txt"
-OUT="$(run_stop "$P" "sess-b")"; RC=$?
+OUT="$(run_stop "$P" "sess-b")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "the hook says nothing -- edits happened" "$OUT"
 
@@ -158,7 +168,8 @@ echo "=== C: nothing fired at all this session -- silence, there is nothing to c
 
 P="$(new_project c)"
 mkdir -p "$(state_of "$P")"
-OUT="$(run_stop "$P" "sess-c")"; RC=$?
+OUT="$(run_stop "$P" "sess-c")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "the hook says nothing -- no injections this session" "$OUT"
 
@@ -171,36 +182,42 @@ echo "=== D: an unwritable tree -- COULD NOT TELL, never silence ==="
 D_SKIPPED=0
 P="$(new_project d)"
 enable_stop_report "$P"
-chmod 555 "$P/.claude/jit-context" 2>/dev/null
+chmod 555 "$P/.claude/jit-context" 2> /dev/null
 if [ -w "$P/.claude/jit-context" ]; then
   D_SKIPPED=1
   echo "  SKIP-NOTE: chmod did not remove write permission here (running as root, or a"
   echo "             filesystem without POSIX modes). Section D tested nothing."
 else
-  OUT="$(run_stop "$P" "sess-d")"; RC=$?
+  OUT="$(run_stop "$P" "sess-d")"
+  RC=$?
   assert_rc0 "the hook exits 0" "$RC"
   assert_contains "it says it could not tell" "$OUT" "could not tell"
   assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
   if [ "$OUT" = "{}" ]; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: could-not-tell rendered as silence"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: could-not-tell rendered as silence"
   else
-    PASS=$((PASS + 1)); echo "  PASS: could-not-tell did not render as silence"
+    PASS=$((PASS + 1))
+    echo "  PASS: could-not-tell did not render as silence"
   fi
 fi
-chmod 755 "$P/.claude/jit-context" 2>/dev/null
+chmod 755 "$P/.claude/jit-context" 2> /dev/null
 
 echo ""
 echo "=== E: no jit-context tree at all -- fully inert ==="
 
 P="$TMP/e"
 mkdir -p "$P"
-OUT="$(run_stop "$P" "sess-e")"; RC=$?
+OUT="$(run_stop "$P" "sess-e")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "the hook says nothing at all" "$OUT"
 if [ -e "$P/.claude" ]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: a .claude directory was materialised for a tree-less project"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: a .claude directory was materialised for a tree-less project"
 else
-  PASS=$((PASS + 1)); echo "  PASS: no .claude directory is materialised"
+  PASS=$((PASS + 1))
+  echo "  PASS: no .claude directory is materialised"
 fi
 
 echo ""
@@ -211,17 +228,20 @@ enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 printf 'bridge.md\njit-refused-vocab\njit-no-subject\n' > "$(state_of "$P")/vocab-shown-sess-f.txt"
-OUT="$(run_stop "$P" "sess-f")"; RC=$?
+OUT="$(run_stop "$P" "sess-f")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_contains "the real entry is named" "$OUT" "bridge.md"
 SENTINEL_HIT=0
-grep -qF -- "jit-refused-vocab" <<<"$OUT" && SENTINEL_HIT=1
-grep -qF -- "jit-no-subject" <<<"$OUT" && SENTINEL_HIT=1
+grep -qF -- "jit-refused-vocab" <<< "$OUT" && SENTINEL_HIT=1
+grep -qF -- "jit-no-subject" <<< "$OUT" && SENTINEL_HIT=1
 if [ "$SENTINEL_HIT" = 1 ]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: a sentinel key was reported as a fired entry"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: a sentinel key was reported as a fired entry"
   echo "    got: $OUT"
 else
-  PASS=$((PASS + 1)); echo "  PASS: no sentinel key was reported as a fired entry"
+  PASS=$((PASS + 1))
+  echo "  PASS: no sentinel key was reported as a fired entry"
 fi
 
 echo ""
@@ -233,13 +253,16 @@ mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-g.txt"
 printf 'bridge.md\n' > "$(state_of "$P")/path-shown-sess-g.txt"
-OUT="$(run_stop "$P" "sess-g")"; RC=$?
+OUT="$(run_stop "$P" "sess-g")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
-COUNT="$(grep -o 'bridge\.md' <<<"$OUT" | wc -l | tr -d ' ')"
+COUNT="$(grep -o 'bridge\.md' <<< "$OUT" | wc -l | tr -d ' ')"
 if [ "$COUNT" = "1" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the entry is listed exactly once"
+  PASS=$((PASS + 1))
+  echo "  PASS: the entry is listed exactly once"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the entry appeared $COUNT times, expected 1"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the entry appeared $COUNT times, expected 1"
   echo "    got: $OUT"
 fi
 
@@ -270,7 +293,8 @@ while [ "$_jit_seq" -le "$JIT_HI" ]; do
   _jit_seq=$((_jit_seq + 1))
 done
 unset H_STATE_DIR
-OUT="$(run_stop "$P" "sess-h")"; RC=$?
+OUT="$(run_stop "$P" "sess-h")"
+RC=$?
 assert_rc0 "the hook exits 0 on 600 distinct fired entries" "$RC"
 assert_contains "the reported total accounts for all 600" "$OUT" "$JIT_HI entries injected"
 assert_contains "the overflow past the cap is named, not silently dropped" "$OUT" "more past this hook's own"
@@ -282,10 +306,12 @@ assert_contains "the overflow past the cap is named, not silently dropped" "$OUT
 # names could not possibly be the reader's own).
 assert_contains "the overflow forces the split wording, not the flat 'none updated' claim" "$OUT" "of them yours and not updated"
 assert_contains "the checked-manual count is hedged as a floor, not an exact claim" "$OUT" "at least 500 of them yours"
-if grep -qF -- ": $JIT_HI entries injected this session, none updated" <<<"$OUT"; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: an overflowed session rendered the flat all-yours sentence"
+if grep -qF -- ": $JIT_HI entries injected this session, none updated" <<< "$OUT"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: an overflowed session rendered the flat all-yours sentence"
 else
-  PASS=$((PASS + 1)); echo "  PASS: an overflowed session did not render the flat all-yours sentence"
+  PASS=$((PASS + 1))
+  echo "  PASS: an overflowed session did not render the flat all-yours sentence"
 fi
 
 echo ""
@@ -299,7 +325,8 @@ echo "=== I: stop_hook_active=true -- a re-entry caused by this hook's own outpu
 P="$(new_project i)"
 mkdir -p "$(state_of "$P")"
 printf 'bridge.md\ncache.md\n' > "$(state_of "$P")/vocab-shown-sess-i.txt"
-OUT="$(run_stop "$P" "sess-i" "true")"; RC=$?
+OUT="$(run_stop "$P" "sess-i" "true")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "stop_hook_active=true means no additionalContext, even though entries fired" "$OUT"
 
@@ -315,7 +342,8 @@ mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-j.txt"
 OUT="$(printf '{"session_id":"sess-j","hook_event_name":"Stop"}' \
-  | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" 2>&1)"; RC=$?
+  | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" 2>&1)"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_contains "a payload with no stop_hook_active key at all still reports" "$OUT" "bridge.md"
 
@@ -332,7 +360,8 @@ P="$(new_project k)"
 mkdir -p "$(state_of "$P")"
 printf 'bridge.md\ncache.md\n' > "$(state_of "$P")/vocab-shown-sess-k.txt"
 OUT="$(printf '{"session_id":"sess-k","cwd":"C:\\quo\\"te","stop_hook_active":true}' \
-  | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" 2>&1)"; RC=$?
+  | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" 2>&1)"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "an escaped quote ahead of stop_hook_active does not hide a real true" "$OUT"
 
@@ -351,13 +380,14 @@ mkdir -p "$(state_of "$P")"
 printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-l.txt"
 FAKE_AWK_DIR="$TMP/fake-awk-l"
 mkdir -p "$FAKE_AWK_DIR"
-cat > "$FAKE_AWK_DIR/awk" <<'FAKE_AWK'
+cat > "$FAKE_AWK_DIR/awk" << 'FAKE_AWK'
 #!/bin/sh
 exit 127
 FAKE_AWK
 chmod +x "$FAKE_AWK_DIR/awk"
 OUT="$(printf '{"session_id":"sess-l","stop_hook_active":true}' \
-  | PATH="$FAKE_AWK_DIR:$PATH" CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" 2>&1)"; RC=$?
+  | PATH="$FAKE_AWK_DIR:$PATH" CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" 2>&1)"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "an unusable awk renders as silence, never as the could-not-tell additionalContext" "$OUT"
 
@@ -373,7 +403,8 @@ enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-m.txt"
-OUT="$(run_stop "$P" "sess-m")"; RC=$?
+OUT="$(run_stop "$P" "sess-m")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_contains "a real awk on the same fixture shape still reports the fired entry" "$OUT" "bridge.md"
 
@@ -390,24 +421,31 @@ enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-n.txt"
 : > "$(state_of "$P")/edited-declined-sess-n.txt"
-OUT="$(run_stop "$P" "sess-n")"; RC=$?
+OUT="$(run_stop "$P" "sess-n")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_contains "it says an edit could not be confirmed" "$OUT" "could not be confirmed"
 assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
 if [ "$OUT" = "{}" ]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: the declined-marker state rendered as silence"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the declined-marker state rendered as silence"
 else
-  PASS=$((PASS + 1)); echo "  PASS: the declined-marker state did not render as silence"
+  PASS=$((PASS + 1))
+  echo "  PASS: the declined-marker state did not render as silence"
 fi
-if grep -qF -- "none updated" <<<"$OUT"; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: the declined-marker state rendered identically to case B (none updated)"
+if grep -qF -- "none updated" <<< "$OUT"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the declined-marker state rendered identically to case B (none updated)"
 else
-  PASS=$((PASS + 1)); echo "  PASS: the declined-marker state text differs from case B"
+  PASS=$((PASS + 1))
+  echo "  PASS: the declined-marker state text differs from case B"
 fi
-if grep -qF -- "could not tell whether any entry fired" <<<"$OUT"; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: the declined-marker state rendered identically to case D (state dir unknown)"
+if grep -qF -- "could not tell whether any entry fired" <<< "$OUT"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the declined-marker state rendered identically to case D (state dir unknown)"
 else
-  PASS=$((PASS + 1)); echo "  PASS: the declined-marker state text differs from case D"
+  PASS=$((PASS + 1))
+  echo "  PASS: the declined-marker state text differs from case D"
 fi
 
 echo ""
@@ -438,21 +476,25 @@ while [ "$_jit_o" -le 205 ]; do
   _jit_o=$((_jit_o + 1))
 done
 unset _jit_o _jit_o_name O_STATE_DIR
-OUT="$(run_stop "$P" "sess-o")"; RC=$?
+OUT="$(run_stop "$P" "sess-o")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_contains "the model line names entry 200 (the cap boundary itself)" "$OUT" "entry-200.md"
 assert_contains "the model line's overflow tail accounts for exactly the other 5" "$OUT" "and 5 more"
-if grep -qF -- "entry-201.md" <<<"$OUT"; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: the model line named an entry past the 200 cap"
+if grep -qF -- "entry-201.md" <<< "$OUT"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the model line named an entry past the 200 cap"
 else
-  PASS=$((PASS + 1)); echo "  PASS: the model line names nothing past the 200 cap"
+  PASS=$((PASS + 1))
+  echo "  PASS: the model line names nothing past the 200 cap"
 fi
 LOG="$P/.claude/jit-context/.discovery/logs/hooks.log"
 if [ -f "$LOG" ]; then
   assert_contains "hooks.log carries entry 200" "$(cat "$LOG")" "entry-200.md"
   assert_contains "hooks.log carries entry 205 too -- the model-line cap does not truncate the log" "$(cat "$LOG")" "entry-205.md"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: hooks.log was not written at all for a fired session"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: hooks.log was not written at all for a fired session"
 fi
 
 echo ""
@@ -488,7 +530,7 @@ ENGINE_BIN=$(mktemp -d)
 ENGINES=""
 ENGINE_SEEN=""
 for cand in awk gawk nawk mawk; do
-  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  cand_path=$(command -v "$cand" 2> /dev/null) || continue
   case " $ENGINE_SEEN " in *" $cand_path "*) continue ;; esac
   ENGINE_SEEN="$ENGINE_SEEN $cand_path"
   mkdir -p "$ENGINE_BIN/$cand"
@@ -524,8 +566,9 @@ else
   for eng in $ENGINES; do
     # The classifying probe: 3 bytes in, and only the DIGIT crosses back through $( ),
     # never the NUL itself.
-    P_LEN="$(printf 'a\000b' | PATH="$ENGINE_BIN/$eng:$PATH" awk '{print length($0)}' 2>/dev/null)"
-    OUT="$(PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" < "$NUL_PAYLOAD" 2>&1)"; RC=$?
+    P_LEN="$(printf 'a\000b' | PATH="$ENGINE_BIN/$eng:$PATH" awk '{print length($0)}' 2> /dev/null)"
+    OUT="$(PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" < "$NUL_PAYLOAD" 2>&1)"
+    RC=$?
     assert_rc0 "[$eng] the hook exits 0 on a raw NUL ahead of the key" "$RC"
     case "$P_LEN" in
       1)
@@ -565,7 +608,8 @@ mkdir -p "$(state_of "$P")"
 # "auto-entry.md" fires but is never created under 00-manual anywhere -- it stands in
 # for #295's plugin-owned layer (e.g. 01-oss), where the file exists but not there.
 printf 'auto-entry.md\n' > "$(state_of "$P")/vocab-shown-sess-q.txt"
-OUT="$(run_stop "$P" "sess-q")"; RC=$?
+OUT="$(run_stop "$P" "sess-q")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "the hook says nothing -- nothing fired is the reader's to curate" "$OUT"
 
@@ -581,17 +625,20 @@ enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 printf 'bridge.md\nauto-entry.md\n' > "$(state_of "$P")/vocab-shown-sess-r.txt"
-OUT="$(run_stop "$P" "sess-r")"; RC=$?
+OUT="$(run_stop "$P" "sess-r")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_contains "the total names both fired entries" "$OUT" "2 entries injected"
 assert_contains "the split names exactly the one the reader owns" "$OUT" "1 of them yours and not updated"
 assert_contains "the owned entry is still named in the fired list" "$OUT" "bridge.md"
 assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
 assert_contains "and says it is not addressed to the reader (#291)" "$OUT" "not addressed to you"
-if grep -qF -- ": 2 entries injected this session, none updated" <<<"$OUT"; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: a mixed session rendered as the flat all-yours sentence"
+if grep -qF -- ": 2 entries injected this session, none updated" <<< "$OUT"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: a mixed session rendered as the flat all-yours sentence"
 else
-  PASS=$((PASS + 1)); echo "  PASS: a mixed session did not render as the flat all-yours sentence"
+  PASS=$((PASS + 1))
+  echo "  PASS: a mixed session did not render as the flat all-yours sentence"
 fi
 
 echo ""
@@ -612,23 +659,26 @@ enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary blocked.md
 printf 'blocked.md\n' > "$(state_of "$P")/vocab-shown-sess-s.txt"
-chmod 000 "$P/.claude/jit-context/vocabulary/00-manual" 2>/dev/null
+chmod 000 "$P/.claude/jit-context/vocabulary/00-manual" 2> /dev/null
 if [ -r "$P/.claude/jit-context/vocabulary/00-manual" ]; then
   S_SKIPPED=1
   echo "  SKIP-NOTE: chmod did not remove read permission here (running as root, or a"
   echo "             filesystem without POSIX modes). Section S tested nothing."
 else
-  OUT="$(run_stop "$P" "sess-s")"; RC=$?
+  OUT="$(run_stop "$P" "sess-s")"
+  RC=$?
   assert_rc0 "the hook exits 0" "$RC"
   assert_contains "it says it could not tell" "$OUT" "could not tell"
   assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
   if [ "$OUT" = "{}" ]; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: an unreadable 00-manual directory rendered as silence"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: an unreadable 00-manual directory rendered as silence"
   else
-    PASS=$((PASS + 1)); echo "  PASS: an unreadable 00-manual directory did not render as silence"
+    PASS=$((PASS + 1))
+    echo "  PASS: an unreadable 00-manual directory did not render as silence"
   fi
 fi
-chmod 755 "$P/.claude/jit-context/vocabulary/00-manual" 2>/dev/null
+chmod 755 "$P/.claude/jit-context/vocabulary/00-manual" 2> /dev/null
 
 echo ""
 echo "=== T: #300 -- default (no config.env at all) is OFF: the none-updated shape emits {}, hooks.log still gets the line ==="
@@ -643,7 +693,8 @@ mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 manual_entry "$P" vocabulary cache.md
 printf 'bridge.md\ncache.md\n' > "$(state_of "$P")/vocab-shown-sess-t.txt"
-OUT="$(run_stop "$P" "sess-t")"; RC=$?
+OUT="$(run_stop "$P" "sess-t")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "no config.env at all -- the report is silent by default" "$OUT"
 LOG_T="$P/.claude/jit-context/.discovery/logs/hooks.log"
@@ -651,7 +702,8 @@ if [ -f "$LOG_T" ]; then
   assert_contains "hooks.log still gets the fired-entries line with the report off" "$(cat "$LOG_T")" "none updated"
   assert_contains "and still names the fired entries" "$(cat "$LOG_T")" "bridge.md"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: hooks.log was not written even though the report is only silenced, not disabled"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: hooks.log was not written even though the report is only silenced, not disabled"
 fi
 
 echo ""
@@ -666,14 +718,16 @@ mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 manual_entry "$P" vocabulary cache.md
 printf 'bridge.md\ncache.md\n' > "$(state_of "$P")/vocab-shown-sess-u.txt"
-OUT="$(run_stop "$P" "sess-u")"; RC=$?
+OUT="$(run_stop "$P" "sess-u")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "JIT_CONTEXT_STOP_REPORT=0 -- the report stays silent" "$OUT"
 LOG_U="$P/.claude/jit-context/.discovery/logs/hooks.log"
 if [ -f "$LOG_U" ]; then
   assert_contains "hooks.log still gets the fired-entries line with =0" "$(cat "$LOG_U")" "none updated"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: hooks.log was not written with JIT_CONTEXT_STOP_REPORT=0"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: hooks.log was not written with JIT_CONTEXT_STOP_REPORT=0"
 fi
 
 echo ""
@@ -684,17 +738,18 @@ echo "=== V: #300 -- the state-dir-unknown could-not-tell shape is silent by def
 
 V_SKIPPED=0
 P="$(new_project v)"
-chmod 555 "$P/.claude/jit-context" 2>/dev/null
+chmod 555 "$P/.claude/jit-context" 2> /dev/null
 if [ -w "$P/.claude/jit-context" ]; then
   V_SKIPPED=1
   echo "  SKIP-NOTE: chmod did not remove write permission here (running as root, or a"
   echo "             filesystem without POSIX modes). Section V tested nothing."
 else
-  OUT="$(run_stop "$P" "sess-v")"; RC=$?
+  OUT="$(run_stop "$P" "sess-v")"
+  RC=$?
   assert_rc0 "the hook exits 0" "$RC"
   assert_empty_json "the state-dir-unknown shape is silent with the report off" "$OUT"
 fi
-chmod 755 "$P/.claude/jit-context" 2>/dev/null
+chmod 755 "$P/.claude/jit-context" 2> /dev/null
 
 echo ""
 echo "=== W: #300 -- the edit-declined shape is silent by default too (twin of N) ==="
@@ -703,7 +758,8 @@ P="$(new_project w)"
 mkdir -p "$(state_of "$P")"
 printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-w.txt"
 : > "$(state_of "$P")/edited-declined-sess-w.txt"
-OUT="$(run_stop "$P" "sess-w")"; RC=$?
+OUT="$(run_stop "$P" "sess-w")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "the edit-declined shape is silent with the report off" "$OUT"
 
@@ -714,14 +770,16 @@ P="$(new_project x)"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 printf 'bridge.md\nauto-entry.md\n' > "$(state_of "$P")/vocab-shown-sess-x.txt"
-OUT="$(run_stop "$P" "sess-x")"; RC=$?
+OUT="$(run_stop "$P" "sess-x")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "the mixed shape is silent with the report off" "$OUT"
 LOG_X="$P/.claude/jit-context/.discovery/logs/hooks.log"
 if [ -f "$LOG_X" ]; then
   assert_contains "hooks.log still carries the split with the report off" "$(cat "$LOG_X")" "of them yours and not updated"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: hooks.log was not written for a mixed session with the report off"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: hooks.log was not written for a mixed session with the report off"
 fi
 
 echo ""
@@ -732,17 +790,18 @@ P="$(new_project y)"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary blocked.md
 printf 'blocked.md\n' > "$(state_of "$P")/vocab-shown-sess-y.txt"
-chmod 000 "$P/.claude/jit-context/vocabulary/00-manual" 2>/dev/null
+chmod 000 "$P/.claude/jit-context/vocabulary/00-manual" 2> /dev/null
 if [ -r "$P/.claude/jit-context/vocabulary/00-manual" ]; then
   Y_SKIPPED=1
   echo "  SKIP-NOTE: chmod did not remove read permission here (running as root, or a"
   echo "             filesystem without POSIX modes). Section Y tested nothing."
 else
-  OUT="$(run_stop "$P" "sess-y")"; RC=$?
+  OUT="$(run_stop "$P" "sess-y")"
+  RC=$?
   assert_rc0 "the hook exits 0" "$RC"
   assert_empty_json "the 00-manual-unreadable shape is silent with the report off" "$OUT"
 fi
-chmod 755 "$P/.claude/jit-context/vocabulary/00-manual" 2>/dev/null
+chmod 755 "$P/.claude/jit-context/vocabulary/00-manual" 2> /dev/null
 
 echo ""
 echo "=== Z: #300 -- an unparseable JIT_CONTEXT_STOP_REPORT value is refused, not silently read as on ==="
@@ -756,7 +815,8 @@ printf 'JIT_CONTEXT_STOP_REPORT=yes\n' > "$P/.claude/jit-context/config.env"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-z.txt"
-OUT="$(run_stop "$P" "sess-z")"; RC=$?
+OUT="$(run_stop "$P" "sess-z")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_empty_json "an unparseable value falls back to off, never silently on" "$OUT"
 LOG_Z="$P/.claude/jit-context/.discovery/logs/hooks.log"
@@ -764,7 +824,8 @@ if [ -f "$LOG_Z" ]; then
   assert_contains "the refusal is logged by line number, the existing config.env channel" "$(cat "$LOG_Z")" "line 1"
   assert_contains "and names what was refused" "$(cat "$LOG_Z")" "stop-report toggle"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: hooks.log was not written at all for the refused-config session"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: hooks.log was not written at all for the refused-config session"
 fi
 
 echo ""
@@ -787,15 +848,18 @@ mkdir -p "$(state_of "$P")"
 manual_entry "$P" tools how-work-lands.md
 manual_entry "$P" vocabulary bridge.md
 printf 'bridge.md\nrule:how-work-lands.md\n' > "$(state_of "$P")/vocab-shown-sess-aa.txt"
-OUT="$(run_stop "$P" "sess-aa")"; RC=$?
+OUT="$(run_stop "$P" "sess-aa")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_contains "the tools entry's real name is printed" "$OUT" "how-work-lands.md"
 assert_contains "and tagged with its dimension (#297 direction 2)" "$OUT" "how-work-lands.md (tools)"
 assert_contains "the vocabulary entry keeps rendering as before" "$OUT" "bridge.md"
-if grep -qF -- '<withheld' <<<"$OUT"; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: a well-formed tools entry still renders as withheld"
+if grep -qF -- '<withheld' <<< "$OUT"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: a well-formed tools entry still renders as withheld"
 else
-  PASS=$((PASS + 1)); echo "  PASS: no withheld placeholder for a well-formed tools entry"
+  PASS=$((PASS + 1))
+  echo "  PASS: no withheld placeholder for a well-formed tools entry"
 fi
 
 echo ""

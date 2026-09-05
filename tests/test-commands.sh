@@ -20,8 +20,17 @@ COMMANDS="$REPO/commands"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; return 0; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+  return 0
+}
 
 # $1 command file basename (e.g. doctor.md), $2 script it must resolve through
 # ${CLAUDE_PLUGIN_ROOT}, i.e. the *-hook.sh/*.sh script under scripts/.
@@ -63,7 +72,7 @@ check_command() {
     ok "commands/$name's body resolves through \${CLAUDE_PLUGIN_ROOT}"
   else
     bad "commands/$name's body resolves through \${CLAUDE_PLUGIN_ROOT}" \
-        "a marketplace install has no other reachable path (#202)"
+      "a marketplace install has no other reachable path (#202)"
   fi
 
   if grep -qF "scripts/$script" "$file"; then

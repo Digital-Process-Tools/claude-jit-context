@@ -30,8 +30,16 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+}
 
 echo "=== A: this repo's own tree -- the regression itself ==="
 # The actual repro from the issue: a clean checkout, `rebuild-tsv.sh`, `git status
@@ -54,8 +62,8 @@ fi
 # cross-tree guard then refuses (exit 2) rather than silently writing the wrong tree,
 # which is the guard working as intended, not a bug in this test. Pin it here the same
 # way test-jit-init.sh and test-cross-tree-write-231.sh already do for their own targets.
-ERR_A="$(mktemp 2>/dev/null || mktemp -t jit277a)"
-CLAUDE_PROJECT_DIR="$REPO" bash "$REPO/scripts/rebuild-tsv.sh" >/dev/null 2>"$ERR_A"
+ERR_A="$(mktemp 2> /dev/null || mktemp -t jit277a)"
+CLAUDE_PROJECT_DIR="$REPO" bash "$REPO/scripts/rebuild-tsv.sh" > /dev/null 2> "$ERR_A"
 RC=$?
 if [ "$RC" = 0 ]; then
   ok "A rebuild-tsv.sh exits 0"
@@ -71,7 +79,7 @@ else
   bad "A vocabulary/01-oss/01-paths.tsv is untouched by git status after a rebuild" "$DIRTY"
 fi
 
-if git -C "$REPO" ls-files --error-unmatch .claude/jit-context/vocabulary/01-oss/01-paths.tsv >/dev/null 2>&1; then
+if git -C "$REPO" ls-files --error-unmatch .claude/jit-context/vocabulary/01-oss/01-paths.tsv > /dev/null 2>&1; then
   ok "A vocabulary/01-oss/01-paths.tsv is tracked"
 else
   bad "A vocabulary/01-oss/01-paths.tsv is tracked" "git ls-files does not know this path"
@@ -83,22 +91,22 @@ echo "=== B: a synthetic fixture -- 01-oss keeps generating real path mappings =
 # is the narrow slice of it that matters here: a 01-oss vocab entry with a "## Modules"
 # section still produces rows in 01-paths.tsv. If a future change reintroduces the
 # "skip 01-oss" fix this suite's first draft took, this is what catches it.
-if ! git --version >/dev/null 2>&1; then
+if ! git --version > /dev/null 2>&1; then
   echo "SKIP-NOTE: no git on PATH -- section B needs a real git tree for rebuild-tsv.sh's"
   echo "           cross-tree guard to pass. A and its verdict above still stand."
 else
-  ROOT="$(mktemp -d 2>/dev/null || mktemp -d -t jit277b)"
+  ROOT="$(mktemp -d 2> /dev/null || mktemp -d -t jit277b)"
   trap 'chmod -R u+rwX "$ROOT" 2>/dev/null; rm -rf "$ROOT"' EXIT
 
   TREE="$ROOT/repo"
   mkdir -p "$TREE/.claude/jit-context/vocabulary/01-oss"
   if (
-    cd "$TREE" &&
-    git init -q &&
-    git config user.email "t@example.com" &&
-    git config user.name "t" &&
-    git commit -q --allow-empty -m init
-  ) >"$ROOT/git-init.log" 2>&1; then
+    cd "$TREE" \
+      && git init -q \
+      && git config user.email "t@example.com" \
+      && git config user.name "t" \
+      && git commit -q --allow-empty -m init
+  ) > "$ROOT/git-init.log" 2>&1; then
     {
       echo "---"
       echo "title: OSS module"
@@ -111,14 +119,14 @@ else
       echo "Bmodule"
     } > "$TREE/.claude/jit-context/vocabulary/01-oss/b-entry.md"
 
-    ( cd "$TREE" && CLAUDE_PROJECT_DIR="$TREE" bash "$REPO/scripts/rebuild-tsv.sh" ) >/dev/null 2>"$ROOT/rebuild.err"
+    (cd "$TREE" && CLAUDE_PROJECT_DIR="$TREE" bash "$REPO/scripts/rebuild-tsv.sh") > /dev/null 2> "$ROOT/rebuild.err"
     RC=$?
     PATHS_TSV="$TREE/.claude/jit-context/vocabulary/01-oss/01-paths.tsv"
     if [ "$RC" = 0 ] && [ -s "$PATHS_TSV" ] && grep -qF "Bmodule/" "$PATHS_TSV"; then
       ok "B a 01-oss \"## Modules\" section still produces a path mapping"
     else
       bad "B a 01-oss \"## Modules\" section still produces a path mapping" \
-        "exit=$RC, contents: $(cat "$PATHS_TSV" 2>/dev/null || echo '<missing>')"
+        "exit=$RC, contents: $(cat "$PATHS_TSV" 2> /dev/null || echo '<missing>')"
     fi
   else
     echo "SKIP-NOTE: could not initialise a git repo here -- see $ROOT/git-init.log."

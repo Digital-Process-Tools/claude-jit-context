@@ -39,9 +39,11 @@ fi
 assert_eq() {
   local desc="$1" want="$2" got="$3"
   if [ "$got" = "$want" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    wanted: $want"
     echo "    got:    $got"
   fi
@@ -64,7 +66,8 @@ if [ "$ctrl" != "unknown" ]; then
   echo "        every assertion below would be built on a harness that cannot answer cleanly"
   exit 1
 fi
-PASS=$((PASS + 1)); echo "  PASS: a clean environment detects unknown"
+PASS=$((PASS + 1))
+echo "  PASS: a clean environment detects unknown"
 
 echo ""
 echo "=== jit_host_detect: signature vars, and only signature vars, decide the host ==="
@@ -102,25 +105,25 @@ echo "=== jit_host_state / jit_host_inject_envelope / jit_host_refusal_state: th
 run_lookup() {
   env -i PATH="$PATH" bash -c 'source "'"$HOST_SH"'" >/dev/null 2>&1; '"$1"' "'"$2"'"'
 }
-assert_eq "claude-code state is OBSERVED"        "OBSERVED"                "$(run_lookup jit_host_state claude-code)"
-assert_eq "codex state is OBSERVED (#288 watched it fire)" "OBSERVED"      "$(run_lookup jit_host_state codex)"
-assert_eq "gemini-cli state is UNKNOWN"          "UNKNOWN"                 "$(run_lookup jit_host_state gemini-cli)"
-assert_eq "a name with no row is UNKNOWN"        "UNKNOWN"                 "$(run_lookup jit_host_state bogus-host)"
-assert_eq "jit_host_detect own miss value is UNKNOWN" "UNKNOWN"            "$(run_lookup jit_host_state unknown)"
+assert_eq "claude-code state is OBSERVED" "OBSERVED" "$(run_lookup jit_host_state claude-code)"
+assert_eq "codex state is OBSERVED (#288 watched it fire)" "OBSERVED" "$(run_lookup jit_host_state codex)"
+assert_eq "gemini-cli state is UNKNOWN" "UNKNOWN" "$(run_lookup jit_host_state gemini-cli)"
+assert_eq "a name with no row is UNKNOWN" "UNKNOWN" "$(run_lookup jit_host_state bogus-host)"
+assert_eq "jit_host_detect own miss value is UNKNOWN" "UNKNOWN" "$(run_lookup jit_host_state unknown)"
 
 assert_eq "claude-code inject envelope is its own shape" "claude-hookSpecificOutput" "$(run_lookup jit_host_inject_envelope claude-code)"
 assert_eq "codex inject envelope is Claude Code's own shape (#288)" "claude-hookSpecificOutput" "$(run_lookup jit_host_inject_envelope codex)"
-assert_eq "gemini-cli inject envelope is UNKNOWN"     "UNKNOWN"            "$(run_lookup jit_host_inject_envelope gemini-cli)"
+assert_eq "gemini-cli inject envelope is UNKNOWN" "UNKNOWN" "$(run_lookup jit_host_inject_envelope gemini-cli)"
 
 # The third state, by name. Every one of these five must NOT read as
 # "claude-decision-block" (a false yes) and must NOT read as "unsupported" (a
 # false, and much stronger, no) -- "refusal-not-established" is the only
 # honest answer for a host whose PreToolUse refusal has never been watched.
-assert_eq "claude-code refusal is the one OBSERVED contract" "claude-decision-block"   "$(run_lookup jit_host_refusal_state claude-code)"
+assert_eq "claude-code refusal is the one OBSERVED contract" "claude-decision-block" "$(run_lookup jit_host_refusal_state claude-code)"
 assert_eq "codex refusal is the same OBSERVED contract (#288)" "claude-decision-block" "$(run_lookup jit_host_refusal_state codex)"
-assert_eq "gemini-cli refusal is not-established"            "refusal-not-established" "$(run_lookup jit_host_refusal_state gemini-cli)"
-assert_eq "an unrecognised host is not-established"          "refusal-not-established" "$(run_lookup jit_host_refusal_state bogus-host)"
-assert_eq "the empty string is not-established"              "refusal-not-established" "$(env -i PATH="$PATH" bash -c 'source "'"$HOST_SH"'" >/dev/null 2>&1; jit_host_refusal_state ""')"
+assert_eq "gemini-cli refusal is not-established" "refusal-not-established" "$(run_lookup jit_host_refusal_state gemini-cli)"
+assert_eq "an unrecognised host is not-established" "refusal-not-established" "$(run_lookup jit_host_refusal_state bogus-host)"
+assert_eq "the empty string is not-established" "refusal-not-established" "$(env -i PATH="$PATH" bash -c 'source "'"$HOST_SH"'" >/dev/null 2>&1; jit_host_refusal_state ""')"
 
 echo ""
 echo "=== common.sh sources host.sh and exports JIT_HOST / JIT_HOST_REFUSAL_STATE (#252) ==="
@@ -148,12 +151,14 @@ echo "=== drift guard: JIT_AWK_ENVELOPE matches the shape the hooks still hand-r
 # which shell quoting a hook happens to use.
 assert_literal_in() {
   local desc="$1" needle_escaped="$2" needle_plain="$3" file="$4" found=0
-  grep -qF -- "$needle_escaped" "$file" 2>/dev/null && found=1
-  grep -qF -- "$needle_plain" "$file" 2>/dev/null && found=1
+  grep -qF -- "$needle_escaped" "$file" 2> /dev/null && found=1
+  grep -qF -- "$needle_plain" "$file" 2> /dev/null && found=1
   if [ "$found" = 1 ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to find, escaped or plain, in $file:"
     echo "    $needle_escaped"
     echo "    $needle_plain"
@@ -178,7 +183,6 @@ for hook in pre-tool-hook.sh pre-prompt-hook.sh pre-path-hook.sh session-start-h
   assert_literal_in "$hook still hand-rolls the identical inject tail" \
     "$INJECT_TAIL_ESC" "$INJECT_TAIL_PLAIN" "$REPO/scripts/$hook"
 done
-
 
 echo ""
 echo "=== #289: the codex row, after #288's live observation ==="
@@ -250,9 +254,9 @@ CODEX_HOOKS="$REPO/hooks/hooks.codex.json"
 CLAUDE_HOOKS="$REPO/hooks/hooks.json"
 CLAUDE_MANIFEST="$REPO/.claude-plugin/plugin.json"
 MARKETPLACE="$REPO/.agents/plugins/marketplace.json"
-assert_eq "a Codex plugin manifest ships"    "yes" "$( [ -r "$CODEX_MANIFEST" ] && echo yes || echo no )"
-assert_eq "a Codex hooks manifest ships"     "yes" "$( [ -r "$CODEX_HOOKS" ] && echo yes || echo no )"
-assert_eq "a self-referential marketplace entry ships" "yes" "$( [ -r "$MARKETPLACE" ] && echo yes || echo no )"
+assert_eq "a Codex plugin manifest ships" "yes" "$([ -r "$CODEX_MANIFEST" ] && echo yes || echo no)"
+assert_eq "a Codex hooks manifest ships" "yes" "$([ -r "$CODEX_HOOKS" ] && echo yes || echo no)"
+assert_eq "a self-referential marketplace entry ships" "yes" "$([ -r "$MARKETPLACE" ] && echo yes || echo no)"
 
 # #252: a live `codex plugin marketplace add .` on this repo's own manifest was
 # observed to refuse outright -- "marketplace 'dpt-plugins' is already added from a
@@ -270,11 +274,11 @@ marketplace_name() {
   LC_ALL=C awk -F'"' '/"name"[[:space:]]*:/ { print $4; exit }' "$1"
 }
 assert_eq "the local marketplace name is not the shared fleet name (observed collision, #252)" \
-  "no" "$( [ "$(marketplace_name "$MARKETPLACE")" = "dpt-plugins" ] && echo yes || echo no )"
+  "no" "$([ "$(marketplace_name "$MARKETPLACE")" = "dpt-plugins" ] && echo yes || echo no)"
 assert_eq "the Codex manifest points at the Codex hooks file, relatively" \
-  "yes" "$(grep -q '"\./hooks/hooks\.codex\.json"' "$CODEX_MANIFEST" 2>/dev/null && echo yes || echo no)"
+  "yes" "$(grep -q '"\./hooks/hooks\.codex\.json"' "$CODEX_MANIFEST" 2> /dev/null && echo yes || echo no)"
 assert_eq "the Codex hooks manifest uses PLUGIN_ROOT, not CLAUDE_PLUGIN_ROOT" \
-  "no" "$(grep -q 'CLAUDE_PLUGIN_ROOT' "$CODEX_HOOKS" 2>/dev/null && echo yes || echo no)"
+  "no" "$(grep -q 'CLAUDE_PLUGIN_ROOT' "$CODEX_HOOKS" 2> /dev/null && echo yes || echo no)"
 
 # One plugin, one version. remember's own test_codex_manifest_410.py carries this
 # assertion for the same reason: a second manifest that drifts from the first ships
@@ -288,22 +292,22 @@ assert_eq "the two manifests declare the same version" \
   "$(manifest_version "$CLAUDE_MANIFEST")" \
   "$(manifest_version "$CODEX_MANIFEST")"
 assert_eq "and that version is not empty (positive control)" \
-  "yes" "$( [ -n "$(manifest_version "$CLAUDE_MANIFEST")" ] && echo yes || echo no )"
+  "yes" "$([ -n "$(manifest_version "$CLAUDE_MANIFEST")" ] && echo yes || echo no)"
 
 # Every script one manifest binds, the other must bind. A hook that ships on one host
 # and silently not the other is this repo's own defect class wearing a manifest.
 for _s in session-start-hook pre-prompt-hook pre-tool-hook pre-path-hook post-tool-hook stop-hook; do
   assert_eq "hooks.codex.json binds $_s.sh" \
-    "yes" "$(grep -q "$_s\.sh" "$CODEX_HOOKS" 2>/dev/null && echo yes || echo no)"
+    "yes" "$(grep -q "$_s\.sh" "$CODEX_HOOKS" 2> /dev/null && echo yes || echo no)"
   assert_eq "hooks.json binds $_s.sh (positive control)" \
-    "yes" "$(grep -q "$_s\.sh" "$CLAUDE_HOOKS" 2>/dev/null && echo yes || echo no)"
+    "yes" "$(grep -q "$_s\.sh" "$CLAUDE_HOOKS" 2> /dev/null && echo yes || echo no)"
 done
 
 # Codex documents exactly eleven lifecycle events. A manifest naming one it does not
 # document registers nothing, silently -- the same shape as an untrusted hook.
 CODEX_DOCUMENTED='SessionStart SessionEnd SubagentStart SubagentStop PreToolUse PostToolUse PermissionRequest PreCompact PostCompact UserPromptSubmit Stop'
 _undocumented=""
-for _ev in $(grep -oE '^    "[A-Za-z]+": \[' "$CODEX_HOOKS" | tr -d ' ":[' ); do
+for _ev in $(grep -oE '^    "[A-Za-z]+": \[' "$CODEX_HOOKS" | tr -d ' ":['); do
   case " $CODEX_DOCUMENTED " in
     *" $_ev "*) ;;
     *) _undocumented="$_undocumented $_ev" ;;
@@ -322,13 +326,13 @@ echo "=== #328: PostToolUse matcher strings must match between the two manifests
 # hook scripts each manifest names (the loop above already covers that), so a future
 # single-sided matcher edit fails here instead of drifting silently again.
 posttooluse_matcher() {
-  awk '/"PostToolUse"/ { f=1 } f && /"matcher"/ { print; exit }' "$1" | \
-    sed -E 's/.*"matcher": *"([^"]*)".*/\1/'
+  awk '/"PostToolUse"/ { f=1 } f && /"matcher"/ { print; exit }' "$1" \
+    | sed -E 's/.*"matcher": *"([^"]*)".*/\1/'
 }
 CLAUDE_PT_MATCHER="$(posttooluse_matcher "$CLAUDE_HOOKS")"
 CODEX_PT_MATCHER="$(posttooluse_matcher "$CODEX_HOOKS")"
 assert_eq "hooks.json's own PostToolUse matcher is not empty (positive control)" \
-  "yes" "$( [ -n "$CLAUDE_PT_MATCHER" ] && echo yes || echo no )"
+  "yes" "$([ -n "$CLAUDE_PT_MATCHER" ] && echo yes || echo no)"
 assert_eq "hooks.codex.json's PostToolUse matcher matches hooks.json's, Bash included (#328)" \
   "$CLAUDE_PT_MATCHER" "$CODEX_PT_MATCHER"
 

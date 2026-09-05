@@ -77,14 +77,23 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --subjects)
       SUBJECTS="${2:-}"
-      [ -n "$SUBJECTS" ] || { echo "--subjects needs a directory" >&2; exit 2; }
+      [ -n "$SUBJECTS" ] || {
+        echo "--subjects needs a directory" >&2
+        exit 2
+      }
       DEFAULT_MODE=0
       shift 2
       ;;
-    *) echo "unknown argument: $1" >&2; exit 2 ;;
+    *)
+      echo "unknown argument: $1" >&2
+      exit 2
+      ;;
   esac
 done
-[ -d "$SUBJECTS" ] || { echo "no such directory: $SUBJECTS" >&2; exit 2; }
+[ -d "$SUBJECTS" ] || {
+  echo "no such directory: $SUBJECTS" >&2
+  exit 2
+}
 
 PASS=0
 FAIL=0
@@ -92,13 +101,18 @@ DROVE=0
 NOT_EVALUATED=""
 UNDECLARED=""
 
-pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
+pass() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
 fail() {
-  FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
   for l in "$@"; do echo "    $l"; done
 }
 
-WORK="$(mktemp -d 2>/dev/null || mktemp -d -t jit56)"
+WORK="$(mktemp -d 2> /dev/null || mktemp -d -t jit56)"
 trap 'rm -rf "$WORK"' EXIT
 
 # --- The payload -------------------------------------------------------------------
@@ -134,7 +148,10 @@ echo "Payload: $BYTES bytes, needle on line 1"
 TOKEN="tokenxyz"
 BIGROW="  2x  $TOKEN
 $BIG"
-BLOCKLINE=$(printf %s "{" ; printf %s "\"decision\":\"block\"}")
+BLOCKLINE=$(
+  printf %s "{"
+  printf %s "\"decision\":\"block\"}"
+)
 BIGBLOCK="$BLOCKLINE
 $BIG"
 
@@ -203,11 +220,17 @@ verdict() {
     FAIL=0
     if [ -n "$var" ]; then eval "$var=\$path"; fi
     # shellcheck disable=SC1090
-    . "$funcs" 2>/dev/null || { echo ERR; exit 0; }
-    "$fn" "$@" >/dev/null 2>&1
-    if [ "$PASS" = 1 ] && [ "$FAIL" = 0 ]; then echo PASS
-    elif [ "$FAIL" = 1 ] && [ "$PASS" = 0 ]; then echo FAIL
-    else echo ERR
+    . "$funcs" 2> /dev/null || {
+      echo ERR
+      exit 0
+    }
+    "$fn" "$@" > /dev/null 2>&1
+    if [ "$PASS" = 1 ] && [ "$FAIL" = 0 ]; then
+      echo PASS
+    elif [ "$FAIL" = 1 ] && [ "$PASS" = 0 ]; then
+      echo FAIL
+    else
+      echo ERR
     fi
   )
 }
@@ -231,27 +254,32 @@ check() {
 drive_declared() {
   local suite="$1" funcs="$2" fn="$3" sem="$4" src="$5" var=""
   case "$src" in
-    capture|path-arg) ;;
+    capture | path-arg) ;;
     file:*)
       var="${src#file:}"
       case "$var" in
-        ""|[0-9]*|*[!A-Za-z0-9_]*)
+        "" | [0-9]* | *[!A-Za-z0-9_]*)
           fail "$suite: $fn declares an unusable output variable" "source: $src"
-          return ;;
+          return
+          ;;
       esac
       # The declared name is assigned inside the same subshell that counts the verdict,
       # so a name this harness already uses there would corrupt its own bookkeeping and
       # report a defect in a helper that has none -- which is #110 all over again, by a
       # different route. Refuse it by name instead of discovering it as a false red.
       case "$var" in
-        PASS|FAIL|funcs|fn|var|path)
+        PASS | FAIL | funcs | fn | var | path)
           fail "$suite: $fn declares an output variable this harness reserves" \
-               "source: $src -- rename the variable in the suite" \
-               "reserved: PASS FAIL funcs fn var path"
-          return ;;
+            "source: $src -- rename the variable in the suite" \
+            "reserved: PASS FAIL funcs fn var path"
+          return
+          ;;
       esac
       ;;
-    *) fail "$suite: $fn declares an unknown source" "source: $src"; return ;;
+    *)
+      fail "$suite: $fn declares an unknown source" "source: $src"
+      return
+      ;;
   esac
 
   case "$src:$sem" in
@@ -259,52 +287,65 @@ drive_declared() {
       check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIG" "$NEEDLE"
       check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIG" "$ABSENT"
       check "$suite" "$funcs" "$fn" PASS "" "" "d" "$DASHBIG" "$DASHNEEDLE"
-      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIG" "$DASHNEEDLE" ;;
+      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIG" "$DASHNEEDLE"
+      ;;
     capture:not_contains)
       check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIG" "$ABSENT"
       check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIG" "$NEEDLE"
       check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIG" "$DASHNEEDLE"
-      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$DASHBIG" "$DASHNEEDLE" ;;
+      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$DASHBIG" "$DASHNEEDLE"
+      ;;
     capture:token_row)
-      check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIGROW" "$TOKEN" ;;
+      check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIGROW" "$TOKEN"
+      ;;
     capture:no_token_row)
-      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIGROW" "$TOKEN" ;;
+      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIGROW" "$TOKEN"
+      ;;
     capture:blocked)
-      check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIGBLOCK" ;;
+      check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIGBLOCK"
+      ;;
     capture:not_blocked)
-      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIGBLOCK" ;;
+      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIGBLOCK"
+      ;;
 
     file:*:contains)
       check "$suite" "$funcs" "$fn" PASS "$var" "$BIGFILE" "d" "$NEEDLE"
       check "$suite" "$funcs" "$fn" FAIL "$var" "$BIGFILE" "d" "$ABSENT"
       check "$suite" "$funcs" "$fn" PASS "$var" "$DASHBIGFILE" "d" "$DASHNEEDLE"
-      check "$suite" "$funcs" "$fn" FAIL "$var" "$BIGFILE" "d" "$DASHNEEDLE" ;;
+      check "$suite" "$funcs" "$fn" FAIL "$var" "$BIGFILE" "d" "$DASHNEEDLE"
+      ;;
     file:*:not_contains)
       check "$suite" "$funcs" "$fn" PASS "$var" "$BIGFILE" "d" "$ABSENT"
       check "$suite" "$funcs" "$fn" FAIL "$var" "$BIGFILE" "d" "$NEEDLE"
       check "$suite" "$funcs" "$fn" PASS "$var" "$BIGFILE" "d" "$DASHNEEDLE"
-      check "$suite" "$funcs" "$fn" FAIL "$var" "$DASHBIGFILE" "d" "$DASHNEEDLE" ;;
+      check "$suite" "$funcs" "$fn" FAIL "$var" "$DASHBIGFILE" "d" "$DASHNEEDLE"
+      ;;
     file:*:blocked)
       check "$suite" "$funcs" "$fn" PASS "$var" "$BIGBLOCKFILE" "d" "$NEEDLE"
-      check "$suite" "$funcs" "$fn" FAIL "$var" "$BIGBLOCKFILE" "d" "$ABSENT" ;;
+      check "$suite" "$funcs" "$fn" FAIL "$var" "$BIGBLOCKFILE" "d" "$ABSENT"
+      ;;
     file:*:not_blocked)
       check "$suite" "$funcs" "$fn" PASS "$var" "$BIGFILE" "d"
-      check "$suite" "$funcs" "$fn" FAIL "$var" "$BIGBLOCKFILE" "d" ;;
+      check "$suite" "$funcs" "$fn" FAIL "$var" "$BIGBLOCKFILE" "d"
+      ;;
 
     path-arg:contains)
       check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIGFILE" "$NEEDLE"
       check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIGFILE" "$ABSENT"
       check "$suite" "$funcs" "$fn" PASS "" "" "d" "$DASHBIGFILE" "$DASHNEEDLE"
-      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIGFILE" "$DASHNEEDLE" ;;
+      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIGFILE" "$DASHNEEDLE"
+      ;;
     path-arg:not_contains)
       check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIGFILE" "$ABSENT"
       check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$BIGFILE" "$NEEDLE"
       check "$suite" "$funcs" "$fn" PASS "" "" "d" "$BIGFILE" "$DASHNEEDLE"
-      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$DASHBIGFILE" "$DASHNEEDLE" ;;
+      check "$suite" "$funcs" "$fn" FAIL "" "" "d" "$DASHBIGFILE" "$DASHNEEDLE"
+      ;;
 
     *)
       fail "$suite: $fn declares a semantic this harness cannot drive" \
-           "semantic: $sem, source: $src" ;;
+        "semantic: $sem, source: $src"
+      ;;
   esac
 }
 
@@ -323,10 +364,10 @@ for suite in "$SUBJECTS"/test-*.sh; do
   saw_none=0
   if [ ! -s "$decls" ]; then
     fail "$name: declares nothing" \
-         "every suite carries at least one '# jit-drive:' line, so that a helper this" \
-         "harness does not drive is a written decision rather than a silence." \
-         "Declare a helper --   # jit-drive: assert_contains contains capture" \
-         "or the absence   --   # jit-drive: none -- <why>"
+      "every suite carries at least one '# jit-drive:' line, so that a helper this" \
+      "harness does not drive is a written decision rather than a silence." \
+      "Declare a helper --   # jit-drive: assert_contains contains capture" \
+      "or the absence   --   # jit-drive: none -- <why>"
   fi
 
   while IFS= read -r decl; do
@@ -342,24 +383,28 @@ for suite in "$SUBJECTS"/test-*.sh; do
       reason="$*"
       saw_none=1
       case "$reason" in
-        ""|"--")
+        "" | "--")
           fail "$name: 'jit-drive: none' carries no reason" \
-               "say what this suite exposes instead, on the same line" ;;
+            "say what this suite exposes instead, on the same line"
+          ;;
         *)
           NOT_EVALUATED="$NOT_EVALUATED
-  $name: $reason" ;;
+  $name: $reason"
+          ;;
       esac
       continue
     fi
-    fn="${1:-}"; sem="${2:-}"; src="${3:-}"
+    fn="${1:-}"
+    sem="${2:-}"
+    src="${3:-}"
     if [ -z "$fn" ] || [ -z "$sem" ] || [ -z "$src" ]; then
       fail "$name: malformed declaration" "jit-drive: $decl" \
-           "expected: <function> <semantic> <source>"
+        "expected: <function> <semantic> <source>"
       continue
     fi
     if ! grep -qF "$fn() {" "$funcs"; then
       fail "$name: declares $fn, which this suite does not define" \
-           "a rename left the declaration behind, and nothing was driven for it"
+        "a rename left the declaration behind, and nothing was driven for it"
       continue
     fi
     declared="$declared $fn"
@@ -389,7 +434,7 @@ done
 if [ "$DEFAULT_MODE" = 1 ]; then
   if [ "$DROVE" -lt 20 ]; then
     fail "drove only $DROVE helper calls -- extraction found almost nothing" \
-         "every result above is vacuous; expected at least 20"
+      "every result above is vacuous; expected at least 20"
   else
     pass "drove $DROVE real helper calls across the suites"
   fi
@@ -420,9 +465,9 @@ printf '%s\n' \
 control_hits=$(scan_file "$CONTROL_FIXTURE")
 case "$control_hits" in
   *"2: "*) case "$control_hits" in
-             *"1: "*) fail "control: the scan flagged the commented line" "$control_hits" ;;
-             *)       pass "control: the scan flags real code and skips the comment" ;;
-           esac ;;
+    *"1: "*) fail "control: the scan flagged the commented line" "$control_hits" ;;
+    *) pass "control: the scan flags real code and skips the comment" ;;
+  esac ;;
   *) fail "control: the scan found nothing -- every result below is vacuous" "$control_hits" ;;
 esac
 
@@ -486,10 +531,10 @@ N='needle'
 dash_control_hits=$(scan_dash_needle "$DASH_CONTROL")
 case "$dash_control_hits" in
   *"2: "*) case "$dash_control_hits" in
-             *"1: "*) fail "control: the dash scan flagged the commented line" "$dash_control_hits" ;;
-             *"3: "*) fail "control: the dash scan flagged a call that already carries --" "$dash_control_hits" ;;
-             *)       pass "control: the dash scan flags the unguarded call only" ;;
-           esac ;;
+    *"1: "*) fail "control: the dash scan flagged the commented line" "$dash_control_hits" ;;
+    *"3: "*) fail "control: the dash scan flagged a call that already carries --" "$dash_control_hits" ;;
+    *) pass "control: the dash scan flags the unguarded call only" ;;
+  esac ;;
   *) fail "control: the dash scan found nothing -- the sweep below is vacuous" "$dash_control_hits" ;;
 esac
 
@@ -621,21 +666,21 @@ if [ "$DEFAULT_MODE" = 1 ]; then
 
   # The control first: if the harness caught nothing, every assertion under it is vacuous.
   self_has "the genuinely broken helper is still flagged" \
-           "FAIL: test-broken.sh: assert_contains should report PASS"
+    "FAIL: test-broken.sh: assert_contains should report PASS"
   self_has "the file-reading helper is driven, and passes" \
-           "PASS: test-file-reader.sh: assert_blocked reports PASS"
+    "PASS: test-file-reader.sh: assert_blocked reports PASS"
   self_has "the file-reading helper is driven the other way too" \
-           "PASS: test-file-reader.sh: assert_blocked reports FAIL"
+    "PASS: test-file-reader.sh: assert_blocked reports FAIL"
   self_lacks "the file-reading helper is not falsely flagged (#110)" \
-             "FAIL: test-file-reader.sh"
+    "FAIL: test-file-reader.sh"
   self_has "a suite that declares nothing is reported, not skipped" \
-           "FAIL: test-undeclared.sh: declares nothing"
+    "FAIL: test-undeclared.sh: declares nothing"
   self_has "its undriven helper is named in the third-outcome list" \
-           "test-undeclared.sh: assert_contains"
+    "test-undeclared.sh: assert_contains"
   self_has "an output variable this harness reserves is refused by name" \
-           "FAIL: test-reserved.sh: assert_blocked declares an output variable this harness reserves"
+    "FAIL: test-reserved.sh: assert_blocked declares an output variable this harness reserves"
   self_lacks "and is not driven into a false verdict instead" \
-             "test-reserved.sh: assert_blocked should report"
+    "test-reserved.sh: assert_blocked should report"
   if [ "$SELF_RC" -ne 0 ]; then
     pass "self-test: the sub-run exits non-zero on its three planted defects"
   else

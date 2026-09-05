@@ -50,7 +50,7 @@ FAIL=0
 # string, so two assertions reading two different rules off the same path still both
 # see that path's real output, and a path queried once is never queried with different
 # arguments and merged into it.
-FIRED_FOR_CACHE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jit-dogfood-fired-for.XXXXXXXX" 2>/dev/null)" || {
+FIRED_FOR_CACHE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/jit-dogfood-fired-for.XXXXXXXX" 2> /dev/null)" || {
   echo "  FAIL: could not create a cache dir for fired_for() memoisation"
   exit 1
 }
@@ -72,12 +72,12 @@ fired_for() {
     cat "$FIRED_FOR_CACHE_DIR/$n"
     return
   fi
-  printf '%s\n' "$path" >>"$FIRED_FOR_LAZY"
+  printf '%s\n' "$path" >> "$FIRED_FOR_LAZY"
   out=$( (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$DRYRUN" --file "$path" 2>&1) \
-    | awk '/pre-path-hook\.sh/ { $1=""; print }' )
-  n=$(($(wc -l <"$FIRED_FOR_MANIFEST") + 1))
-  printf '%s\n' "$out" >"$FIRED_FOR_CACHE_DIR/$n"
-  printf '%s\t%s\n' "$n" "$path" >>"$FIRED_FOR_MANIFEST"
+    | awk '/pre-path-hook\.sh/ { $1=""; print }')
+  n=$(($(wc -l < "$FIRED_FOR_MANIFEST") + 1))
+  printf '%s\n' "$out" > "$FIRED_FOR_CACHE_DIR/$n"
+  printf '%s\t%s\n' "$n" "$path" >> "$FIRED_FOR_MANIFEST"
   cat "$FIRED_FOR_CACHE_DIR/$n"
 }
 
@@ -107,13 +107,13 @@ fired_for_prime() {
     # the memoisation test reads -- would count evaluations that never happened.
     n=$(awk -F'\t' -v p="$path" '$2==p{print $1; exit}' "$FIRED_FOR_MANIFEST")
     [ -z "$n" ] || continue
-    n=$(($(wc -l <"$FIRED_FOR_MANIFEST") + 1))
+    n=$(($(wc -l < "$FIRED_FOR_MANIFEST") + 1))
     awk -v want="  file: $path" '
       $0 == want { on = 1; next }
       on && /^  file: / { exit }
       on && /pre-path-hook\.sh/ { $1 = ""; print }
-    ' <<<"$out" >"$FIRED_FOR_CACHE_DIR/$n"
-    printf '%s\t%s\n' "$n" "$path" >>"$FIRED_FOR_MANIFEST"
+    ' <<< "$out" > "$FIRED_FOR_CACHE_DIR/$n"
+    printf '%s\t%s\n' "$n" "$path" >> "$FIRED_FOR_MANIFEST"
   done
 }
 
@@ -121,7 +121,7 @@ fired_for_prime() {
 # is correct even when the last call to fired_for() ran, and updated the manifest,
 # inside a subshell this function's own caller never sees.
 fired_for_misses() {
-  wc -l <"$FIRED_FOR_MANIFEST" | tr -d '[:space:]'
+  wc -l < "$FIRED_FOR_MANIFEST" | tr -d '[:space:]'
 }
 
 # The scripts/ half of the prime list, read one line at a time rather than left to an
@@ -133,7 +133,7 @@ prime_scripts=$(cd "$REPO" && git ls-files -- scripts)
 while IFS= read -r prime_script; do
   [ -n "$prime_script" ] || continue
   PRIME_SCRIPTS+=("$prime_script")
-done <<<"$prime_scripts"
+done <<< "$prime_scripts"
 
 # Every path the assertions below ask about, answered in one evaluation of the tree.
 # Written out rather than derived from the call sites: a derivation goes silently narrower
@@ -191,7 +191,7 @@ fired_for_prime \
 # the pipe takes SIGPIPE, which under pipefail turns a found string into a non-zero
 # status. That is issue #56, and here it would have inverted the guard itself.
 harness_probe=$(fired_for "scripts/pre-path-hook.sh")
-if ! grep -q "hooks.md" <<<"$harness_probe"; then
+if ! grep -q "hooks.md" <<< "$harness_probe"; then
   echo "  FAIL: harness cannot evaluate this repo's own tree — every result below would be vacuous"
   exit 1
 fi
@@ -220,9 +220,11 @@ out=$(fired_for "docs/only-the-memoisation-test-asks-for-this.txt")
 out=$(fired_for "docs/only-the-memoisation-test-asks-for-this.txt")
 misses_after=$(fired_for_misses)
 if [ "$((misses_after - misses_before))" -eq 1 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: fired_for answers a repeated path from cache, not a second evaluation"
+  PASS=$((PASS + 1))
+  echo "  PASS: fired_for answers a repeated path from cache, not a second evaluation"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: fired_for re-evaluated an already-queried path"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: fired_for re-evaluated an already-queried path"
   echo "    expected exactly 1 subprocess invocation for two identical queries, got $((misses_after - misses_before))"
 fi
 unset out
@@ -231,10 +233,12 @@ unset out
 assert_fires() {
   local desc="$1" path="$2" rule="$3" out
   out=$(fired_for "$path")
-  if grep -qF "$rule" <<<"$out"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF "$rule" <<< "$out"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected $rule to fire for: $path"
     echo "    got: ${out:-<nothing>}"
   fi
@@ -243,18 +247,20 @@ assert_fires() {
 assert_silent() {
   local desc="$1" path="$2" rule="$3" out
   out=$(fired_for "$path")
-  if grep -qF "$rule" <<<"$out"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF "$rule" <<< "$out"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    $rule must NOT fire for: $path"
     echo "    got: $out"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
 echo "=== entries.md fires on an entry, and only on an entry ==="
-assert_fires  "our own entry tree"     ".claude/jit-context/paths/00-manual/hooks.md" "entries.md"
-assert_fires  "the shipped examples"   "examples/jit-context/tools/00-manual/git.md"  "entries.md"
+assert_fires "our own entry tree" ".claude/jit-context/paths/00-manual/hooks.md" "entries.md"
+assert_fires "the shipped examples" "examples/jit-context/tools/00-manual/git.md" "entries.md"
 # The bug this suite was written for. The scratchpad path a Claude Code session hands
 # out is derived from the project directory, so for THIS repo it contains the string
 # "claude-jit-context" — and a pattern anchored on the bare fragment "jit-context/"
@@ -263,91 +269,91 @@ assert_silent "a session scratchpad path" \
   "/private/tmp/claude-501/-Users-floriandavid-Documents-claude-jit-context/x/scratchpad/note.md" \
   "entries.md"
 assert_silent "a doc that is not an entry" "docs/contributing.md" "entries.md"
-assert_silent "the README"                 "README.md"            "entries.md"
+assert_silent "the README" "README.md" "entries.md"
 
 echo ""
 echo "=== hooks.md fires on code that runs in someone else session ==="
-assert_fires  "a hook script"          "scripts/pre-path-hook.sh"  "hooks.md"
-assert_fires  "the session-start hook" "scripts/session-start-hook.sh" "hooks.md"
+assert_fires "a hook script" "scripts/pre-path-hook.sh" "hooks.md"
+assert_fires "the session-start hook" "scripts/session-start-hook.sh" "hooks.md"
 # common.sh is sourced by all four hooks, so every sentence in hooks.md applies to it
 # verbatim -- and it is where every containment fix in 0.3.0 landed. It carried no rule
 # at all until #42.
-assert_fires  "the shared library"     "scripts/common.sh"         "hooks.md"
+assert_fires "the shared library" "scripts/common.sh" "hooks.md"
 # The three tooling scripts must NOT get this entry. "Every failure path exits 0" is
 # actively wrong for rebuild-tsv.sh, and jit-dry-run.sh exits 1 and 2 on purpose. A false
 # rule fires more expensively than no rule, because it arrives with the same authority.
-assert_silent "the index writer"       "scripts/rebuild-tsv.sh"    "hooks.md"
-assert_silent "the linter"             "scripts/jit-dry-run.sh"    "hooks.md"
-assert_silent "the miss reporter"      "scripts/jit-misses.sh"     "hooks.md"
-assert_silent "a test for a hook"      "tests/test-pre-path-hook.sh" "hooks.md"
+assert_silent "the index writer" "scripts/rebuild-tsv.sh" "hooks.md"
+assert_silent "the linter" "scripts/jit-dry-run.sh" "hooks.md"
+assert_silent "the miss reporter" "scripts/jit-misses.sh" "hooks.md"
+assert_silent "a test for a hook" "tests/test-pre-path-hook.sh" "hooks.md"
 # Same defect class as the scratchpad path above: an unanchored pattern matches the
 # fragment wherever it appears, so a directory ENDING in "scripts" claims the rule.
-assert_silent "a lookalike directory"  "myscripts/common.sh"       "hooks.md"
+assert_silent "a lookalike directory" "myscripts/common.sh" "hooks.md"
 # jit-init.sh must never inherit "every failure path exits 0" -- it exits 1 to refuse an
 # overwrite and 2 when it cannot evaluate the request.
-assert_silent "the project seeder"     "scripts/jit-init.sh"       "hooks.md"
+assert_silent "the project seeder" "scripts/jit-init.sh" "hooks.md"
 # Same split for the fifth tool: "every failure path exits 0" is actively wrong for a
 # diagnostic whose exit code is the answer.
-assert_silent "the doctor"             "scripts/jit-doctor.sh"     "hooks.md"
+assert_silent "the doctor" "scripts/jit-doctor.sh" "hooks.md"
 
 echo ""
 echo "=== tooling.md fires on the five build, diagnostic and release scripts ==="
-assert_fires  "the index writer"       "scripts/rebuild-tsv.sh"    "tooling.md"
+assert_fires "the index writer" "scripts/rebuild-tsv.sh" "tooling.md"
 # Seeds a project and refuses rather than overwriting, so it is run deliberately by a
 # person and fails loudly (#81). It carried no rule at all until this file named it --
 # hooks.md's pattern does not reach it either, so it was a script in scripts/ that the
 # repo's own knowledge said nothing about.
-assert_fires  "the project seeder"     "scripts/jit-init.sh"       "tooling.md"
-assert_fires  "the linter"             "scripts/jit-dry-run.sh"    "tooling.md"
-assert_fires  "the miss reporter"      "scripts/jit-misses.sh"     "tooling.md"
+assert_fires "the project seeder" "scripts/jit-init.sh" "tooling.md"
+assert_fires "the linter" "scripts/jit-dry-run.sh" "tooling.md"
+assert_fires "the miss reporter" "scripts/jit-misses.sh" "tooling.md"
 # The fifth (#183). It answers "is any of this running at all", exits 1 on a layer whose
 # rules can never load, and 2 when it cannot evaluate the tree -- so the tooling contract
 # is the one that applies to it, and the hook contract below must not.
-assert_fires  "the doctor"             "scripts/jit-doctor.sh"     "tooling.md"
+assert_fires "the doctor" "scripts/jit-doctor.sh" "tooling.md"
 # The changelog assembler used to be here, at `.github/scripts/assemble_changelog.py`,
 # under the same contract (#66). It is now `.oss/assemble_changelog.py`, vendored from
 # the oss plugin, and `tooling.md`'s exit-code table is the INVERSE of what it does --
 # so it must not fire, and `vendored-oss.md` covers it instead.
 assert_silent "the vendored assembler" ".oss/assemble_changelog.py" "tooling.md"
-assert_fires  "the vendored assembler" ".oss/assemble_changelog.py" "vendored-oss.md"
-assert_fires  "the owned workflow"     ".github/workflows/oss-changelog.yml" "vendored-oss.md"
+assert_fires "the vendored assembler" ".oss/assemble_changelog.py" "vendored-oss.md"
+assert_fires "the owned workflow" ".github/workflows/oss-changelog.yml" "vendored-oss.md"
 # The scaffold owns files directly under .oss/ and nothing below it, and no other
 # workflow: a rule saying "an edit here is lost" must not reach a file it is false of.
-assert_silent "a nested path under .oss"  ".oss/vendor/lib/thing.py" "vendored-oss.md"
+assert_silent "a nested path under .oss" ".oss/vendor/lib/thing.py" "vendored-oss.md"
 assert_silent "our own tests workflow" ".github/workflows/tests.yml" "vendored-oss.md"
 # The inverse of the split above: these run in someone else session and are governed by
 # hooks.md, so the tooling contract must not reach them.
-assert_silent "a hook script"          "scripts/pre-tool-hook.sh"  "tooling.md"
-assert_silent "the shared library"     "scripts/common.sh"         "tooling.md"
-assert_silent "a suite about a tool"   "tests/test-jit-dry-run.sh" "tooling.md"
-assert_silent "a lookalike directory"  "vendor/subscripts/jit-misses.sh" "tooling.md"
-assert_silent "the seeder's own suite"  "tests/test-jit-init.sh"   "tooling.md"
+assert_silent "a hook script" "scripts/pre-tool-hook.sh" "tooling.md"
+assert_silent "the shared library" "scripts/common.sh" "tooling.md"
+assert_silent "a suite about a tool" "tests/test-jit-dry-run.sh" "tooling.md"
+assert_silent "a lookalike directory" "vendor/subscripts/jit-misses.sh" "tooling.md"
+assert_silent "the seeder's own suite" "tests/test-jit-init.sh" "tooling.md"
 # The template the seeder copies is documentation, not one of the tools.
-assert_silent "the seeded template"     "templates/jit-context/vocabulary/00-manual/writing-rules.md" "tooling.md"
+assert_silent "the seeded template" "templates/jit-context/vocabulary/00-manual/writing-rules.md" "tooling.md"
 
 echo ""
 echo "=== tests.md fires on a suite, and only on a suite ==="
-assert_fires  "a hook suite"           "tests/test-pre-path-hook.sh" "tests.md"
-assert_fires  "the runner"             "tests/run-all.sh"          "tests.md"
-assert_silent "a hook script"          "scripts/pre-path-hook.sh"  "tests.md"
-assert_silent "the shared library"     "scripts/common.sh"         "tests.md"
+assert_fires "a hook suite" "tests/test-pre-path-hook.sh" "tests.md"
+assert_fires "the runner" "tests/run-all.sh" "tests.md"
+assert_silent "a hook script" "scripts/pre-path-hook.sh" "tests.md"
+assert_silent "the shared library" "scripts/common.sh" "tests.md"
 assert_silent "a fixture below tests/" "tests/fixtures/tree/setup.sh" "tests.md"
-assert_silent "a lookalike directory"  "contests/entry.sh"         "tests.md"
+assert_silent "a lookalike directory" "contests/entry.sh" "tests.md"
 
 echo ""
 echo "=== release.md fires on the manifest only ==="
-assert_fires  "the plugin manifest"    ".claude-plugin/plugin.json" "release.md"
-assert_silent "some other json"        ".supertool.json"            "release.md"
+assert_fires "the plugin manifest" ".claude-plugin/plugin.json" "release.md"
+assert_silent "some other json" ".supertool.json" "release.md"
 
 echo ""
 echo "=== changelog.md fires on the assembled file, and not on the fragments ==="
-assert_fires  "the assembled file"     "CHANGELOG.md"               "changelog.md"
-assert_fires  "it from a subdirectory" "vendor/thing/CHANGELOG.md"  "changelog.md"
+assert_fires "the assembled file" "CHANGELOG.md" "changelog.md"
+assert_fires "it from a subdirectory" "vendor/thing/CHANGELOG.md" "changelog.md"
 # The directory documents itself, and a rule saying "do not edit this, write a fragment"
 # arriving while you write a fragment is the rule firing against its own advice.
-assert_silent "the convention page"    "changelog.d/README.md"      "changelog.md"
-assert_silent "a fragment"             "changelog.d/70.fixed.md"    "changelog.md"
-assert_silent "a lookalike name"       "docs/CHANGELOG.md.tmpl"     "changelog.md"
+assert_silent "the convention page" "changelog.d/README.md" "changelog.md"
+assert_silent "a fragment" "changelog.d/70.fixed.md" "changelog.md"
+assert_silent "a lookalike name" "docs/CHANGELOG.md.tmpl" "changelog.md"
 
 echo ""
 echo "=== the tools dimension: a write to the generated index is refused, a read is not ==="
@@ -370,7 +376,7 @@ SHELL_RULE="no-shell-writes-to-the-index.md"
 IDX=".claude/jit-context/paths/00-manual/00-index.tsv"
 
 hook_verdict() {
-  printf '%s' "$1" | (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" 2>/dev/null)
+  printf '%s' "$1" | (cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" 2> /dev/null)
 }
 # No double quote appears in any command below, so none needs JSON-escaping here. A helper
 # that pretended to escape would be a helper nobody checked.
@@ -380,10 +386,12 @@ file_payload() { printf '{"tool_name":"%s","tool_input":{"file_path":"%s"}}' "$1
 assert_blocks() {
   local desc="$1" payload="$2" rule="$3" out
   out=$(hook_verdict "$payload")
-  if grep -qF '"decision":"block"' <<<"$out" && grep -qF "$rule" <<<"$out"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF '"decision":"block"' <<< "$out" && grep -qF "$rule" <<< "$out"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected a block naming $rule"
     echo "    got: ${out:0:200}"
   fi
@@ -392,12 +400,14 @@ assert_blocks() {
 assert_allows() {
   local desc="$1" payload="$2" out
   out=$(hook_verdict "$payload")
-  if grep -qF '"decision":"block"' <<<"$out"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF '"decision":"block"' <<< "$out"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    this call must NOT be blocked"
     echo "    got: ${out:0:200}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
@@ -421,16 +431,19 @@ assert_not_blocked_by() {
   # other: a block always has "decision":"block", and a fall-through (allow or degraded
   # advisory) always carries the hookSpecificOutput wrapper -- so their absence together
   # is the harness failing to evaluate, not a clean answer.
-  if ! grep -qF '"decision":"block"' <<<"$out" && ! grep -qF '"hookSpecificOutput"' <<<"$out"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if ! grep -qF '"decision":"block"' <<< "$out" && ! grep -qF '"hookSpecificOutput"' <<< "$out"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    the hook produced no verdict at all for this payload -- not a clean allow"
     echo "    got: ${out:-<nothing>}"
-  elif grep -qF '"decision":"block"' <<<"$out" && grep -qF "$forbidden_rule" <<<"$out"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  elif grep -qF '"decision":"block"' <<< "$out" && grep -qF "$forbidden_rule" <<< "$out"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    $forbidden_rule must NOT block this call"
     echo "    got: ${out:0:200}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
@@ -438,7 +451,7 @@ assert_not_blocked_by() {
 # this tree -- wrong CLAUDE_PROJECT_DIR, missing index, a fatal awk error in row 1 --
 # reports no block for everything and the silence half of this section passes on emptiness.
 tool_probe=$(hook_verdict "$(file_payload Edit "$REPO/$IDX")")
-if ! grep -qF '"decision":"block"' <<<"$tool_probe"; then
+if ! grep -qF '"decision":"block"' <<< "$tool_probe"; then
   echo "  FAIL: the tool hook cannot refuse anything in this repo's own tree"
   echo "    got: ${tool_probe:0:200}"
   echo "    every allow assertion below would be vacuous"
@@ -446,9 +459,9 @@ if ! grep -qF '"decision":"block"' <<<"$tool_probe"; then
 fi
 
 # --- Edit / Write: the subject is a path -------------------------------------
-assert_blocks "Edit on the paths index"   "$(file_payload Edit "$REPO/$IDX")"  "$EDIT_RULE"
-assert_blocks "Write on the tools index"  "$(file_payload Write ".claude/jit-context/tools/00-manual/00-index.tsv")" "$EDIT_RULE"
-assert_blocks "a relative bare index"     "$(file_payload Edit "00-index.tsv")" "$EDIT_RULE"
+assert_blocks "Edit on the paths index" "$(file_payload Edit "$REPO/$IDX")" "$EDIT_RULE"
+assert_blocks "Write on the tools index" "$(file_payload Write ".claude/jit-context/tools/00-manual/00-index.tsv")" "$EDIT_RULE"
+assert_blocks "a relative bare index" "$(file_payload Edit "00-index.tsv")" "$EDIT_RULE"
 # The over-fire half of #92: the rule named a filename FRAGMENT where it meant the
 # generated index, so a backup of it -- a file nothing generates and nobody may not edit --
 # was refused by a rule that has no business reaching it.
@@ -472,16 +485,18 @@ control_out=$(
   PASS=0 FAIL=0
   assert_not_blocked_by "probe" "$(file_payload Edit "$REPO/$IDX")" "$EDIT_RULE"
 )
-if grep -q '^  FAIL: probe$' <<<"$control_out"; then
-  PASS=$((PASS + 1)); echo "  PASS: control -- assert_not_blocked_by can still fail"
+if grep -q '^  FAIL: probe$' <<< "$control_out"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: control -- assert_not_blocked_by can still fail"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: control -- assert_not_blocked_by can still fail"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: control -- assert_not_blocked_by can still fail"
   echo "    got: $control_out"
 fi
 
-assert_not_blocked_by "a backup of the index"   "$(file_payload Edit "docs/00-index.tsv.bak")"        "$EDIT_RULE"
-assert_not_blocked_by "a differently named tsv" "$(file_payload Edit "docs/my00-index.tsv")"          "$EDIT_RULE"
-assert_not_blocked_by "the index name in a dir" "$(file_payload Edit "docs/00-index.tsv/notes.md")"   "$EDIT_RULE"
+assert_not_blocked_by "a backup of the index" "$(file_payload Edit "docs/00-index.tsv.bak")" "$EDIT_RULE"
+assert_not_blocked_by "a differently named tsv" "$(file_payload Edit "docs/my00-index.tsv")" "$EDIT_RULE"
+assert_not_blocked_by "the index name in a dir" "$(file_payload Edit "docs/00-index.tsv/notes.md")" "$EDIT_RULE"
 
 # Second positive control, same shape: a payload the hook cannot answer at all -- no
 # "decision", no hookSpecificOutput -- must be reported as a failure ("no verdict"),
@@ -492,42 +507,44 @@ control_out=$(
   PASS=0 FAIL=0
   assert_not_blocked_by "probe" "not valid json at all" "$EDIT_RULE"
 )
-if grep -q '^  FAIL: probe$' <<<"$control_out" && grep -qF "no verdict at all" <<<"$control_out"; then
-  PASS=$((PASS + 1)); echo "  PASS: control -- an unanswerable payload is not read as an allow"
+if grep -q '^  FAIL: probe$' <<< "$control_out" && grep -qF "no verdict at all" <<< "$control_out"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: control -- an unanswerable payload is not read as an allow"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: control -- an unanswerable payload is not read as an allow"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: control -- an unanswerable payload is not read as an allow"
   echo "    got: $control_out"
 fi
 
 # --- Bash: the subject is a command string ------------------------------------
 # The blindness #92 reports. The guard was anchored on the tool, so every one of these
 # rewrote the generated index with the hook running and saying nothing about it.
-assert_blocks "sed -i on the index"       "$(bash_payload "sed -i '' s/a/b/ $IDX")" "$SHELL_RULE"
-assert_blocks "sed -i with a backup suffix" "$(bash_payload "sed -i.bak s/a/b/ $IDX")"     "$SHELL_RULE"
-assert_blocks "perl -pi on the index"     "$(bash_payload "perl -pi -e s/a/b/ $IDX")"      "$SHELL_RULE"
+assert_blocks "sed -i on the index" "$(bash_payload "sed -i '' s/a/b/ $IDX")" "$SHELL_RULE"
+assert_blocks "sed -i with a backup suffix" "$(bash_payload "sed -i.bak s/a/b/ $IDX")" "$SHELL_RULE"
+assert_blocks "perl -pi on the index" "$(bash_payload "perl -pi -e s/a/b/ $IDX")" "$SHELL_RULE"
 # The long-option spelling of the same flag. `-[a-z]*i` is a SHORT cluster and cannot
 # reach it, so the first draft of this rule claimed to cover in-place sed and did not.
-assert_blocks "sed --in-place"            "$(bash_payload "sed --in-place s/a/b/ $IDX")"  "$SHELL_RULE"
-assert_blocks "a > redirect"              "$(bash_payload "echo x > $IDX")"                "$SHELL_RULE"
-assert_blocks "a >> redirect, no space"   "$(bash_payload "printf a >>$IDX")"              "$SHELL_RULE"
-assert_blocks "tee at the end of a pipe"  "$(bash_payload "cat foo | tee $IDX")"           "$SHELL_RULE"
-assert_blocks "a write after a chain op"  "$(bash_payload "cd /tmp && sed -i '' s/a/b/ $IDX")" "$SHELL_RULE"
-assert_blocks "the bare file name"        "$(bash_payload "sed -i '' s/a/b/ 00-index.tsv")"    "$SHELL_RULE"
+assert_blocks "sed --in-place" "$(bash_payload "sed --in-place s/a/b/ $IDX")" "$SHELL_RULE"
+assert_blocks "a > redirect" "$(bash_payload "echo x > $IDX")" "$SHELL_RULE"
+assert_blocks "a >> redirect, no space" "$(bash_payload "printf a >>$IDX")" "$SHELL_RULE"
+assert_blocks "tee at the end of a pipe" "$(bash_payload "cat foo | tee $IDX")" "$SHELL_RULE"
+assert_blocks "a write after a chain op" "$(bash_payload "cd /tmp && sed -i '' s/a/b/ $IDX")" "$SHELL_RULE"
+assert_blocks "the bare file name" "$(bash_payload "sed -i '' s/a/b/ 00-index.tsv")" "$SHELL_RULE"
 
 # The other direction, and the whole reason this rule is a regex over write FORMS rather
 # than over the file name: #76 and #79 are what a block anchored on a word costs. Each of
 # these names the index and each is a read or a mention.
-assert_allows "cat on the index"          "$(bash_payload "cat $IDX")"
-assert_allows "grep on the index"         "$(bash_payload "grep foo $IDX")"
+assert_allows "cat on the index" "$(bash_payload "cat $IDX")"
+assert_allows "grep on the index" "$(bash_payload "grep foo $IDX")"
 # Paired with "sed -i on the index" above: same command word, same path, one flag apart.
-assert_allows "sed reading, not writing"  "$(bash_payload "sed -n 1p $IDX")"
-assert_allows "merely mentioning it"      "$(bash_payload "echo see $IDX")"
+assert_allows "sed reading, not writing" "$(bash_payload "sed -n 1p $IDX")"
+assert_allows "merely mentioning it" "$(bash_payload "echo see $IDX")"
 # An arrow is not a redirect. The first draft matched a bare `>`, so narrating a rename
 # was refused -- the #76 shape again, one character wide.
-assert_allows "an arrow, not a redirect"  "$(bash_payload "echo renamed old.tsv->00-index.tsv")"
+assert_allows "an arrow, not a redirect" "$(bash_payload "echo renamed old.tsv->00-index.tsv")"
 # Paired with "sed -i on the index": same write form, one suffix apart.
-assert_allows "a write to a .bak"         "$(bash_payload "sed -i '' s/a/b/ docs/00-index.tsv.bak")"
-assert_allows "a write to another tsv"    "$(bash_payload "echo x > docs/my00-index.tsv")"
+assert_allows "a write to a .bak" "$(bash_payload "sed -i '' s/a/b/ docs/00-index.tsv.bak")"
+assert_allows "a write to another tsv" "$(bash_payload "echo x > docs/my00-index.tsv")"
 # The sanctioned writer. A guard that refuses the command its own text tells you to run
 # would be worse than the hole it closes.
 assert_allows "the rebuild script itself" "$(bash_payload "bash scripts/rebuild-tsv.sh")"
@@ -540,19 +557,24 @@ assert_allows "the rebuild script itself" "$(bash_payload "bash scripts/rebuild-
 # holds, and a regex over a command string cannot see that a heredoc/TOML string is not a
 # real redirect. What changed is that the refusal now names the split-literal workaround,
 # so an author pays this once per fixture instead of every time (see the rule body).
-IDXNAME_215="00-index"; IDXNAME_215="$IDXNAME_215.tsv"
+IDXNAME_215="00-index"
+IDXNAME_215="$IDXNAME_215.tsv"
 PAYLOAD_CMD="supertool 'paste:@-' path=docs/other.md content='see > $IDXNAME_215 for details'"
 PAYLOAD_OUT="$(hook_verdict "$(bash_payload "$PAYLOAD_CMD")")"
-if grep -qF '"decision":"block"' <<<"$PAYLOAD_OUT" && grep -qF "$SHELL_RULE" <<<"$PAYLOAD_OUT"; then
-  PASS=$((PASS + 1)); echo "  PASS: a payload writing an unrelated file is still refused (#215, known FP)"
+if grep -qF '"decision":"block"' <<< "$PAYLOAD_OUT" && grep -qF "$SHELL_RULE" <<< "$PAYLOAD_OUT"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: a payload writing an unrelated file is still refused (#215, known FP)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: expected this payload to still be refused (the known false positive)"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: expected this payload to still be refused (the known false positive)"
   echo "    got: ${PAYLOAD_OUT:0:200}"
 fi
-if grep -qF "Split the literal" <<<"$PAYLOAD_OUT"; then
-  PASS=$((PASS + 1)); echo "  PASS: the refusal names the split-literal workaround (#215)"
+if grep -qF "Split the literal" <<< "$PAYLOAD_OUT"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: the refusal names the split-literal workaround (#215)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the refusal does not name the split-literal workaround"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the refusal does not name the split-literal workaround"
   echo "    got: ${PAYLOAD_OUT:0:400}"
 fi
 # The workaround itself must actually escape the rule -- proof, not just a claim in prose.
@@ -571,7 +593,7 @@ echo "=== the vocabulary dimension: the one entry that explains this plugin ==="
 # drops NUL bytes, so an assertion can pass against output it never saw.
 PROMPT_HOOK="$REPO/scripts/pre-prompt-hook.sh"
 VOCAB_RULE="jit-context.md"
-PTMP="$(mktemp -d 2>/dev/null)" || PTMP=""
+PTMP="$(mktemp -d 2> /dev/null)" || PTMP=""
 if [ -z "$PTMP" ] || [ ! -d "$PTMP" ]; then
   echo "  SKIPPED: mktemp -d produced no directory here, so this section was not tested."
 else
@@ -580,15 +602,17 @@ else
   run_prompt() {
     printf '{"prompt":"%s"}' "$1" > "$PTMP/payload.json"
     CLAUDE_PROJECT_DIR="$REPO" bash "$PROMPT_HOOK" < "$PTMP/payload.json" \
-      > "$PTMP/prompt-out.txt" 2>/dev/null
+      > "$PTMP/prompt-out.txt" 2> /dev/null
   }
 
   assert_prompt_fires() {
     run_prompt "$2"
     if grep -qF -- "$VOCAB_RULE" "$PTMP/prompt-out.txt"; then
-      PASS=$((PASS + 1)); echo "  PASS: $1"
+      PASS=$((PASS + 1))
+      echo "  PASS: $1"
     else
-      FAIL=$((FAIL + 1)); echo "  FAIL: $1"
+      FAIL=$((FAIL + 1))
+      echo "  FAIL: $1"
       echo "    expected $VOCAB_RULE for prompt: $2"
     fi
   }
@@ -596,10 +620,12 @@ else
   assert_prompt_silent() {
     run_prompt "$2"
     if grep -qF -- "$VOCAB_RULE" "$PTMP/prompt-out.txt"; then
-      FAIL=$((FAIL + 1)); echo "  FAIL: $1"
+      FAIL=$((FAIL + 1))
+      echo "  FAIL: $1"
       echo "    $VOCAB_RULE must NOT fire for prompt: $2"
     else
-      PASS=$((PASS + 1)); echo "  PASS: $1"
+      PASS=$((PASS + 1))
+      echo "  PASS: $1"
     fi
   }
 
@@ -613,15 +639,16 @@ else
     cat "$PTMP/prompt-out.txt"
     exit 1
   fi
-  PASS=$((PASS + 1)); echo "  PASS: it fires when someone names rebuild-tsv"
+  PASS=$((PASS + 1))
+  echo "  PASS: it fires when someone names rebuild-tsv"
 
-  assert_prompt_fires  "naming a hook"        "what does pre-tool-hook decide"
-  assert_prompt_fires  "naming the plugin"    "how does jit-context pick an entry"
+  assert_prompt_fires "naming a hook" "what does pre-tool-hook decide"
+  assert_prompt_fires "naming the plugin" "how does jit-context pick an entry"
   # Ordinary sentences in a session that happens to be in this repository. Each names a
   # word the entry is about without naming anything the entry is keyed on, and an entry
   # that fires on them is a standing tax on every prompt.
-  assert_prompt_silent "a git hook"           "add a pre-commit hook to this repo"
-  assert_prompt_silent "an unrelated index"   "the index is stale, rebuild it"
+  assert_prompt_silent "a git hook" "add a pre-commit hook to this repo"
+  assert_prompt_silent "an unrelated index" "the index is stale, rebuild it"
   assert_prompt_silent "an unrelated context" "the context window is full"
 fi
 
@@ -659,12 +686,14 @@ echo "=== every file under scripts/ is governed by some paths/ rule ==="
 # tested for non-empty output and reported a deliberately uncovered script as covered.
 # That is the defect this whole suite is about, reproduced inside the fix for it.
 uncovered_probe=$(fired_for "docs/nothing-governs-this.txt")
-if grep -qE '[^[:space:]]+[.]md' <<<"$uncovered_probe"; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: control -- an ungoverned path must name no rule"
+if grep -qE '[^[:space:]]+[.]md' <<< "$uncovered_probe"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: control -- an ungoverned path must name no rule"
   echo "    got: $uncovered_probe"
   echo "    every coverage assertion below is vacuous"
 else
-  PASS=$((PASS + 1)); echo "  PASS: control -- an ungoverned path names no rule"
+  PASS=$((PASS + 1))
+  echo "  PASS: control -- an ungoverned path names no rule"
 fi
 
 # Enumerated from the repository, not listed here: a list in this file is the same
@@ -675,7 +704,7 @@ fi
 # for a reason that has nothing to do with rule coverage. The cost is that a brand-new
 # script is invisible here until it is staged, which is before CI sees it either.
 script_list=$(cd "$REPO" && git ls-files -- scripts | LC_ALL=C sort)
-if ! grep -q '^scripts/common[.]sh$' <<<"$script_list"; then
+if ! grep -q '^scripts/common[.]sh$' <<< "$script_list"; then
   echo "  FAIL: could not enumerate scripts/ -- every coverage assertion below would be vacuous"
   exit 1
 fi
@@ -683,15 +712,17 @@ fi
 while IFS= read -r script; do
   [ -n "$script" ] || continue
   fired=$(fired_for "$script")
-  if grep -qE '[^[:space:]]+[.]md' <<<"$fired"; then
-    PASS=$((PASS + 1)); echo "  PASS: $script is governed by:$fired"
+  if grep -qE '[^[:space:]]+[.]md' <<< "$fired"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $script is governed by:$fired"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $script matches no rule in .claude/jit-context/paths/"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $script matches no rule in .claude/jit-context/paths/"
     echo "    a new script starts uncovered, and an uncovered script reads exactly like one"
     echo "    with nothing to say about it (#83). Widen a match in paths/00-manual/, or write"
     echo "    the entry that states its contract, then rebuild: bash scripts/rebuild-tsv.sh"
   fi
-done <<<"$script_list"
+done <<< "$script_list"
 
 echo ""
 echo "=== every path this suite asks about was answered by the one primed evaluation ==="
@@ -711,17 +742,21 @@ unexpected_lazy=$(grep -vxF "$MEMO_TEST_PATH" "$FIRED_FOR_LAZY")
 # The memo test's own path is written to it by fired_for() on a real miss, so its presence
 # proves the file is being fed at all.
 if grep -qxF "$MEMO_TEST_PATH" "$FIRED_FOR_LAZY"; then
-  PASS=$((PASS + 1)); echo "  PASS: control -- lazy evaluations are actually being recorded"
+  PASS=$((PASS + 1))
+  echo "  PASS: control -- lazy evaluations are actually being recorded"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: control -- nothing was recorded as lazily evaluated"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: control -- nothing was recorded as lazily evaluated"
   echo "    the memoisation test above evaluates $MEMO_TEST_PATH and nothing primed it,"
   echo "    so it must appear here. An empty list below proves nothing while this is red."
 fi
 
 if [ -z "$unexpected_lazy" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: no path was evaluated outside the primed batch"
+  PASS=$((PASS + 1))
+  echo "  PASS: no path was evaluated outside the primed batch"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: $(grep -c . <<<"$unexpected_lazy") path(s) cost a full-tree lint of their own"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $(grep -c . <<< "$unexpected_lazy") path(s) cost a full-tree lint of their own"
   echo "$unexpected_lazy" | sed 's/^/      /'
   echo "    add each of them to the fired_for_prime call near the top of this file."
 fi

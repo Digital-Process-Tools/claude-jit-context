@@ -22,31 +22,46 @@ PROMPT_HOOK="$REPO/scripts/pre-prompt-hook.sh"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+}
 
 assert_contains() {
   local desc="$1" out="$2" want="$3"
-  if grep -qF -- "$want" <<<"$out"; then ok "$desc"
-  else bad "$desc" "expected to contain: $want"; echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-400)"
+  if grep -qF -- "$want" <<< "$out"; then
+    ok "$desc"
+  else
+    bad "$desc" "expected to contain: $want"
+    echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-400)"
   fi
 }
 assert_not_contains() {
   local desc="$1" out="$2" unwanted="$3"
-  if grep -qF -- "$unwanted" <<<"$out"; then bad "$desc" "must NOT contain: $unwanted"; echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-400)"
-  else ok "$desc"
+  if grep -qF -- "$unwanted" <<< "$out"; then
+    bad "$desc" "must NOT contain: $unwanted"
+    echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-400)"
+  else
+    ok "$desc"
   fi
 }
 
 run_prompt() {
   # $1 project dir, $2 prompt text
-  printf '{"prompt":"%s"}' "$2" | CLAUDE_PROJECT_DIR="$1" bash "$PROMPT_HOOK" 2>/dev/null
+  printf '{"prompt":"%s"}' "$2" | CLAUDE_PROJECT_DIR="$1" bash "$PROMPT_HOOK" 2> /dev/null
 }
 
-IDXNAME="00-index"; IDXNAME="$IDXNAME.tsv"
+IDXNAME="00-index"
+IDXNAME="$IDXNAME.tsv"
 
 echo "=== A. every mtime in the 00-manual layer within seconds of each other: the footer omits the age (checkout signature) ==="
-ROOT_A="$(mktemp -d 2>/dev/null || mktemp -d -t jit243a)"
+ROOT_A="$(mktemp -d 2> /dev/null || mktemp -d -t jit243a)"
 trap 'chmod -R u+rwX "$ROOT_A" 2>/dev/null; rm -rf "$ROOT_A"' EXIT
 BASE_A="$ROOT_A/proj/.claude/jit-context/vocabulary/00-manual"
 mkdir -p "$BASE_A"
@@ -64,7 +79,7 @@ assert_not_contains "no age is claimed -- it would be wrong" "$OUT_A" "last edit
 
 echo ""
 echo "=== B. mtimes genuinely spread across time: the footer still carries a real age (control) ==="
-ROOT_B="$(mktemp -d 2>/dev/null || mktemp -d -t jit243b)"
+ROOT_B="$(mktemp -d 2> /dev/null || mktemp -d -t jit243b)"
 trap 'chmod -R u+rwX "$ROOT_B" 2>/dev/null; rm -rf "$ROOT_B"; chmod -R u+rwX "$ROOT_A" 2>/dev/null; rm -rf "$ROOT_A"' EXIT
 BASE_B="$ROOT_B/proj/.claude/jit-context/vocabulary/00-manual"
 mkdir -p "$BASE_B"

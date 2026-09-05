@@ -61,7 +61,7 @@ BASE=""
 BASE_FROM=""
 
 usage() {
-  cat <<'EOF'
+  cat << 'EOF'
 jit-doctor.sh -- is any of this running at all, and against which tree?
 
   bash scripts/jit-doctor.sh [--base DIR]
@@ -108,8 +108,16 @@ need_value() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --base) [ $# -ge 2 ] || need_value "$1"; BASE="$2"; BASE_FROM="--base on the command line"; shift 2 ;;
-    --help|-h) usage; exit 0 ;;
+    --base)
+      [ $# -ge 2 ] || need_value "$1"
+      BASE="$2"
+      BASE_FROM="--base on the command line"
+      shift 2
+      ;;
+    --help | -h)
+      usage
+      exit 0
+      ;;
     *)
       echo "jit-doctor: SKIPPED -- unknown argument: $1" >&2
       echo "  run with --help for the accepted flags. Nothing was checked." >&2
@@ -182,7 +190,7 @@ echo ""
 # Anything else -- no readable settings file, or one that mentions neither -- is
 # `cannot tell`, which is NOT "nothing is registered". Claude Code merges user, project,
 # local and enterprise settings, and this script can see three of those at most.
-PROJ_DIR="$(cd "$BASE/../.." 2>/dev/null && pwd)" || PROJ_DIR=""
+PROJ_DIR="$(cd "$BASE/../.." 2> /dev/null && pwd)" || PROJ_DIR=""
 SETTINGS_SEEN=0
 CACHE_SIDE=0
 CHECKOUT_SIDE=0
@@ -285,7 +293,7 @@ if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
 fi
 if [ -n "${HOME:-}" ]; then
   for _c in "$HOME"/.claude/plugins/cache/*/claude-jit-context \
-            "$HOME"/.claude/plugins/cache/*/claude-jit-context/*; do
+    "$HOME"/.claude/plugins/cache/*/claude-jit-context/*; do
     [ -d "$_c/.claude-plugin" ] && note_cache "$_c"
   done
   unset _c
@@ -324,9 +332,15 @@ CFG_UNKNOWN=""
 report_setting_name() {
   local LC_ALL=C
   case "$1" in
-    ''|[!A-Za-z0-9]*|*[!A-Za-z0-9_]*) printf '%s' "<withheld: not a plain setting name>"; return 0 ;;
+    '' | [!A-Za-z0-9]* | *[!A-Za-z0-9_]*)
+      printf '%s' "<withheld: not a plain setting name>"
+      return 0
+      ;;
   esac
-  [ "${#1}" -gt 64 ] && { printf '%s' "<withheld: not a plain setting name>"; return 0; }
+  [ "${#1}" -gt 64 ] && {
+    printf '%s' "<withheld: not a plain setting name>"
+    return 0
+  }
   printf '%s' "$1"
 }
 
@@ -346,7 +360,7 @@ elif [ -f "$CFG" ]; then
     JIT_CONTEXT_INJECT=""
     JIT_CONTEXT_DOCTOR_MAX_BYTES=""
     JIT_CONTEXT_DOCTOR_MIN_KEYWORD=""
-    jit_load_config "$CFG" >/dev/null 2>&1
+    jit_load_config "$CFG" > /dev/null 2>&1
     printf 'n=%s\n' "$JIT_CONFIG_REFUSED_N"
     printf 'inject=%s\n' "$JIT_CONTEXT_INJECT"
     printf 'max=%s\n' "$JIT_CONTEXT_DOCTOR_MAX_BYTES"
@@ -354,15 +368,15 @@ elif [ -f "$CFG" ]; then
   )
   while IFS= read -r _l; do
     case "$_l" in
-      n=*)      CFG_REFUSED_N="${_l#n=}" ;;
+      n=*) CFG_REFUSED_N="${_l#n=}" ;;
       inject=*) TREE_INJECT="${_l#inject=}" ;;
-      max=*)    TREE_MAX="${_l#max=}" ;;
-      min=*)    TREE_MIN="${_l#min=}" ;;
+      max=*) TREE_MAX="${_l#max=}" ;;
+      min=*) TREE_MIN="${_l#min=}" ;;
     esac
-  done <<EOF
+  done << EOF
 $_cfg
 EOF
-  case "$CFG_REFUSED_N" in ''|*[!0-9]*) CFG_REFUSED_N=0 ;; esac
+  case "$CFG_REFUSED_N" in '' | *[!0-9]*) CFG_REFUSED_N=0 ;; esac
 
   # A second, tiny pass for PROVENANCE and for the typo case. jit_load_config() reports
   # neither: a JIT_CONTEXT_DOCTOR_MAX_BYTE -- singular -- parses clean, is accepted as a
@@ -374,7 +388,7 @@ EOF
     _l="${_l%$'\r'}"
     while [ "$_l" != "${_l#[[:space:]]}" ]; do _l="${_l#[[:space:]]}"; done
     case "$_l" in
-      ''|'#'*) continue ;;
+      '' | '#'*) continue ;;
       export[[:space:]]*)
         _l="${_l#export}"
         while [ "$_l" != "${_l#[[:space:]]}" ]; do _l="${_l#[[:space:]]}"; done
@@ -382,7 +396,7 @@ EOF
     esac
     case "$_l" in *=*) _k="${_l%%=*}" ;; *) continue ;; esac
     case "$_k" in
-      JIT_CONTEXT_DOCTOR_MAX_BYTES)   CFG_LINE_MAX="$_n" ;;
+      JIT_CONTEXT_DOCTOR_MAX_BYTES) CFG_LINE_MAX="$_n" ;;
       JIT_CONTEXT_DOCTOR_MIN_KEYWORD) CFG_LINE_MIN="$_n" ;;
       JIT_CONTEXT_DOCTOR_*)
         CFG_UNKNOWN="$CFG_UNKNOWN${CFG_UNKNOWN:+, }$(report_setting_name "$_k") (line $_n)"
@@ -394,8 +408,8 @@ fi
 
 echo "config.env"
 case "$CFG_STATE" in
-  absent)  printf '  %-20s %s\n' "file" "absent -- every setting is at its default" ;;
-  link)    printf '  %-20s %s\n' "file" "a symbolic link, so the hooks do not read it at all" ;;
+  absent) printf '  %-20s %s\n' "file" "absent -- every setting is at its default" ;;
+  link) printf '  %-20s %s\n' "file" "a symbolic link, so the hooks do not read it at all" ;;
   present) printf '  %-20s %s\n' "file" "$CFG" ;;
 esac
 if [ "$CFG_STATE" = present ]; then
@@ -406,8 +420,8 @@ if [ "$CFG_STATE" = present ]; then
   fi
 fi
 case "$TREE_INJECT" in
-  summary|full) printf '  %-20s %s\n' "JIT_CONTEXT_INJECT" "$TREE_INJECT (config.env)" ;;
-  *)            printf '  %-20s %s\n' "JIT_CONTEXT_INJECT" "full (default)" ;;
+  summary | full) printf '  %-20s %s\n' "JIT_CONTEXT_INJECT" "$TREE_INJECT (config.env)" ;;
+  *) printf '  %-20s %s\n' "JIT_CONTEXT_INJECT" "full (default)" ;;
 esac
 echo ""
 
@@ -441,10 +455,11 @@ read_threshold() {
   THRESH_FROM=""
   [ -n "$raw" ] || return 1
   case "$raw" in
-    ''|*[!0-9]*)
+    '' | *[!0-9]*)
       THRESH_REFUSED="$THRESH_REFUSED  $(printf '%-20s %s' "" "$key is not a whole number -- refused, the default stands")
 "
-      return 1 ;;
+      return 1
+      ;;
   esac
   if [ "$raw" -lt 1 ]; then
     THRESH_REFUSED="$THRESH_REFUSED  $(printf '%-20s %s' "" "$key is not a whole number above zero -- refused, the default stands")
@@ -490,8 +505,8 @@ if [ -f "$LOG" ] && [ -r "$LOG" ]; then
   # perl is already a runtime dependency of every hook here (common.sh _ts/_ms), so this
   # adds nothing. WHOLE DAYS, deliberately coarse -- a precise answer that is wrong on one
   # leg is worth less than a coarse one that is right on all three.
-  LOG_AGE=$(perl -e 'printf("%d", int(-M $ARGV[0]))' "$LOG" 2>/dev/null) || LOG_AGE=""
-  case "$LOG_AGE" in ''|*[!0-9]*) LOG_AGE="" ;; esac
+  LOG_AGE=$(perl -e 'printf("%d", int(-M $ARGV[0]))' "$LOG" 2> /dev/null) || LOG_AGE=""
+  case "$LOG_AGE" in '' | *[!0-9]*) LOG_AGE="" ;; esac
 fi
 
 echo "hook log"
@@ -559,7 +574,7 @@ for _dim in tools paths vocabulary; do
       # as an absence in the world, in the section written to end exactly that.
       case "$_dim" in
         tools) _key="tool:$_name" ;;
-        *)     _key="$_layer:$_name" ;;
+        *) _key="$_layer:$_name" ;;
       esac
       case "$_key" in *"$JIT_NL"*) _key="<unnameable>" ;; esac
       ENTRY_KEY[$ENTRY_N]="$_key"
@@ -590,7 +605,7 @@ for _dim in tools paths vocabulary; do
     fi
     case "$_read" in
       *" $_layer "*) _loads="" ;;
-      *)             _loads="  NOT LOADED by the matcher" ;;
+      *) _loads="  NOT LOADED by the matcher" ;;
     esac
     printf '  %-24s %3d entr(y/ies)  %s%s\n' "$_dim/$_safe" "$_md_n" "$_note" "$_loads"
   done
@@ -641,7 +656,7 @@ if [ "$LOG_STATE" = present ] && [ "$ENTRY_N" -gt 0 ]; then
   while IFS= read -r _c; do
     FIRED[$_i]="$_c"
     _i=$((_i + 1))
-  done <<EOF
+  done << EOF
 $_counts
 EOF
   unset _counts _i _c

@@ -42,10 +42,12 @@ trap 'chmod -R u+rwX "$TMPROOT" 2>/dev/null; rm -rf "$TMPROOT"' EXIT
 # jit-drive: assert_contains contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:-<EMPTY>}"
   fi
@@ -54,18 +56,22 @@ assert_contains() {
 assert_rc0() {
   local desc="$1" rc="$2"
   if [ "$rc" = 0 ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc (exit $rc)"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (exit $rc)"
   fi
 }
 
 assert_exists() {
   local desc="$1" p="$2"
   if [ -e "$p" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to exist: $p"
   fi
 }
@@ -73,11 +79,13 @@ assert_exists() {
 assert_absent() {
   local desc="$1" p="$2"
   if [ -e "$p" ]; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should not exist: $p"
-    find "$p" 2>/dev/null | sed 's/^/      /'
+    find "$p" 2> /dev/null | sed 's/^/      /'
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
@@ -86,19 +94,19 @@ assert_absent() {
 run_all_hooks() {
   local proj="$1"
   printf '{"prompt":"hello there","session_id":"sessI"}' \
-    | CLAUDE_PROJECT_DIR="$proj" bash "$SCRIPTS/pre-prompt-hook.sh" 2>/dev/null
+    | CLAUDE_PROJECT_DIR="$proj" bash "$SCRIPTS/pre-prompt-hook.sh" 2> /dev/null
   printf '{"tool_name":"Bash","tool_input":{"command":"echo hi"}}' \
-    | CLAUDE_PROJECT_DIR="$proj" bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null
+    | CLAUDE_PROJECT_DIR="$proj" bash "$SCRIPTS/pre-tool-hook.sh" 2> /dev/null
   printf '{"tool_name":"Read","tool_input":{"file_path":"/x/y/a.php"}}' \
-    | CLAUDE_PROJECT_DIR="$proj" bash "$SCRIPTS/pre-path-hook.sh" 2>/dev/null
+    | CLAUDE_PROJECT_DIR="$proj" bash "$SCRIPTS/pre-path-hook.sh" 2> /dev/null
   printf '{"session_id":"sessI"}' \
-    | CLAUDE_PROJECT_DIR="$proj" bash "$SCRIPTS/session-start-hook.sh" 2>/dev/null
+    | CLAUDE_PROJECT_DIR="$proj" bash "$SCRIPTS/session-start-hook.sh" 2> /dev/null
   # #244: PostToolUse and Stop are the two hooks that read/write the edit signal --
   # neither is exempt from the tree-less contract this whole suite exists to pin.
   printf '{"session_id":"sessI","tool_name":"Edit","tool_input":{"file_path":"/x/y/a.php"}}' \
-    | CLAUDE_PROJECT_DIR="$proj" bash "$SCRIPTS/post-tool-hook.sh" 2>/dev/null
+    | CLAUDE_PROJECT_DIR="$proj" bash "$SCRIPTS/post-tool-hook.sh" 2> /dev/null
   printf '{"session_id":"sessI","hook_event_name":"Stop"}' \
-    | CLAUDE_PROJECT_DIR="$proj" bash "$SCRIPTS/stop-hook.sh" 2>/dev/null
+    | CLAUDE_PROJECT_DIR="$proj" bash "$SCRIPTS/stop-hook.sh" 2> /dev/null
 }
 
 echo "=== A: the positive control -- with a tree, the same hooks DO write ==="
@@ -111,7 +119,8 @@ mkdir -p "$BASE/tools/00-manual"
 printf 'entry body A\n' > "$BASE/tools/00-manual/a.md"
 printf 'Bash\tatarget\ta.md\t\t\t\n' > "$BASE/tools/00-manual/00-index.tsv"
 OUT=$(printf '{"tool_name":"Bash","tool_input":{"command":"atarget now"}}' \
-  | CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null); RC=$?
+  | CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPTS/pre-tool-hook.sh" 2> /dev/null)
+RC=$?
 assert_rc0 "A the hook exits 0" "$RC"
 assert_contains "A the rule fires, so the fixture is live" "$OUT" "entry body A"
 assert_exists "A the log is written where a tree exists" "$BASE/.discovery/logs/hooks.log"
@@ -125,10 +134,12 @@ OUT="$(run_all_hooks "$PROJ")"
 # The hooks ran and answered. Six `{}` bodies, one per hook: this is what stops the
 # absence below from being an absence of hooks.
 assert_contains "B the hooks answered" "$OUT" "{}"
-if [ "$(grep -c '{}' <<<"$OUT")" -ge 6 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: B all six hooks answered"
+if [ "$(grep -c '{}' <<< "$OUT")" -ge 6 ]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: B all six hooks answered"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: B fewer than six hooks answered -- the absence below proves nothing"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: B fewer than six hooks answered -- the absence below proves nothing"
   echo "    got: $OUT"
 fi
 assert_absent "B no .claude directory is materialised" "$PROJ/.claude"
@@ -147,25 +158,29 @@ assert_absent "C no jit-context tree is materialised" "$PROJ/.claude/jit-context
 echo ""
 echo "=== D: git status stays clean, which is the symptom users actually see ==="
 
-if ! command -v git >/dev/null 2>&1; then
+if ! command -v git > /dev/null 2>&1; then
   echo "  SKIPPED: git is not on PATH here, so the user-visible symptom went undriven"
 else
   PROJ="$(mktemp -d "$TMPROOT/git-XXXXXX")"
-  ( cd "$PROJ" && git init -q . && git config user.email t@example.com && git config user.name t ) >/dev/null 2>&1
+  (cd "$PROJ" && git init -q . && git config user.email t@example.com && git config user.name t) > /dev/null 2>&1
   printf 'hello\n' > "$PROJ/README.md"
-  ( cd "$PROJ" && git add -A && git commit -qm init ) >/dev/null 2>&1
-  BEFORE="$( cd "$PROJ" && git status --porcelain )"
+  (cd "$PROJ" && git add -A && git commit -qm init) > /dev/null 2>&1
+  BEFORE="$(cd "$PROJ" && git status --porcelain)"
   if [ -n "$BEFORE" ]; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: D the fixture repository was not clean to begin with"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: D the fixture repository was not clean to begin with"
     echo "    got: $BEFORE"
   else
-    PASS=$((PASS + 1)); echo "  PASS: D the fixture repository starts clean"
-    run_all_hooks "$PROJ" >/dev/null
-    AFTER="$( cd "$PROJ" && git status --porcelain )"
+    PASS=$((PASS + 1))
+    echo "  PASS: D the fixture repository starts clean"
+    run_all_hooks "$PROJ" > /dev/null
+    AFTER="$(cd "$PROJ" && git status --porcelain)"
     if [ -z "$AFTER" ]; then
-      PASS=$((PASS + 1)); echo "  PASS: D and it is still clean after every hook has run"
+      PASS=$((PASS + 1))
+      echo "  PASS: D and it is still clean after every hook has run"
     else
-      FAIL=$((FAIL + 1)); echo "  FAIL: D the hooks dirtied a repository that never opted in"
+      FAIL=$((FAIL + 1))
+      echo "  FAIL: D the hooks dirtied a repository that never opted in"
       echo "    got: $AFTER"
     fi
   fi
@@ -181,18 +196,19 @@ BASE="$PROJ/.claude/jit-context"
 mkdir -p "$BASE/tools/00-manual"
 printf 'entry body E\n' > "$BASE/tools/00-manual/e.md"
 printf 'Bash\tetarget\te.md\t\t\t\n' > "$BASE/tools/00-manual/00-index.tsv"
-chmod a-w "$BASE" 2>/dev/null
-if ( : > "$BASE/.jit-write-probe" ) 2>/dev/null; then
+chmod a-w "$BASE" 2> /dev/null
+if (: > "$BASE/.jit-write-probe") 2> /dev/null; then
   rm -f "$BASE/.jit-write-probe"
-  chmod u+w "$BASE" 2>/dev/null
+  chmod u+w "$BASE" 2> /dev/null
   echo "  SKIPPED: this filesystem or user ignores the write bit, so the unwritable-tree"
   echo "           case went undriven -- it is neither a pass nor a failure here"
 else
   OUT=$(printf '{"tool_name":"Bash","tool_input":{"command":"etarget now"}}' \
-    | CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null); RC=$?
+    | CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPTS/pre-tool-hook.sh" 2> /dev/null)
+  RC=$?
   assert_rc0 "E the hook exits 0 on an unwritable tree" "$RC"
   assert_contains "E and the entry still reaches the model" "$OUT" "entry body E"
-  chmod u+w "$BASE" 2>/dev/null
+  chmod u+w "$BASE" 2> /dev/null
   assert_absent "E and nothing was forced into place" "$BASE/.discovery"
 fi
 

@@ -24,14 +24,22 @@ REBUILD="$REPO/scripts/rebuild-tsv.sh"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+}
 
 # jit-drive: assert_contains contains capture
 # jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" out="$2" want="$3"
-  if grep -qF -- "$want" <<<"$out"; then
+  if grep -qF -- "$want" <<< "$out"; then
     ok "$desc"
   else
     bad "$desc" "expected to contain: $want"
@@ -41,7 +49,7 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" out="$2" unwanted="$3"
-  if grep -qF -- "$unwanted" <<<"$out"; then
+  if grep -qF -- "$unwanted" <<< "$out"; then
     bad "$desc" "must NOT contain: $unwanted"
     echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
   else
@@ -116,7 +124,7 @@ write_entry paths/00-manual/quoted-path.md \
   "title: Config tree" \
   'match: "(^|/)config/"'
 
-rebuild >/dev/null 2>&1
+rebuild > /dev/null 2>&1
 
 TOOLS_TSV="$BASE/tools/00-manual/00-index.tsv"
 PATHS_TSV="$BASE/paths/00-manual/00-index.tsv"
@@ -135,11 +143,11 @@ INDEX="$(cat "$TOOLS_TSV")"
 
 echo ""
 echo "=== a quote inside the pattern reaches the index intact ==="
-assert_contains     "the bracketed quote survives"    "$INDEX" '["]hi["]'
+assert_contains "the bracketed quote survives" "$INDEX" '["]hi["]'
 # The exact shape the old strip produced. `[hi]` -- the obvious guess -- was never in any
 # index, so asserting its absence would pass with the defect still present.
 assert_not_contains "and is not collapsed to []hi[]" "$INDEX" '[]hi[]'
-assert_contains     "require keeps its quotes too"   "$INDEX" 'say "please"'
+assert_contains "require keeps its quotes too" "$INDEX" 'say "please"'
 # A value that starts and ends with a quote WITHOUT being one quoted scalar. Preserved
 # verbatim: the old strip made it `a or b`, and a greedy `^".*"$` test would make it
 # `a" or "b` -- both rewrites of something the author wrote.
@@ -152,7 +160,7 @@ echo ""
 # here. Only the trailing-space one discriminates. The assertions that actually fail
 # without the fix are the four above, that one, and four of the six hook verdicts.
 echo "=== a matching pair around the whole value is still stripped ==="
-assert_contains     "the YAML-quoted pattern is bare" "$INDEX" '~ls[[:space:]]+-la'
+assert_contains "the YAML-quoted pattern is bare" "$INDEX" '~ls[[:space:]]+-la'
 assert_not_contains "no surrounding quote is indexed" "$INDEX" '"~ls'
 assert_equals "trailing space after the closing quote" \
   "$(awk -F'\t' '$3 == "trailing-space.md" {print $2}' "$TOOLS_TSV")" '~pwd'
@@ -163,7 +171,7 @@ assert_equals "a quoted paths value is stripped too" \
 drive() {
   # $1 command, already JSON-escaped
   printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \
-    | CLAUDE_PROJECT_DIR="$ROOT" bash "$HOOK" 2>/dev/null
+    | CLAUDE_PROJECT_DIR="$ROOT" bash "$HOOK" 2> /dev/null
 }
 
 verdict() {
@@ -171,8 +179,8 @@ verdict() {
   out="$(drive "$1")"
   case "$out" in
     *'"decision":"block"'*) echo "BLOCK" ;;
-    *'JIT Context'*)        echo "REMIND" ;;
-    *)                      echo "silent" ;;
+    *'JIT Context'*) echo "REMIND" ;;
+    *) echo "silent" ;;
   esac
 }
 
@@ -188,15 +196,15 @@ assert_verdict() {
 
 echo ""
 echo "=== the quoted-argument rule fires on the quoted call and only on it ==="
-assert_verdict "the double-quoted argument"    'echo \"hi\"'   REMIND
-assert_verdict "the same word unquoted"        'echo hi'       silent
-assert_verdict "a single letter from the pair" 'echo h'        silent
+assert_verdict "the double-quoted argument" 'echo \"hi\"' REMIND
+assert_verdict "the same word unquoted" 'echo hi' silent
+assert_verdict "a single letter from the pair" 'echo h' silent
 
 echo ""
 echo "=== the YAML-quoted rules still fire ==="
-assert_verdict "the stripped pattern matches"  'ls -la'        REMIND
-assert_verdict "and its near-miss is silent"   'ls'            silent
-assert_verdict "trailing-space rule matches"   'pwd'           REMIND
+assert_verdict "the stripped pattern matches" 'ls -la' REMIND
+assert_verdict "and its near-miss is silent" 'ls' silent
+assert_verdict "trailing-space rule matches" 'pwd' REMIND
 
 rm -rf "$ROOT"
 

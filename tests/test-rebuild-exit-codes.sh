@@ -31,8 +31,16 @@ REBUILD="$REPO/scripts/rebuild-tsv.sh"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+}
 
 # Here-string, never a pipe: `| grep -q` exits on the first match and the writer takes
 # SIGPIPE, which under pipefail reports the opposite of what was found (#56).
@@ -40,7 +48,7 @@ bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    
 # jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" out="$2" want="$3"
-  if grep -qF -- "$want" <<<"$out"; then
+  if grep -qF -- "$want" <<< "$out"; then
     ok "$desc"
   else
     bad "$desc" "expected to contain: $want"
@@ -50,7 +58,7 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" out="$2" unwanted="$3"
-  if grep -qF -- "$unwanted" <<<"$out"; then
+  if grep -qF -- "$unwanted" <<< "$out"; then
     bad "$desc" "must NOT contain: $unwanted"
     echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
   else
@@ -67,7 +75,7 @@ assert_rc() {
   fi
 }
 
-ROOT="$(mktemp -d 2>/dev/null || mktemp -d -t jit47)"
+ROOT="$(mktemp -d 2> /dev/null || mktemp -d -t jit47)"
 trap 'chmod -R u+rwX "$ROOT" 2>/dev/null; rm -rf "$ROOT"' EXIT
 BASE="$ROOT/.claude/jit-context"
 mkdir -p "$BASE/tools/00-manual" "$BASE/paths/00-manual" "$BASE/vocabulary/00-manual"
@@ -90,7 +98,7 @@ RC=0
 # Runs the real script the way a person does, and keeps BOTH halves: an exit code with no
 # stderr beside it cannot show that the reason reached a reader.
 rebuild() {
-  CLAUDE_PROJECT_DIR="${1:-$ROOT}" bash "$REBUILD" >/dev/null 2>"$ERR"
+  CLAUDE_PROJECT_DIR="${1:-$ROOT}" bash "$REBUILD" > /dev/null 2> "$ERR"
   RC=$?
   return 0
 }
@@ -131,8 +139,8 @@ write_entry tools/00-manual/bogus.md \
   "mode: block"
 rebuild
 assert_rc "a refused macro exits 1" 1 "$RC"
-assert_contains "and names the entry"     "$(cat "$ERR")" "bogus.md"
-assert_contains "and names the macro"     "$(cat "$ERR")" "@invokation"
+assert_contains "and names the entry" "$(cat "$ERR")" "bogus.md"
+assert_contains "and names the macro" "$(cat "$ERR")" "@invokation"
 # Written through unexpanded on purpose -- the hook then refuses that row by name. An
 # exit 1 that also DROPPED the rule would be a different, worse change.
 assert_contains "the row is written through unexpanded" \
@@ -207,7 +215,7 @@ echo "=== F. no entry tree at all is 2 -- could not evaluate, not a clean rebuil
 # JIT_BASE resolves against CLAUDE_PROJECT_DIR and never the working directory, so
 # rebuilding from the wrong root indexed nothing and reported success. That is the exact
 # state this repository calls its second trap, and it read as green.
-EMPTY="$(mktemp -d 2>/dev/null || mktemp -d -t jit47b)"
+EMPTY="$(mktemp -d 2> /dev/null || mktemp -d -t jit47b)"
 rebuild "$EMPTY"
 assert_rc "a project with no jit-context tree exits 2" 2 "$RC"
 assert_contains "and names the path it looked for" "$(cat "$ERR")" "$EMPTY/.claude/jit-context"
@@ -218,7 +226,7 @@ assert_not_contains "and does not claim to have indexed anything" "$(cat "$ERR")
 # the point -- that no index was written, since an index is the thing whose absence exit 0
 # would deny. Asserting on the directory instead would now pass for a second reason and
 # stop being evidence about this script at all.
-if [ -n "$(find "$EMPTY" -name "00-index.tsv" -print 2>/dev/null)" ]; then
+if [ -n "$(find "$EMPTY" -name "00-index.tsv" -print 2> /dev/null)" ]; then
   bad "it wrote no index under a root it could not evaluate"
 else
   ok "it wrote no index under a root it could not evaluate"
@@ -233,12 +241,12 @@ echo "=== G. an index it cannot write is 2, not a count read back off the stale 
 # rule count it read back OUT of that stale file -- success, with a number, for an index
 # nobody rebuilt.
 TSV="$BASE/tools/00-manual/00-index.tsv"
-chmod 444 "$TSV" 2>/dev/null
+chmod 444 "$TSV" 2> /dev/null
 # The probe is an actual open-for-write, not `[ -w ]`. Root passes `-w` on a mode nobody
 # can write, and Git Bash answers it from an emulated attribute -- both of which decide
 # this section by a proxy for the capability rather than the capability. An append of zero
 # bytes takes the same permission check as the truncation and changes nothing.
-if printf %s "" >> "$TSV" 2>/dev/null; then
+if printf %s "" >> "$TSV" 2> /dev/null; then
   echo "  SKIP-NOTE: chmod did not remove write permission here (running as root, or a"
   echo "             filesystem without POSIX modes). Section G tested nothing."
 else
@@ -248,7 +256,7 @@ else
   # whatever this script does, so a bare name grep passed before the fix existed.
   assert_contains "and says that index is now stale" "$(cat "$ERR")" "was NOT rebuilt"
 fi
-chmod 644 "$TSV" 2>/dev/null
+chmod 644 "$TSV" 2> /dev/null
 rebuild
 assert_rc "and once it is writable again, 0" 0 "$RC"
 

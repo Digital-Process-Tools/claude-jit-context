@@ -93,8 +93,15 @@ PASS=0
 FAIL=0
 ADVISORY=0
 
-pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; [ $# -gt 1 ] && echo "    $2"; }
+pass() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+fail() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  [ $# -gt 1 ] && echo "    $2"
+}
 
 # Every "could not build the fixtures here" floor below exits 2, which run-all.sh maps
 # to SKIPPED rather than FAILED or passed -- correctly, for a floor that fires before
@@ -115,18 +122,21 @@ skip_or_fail() {
   exit 2
 }
 
-if ! command -v git >/dev/null 2>&1; then
+if ! command -v git > /dev/null 2>&1; then
   echo "SKIPPED: no git on PATH, so the set of tracked files cannot be established"
   echo "  The needle set IS the tracked basenames, and the swept set is the tracked files."
   echo "  Neither can be read off whatever happens to be in the working directory."
   skip_or_fail
 fi
-if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+if ! git -C "$REPO" rev-parse --git-dir > /dev/null 2>&1; then
   echo "SKIPPED: $REPO is not a git working tree"
   skip_or_fail
 fi
 
-WORK=$(mktemp -d) || { echo "SKIPPED: could not create a scratch directory"; skip_or_fail; }
+WORK=$(mktemp -d) || {
+  echo "SKIPPED: could not create a scratch directory"
+  skip_or_fail
+}
 trap 'rm -rf "$WORK"' EXIT
 
 # --- the needle ----------------------------------------------------------------------
@@ -135,7 +145,9 @@ trap 'rm -rf "$WORK"' EXIT
 # [A-Za-z0-9_-] is backslash-escaped rather than only the dot: a basename is whatever
 # somebody committed, and one unescaped metacharacter would silently widen the sweep.
 git -C "$REPO" ls-files -z > "$WORK/tracked0" || {
-  echo "SKIPPED: git ls-files failed"; skip_or_fail; }
+  echo "SKIPPED: git ls-files failed"
+  skip_or_fail
+}
 tr '\0' '\n' < "$WORK/tracked0" > "$WORK/tracked"
 
 SCANNED=$(awk 'END { print NR + 0 }' "$WORK/tracked")
@@ -159,7 +171,7 @@ ALT=$(sed 's/[^A-Za-z0-9_-]/\\&/g' "$WORK/basenames" | paste -sd'|' -)
 # citation and a bare-basename one are the same finding.
 CITE_RE="(^|[^A-Za-z0-9_.-])([A-Za-z0-9_.-]+/)*($ALT):[0-9]"
 
-cites_in() { grep -nIE -- "$CITE_RE" "$1" 2>/dev/null; }
+cites_in() { grep -nIE -- "$CITE_RE" "$1" 2> /dev/null; }
 
 # Distinguishes grep's own three outcomes -- 0 (a citation was found), 1 (no citation,
 # a genuinely clean read), 2+ (the file could not be read at all, an unreadable file
@@ -251,7 +263,7 @@ if [ -n "$planted" ]; then
   pass "control: a planted line-number citation is seen"
 else
   fail "control: the planted citation was found NOWHERE -- every result below is vacuous" \
-       "needle over $BASE_N basename(s) matched nothing in the planted fixture"
+    "needle over $BASE_N basename(s) matched nothing in the planted fixture"
   echo ""
   echo "  Stopping here rather than printing a clean sweep nobody performed."
   exit 1
@@ -262,13 +274,13 @@ if [ -n "$planted_path" ]; then
   pass "control: a path-qualified citation is seen too"
 else
   fail "control: the path-qualified citation was found NOWHERE" \
-       "the dir-prefix branch of the needle is dead, and no enforced file exercises it"
+    "the dir-prefix branch of the needle is dead, and no enforced file exercises it"
 fi
 
 clean=$(cites_in "$WORK/clean.sh")
 if [ -n "$clean" ]; then
   fail "control: the recommended forms and a longer basename are NOT citations" \
-       "$(printf '%s' "$clean" | tr '\n' ' ')"
+    "$(printf '%s' "$clean" | tr '\n' ' ')"
 else
   pass "control: the recommended forms and a longer basename are NOT citations"
 fi
@@ -287,12 +299,12 @@ fi
 read_citations "$WORK/does-not-exist-$$"
 if [ "$RC" -eq 1 ]; then
   fail "control: a read failure is reported as a CLEAN sweep, not as unreadable" \
-       "grep exit 1 (no match) and grep exit 2+ (could not read it) must not collapse"
+    "grep exit 1 (no match) and grep exit 2+ (could not read it) must not collapse"
 elif [ "$RC" -ge 2 ]; then
   pass "control: a read failure is distinguished from a clean sweep (grep exit $RC)"
 else
   fail "control: reading a nonexistent path unexpectedly reported a citation" \
-       "grep exit $RC, expected 2 or more"
+    "grep exit $RC, expected 2 or more"
 fi
 
 # --- the control on the SELECTORS ----------------------------------------------------
@@ -314,12 +326,12 @@ while IFS=' ' read -r want path; do
   [ -n "$want" ] || continue
   sel_n=$((sel_n + 1))
   got=$(printf '%s\n' "$path" | awk -v enf="$ENFORCED_RE" -v ns="$NOT_SWEPT_RE" \
-        -v vend="$VENDORED_RE" "$BUCKET_AWK"' { print b }')
+    -v vend="$VENDORED_RE" "$BUCKET_AWK"' { print b }')
   if [ "$got" != "$want" ]; then
     sel_fail=$((sel_fail + 1))
     echo "    $path -> ${got:-<nothing>}, expected $want"
   fi
-done <<'CASES'
+done << 'CASES'
 enforced scripts/pre-tool-hook.sh
 enforced tests/test-line-citations.sh
 enforced .claude/jit-context/paths/00-manual/tooling.md
@@ -341,12 +353,12 @@ CASES
 # the same third state both file sets get: nothing checked is not a clean check.
 if [ "$sel_n" -lt 10 ]; then
   fail "control: only $sel_n selector case(s) were read -- the table did not arrive" \
-       "every bucket claim below rests on a control that did not run"
+    "every bucket claim below rests on a control that did not run"
 elif [ "$sel_fail" -eq 0 ]; then
   pass "control: all $sel_n sample paths land in the bucket their label claims"
 else
   fail "control: $sel_fail of $sel_n sample path(s) landed in the wrong bucket" \
-       "the labels below would describe coverage this sweep does not have"
+    "the labels below would describe coverage this sweep does not have"
 fi
 
 # --- the enforced sweep --------------------------------------------------------------
@@ -372,7 +384,10 @@ hits=""
 unread=0
 while IFS= read -r file; do
   [ -n "$file" ] || continue
-  if [ ! -f "$REPO/$file" ]; then unread=$((unread + 1)); continue; fi
+  if [ ! -f "$REPO/$file" ]; then
+    unread=$((unread + 1))
+    continue
+  fi
   read_citations "$REPO/$file"
   case "$RC" in
     0) hits="$hits$file: $CITES
@@ -418,7 +433,10 @@ adv=""
 adv_unread=0
 while IFS= read -r file; do
   [ -n "$file" ] || continue
-  if [ ! -f "$REPO/$file" ]; then adv_unread=$((adv_unread + 1)); continue; fi
+  if [ ! -f "$REPO/$file" ]; then
+    adv_unread=$((adv_unread + 1))
+    continue
+  fi
   read_citations "$REPO/$file"
   case "$RC" in
     0) adv="$adv$file: $CITES

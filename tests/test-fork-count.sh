@@ -29,7 +29,7 @@ FAIL=0
 
 # jit-drive: none -- every helper here runs a real hook and counts its forks; none takes hook output as an argument
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/jit-spawn.XXXXXXXX" 2>/dev/null)" || {
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/jit-spawn.XXXXXXXX" 2> /dev/null)" || {
   echo "  SKIPPED: could not create a work directory -- nothing was measured"
   exit 2
 }
@@ -46,10 +46,13 @@ mkdir -p "$SHIM"
 # forks.
 SHIMMED=""
 for c in awk grep sed tr wc cat head tail sort uniq cut date mkdir rm mv cp touch ls \
-         dirname basename expr stat find perl mktemp chmod; do
+  dirname basename expr stat find perl mktemp chmod; do
   real=""
   for d in /usr/bin /bin /usr/local/bin; do
-    if [ -x "$d/$c" ]; then real="$d/$c"; break; fi
+    if [ -x "$d/$c" ]; then
+      real="$d/$c"
+      break
+    fi
   done
   [ -n "$real" ] || continue
   {
@@ -57,14 +60,14 @@ for c in awk grep sed tr wc cat head tail sort uniq cut date mkdir rm mv cp touc
     printf 'echo %s >> "%s"\n' "$c" "$COUNT"
     printf 'exec %s "$@"\n' "$real"
   } > "$SHIM/$c"
-  chmod +x "$SHIM/$c" 2>/dev/null || continue
+  chmod +x "$SHIM/$c" 2> /dev/null || continue
   SHIMMED="$SHIMMED $c"
 done
 
 # How many times one hook invocation spawned one named command.
 spawns_of() {
   local n
-  n=$(grep -c -x -F "$1" "$COUNT" 2>/dev/null)
+  n=$(grep -c -x -F "$1" "$COUNT" 2> /dev/null)
   printf '%s' "${n:-0}"
 }
 
@@ -75,12 +78,17 @@ run_hook() {
   : > "$COUNT"
   printf '%s' "$payload" \
     | PATH="$SHIM:$PATH" CLAUDE_PROJECT_DIR="$REPO" bash "$REPO/scripts/$hook" \
-      >"$WORK/out.json" 2>/dev/null
+      > "$WORK/out.json" 2> /dev/null
 }
 
-pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
+pass() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
 fail() {
-  FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
   local l
   for l in "$@"; do echo "    $l"; done
 }
@@ -99,7 +107,7 @@ if [ "$(spawns_of awk)" -ge 1 ]; then
   pass "the shim counted the matcher's own awk"
 else
   fail "the shim counted the matcher's own awk" \
-    "counted: $(wc -l <"$COUNT" | tr -d '[:space:]') spawn(s), none of them awk" \
+    "counted: $(wc -l < "$COUNT" | tr -d '[:space:]') spawn(s), none of them awk" \
     "every zero-count assertion below would be vacuous, so this suite stops here" \
     "shimmed:$SHIMMED"
   echo ""
@@ -125,9 +133,9 @@ echo "=== no hook resolves its own directory by forking dirname ==="
 # strip, where dirname returns "." -- which is what the section below this one checks.
 for h in pre-path-hook pre-tool-hook pre-prompt-hook session-start-hook post-tool-hook stop-hook; do
   case "$h" in
-    pre-prompt-hook)    p="$PROMPT_PAYLOAD" ;;
+    pre-prompt-hook) p="$PROMPT_PAYLOAD" ;;
     session-start-hook) p="$SESSION_PAYLOAD" ;;
-    *)                  p="$FILE_PAYLOAD" ;;
+    *) p="$FILE_PAYLOAD" ;;
   esac
   run_hook "$h.sh" "$p"
   n=$(spawns_of dirname)
@@ -145,8 +153,8 @@ echo '=== SCRIPT_DIR still resolves, with and without a slash in $0 ==='
 # fail to source common.sh, and the hook would answer nothing -- which reads exactly like
 # a clean miss.
 OUT_ABS=$(printf '%s' "$FILE_PAYLOAD" \
-  | CLAUDE_PROJECT_DIR="$REPO" bash "$REPO/scripts/pre-path-hook.sh" 2>/dev/null)
-if grep -q "hooks.md" <<<"$OUT_ABS"; then
+  | CLAUDE_PROJECT_DIR="$REPO" bash "$REPO/scripts/pre-path-hook.sh" 2> /dev/null)
+if grep -q "hooks.md" <<< "$OUT_ABS"; then
   pass 'an absolute $0 still finds common.sh and the tree'
 else
   fail 'an absolute $0 still finds common.sh and the tree' "got: ${OUT_ABS:0:200}"
@@ -156,8 +164,8 @@ fi
 # own directory gets. dirname answers "."; `${0%/*}` answers the filename itself, which
 # would make SCRIPT_DIR a path that is not a directory at all.
 OUT_BARE=$(cd "$REPO/scripts" && printf '%s' "$FILE_PAYLOAD" \
-  | CLAUDE_PROJECT_DIR="$REPO" bash pre-path-hook.sh 2>/dev/null)
-if grep -q "hooks.md" <<<"$OUT_BARE"; then
+  | CLAUDE_PROJECT_DIR="$REPO" bash pre-path-hook.sh 2> /dev/null)
+if grep -q "hooks.md" <<< "$OUT_BARE"; then
   pass 'a bare $0 with no slash still finds common.sh and the tree'
 else
   fail 'a bare $0 with no slash still finds common.sh and the tree' "got: ${OUT_BARE:0:200}"
@@ -180,8 +188,8 @@ if [ -n "${EPOCHREALTIME:-}" ]; then
     fail '_ms forks no perl on a bash with $EPOCHREALTIME' "counted $(spawns_of perl)"
   fi
   case "$ms" in
-    ''|*[!0-9]*) fail "_ms answers whole milliseconds" "got: ${ms:-<nothing>}" ;;
-    *)           pass "_ms answers whole milliseconds" ;;
+    '' | *[!0-9]*) fail "_ms answers whole milliseconds" "got: ${ms:-<nothing>}" ;;
+    *) pass "_ms answers whole milliseconds" ;;
   esac
 
   : > "$COUNT"
@@ -210,8 +218,8 @@ echo "=== ...and the perl fallback still answers when it does not ==="
 # which is deterministic on any bash -- on 3.2 this is simply the only path there is.
 fb_ms=$(bash -c "unset EPOCHREALTIME; . \"$REPO/scripts/common.sh\" 2>/dev/null; _ms")
 case "$fb_ms" in
-  ''|*[!0-9]*) fail '_ms answers with no $EPOCHREALTIME' "got: ${fb_ms:-<nothing>}" ;;
-  *)           pass '_ms answers with no $EPOCHREALTIME' ;;
+  '' | *[!0-9]*) fail '_ms answers with no $EPOCHREALTIME' "got: ${fb_ms:-<nothing>}" ;;
+  *) pass '_ms answers with no $EPOCHREALTIME' ;;
 esac
 fb_ts=$(bash -c "unset EPOCHREALTIME; . \"$REPO/scripts/common.sh\" 2>/dev/null; _ts")
 if [[ "$fb_ts" =~ ^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\.[0-9][0-9][0-9]$ ]]; then
@@ -280,9 +288,9 @@ else
   # around every awk for the same class of reason.
   frozen_ms=$(bash -c "EPOCHREALTIME=1000000000,500000; . \"$REPO/scripts/common.sh\" 2>/dev/null; _ms")
   case "$frozen_ms" in
-    ''|*[!0-9]*) fail 'a comma decimal separator still answers whole milliseconds' \
-                   "got: ${frozen_ms:-<nothing>}" ;;
-    *)           pass 'a comma decimal separator still answers whole milliseconds' ;;
+    '' | *[!0-9]*) fail 'a comma decimal separator still answers whole milliseconds' \
+      "got: ${frozen_ms:-<nothing>}" ;;
+    *) pass 'a comma decimal separator still answers whole milliseconds' ;;
   esac
 fi
 
@@ -302,13 +310,19 @@ echo "=== no hook puts a cat in front of something that reads stdin itself ==="
 # bound alone lets a new fork in unnoticed.
 for h in pre-path-hook pre-tool-hook pre-prompt-hook session-start-hook post-tool-hook stop-hook; do
   case "$h" in
-    pre-prompt-hook)    p="$PROMPT_PAYLOAD" ;;
+    pre-prompt-hook) p="$PROMPT_PAYLOAD" ;;
     session-start-hook) p="$SESSION_PAYLOAD" ;;
-    *)                  p="$FILE_PAYLOAD" ;;
+    *) p="$FILE_PAYLOAD" ;;
   esac
   case "$h" in
-    post-tool-hook) want=1; why=" (the free-text field, deliberately)" ;;
-    *)              want=0; why="" ;;
+    post-tool-hook)
+      want=1
+      why=" (the free-text field, deliberately)"
+      ;;
+    *)
+      want=0
+      why=""
+      ;;
   esac
   run_hook "$h.sh" "$p"
   n=$(spawns_of cat)
@@ -333,7 +347,7 @@ echo "=== no hook forks a text tool to slice a string it already holds ==="
 for h in pre-path-hook pre-tool-hook pre-prompt-hook post-tool-hook stop-hook; do
   case "$h" in
     pre-prompt-hook) p="$PROMPT_PAYLOAD" ;;
-    *)               p="$FILE_PAYLOAD" ;;
+    *) p="$FILE_PAYLOAD" ;;
   esac
   run_hook "$h.sh" "$p"
   for t in sed tr wc; do
@@ -369,7 +383,7 @@ echo "=== jit_path_dir / jit_path_base answer without a fork of any kind ==="
 # is about. `printf -v` writes the answer in the caller's own shell. It is bash 3.2, so
 # there is no version gate here and no fallback to keep working.
 # shellcheck disable=SC1090
-. "$REPO/scripts/common.sh" 2>/dev/null
+. "$REPO/scripts/common.sh" 2> /dev/null
 
 check_split() {
   local desc="$1" input="$2" want_dir="$3" want_base="$4" got_dir="" got_base=""
@@ -388,12 +402,12 @@ check_split() {
 # Every case dirname and basename disagree with naive parameter expansion on. `${x%/*}`
 # returns x UNCHANGED with no slash, and `${x##*/}` returns "" on a trailing slash -- both
 # are wrong answers that look like right ones.
-check_split "an ordinary path"          "a/b/c.md"     "a/b"   "c.md"
-check_split "no slash at all"           "c.md"         "."     "c.md"
-check_split "one leading slash"         "/c.md"        ""      "c.md"
-check_split "an absolute path"          "/a/b/c.md"    "/a/b"  "c.md"
-check_split "a path with a space"       "a b/c d.md"   "a b"   "c d.md"
-check_split "a dot directory"           "./c.md"       "."     "c.md"
+check_split "an ordinary path" "a/b/c.md" "a/b" "c.md"
+check_split "no slash at all" "c.md" "." "c.md"
+check_split "one leading slash" "/c.md" "" "c.md"
+check_split "an absolute path" "/a/b/c.md" "/a/b" "c.md"
+check_split "a path with a space" "a b/c d.md" "a b" "c d.md"
+check_split "a dot directory" "./c.md" "." "c.md"
 
 # Positive control on the helpers themselves: the two above are only meaningful if the
 # functions exist. An unsourced or renamed helper leaves both variables at "" and would
@@ -415,8 +429,8 @@ echo "=== jit-dry-run.sh forks no dirname, basename or tr over this repo's own t
 # This is the tool CI runs over a whole tree and the one tests/test-dogfood-entries.sh
 # calls, so its fork count is paid by every author on every run, not once.
 : > "$COUNT"
-( cd "$REPO" && PATH="$SHIM:$PATH" CLAUDE_PROJECT_DIR="$REPO" \
-    bash "$REPO/scripts/jit-dry-run.sh" >"$WORK/lint.out" 2>&1 )
+(cd "$REPO" && PATH="$SHIM:$PATH" CLAUDE_PROJECT_DIR="$REPO" \
+  bash "$REPO/scripts/jit-dry-run.sh" > "$WORK/lint.out" 2>&1)
 lint_rc=$?
 
 # Control first, again: a lint that did not run forks nothing and would pass every count
@@ -425,7 +439,7 @@ if [ "$(spawns_of awk)" -ge 10 ] && [ -s "$WORK/lint.out" ]; then
   pass "control: the lint ran and did its awk work (exit $lint_rc)"
 else
   fail "control: the lint ran and did its awk work" \
-    "exit $lint_rc, $(spawns_of awk) awk spawn(s), $(wc -c <"$WORK/lint.out" | tr -d '[:space:]') bytes of report" \
+    "exit $lint_rc, $(spawns_of awk) awk spawn(s), $(wc -c < "$WORK/lint.out" | tr -d '[:space:]') bytes of report" \
     "the counts below would be vacuous"
 fi
 
@@ -456,7 +470,7 @@ done
 # not per row, and it is the reason this is a ceiling rather than a floor of zero. CI is
 # what established the number: the first version of this assertion demanded zero, and the
 # two legs with the fold builtin reported the two STX conversions as a defect.
-IDX_FILES=$(find "$REPO/.claude/jit-context" -name 00-index.tsv 2>/dev/null | grep -c . | tr -d '[:space:]')
+IDX_FILES=$(find "$REPO/.claude/jit-context" -name 00-index.tsv 2> /dev/null | grep -c . | tr -d '[:space:]')
 tr_n=$(spawns_of tr)
 wc_n=$(spawns_of wc)
 if [ "${BASH_VERSINFO[0]:-0}" -ge 4 ]; then

@@ -36,13 +36,24 @@ REBUILD="$REPO/scripts/rebuild-tsv.sh"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+}
 
 assert_contains() {
   local desc="$1" out="$2" want="$3"
-  if grep -qF -- "$want" <<<"$out"; then ok "$desc"
-  else bad "$desc" "expected to contain: $want"; echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
+  if grep -qF -- "$want" <<< "$out"; then
+    ok "$desc"
+  else
+    bad "$desc" "expected to contain: $want"
+    echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
   fi
 }
 assert_line() {
@@ -53,14 +64,20 @@ assert_line() {
   # "keyword\tfile\tgeneric" (generic), since the former is a literal prefix of the
   # latter. Reviewer finding (#270): an assert_contains here would have kept
   # passing even if the fix did nothing.
-  if grep -qFx -- "$want" <<<"$out"; then ok "$desc"
-  else bad "$desc" "expected exact line: $want"; echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
+  if grep -qFx -- "$want" <<< "$out"; then
+    ok "$desc"
+  else
+    bad "$desc" "expected exact line: $want"
+    echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
   fi
 }
 assert_not_contains() {
   local desc="$1" out="$2" unwanted="$3"
-  if grep -qF -- "$unwanted" <<<"$out"; then bad "$desc" "must NOT contain: $unwanted"; echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
-  else ok "$desc"
+  if grep -qF -- "$unwanted" <<< "$out"; then
+    bad "$desc" "must NOT contain: $unwanted"
+    echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
+  else
+    ok "$desc"
   fi
 }
 assert_rc() {
@@ -68,7 +85,7 @@ assert_rc() {
   if [ "$got" = "$want" ]; then ok "$desc"; else bad "$desc" "wanted exit $want, got exit $got"; fi
 }
 
-ROOT="$(mktemp -d 2>/dev/null || mktemp -d -t jit255)"
+ROOT="$(mktemp -d 2> /dev/null || mktemp -d -t jit255)"
 trap 'chmod -R u+rwX "$ROOT" 2>/dev/null; rm -rf "$ROOT"' EXIT
 BASE="$ROOT/.claude/jit-context"
 mkdir -p "$BASE/vocabulary/00-manual"
@@ -93,7 +110,7 @@ write_entry widget.md \
 ERR="$ROOT/rebuild.err"
 RC=0
 rebuild() {
-  CLAUDE_PROJECT_DIR="$ROOT" JIT_CONTEXT_GENERIC_WORDS="${1:-}" bash "$REBUILD" >/dev/null 2>"$ERR"
+  CLAUDE_PROJECT_DIR="$ROOT" JIT_CONTEXT_GENERIC_WORDS="${1:-}" bash "$REBUILD" > /dev/null 2> "$ERR"
   RC=$?
   return 0
 }
@@ -103,7 +120,7 @@ rebuild() {
 # only way to get that from here without touching this process's own environment.
 rebuild_unset() {
   env -u JIT_CONTEXT_GENERIC_WORDS -u DYNAMIC_RULES_GENERIC_WORDS \
-    CLAUDE_PROJECT_DIR="$ROOT" bash "$REBUILD" >/dev/null 2>"$ERR"
+    CLAUDE_PROJECT_DIR="$ROOT" bash "$REBUILD" > /dev/null 2> "$ERR"
   RC=$?
   return 0
 }
@@ -137,7 +154,7 @@ echo "=== A3. #270 review finding: an explicitly-empty JIT_CONTEXT_GENERIC_WORDS
 GOODFILE_A3="$ROOT/good-words-a3.txt"
 printf 'context\n' > "$GOODFILE_A3"
 JIT_CONTEXT_GENERIC_WORDS="" DYNAMIC_RULES_GENERIC_WORDS="$GOODFILE_A3" \
-  CLAUDE_PROJECT_DIR="$ROOT" bash "$REBUILD" >/dev/null 2>"$ERR"
+  CLAUDE_PROJECT_DIR="$ROOT" bash "$REBUILD" > /dev/null 2> "$ERR"
 RC=$?
 assert_rc "still exits 0" 0 "$RC"
 assert_line "and JIT_CONTEXT_GENERIC_WORDS=\"\" wins: the keyword stays specific, DYNAMIC_RULES_GENERIC_WORDS is not consulted" \
@@ -174,7 +191,7 @@ echo ""
 echo "=== D. a wordlist that EXISTS and is UNREADABLE: loud, exit 2 ==="
 UNREADABLE="$ROOT/secret-words.txt"
 printf 'context\n' > "$UNREADABLE"
-chmod 000 "$UNREADABLE" 2>/dev/null
+chmod 000 "$UNREADABLE" 2> /dev/null
 if [ -r "$UNREADABLE" ]; then
   echo "  SKIP-NOTE: chmod did not remove read permission here (running as root). Section D tested nothing."
 else
@@ -183,7 +200,7 @@ else
   assert_contains "and names the broken file" "$(cat "$ERR")" "$UNREADABLE"
   assert_contains "and says it is not readable" "$(cat "$ERR")" "not readable"
 fi
-chmod 644 "$UNREADABLE" 2>/dev/null
+chmod 644 "$UNREADABLE" 2> /dev/null
 
 echo ""
 echo "=== E. positive control: a working wordlist classifies correctly and exits 0 ==="
@@ -210,7 +227,7 @@ echo "=== F. a wordlist path carrying a raw carriage return cannot forge the FAT
 CRNAME="$(printf 'crfile%bFORGED-SUFFIX.txt' '\r')"
 CRPATH="$ROOT/$CRNAME"
 printf 'context\n' > "$CRPATH"
-chmod 000 "$CRPATH" 2>/dev/null
+chmod 000 "$CRPATH" 2> /dev/null
 if [ -r "$CRPATH" ]; then
   echo "  SKIP-NOTE: chmod did not remove read permission here (running as root). Section F tested nothing."
 else
@@ -224,7 +241,7 @@ else
   fi
   assert_contains "and the FATAL line still shows the readable part of the path" "$(cat "$ERR")" "crfile"
 fi
-chmod 644 "$CRPATH" 2>/dev/null
+chmod 644 "$CRPATH" 2> /dev/null
 
 echo ""
 echo "== Results: $PASS passed, $FAIL failed =="

@@ -25,8 +25,17 @@ WORKFLOW="$REPO/.github/workflows/tests.yml"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -gt 0 ] && echo "    $*"; return 0; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -gt 0 ] && echo "    $*"
+  return 0
+}
 
 if [ ! -f "$WORKFLOW" ]; then
   echo "  SKIPPED: $WORKFLOW not found -- nothing to check."
@@ -37,11 +46,11 @@ fi
 # either one is a loud failure here rather than every assertion below going vacuously
 # green against a file that no longer contains what it is looking for.
 if grep -qF 'Exclude the checkout and temp dir from Windows Defender scanning' "$WORKFLOW" \
-   && grep -qF 'Run hook test suites' "$WORKFLOW"; then
+  && grep -qF 'Run hook test suites' "$WORKFLOW"; then
   ok "harness sees both step names in the workflow file"
 else
   bad "harness cannot see one or both step names -- everything below is vacuous" \
-      "grep the workflow file by hand before trusting any PASS below"
+    "grep the workflow file by hand before trusting any PASS below"
   echo ""
   echo "$PASS passed, $FAIL failed"
   exit 1
@@ -83,7 +92,7 @@ assert_unique_step_name() {
     | grep -cF -- "- name: $name")"
   if [ "$count" != "1" ]; then
     bad "step name '$name' occurs $count times in the hooks: job, not exactly 1" \
-        "step_block() cannot isolate a unique block -- fix the workflow's step names before trusting anything below"
+      "step_block() cannot isolate a unique block -- fix the workflow's step names before trusting anything below"
     return 1
   fi
   return 0
@@ -95,23 +104,23 @@ assert_unique_step_name "Run hook test suites"
 DEFENDER_BLOCK="$(step_block "Exclude the checkout and temp dir from Windows Defender scanning")"
 TEST_BLOCK="$(step_block "Run hook test suites")"
 
-if grep -qF 'continue-on-error: true' <<<"$DEFENDER_BLOCK"; then
+if grep -qF 'continue-on-error: true' <<< "$DEFENDER_BLOCK"; then
   ok "the Defender exclusion step carries continue-on-error: true"
 else
   bad "the Defender exclusion step has no continue-on-error: true" \
-      "a Defender-service outage will red the whole leg again -- see #355"
+    "a Defender-service outage will red the whole leg again -- see #355"
 fi
 
-if grep -qF 'continue-on-error' <<<"$TEST_BLOCK"; then
+if grep -qF 'continue-on-error' <<< "$TEST_BLOCK"; then
   bad "Run hook test suites carries continue-on-error -- this would hide a real failure" \
-      "remove it: only the exclusion step above it may ever have this line"
+    "remove it: only the exclusion step above it may ever have this line"
 else
   ok "Run hook test suites carries no continue-on-error"
 fi
 
-if grep -qE '^\s*if:' <<<"$TEST_BLOCK"; then
+if grep -qE '^\s*if:' <<< "$TEST_BLOCK"; then
   bad "Run hook test suites carries an if: condition that could skip it" \
-      "the test step must run unconditionally and be the sole source of the leg's result"
+    "the test step must run unconditionally and be the sole source of the leg's result"
 else
   ok "Run hook test suites carries no weakening if: condition"
 fi
@@ -120,8 +129,8 @@ fi
 # this check degrades to SKIPPED rather than FAILED when the module is unavailable --
 # CI's own workflow-syntax check (GitHub parsing the file to run it at all) is the real
 # backstop; this is a fast local confirmation, not the only gate.
-if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
-  if python3 -c "import yaml, sys; yaml.safe_load(open(sys.argv[1]))" "$WORKFLOW" >/dev/null 2>&1; then
+if command -v python3 > /dev/null 2>&1 && python3 -c 'import yaml' > /dev/null 2>&1; then
+  if python3 -c "import yaml, sys; yaml.safe_load(open(sys.argv[1]))" "$WORKFLOW" > /dev/null 2>&1; then
     ok "the workflow file is syntactically valid YAML"
   else
     bad "the workflow file failed to parse as YAML"

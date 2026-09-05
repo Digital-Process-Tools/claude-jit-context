@@ -29,15 +29,24 @@ RUN_ALL="$REPO/tests/run-all.sh"
 PASS=0
 FAIL=0
 
-TMP="$(mktemp -d 2>/dev/null)" || TMP=""
+TMP="$(mktemp -d 2> /dev/null)" || TMP=""
 if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
   echo "  SKIPPED: mktemp -d produced no directory, so no fixture can be built here."
   exit 2
 fi
 trap 'rm -rf "$TMP"' EXIT
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -gt 0 ] && echo "    $*"; return 0; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -gt 0 ] && echo "    $*"
+  return 0
+}
 
 # A minimal fixture directory: run-all.sh cds to its own dirname and globs test-*.sh
 # there, so a copy of it plus a couple of stub suites is a complete sandbox -- nothing
@@ -46,11 +55,11 @@ build_fixture() {
   local dir="$1"
   mkdir -p "$dir"
   cp "$RUN_ALL" "$dir/run-all.sh"
-  cat > "$dir/test-a-fast.sh" <<'EOF'
+  cat > "$dir/test-a-fast.sh" << 'EOF'
 #!/bin/bash
 exit 0
 EOF
-  cat > "$dir/test-b-slow.sh" <<'EOF'
+  cat > "$dir/test-b-slow.sh" << 'EOF'
 #!/bin/bash
 sleep 1
 exit 0
@@ -117,7 +126,7 @@ fi
 # is aimed at: a stub that always printed "1s" for every suite would pass every
 # assertion above except this one.
 SLOW_TIME_LINE=$(grep 'test-b-slow\.sh' "$OUT_PASS" | tail -1)
-if grep -qE '^ *[1-9][0-9]*s' <<<"$SLOW_TIME_LINE"; then
+if grep -qE '^ *[1-9][0-9]*s' <<< "$SLOW_TIME_LINE"; then
   ok "the slow suite (sleep 1) is timed at 1 second or more, not 0"
 else
   bad "the slow suite (sleep 1) is timed at 1 second or more, not 0" "$SLOW_TIME_LINE"
@@ -125,7 +134,7 @@ fi
 
 # --- Failing fixture: the exit code and the tally text must not change shape ---
 build_fixture "$TMP/fail"
-cat > "$TMP/fail/test-c-fail.sh" <<'EOF'
+cat > "$TMP/fail/test-c-fail.sh" << 'EOF'
 #!/bin/bash
 exit 1
 EOF
@@ -149,7 +158,7 @@ else
 fi
 
 TIMING_BLOCK=$(awk '/Timing/{p=1} p' "$OUT_FAIL")
-if grep -q 'test-c-fail\.sh' "$OUT_FAIL" && grep -qF 'test-c-fail.sh' <<<"$TIMING_BLOCK"; then
+if grep -q 'test-c-fail\.sh' "$OUT_FAIL" && grep -qF 'test-c-fail.sh' <<< "$TIMING_BLOCK"; then
   ok "a failed suite is still timed, in the timing block"
 else
   bad "a failed suite is still timed, in the timing block"

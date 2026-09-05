@@ -34,8 +34,16 @@ COMMANDS="$REPO/commands"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+}
 
 # Pulls the first ```bash ... ``` fence out of a command markdown file.
 extract_fence() {
@@ -46,7 +54,7 @@ extract_fence() {
   ' "$1"
 }
 
-ROOT="$(mktemp -d 2>/dev/null || mktemp -d -t jit278)"
+ROOT="$(mktemp -d 2> /dev/null || mktemp -d -t jit278)"
 trap 'chmod -R u+rwX "$ROOT" 2>/dev/null; rm -rf "$ROOT"' EXIT
 
 STUB_ROOT="$ROOT/plugin"
@@ -54,7 +62,7 @@ mkdir -p "$STUB_ROOT/scripts"
 
 # A stub in place of the real jit-init.sh/jit-doctor.sh: dumps every argument it received,
 # one per line, so the count and the exact text of each word is checkable.
-cat > "$STUB_ROOT/scripts/jit-init.sh" <<'STUB'
+cat > "$STUB_ROOT/scripts/jit-init.sh" << 'STUB'
 #!/bin/bash
 printf 'ARGC=%s\n' "$#"
 i=0
@@ -94,9 +102,9 @@ check_command_body() {
   # once output is long enough (#56, the reason test-cross-tree-write-231.sh does the
   # same). $out here is small, but the shape is what the structural guard in
   # test-assertion-helpers.sh flags regardless of size.
-  if grep -qF 'ARGC=2' <<<"$out" && \
-     grep -qF 'ARG1=[--base]' <<<"$out" && \
-     grep -qF 'ARG2=[/some/project/.claude/jit-context]' <<<"$out"; then
+  if grep -qF 'ARGC=2' <<< "$out" \
+    && grep -qF 'ARG1=[--base]' <<< "$out" \
+    && grep -qF 'ARG2=[/some/project/.claude/jit-context]' <<< "$out"; then
     ok "commands/$name: \"--base DIR\" reaches the script as two separate words"
   else
     bad "commands/$name: \"--base DIR\" reaches the script as two separate words" "got: $out"
@@ -106,8 +114,8 @@ check_command_body() {
   # as that literal text -- not expand against whatever files happen to sit in the
   # directory the command runs from.
   out="$(cd "$CWD" && CLAUDE_PLUGIN_ROOT="$STUB_ROOT" ARGUMENTS='--base decoy-*' bash "$fence" 2>&1)"
-  if grep -qF 'ARGC=2' <<<"$out" && \
-     grep -qF 'ARG2=[decoy-*]' <<<"$out"; then
+  if grep -qF 'ARGC=2' <<< "$out" \
+    && grep -qF 'ARG2=[decoy-*]' <<< "$out"; then
     ok "commands/$name: a typed glob is not expanded against the cwd"
   else
     bad "commands/$name: a typed glob is not expanded against the cwd" "got: $out"
@@ -119,14 +127,14 @@ check_command_body() {
   # are driven, with `set -u` on so a regression here is loud instead of environment-
   # dependent.
   out="$(cd "$CWD" && CLAUDE_PLUGIN_ROOT="$STUB_ROOT" ARGUMENTS='' bash -u "$fence" 2>&1)"
-  if grep -qF 'ARGC=0' <<<"$out"; then
+  if grep -qF 'ARGC=0' <<< "$out"; then
     ok "commands/$name: empty \$ARGUMENTS under set -u still runs with zero extra args"
   else
     bad "commands/$name: empty \$ARGUMENTS under set -u still runs with zero extra args" "got: $out"
   fi
 
   out="$(cd "$CWD" && env -u ARGUMENTS CLAUDE_PLUGIN_ROOT="$STUB_ROOT" bash -u "$fence" 2>&1)"
-  if grep -qF 'ARGC=0' <<<"$out"; then
+  if grep -qF 'ARGC=0' <<< "$out"; then
     ok "commands/$name: unset \$ARGUMENTS under set -u still runs with zero extra args"
   else
     bad "commands/$name: unset \$ARGUMENTS under set -u still runs with zero extra args" "got: $out"

@@ -40,9 +40,11 @@ NOT_EVALUATED=""
 assert_has() {
   local desc="$1" path="$2" needle="$3"
   if LC_ALL=C grep -qF -- "$needle" "$path"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $needle"
     echo "    in file: $path"
   fi
@@ -50,23 +52,27 @@ assert_has() {
 assert_lacks() {
   local desc="$1" path="$2" needle="$3"
   if LC_ALL=C grep -qF -- "$needle" "$path"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $needle"
     echo "    in file: $path"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 assert_status() {
   local desc="$1" actual="$2" expected="$3"
   if [ "$actual" = "$expected" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc (got $actual, expected $expected)"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (got $actual, expected $expected)"
   fi
 }
 
-WORK="$(mktemp -d 2>/dev/null || mktemp -d -t jit195)"
+WORK="$(mktemp -d 2> /dev/null || mktemp -d -t jit195)"
 trap 'rm -rf "$WORK"' EXIT
 
 # =============================================================================
@@ -103,9 +109,10 @@ SITES=$(grep -c -- '-v file="\$filename"' "$SCRIPT_DIR/scripts/rebuild-tsv.sh")
 if [ "${SITES:-0}" -ne 1 ]; then
   FAIL=$((FAIL + 1))
   echo "  FAIL: expected exactly one '-v file=\"\$filename\"' call site in rebuild-tsv.sh," \
-       "found $SITES -- this shim's marker is no longer unique, fix the marker before trusting section A"
+    "found $SITES -- this shim's marker is no longer unique, fix the marker before trusting section A"
 else
-  PASS=$((PASS + 1)); echo "  PASS: the shim's marker still names exactly one call site"
+  PASS=$((PASS + 1))
+  echo "  PASS: the shim's marker still names exactly one call site"
 
   APROJ="$WORK/modfail"
   AMANUAL="$APROJ/.claude/jit-context/vocabulary/00-manual"
@@ -117,8 +124,8 @@ else
   ARC=$?
 
   assert_status "a Modules-builder awk that dies exits the whole rebuild 2" "$ARC" "2"
-  assert_has  "the failure is named FATAL, with the entry file" "$AOUT" "mod.md: awk exited 2"
-  assert_has  "and it says the index is not this run" "$AOUT" "the index is not this run"
+  assert_has "the failure is named FATAL, with the entry file" "$AOUT" "mod.md: awk exited 2"
+  assert_has "and it says the index is not this run" "$AOUT" "the index is not this run"
   assert_lacks "the row the dead awk would have written never landed silently" \
     "$AMANUAL/01-paths.tsv" "BillingCore"
 
@@ -152,14 +159,14 @@ ORIG_REBUILD="$WORK/rebuild-tsv.orig.sh"
 # after it, and on main once the fix has landed there too, because the fix commit is found
 # by what it changed rather than by where it sits relative to a moving remote ref.
 FIX_MARKER='the index is not this run'
-FIX_COMMIT=$(git -C "$SCRIPT_DIR" log -1 --format=%H -S"$FIX_MARKER" -- scripts/rebuild-tsv.sh 2>/dev/null)
+FIX_COMMIT=$(git -C "$SCRIPT_DIR" log -1 --format=%H -S"$FIX_MARKER" -- scripts/rebuild-tsv.sh 2> /dev/null)
 PRE_FIX_REF=""
 if [ -n "$FIX_COMMIT" ]; then
-  PRE_FIX_REF=$(git -C "$SCRIPT_DIR" rev-parse "${FIX_COMMIT}~1" 2>/dev/null)
+  PRE_FIX_REF=$(git -C "$SCRIPT_DIR" rev-parse "${FIX_COMMIT}~1" 2> /dev/null)
 fi
 if [ -n "${PRE_FIX_REF:-}" ] \
-   && git -C "$SCRIPT_DIR" show "$PRE_FIX_REF:scripts/rebuild-tsv.sh" > "$ORIG_REBUILD" 2>/dev/null \
-   && git -C "$SCRIPT_DIR" show "$PRE_FIX_REF:scripts/common.sh" > "$WORK/common.orig.sh" 2>/dev/null; then
+  && git -C "$SCRIPT_DIR" show "$PRE_FIX_REF:scripts/rebuild-tsv.sh" > "$ORIG_REBUILD" 2> /dev/null \
+  && git -C "$SCRIPT_DIR" show "$PRE_FIX_REF:scripts/common.sh" > "$WORK/common.orig.sh" 2> /dev/null; then
   # rebuild-tsv.sh sources "$(dirname "$0")/common.sh" -- give the scratch copy its own
   # common.sh right beside it so it does not pick up the FIXED one from scripts/.
   cp "$WORK/common.orig.sh" "$WORK/common.sh"
@@ -176,7 +183,7 @@ if [ -n "${PRE_FIX_REF:-}" ] \
   else
     FAIL=$((FAIL + 1))
     echo "  FAIL: expected the pre-fix code to exit 0 with no FATAL for this same fixture" \
-         "(got rc=$BRC); the red/green comparison above proves nothing if this is not red"
+      "(got rc=$BRC); the red/green comparison above proves nothing if this is not red"
     echo "    --- pre-fix output ---"
     cat "$BOUT"
   fi
@@ -196,7 +203,7 @@ ENGINE_BIN="$WORK/engines"
 ENGINES=""
 ENGINE_SEEN=""
 for cand in awk gawk nawk mawk; do
-  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  cand_path=$(command -v "$cand" 2> /dev/null) || continue
   case " $ENGINE_SEEN " in *" $cand_path "*) continue ;; esac
   ENGINE_SEEN="$ENGINE_SEEN $cand_path"
   mkdir -p "$ENGINE_BIN/$cand"
@@ -212,15 +219,16 @@ DIVERGE_ENGINE=""
 DIVERGE_LOCALE=""
 for eng in $ENGINES; do
   rc_c=0
-  printf '%s' "$BADREC" | PATH="$ENGINE_BIN/$eng:$PATH" LC_ALL=C awk '/x/{}1' >/dev/null 2>&1
+  printf '%s' "$BADREC" | PATH="$ENGINE_BIN/$eng:$PATH" LC_ALL=C awk '/x/{}1' > /dev/null 2>&1
   rc_c=$?
   [ "$rc_c" -eq 0 ] || continue
   for loc in en_US.UTF-8 C.UTF-8 en_US.utf8; do
     rc_loc=0
-    printf '%s' "$BADREC" | PATH="$ENGINE_BIN/$eng:$PATH" LC_ALL="$loc" awk '/x/{}1' >/dev/null 2>&1
+    printf '%s' "$BADREC" | PATH="$ENGINE_BIN/$eng:$PATH" LC_ALL="$loc" awk '/x/{}1' > /dev/null 2>&1
     rc_loc=$?
     if [ "$rc_loc" -ne 0 ]; then
-      DIVERGE_ENGINE="$eng"; DIVERGE_LOCALE="$loc"
+      DIVERGE_ENGINE="$eng"
+      DIVERGE_LOCALE="$loc"
       break 2
     fi
   done
@@ -370,7 +378,7 @@ CLAUDE_PROJECT_DIR="$EPROJ" bash "$REBUILD" > "$EOUT" 2>&1
 # The positive control: did the read-only bit actually stop the truncate, so our seeded
 # bytes are what the reporter is reading? If not (root, or a filesystem that ignores the
 # bit), this whole section says NOT_EVALUATED rather than passing on an empty file.
-if LC_ALL=C grep -qF 'wi' "$EKWIDX" 2>/dev/null && LC_ALL=C grep -qF 'Wi' "$EPATHIDX" 2>/dev/null; then
+if LC_ALL=C grep -qF 'wi' "$EKWIDX" 2> /dev/null && LC_ALL=C grep -qF 'Wi' "$EPATHIDX" 2> /dev/null; then
   assert_has "the keyword-index row names its own leaf" \
     "$EOUT" "vocabulary/00-manual/$EKWLEAF row"
   assert_has "the paths-index row names its own leaf" \
@@ -378,12 +386,14 @@ if LC_ALL=C grep -qF 'wi' "$EKWIDX" 2>/dev/null && LC_ALL=C grep -qF 'Wi' "$EPAT
   # grep -c already prints "0" on no match and only its EXIT status is nonzero then, so
   # `|| echo 0` here would append a SECOND "0" on a line of its own and break the -eq
   # test below with two lines instead of one.
-  OLDFORM=$(LC_ALL=C grep -c '^rebuild-tsv: vocabulary/00-manual row ' "$EOUT" 2>/dev/null)
+  OLDFORM=$(LC_ALL=C grep -c '^rebuild-tsv: vocabulary/00-manual row ' "$EOUT" 2> /dev/null)
   OLDFORM="${OLDFORM:-0}"
   if [ "${OLDFORM:-0}" -eq 0 ]; then
-    PASS=$((PASS + 1)); echo "  PASS: the undifferentiated 'vocabulary/00-manual row' form is gone"
+    PASS=$((PASS + 1))
+    echo "  PASS: the undifferentiated 'vocabulary/00-manual row' form is gone"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: the old ambiguous label is still printed on its own"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: the old ambiguous label is still printed on its own"
   fi
   # tools/ and paths/ write one index per layer and stay bare on purpose (#153) -- this
   # change must not have widened to them by accident.
@@ -396,13 +406,13 @@ if LC_ALL=C grep -qF 'wi' "$EKWIDX" 2>/dev/null && LC_ALL=C grep -qF 'Wi' "$EPAT
   chmod 444 "$TIDX"
   TOUT="$WORK/toolslabel.out"
   CLAUDE_PROJECT_DIR="$TPROJ" bash "$REBUILD" > "$TOUT" 2>&1
-  if LC_ALL=C grep -qF 'wi' "$TIDX" 2>/dev/null; then
+  if LC_ALL=C grep -qF 'wi' "$TIDX" 2> /dev/null; then
     assert_has "paths stays bare -- no leaf suffix invented where only one index exists" \
       "$TOUT" "rebuild-tsv: paths/00-manual row"
     assert_lacks "and it does not gain a fabricated leaf suffix either" \
       "$TOUT" "paths/00-manual/$EKWLEAF row"
   fi
-  chmod 644 "$TIDX" 2>/dev/null || true
+  chmod 644 "$TIDX" 2> /dev/null || true
 else
   NOT_EVALUATED="$NOT_EVALUATED
   - section E: chmod 444 did not stop rebuild-tsv.sh from truncating the seeded TSVs on
@@ -410,7 +420,7 @@ else
     bad bytes did not survive to the reporter, so nothing here proves which label was
     printed"
 fi
-chmod 644 "$EKWIDX" "$EPATHIDX" 2>/dev/null || true
+chmod 644 "$EKWIDX" "$EPATHIDX" 2> /dev/null || true
 
 echo ""
 if [ -n "$NOT_EVALUATED" ]; then

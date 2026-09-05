@@ -31,16 +31,23 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PASS=0
 FAIL=0
 
-pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; [ $# -gt 1 ] && echo "    $2"; }
+pass() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+fail() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  [ $# -gt 1 ] && echo "    $2"
+}
 
-if ! command -v git >/dev/null 2>&1; then
+if ! command -v git > /dev/null 2>&1; then
   echo "SKIPPED: no git on PATH, so the set of tracked files cannot be established"
   echo "  Scanning the working tree instead would sweep build output and ignored files,"
   echo "  and a rule about what is COMMITTED cannot be read off what happens to be there."
   exit 2
 fi
-if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+if ! git -C "$REPO" rev-parse --git-dir > /dev/null 2>&1; then
   echo "SKIPPED: $REPO is not a git working tree"
   exit 2
 fi
@@ -59,7 +66,7 @@ names_it() {
   local needle="$1"
   shift
   local re="${needle//./\.}"
-  grep -lIE -- "(^|[^0-9])$re" "$@" 2>/dev/null
+  grep -lIE -- "(^|[^0-9])$re" "$@" 2> /dev/null
 }
 
 # --- the control, first --------------------------------------------------------------
@@ -67,7 +74,10 @@ names_it() {
 # A scan that found nothing because it was looking in the wrong place, or with a broken
 # needle, is indistinguishable from a clean tree. So plant the exact shape being
 # prohibited in a scratch file and require the scanner to see it.
-WORK=$(mktemp -d) || { echo "SKIPPED: could not create a scratch directory"; exit 2; }
+WORK=$(mktemp -d) || {
+  echo "SKIPPED: could not create a scratch directory"
+  exit 2
+}
 trap 'rm -rf "$WORK"' EXIT
 
 printf 'a doc that names changelog.d/999.fixed.md by path\n' > "$WORK/planted.md"
@@ -77,13 +87,16 @@ case "$control" in
   *planted.md*)
     case "$control" in
       *clean.md*) fail "control: the scan flagged a file that names no fragment" "$control" ;;
-      *)          pass "control: the scan sees a planted reference and only that file" ;;
-    esac ;;
-  *) fail "control: the scan found the planted reference nowhere — every result below is vacuous" \
-          "got: ${control:-<nothing>}"
-     echo ""
-     echo "  Stopping here rather than printing a clean sweep nobody performed."
-     exit 1 ;;
+      *) pass "control: the scan sees a planted reference and only that file" ;;
+    esac
+    ;;
+  *)
+    fail "control: the scan found the planted reference nowhere — every result below is vacuous" \
+      "got: ${control:-<nothing>}"
+    echo ""
+    echo "  Stopping here rather than printing a clean sweep nobody performed."
+    exit 1
+    ;;
 esac
 
 # A fragment name is a substring of every longer-numbered one sharing its prefix, and a
@@ -98,7 +111,7 @@ printf 'a doc that names changelog.d/9999997.fixed.md by path\n' > "$WORK/prefix
 false_positive=$(names_it "999997.fixed.md" "$WORK/prefix.md")
 if [ -n "$false_positive" ]; then
   fail "control: a name that is a prefix of a longer one is not a reference to it" \
-       "999997.fixed.md was found in a document that names only 9999997.fixed.md"
+    "999997.fixed.md was found in a document that names only 9999997.fixed.md"
 else
   pass "control: a name that is a prefix of a longer one is not a reference to it"
 fi
@@ -129,9 +142,11 @@ fi
 # Every tracked file except changelog.d/ itself. A fragment naming its own filename is
 # not a thing that happens, and the directory's README documents the convention.
 TRACKED="$WORK/tracked"
-( cd "$REPO" && git ls-files -z ) > "$WORK/tracked0" || {
-  echo "SKIPPED: git ls-files failed"; exit 2; }
-( cd "$REPO" && tr '\0' '\n' < "$WORK/tracked0" ) \
+(cd "$REPO" && git ls-files -z) > "$WORK/tracked0" || {
+  echo "SKIPPED: git ls-files failed"
+  exit 2
+}
+(cd "$REPO" && tr '\0' '\n' < "$WORK/tracked0") \
   | awk '$0 !~ /^changelog\.d\// { print }' > "$TRACKED"
 
 SCANNED=$(awk 'END { print NR + 0 }' "$TRACKED")
@@ -156,13 +171,13 @@ while IFS= read -r name; do
   done < "$TRACKED"
   if [ -n "$hits" ]; then
     fail "changelog.d/$name is named by a tracked file outside changelog.d/" \
-         "$(printf '%s' "$hits" | tr '\n' ' ')"
+      "$(printf '%s' "$hits" | tr '\n' ' ')"
     echo "    The next release deletes that file. Point at CHANGELOG.md instead, where"
     echo "    this fragment's prose lands and stays."
   else
     pass "changelog.d/$name is named nowhere else"
   fi
-done <<EOF
+done << EOF
 $FRAGMENTS
 EOF
 

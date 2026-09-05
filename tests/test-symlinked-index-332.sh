@@ -33,10 +33,12 @@ TSV_NAME="00-index.tsv"
 # jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:-<EMPTY STDOUT>}"
   fi
@@ -44,12 +46,14 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: ${output:-<EMPTY STDOUT>}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
@@ -85,8 +89,8 @@ probe_symlinks() {
   rm -rf "$d" || return 1
   mkdir -p "$d/target-dir" || return 1
   printf 'probe\n' > "$d/target-file" || return 1
-  ln -sf "$d/target-file" "$d/link-file" 2>/dev/null
-  ln -sfn "$d/target-dir" "$d/link-dir" 2>/dev/null
+  ln -sf "$d/target-file" "$d/link-file" 2> /dev/null
+  ln -sfn "$d/target-dir" "$d/link-dir" 2> /dev/null
   printf 'late\n' > "$d/target-dir/late.txt" || return 1
   [ -L "$d/link-file" ] || return 1
   [ -L "$d/link-dir" ] || return 1
@@ -134,16 +138,20 @@ printf '%s\n' \
 
 run_rebuild "$P"
 if [ "$RC" -ne 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the run reports a non-zero exit ($RC)"
+  PASS=$((PASS + 1))
+  echo "  PASS: the run reports a non-zero exit ($RC)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the run exited 0"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the run exited 0"
 fi
 assert_contains "the run names the symlink as the reason" "$OUT" "SYMBOLIC LINK"
 TARGET_CONTENT="$(cat "$TARGET")"
 if [ "$TARGET_CONTENT" = "PRISTINE-OUTSIDE-CONTENT-S1" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the outside target file was NOT truncated or written"
+  PASS=$((PASS + 1))
+  echo "  PASS: the outside target file was NOT truncated or written"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the outside target file was modified: $TARGET_CONTENT"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the outside target file was modified: $TARGET_CONTENT"
 fi
 
 # Positive control: the identical fixture, but the index path is an ORDINARY file (the
@@ -166,9 +174,11 @@ printf '%s\n' \
   "body" > "$D/ordinary.md"
 run_rebuild "$P"
 if [ "$RC" -eq 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the control run exits 0"
+  PASS=$((PASS + 1))
+  echo "  PASS: the control run exits 0"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the control run exited $RC: $OUT"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the control run exited $RC: $OUT"
 fi
 assert_contains "the control run wrote the row" "$(cat "$D/$TSV_NAME")" "ordinary.md"
 
@@ -202,12 +212,14 @@ run_rebuild "$P"
 assert_contains "the run names the symlinked layer as refused" "$OUT" "SYMBOLIC LINK"
 LAYER_CONTENT="$(cat "$OUTSIDE_LAYER/$TSV_NAME")"
 if [ "$LAYER_CONTENT" = "PRISTINE-OUTSIDE-LAYER-CONTENT" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the outside layer's index was NOT touched"
+  PASS=$((PASS + 1))
+  echo "  PASS: the outside layer's index was NOT touched"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the outside layer's index was modified: $LAYER_CONTENT"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the outside layer's index was modified: $LAYER_CONTENT"
 fi
 assert_contains "the sibling layer still rebuilt (skip-and-continue, not abort-the-run)" \
-  "$(cat "$P/.claude/jit-context/tools/00-manual/$TSV_NAME" 2>/dev/null)" "sibling.md"
+  "$(cat "$P/.claude/jit-context/tools/00-manual/$TSV_NAME" 2> /dev/null)" "sibling.md"
 
 # Positive control: an ordinary (non-symlinked) second layer directory rebuilds fine,
 # proving the S2 refusal above is about the symlink and not about having two layers.
@@ -221,12 +233,14 @@ printf '%s\n' "---" "title: B" "description: b" "tool: Bash" "match: git b" "mod
   > "$P/.claude/jit-context/tools/another-layer/b.md"
 run_rebuild "$P"
 if [ "$RC" -eq 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the control run exits 0"
+  PASS=$((PASS + 1))
+  echo "  PASS: the control run exits 0"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the control run exited $RC: $OUT"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the control run exited $RC: $OUT"
 fi
-assert_contains "layer one rebuilt" "$(cat "$P/.claude/jit-context/tools/00-manual/$TSV_NAME" 2>/dev/null)" "a.md"
-assert_contains "layer two rebuilt" "$(cat "$P/.claude/jit-context/tools/another-layer/$TSV_NAME" 2>/dev/null)" "b.md"
+assert_contains "layer one rebuilt" "$(cat "$P/.claude/jit-context/tools/00-manual/$TSV_NAME" 2> /dev/null)" "a.md"
+assert_contains "layer two rebuilt" "$(cat "$P/.claude/jit-context/tools/another-layer/$TSV_NAME" 2> /dev/null)" "b.md"
 
 # =====================================================================================
 # S3: the DIMENSION directory itself (tools/, not a layer beneath it) is a symlink.
@@ -260,12 +274,14 @@ run_rebuild "$P"
 assert_contains "the run names the symlinked dimension as refused" "$OUT" "SYMBOLIC LINK dimension directory"
 DIM_CONTENT="$(cat "$OUTSIDE_DIM/realsubdir/$TSV_NAME")"
 if [ "$DIM_CONTENT" = "PRISTINE-OUTSIDE-DIMENSION-CONTENT" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the outside dimension's real subdirectory index was NOT touched"
+  PASS=$((PASS + 1))
+  echo "  PASS: the outside dimension's real subdirectory index was NOT touched"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the outside dimension's index was modified: $DIM_CONTENT"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the outside dimension's index was modified: $DIM_CONTENT"
 fi
 assert_contains "an unrelated dimension (paths/) still rebuilt (skip-and-continue)" \
-  "$(cat "$P/.claude/jit-context/paths/00-manual/$TSV_NAME" 2>/dev/null)" "sibling.md"
+  "$(cat "$P/.claude/jit-context/paths/00-manual/$TSV_NAME" 2> /dev/null)" "sibling.md"
 
 # Positive control: an ordinary (non-symlinked) tools/ dimension rebuilds fine, proving
 # the S3 refusal is about the symlink and not about tools/ existing at all.
@@ -277,11 +293,13 @@ printf '%s\n' "---" "title: C" "description: c" "tool: Bash" "match: git c" "mod
   > "$P/.claude/jit-context/tools/00-manual/c.md"
 run_rebuild "$P"
 if [ "$RC" -eq 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the control run exits 0"
+  PASS=$((PASS + 1))
+  echo "  PASS: the control run exits 0"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the control run exited $RC: $OUT"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the control run exited $RC: $OUT"
 fi
-assert_contains "the ordinary tools/ dimension rebuilt" "$(cat "$P/.claude/jit-context/tools/00-manual/$TSV_NAME" 2>/dev/null)" "c.md"
+assert_contains "the ordinary tools/ dimension rebuilt" "$(cat "$P/.claude/jit-context/tools/00-manual/$TSV_NAME" 2> /dev/null)" "c.md"
 
 # =====================================================================================
 # S4: a symlinked vocabulary LAYER does not leak the outside target's file name/size
@@ -320,7 +338,7 @@ printf '%s\n' \
 run_rebuild "$P"
 assert_not_contains "the outside file's NAME never appears in the run's own output" "$OUT" "$CANARY_NAME"
 assert_contains "the sibling vocabulary layer still rebuilt" \
-  "$(cat "$P/.claude/jit-context/vocabulary/00-manual/$TSV_NAME" 2>/dev/null)" "ordinary.md"
+  "$(cat "$P/.claude/jit-context/vocabulary/00-manual/$TSV_NAME" 2> /dev/null)" "ordinary.md"
 
 # =====================================================================================
 # S5: a symlinked DIMENSION directory (tools/ itself, not a layer beneath it) does not
@@ -367,7 +385,7 @@ printf '%s\n' \
 
 run_rebuild "$P"
 assert_not_contains "the outside file's NAME never appears in the cost report" "$OUT" "$CANARY_NAME_S5"
-COST_SECTION_S5="$(awk '/=== What a match costs/{p=1} p' <<<"$OUT")"
+COST_SECTION_S5="$(awk '/=== What a match costs/{p=1} p' <<< "$OUT")"
 assert_not_contains "...nor within the cost-report section specifically" "$COST_SECTION_S5" "$CANARY_NAME_S5"
 assert_contains "an unrelated dimension (paths/) still appears in the cost report" \
   "$COST_SECTION_S5" "sibling.md"

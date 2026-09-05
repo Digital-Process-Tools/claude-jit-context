@@ -23,23 +23,37 @@ PROMPT_HOOK="$REPO/scripts/pre-prompt-hook.sh"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+}
 
 assert_contains() {
   local desc="$1" out="$2" want="$3"
-  if grep -qF -- "$want" <<<"$out"; then ok "$desc"
-  else bad "$desc" "expected to contain: $want"; echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
+  if grep -qF -- "$want" <<< "$out"; then
+    ok "$desc"
+  else
+    bad "$desc" "expected to contain: $want"
+    echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
   fi
 }
 assert_not_contains() {
   local desc="$1" out="$2" unwanted="$3"
-  if grep -qF -- "$unwanted" <<<"$out"; then bad "$desc" "must NOT contain: $unwanted"; echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
-  else ok "$desc"
+  if grep -qF -- "$unwanted" <<< "$out"; then
+    bad "$desc" "must NOT contain: $unwanted"
+    echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)"
+  else
+    ok "$desc"
   fi
 }
 
-ROOT="$(mktemp -d 2>/dev/null || mktemp -d -t jit232fb)"
+ROOT="$(mktemp -d 2> /dev/null || mktemp -d -t jit232fb)"
 trap 'chmod -R u+rwX "$ROOT" 2>/dev/null; rm -rf "$ROOT"' EXIT
 PROJ="$ROOT/proj"
 BASE="$PROJ/.claude/jit-context"
@@ -72,7 +86,7 @@ write_entry mixed.md \
   "keywords: template, uniquespecifictoken232fb"
 
 echo "=== A. rebuild-tsv.sh: an entry with ONLY generic keywords gets every verdict cleared ==="
-CLAUDE_PROJECT_DIR="$PROJ" bash "$REBUILD" >/dev/null 2>"$ROOT/rebuild.err"
+CLAUDE_PROJECT_DIR="$PROJ" bash "$REBUILD" > /dev/null 2> "$ROOT/rebuild.err"
 IDX="$BASE/vocabulary/00-manual/00-index.tsv"
 [ -f "$IDX" ] || bad "index was written" "no such file: $IDX"
 IDXOUT="$(cat "$IDX")"
@@ -89,7 +103,7 @@ echo "=== C. pre-prompt-hook.sh: a match on the all-generic entry delivers the f
 run_prompt() {
   local text="$1"
   printf '{"session_id":"jit232fb-test-session","prompt":"%s"}' "$text" \
-    | CLAUDE_PROJECT_DIR="$PROJ" bash "$PROMPT_HOOK" 2>/dev/null
+    | CLAUDE_PROJECT_DIR="$PROJ" bash "$PROMPT_HOOK" 2> /dev/null
 }
 OUT1=$(run_prompt "what does the template say")
 assert_contains "the full body arrives on the first match (no permanent description-only)" "$OUT1" "BODY-MARKER-FOR-all-generic"

@@ -17,7 +17,7 @@ MATCH="$REPO/scripts/jit-match.sh"
 PASS=0
 FAIL=0
 
-TMP="$(mktemp -d 2>/dev/null)" || TMP=""
+TMP="$(mktemp -d 2> /dev/null)" || TMP=""
 if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
   echo "  SKIPPED: mktemp -d produced no directory, so no fixture can be built here."
   exit 2
@@ -34,40 +34,47 @@ ERR="$TMP/err.txt"
 # grep -q gives the writer SIGPIPE under pipefail. paths/00-manual/tests.md.
 assert_has() {
   local desc="$1" path="$2" needle="$3"
-  if grep -qF -- "$needle" "$path" 2>/dev/null; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$needle" "$path" 2> /dev/null; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $needle"
-    echo "    got: $(cut -c1-300 "$path" 2>/dev/null | tr '\n' '|')"
+    echo "    got: $(cut -c1-300 "$path" 2> /dev/null | tr '\n' '|')"
   fi
 }
 
 assert_lacks() {
   local desc="$1" path="$2" needle="$3"
-  if grep -qF -- "$needle" "$path" 2>/dev/null; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$needle" "$path" 2> /dev/null; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $needle"
-    echo "    got: $(cut -c1-300 "$path" 2>/dev/null | tr '\n' '|')"
+    echo "    got: $(cut -c1-300 "$path" 2> /dev/null | tr '\n' '|')"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
 assert_exit() {
   local desc="$1" want="$2" got="$3"
   if [ "$got" = "$want" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    wanted exit $want, got $got"
-    echo "    stderr: $(cut -c1-300 "$ERR" 2>/dev/null | tr '\n' '|')"
+    echo "    stderr: $(cut -c1-300 "$ERR" 2> /dev/null | tr '\n' '|')"
   fi
 }
 
 run_match() {
   local st=0
-  : > "$OUT"; : > "$ERR"
+  : > "$OUT"
+  : > "$ERR"
   bash "$MATCH" "$@" > "$OUT" 2> "$ERR" || st=$?
   return "$st"
 }
@@ -85,14 +92,14 @@ mk_project() {
   mkdir -p "$base/tools/00-manual" "$base/paths/00-manual" "$base/vocabulary/00-manual"
   : > "$base/tools/00-manual/$IDX"
   : > "$base/paths/00-manual/$IDX"
-  cat > "$base/vocabulary/00-manual/xsd.md" <<'MD'
+  cat > "$base/vocabulary/00-manual/xsd.md" << 'MD'
 ---
 title: XSD regen
 description: regen command plus a non-obvious scope trap.
 ---
 Full body about xsd regeneration.
 MD
-  cat > "$base/vocabulary/00-manual/billing.md" <<'MD'
+  cat > "$base/vocabulary/00-manual/billing.md" << 'MD'
 ---
 title: Billing totals
 description: how totals are computed.
@@ -108,7 +115,8 @@ mk_project "$PROJ"
 
 # =====================================================================================
 echo "=== control: the suite can drive jit-match at all ==="
-ST=0; run_match --base "$BASE" --text "the xsd editor is broken" || ST=$?
+ST=0
+run_match --base "$BASE" --text "the xsd editor is broken" || ST=$?
 if [ "$ST" != 0 ]; then
   echo "  FAIL: jit-match does not reach exit 0 on an honest match -- every assertion below is vacuous"
   echo "    exit $ST"
@@ -116,7 +124,8 @@ if [ "$ST" != 0 ]; then
   echo "    stderr: $(cut -c1-400 "$ERR" | tr '\n' '|')"
   exit 1
 fi
-PASS=$((PASS + 1)); echo "  PASS: a real match exits 0"
+PASS=$((PASS + 1))
+echo "  PASS: a real match exits 0"
 
 # =====================================================================================
 echo ""
@@ -140,11 +149,13 @@ assert_has "file field names the entry" "$OUT" '"file":"xsd.md"'
 assert_has "keywords field names what fired" "$OUT" '"keywords":"xsd"'
 assert_has "mode field says full by default" "$OUT" '"mode":"full"'
 assert_has "text field carries the injected body" "$OUT" "Full body about xsd regeneration."
-python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$OUT" 2>/dev/null
+python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$OUT" 2> /dev/null
 if [ "$?" = 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the json output actually parses as JSON"
+  PASS=$((PASS + 1))
+  echo "  PASS: the json output actually parses as JSON"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the json output does not parse as JSON"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the json output does not parse as JSON"
   echo "    got: $(cut -c1-400 "$OUT" | tr '\n' '|')"
 fi
 
@@ -200,12 +211,14 @@ printf -- '---\ntitle: Control byte entry\ndescription: carries a form feed.\n--
   > "$CTRLPROJ/.claude/jit-context/vocabulary/00-manual/ctrl.md"
 printf 'ctrlword\tctrl.md\n' > "$CTRLPROJ/.claude/jit-context/vocabulary/00-manual/$IDX"
 run_match --base "$CTRLPROJ/.claude/jit-context" --text "ctrlword trouble" --format json
-if command -v python3 >/dev/null 2>&1; then
-  python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$OUT" 2>/dev/null
+if command -v python3 > /dev/null 2>&1; then
+  python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$OUT" 2> /dev/null
   if [ "$?" = 0 ]; then
-    PASS=$((PASS + 1)); echo "  PASS: a raw form-feed byte in an entry body still yields parseable JSON"
+    PASS=$((PASS + 1))
+    echo "  PASS: a raw form-feed byte in an entry body still yields parseable JSON"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: a raw form-feed byte in an entry body broke the JSON output"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: a raw form-feed byte in an entry body broke the JSON output"
     echo "    got: $(cut -c1-400 "$OUT" | tr '\n' '|')"
   fi
   # Parseable is a weaker claim than correct: a JSON string that spells out the six
@@ -216,11 +229,13 @@ if command -v python3 >/dev/null 2>&1; then
 import json, sys
 d = json.load(open(sys.argv[1]))
 sys.exit(0 if chr(12) in d['matches'][0]['text'] else 1)
-" "$OUT" 2>/dev/null
+" "$OUT" 2> /dev/null
   if [ "$?" = 0 ]; then
-    PASS=$((PASS + 1)); echo "  PASS: the form feed round-trips as the real byte, not as visible escape text"
+    PASS=$((PASS + 1))
+    echo "  PASS: the form feed round-trips as the real byte, not as visible escape text"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: the form feed did not round-trip as a real byte"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: the form feed did not round-trip as a real byte"
     echo "    got: $(cut -c1-400 "$OUT" | tr '\n' '|')"
   fi
 else
@@ -250,7 +265,7 @@ echo "=== a phantom match is NOT COUNTED -- and, since #219, not even POSSIBLE (
 FORGEPROJ="$TMP/forgeproj"
 mkdir -p "$FORGEPROJ/.claude/jit-context/vocabulary/00-manual"
 mk_project "$FORGEPROJ"
-cat > "$FORGEPROJ/.claude/jit-context/vocabulary/00-manual/tricky.md" <<'MD'
+cat > "$FORGEPROJ/.claude/jit-context/vocabulary/00-manual/tricky.md" << 'MD'
 ---
 title: Tricky entry
 description: legitimately quotes the separator format in its own body.
@@ -273,11 +288,13 @@ run_match --base "$FORGEPROJ/.claude/jit-context" --text "tricky situation" --fo
 assert_has "json count reflects the one real match" "$OUT" '"count":1'
 assert_has "the forged text is inside that match's own text field" "$OUT" "fake body pretending to be a second match"
 assert_lacks "the forged file name never rides as its own matches[] entry" "$OUT" '"matches":[{"file":"fake.md"'
-python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$OUT" 2>/dev/null
+python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$OUT" 2> /dev/null
 if [ "$?" = 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the json output with a forged body still parses as JSON"
+  PASS=$((PASS + 1))
+  echo "  PASS: the json output with a forged body still parses as JSON"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the json output with a forged body does not parse"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the json output with a forged body does not parse"
 fi
 
 # Positive control, in the SAME fixture, so the count above is not just "count is always
@@ -312,9 +329,11 @@ FIRST_HAD_MATCH=$(grep -c "xsd.md" "$OUT" || true)
 run_match --base "$BASE" --text "xsd trouble"
 SECOND_HAD_MATCH=$(grep -c "xsd.md" "$OUT" || true)
 if [ "$FIRST_HAD_MATCH" -gt 0 ] && [ "$SECOND_HAD_MATCH" -gt 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: a second call for the same text still matches -- nothing was marked shown"
+  PASS=$((PASS + 1))
+  echo "  PASS: a second call for the same text still matches -- nothing was marked shown"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: a second call for the same text matched less than the first"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: a second call for the same text matched less than the first"
   echo "    first: $FIRST_HAD_MATCH  second: $SECOND_HAD_MATCH"
 fi
 # No state directory was created by any of this either -- a stricter, structural version
@@ -323,11 +342,13 @@ fi
 # match closes the pipe early, and the writer on the other end can be handed SIGPIPE for
 # it -- paths/00-manual/tests.md's own rule, and this repository's own suite scans for the
 # shape.
-STATE_HIT="$(find "$BASE/.discovery/state" -type f -print -quit 2>/dev/null)"
+STATE_HIT="$(find "$BASE/.discovery/state" -type f -print -quit 2> /dev/null)"
 if [ -d "$BASE/.discovery/state" ] && [ -n "$STATE_HIT" ]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: a shown-state file was written even though the payload carried no session_id"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: a shown-state file was written even though the payload carried no session_id"
 else
-  PASS=$((PASS + 1)); echo "  PASS: no shown-state file was ever written"
+  PASS=$((PASS + 1))
+  echo "  PASS: no shown-state file was ever written"
 fi
 
 # =====================================================================================
@@ -372,7 +393,7 @@ run_match --base "$TMP/not-a-project-shape" --text "x"
 assert_exit "a --base not shaped like a project tree is refused" 2 "$?"
 assert_has "and says why -- it needs a project to point the hook at" "$ERR" "project"
 
-run_match --base "$BASE" </dev/null
+run_match --base "$BASE" < /dev/null
 assert_exit "no --text and empty stdin is refused, never a silent zero matches" 2 "$?"
 
 echo ""

@@ -39,7 +39,7 @@ set -uo pipefail
 # is resolving the path to. Same case split, written out.
 case "$0" in
   */*) SCRIPT_DIR="$(cd "${0%/*}" && pwd)" ;;
-  *)   SCRIPT_DIR="$PWD" ;;
+  *) SCRIPT_DIR="$PWD" ;;
 esac
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/common.sh"
@@ -72,7 +72,7 @@ _lw_layer=""
 
 SAMPLE_TOOL=""
 SAMPLE_COMMAND=""
- # --file is repeatable (#307). A --file call is ~89% full-tree lint and ~11% the two
+# --file is repeatable (#307). A --file call is ~89% full-tree lint and ~11% the two
 # hook spawns it was asked for -- measured by counting external commands on PATH: 224 for
 # a bare run, 252 for the same run carrying one --file. A caller with N files paid that
 # lint N times over a tree that cannot change between them, and tests/test-dogfood-entries.sh
@@ -109,25 +109,52 @@ need_value() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --base)    [ $# -ge 2 ] || need_value "$1"; BASE="$2"; shift 2 ;;
-    --tool)    [ $# -ge 2 ] || need_value "$1"; SAMPLE_TOOL="$2"; shift 2 ;;
-    --command) [ $# -ge 2 ] || need_value "$1"; SAMPLE_COMMAND="$2"; shift 2 ;;
-    --file)    [ $# -ge 2 ] || need_value "$1"; SAMPLE_FILES+=("$2"); shift 2 ;;
-    --prompt)  [ $# -ge 2 ] || need_value "$1"; SAMPLE_PROMPT="$2"; shift 2 ;;
-    --agent)   [ $# -ge 2 ] || need_value "$1"; SAMPLE_AGENT="$2"; shift 2 ;;
-    -h|--help) usage 0 ;;
-    *) echo "unknown argument: $1" >&2; usage 2 ;;
+    --base)
+      [ $# -ge 2 ] || need_value "$1"
+      BASE="$2"
+      shift 2
+      ;;
+    --tool)
+      [ $# -ge 2 ] || need_value "$1"
+      SAMPLE_TOOL="$2"
+      shift 2
+      ;;
+    --command)
+      [ $# -ge 2 ] || need_value "$1"
+      SAMPLE_COMMAND="$2"
+      shift 2
+      ;;
+    --file)
+      [ $# -ge 2 ] || need_value "$1"
+      SAMPLE_FILES+=("$2")
+      shift 2
+      ;;
+    --prompt)
+      [ $# -ge 2 ] || need_value "$1"
+      SAMPLE_PROMPT="$2"
+      shift 2
+      ;;
+    --agent)
+      [ $# -ge 2 ] || need_value "$1"
+      SAMPLE_AGENT="$2"
+      shift 2
+      ;;
+    -h | --help) usage 0 ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage 2
+      ;;
   esac
 done
 
 BASE="${BASE%/}"
 
-if ! command -v awk >/dev/null 2>&1; then
+if ! command -v awk > /dev/null 2>&1; then
   echo "SKIPPED: no awk on PATH — the matcher itself is missing, so nothing here can be checked."
   exit 2
 fi
 
-AWK_BANNER="$( (awk --version 2>/dev/null || awk -W version 2>&1) | head -1 )"
+AWK_BANNER="$( (awk --version 2> /dev/null || awk -W version 2>&1) | head -1)"
 
 echo "tree:   $BASE"
 echo "awk:    ${AWK_BANNER:-unknown}"
@@ -283,7 +310,7 @@ report_layer() {
 # over every index file in every dimension. See jit_path_dir/jit_path_base in common.sh:
 # they assign into a named variable, so this helper forks once (report_layer's own command
 # substitution) where the written-out version forked three times.
-index_label() {   # VAR, dimension, path-to-00-index.tsv
+index_label() { # VAR, dimension, path-to-00-index.tsv
   local _il_dir _il_layer
   jit_path_dir _il_dir "$3"
   jit_path_base _il_layer "$_il_dir"
@@ -397,7 +424,7 @@ elif [ -f "$BASE/config.env" ]; then
       [ -n "$_cl" ] || continue
       CONFIG_REFUSED=$((CONFIG_REFUSED + 1))
       printf 'REFUSED  %-18s %-30s %s\n' "config.env" "" "${_cl#- }"
-    done <<CONFIG_EOF
+    done << CONFIG_EOF
 $CONFIG_LINES
 CONFIG_EOF
     printf '         %-18s %-30s those lines do not take effect — the hooks read this file as plain KEY=VALUE\n' "" ""
@@ -497,7 +524,7 @@ PAT_NL="
 # version a silent no-op over two thirds of the tree: `tools` keeps the match in column 2
 # and marks a regex with a leading `~`, `paths` keeps a bare ERE in column 1. The file-name
 # column moves too. All of it is an argument, named by the caller that knows its own index.
-idx_prime() {   # tsv, match column (0 for none), 1 if ~ marks a regex, name column, layer dir
+idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name column, layer dir
   local tsv="$1" pcol="$2" need="$3" ncol="$4" dir="$5" out pats n i start line k
   out="$(JIT_DIR="$dir" LC_ALL=C awk -F'\t' -v pc="$pcol" -v need="$need" -v nc="$ncol" \
     "$JIT_AWK_GUARD$JIT_AWK_ENTRY"'
@@ -514,7 +541,7 @@ idx_prime() {   # tsv, match column (0 for none), 1 if ~ marks a regex, name col
         f = $nc
         if (f != "" && !seenf[f]++) printf "ent\t%s\t%s\n", f, jit_bad_entry_file(f, ENVIRON["JIT_DIR"])
       }
-    }' "$tsv" 2>/dev/null)"
+    }' "$tsv" 2> /dev/null)"
   [ -n "$out" ] || return 0
   PAT_MEMO="$PAT_MEMO$PAT_NL$out"
   ENT_MEMO="$ENT_MEMO$PAT_NL$out"
@@ -529,11 +556,11 @@ idx_prime() {   # tsv, match column (0 for none), 1 if ~ marks a regex, name col
         pats="$pats${line%%	*}$PAT_NL"
         ;;
     esac
-  done <<<"$out"
+  done <<< "$out"
   pats="${pats%"$PAT_NL"}"
   [ -n "$pats" ] || return 0
   n=0
-  while IFS= read -r line; do n=$((n + 1)); done <<<"$pats"
+  while IFS= read -r line; do n=$((n + 1)); done <<< "$pats"
 
   # The engine probe is the half that cannot join the pass above: a pattern the engine
   # refuses is FATAL and takes the whole process down with it -- which is exactly the
@@ -551,7 +578,7 @@ idx_prime() {   # tsv, match column (0 for none), 1 if ~ marks a regex, name col
           printf "ok %d\n", k
           fflush()
         }
-      }' <<<"$pats" 2>/dev/null | LC_ALL=C awk 'END { print (NR ? $2 : 0) }')
+      }' <<< "$pats" 2> /dev/null | LC_ALL=C awk 'END { print (NR ? $2 : 0) }')
     [ -n "$i" ] || i=0
     k=0
     while IFS= read -r line; do
@@ -563,7 +590,7 @@ idx_prime() {   # tsv, match column (0 for none), 1 if ~ marks a regex, name col
         PAT_MEMO="$PAT_MEMO${PAT_NL}engine	$line	rejected"
         break
       fi
-    done <<<"$pats"
+    done <<< "$pats"
     [ "$i" -ge "$n" ] && break
     start=$((i + 2))
   done
@@ -575,7 +602,7 @@ idx_prime() {   # tsv, match column (0 for none), 1 if ~ marks a regex, name col
 #
 # Parameter expansion only. No awk, no grep, no command substitution: a fork here would be
 # one per row, which is exactly what idx_prime() just spent one process to avoid.
-pat_memo_get() {   # VAR, kind (why|engine), pattern
+pat_memo_get() { # VAR, kind (why|engine), pattern
   local _key="$PAT_NL$2	$3	" _rest
   case "$PAT_MEMO" in
     *"$_key"*)
@@ -628,8 +655,8 @@ check_pattern() {
   fi
 
   if { [ "$memo_hit" = 1 ] && [ "$memo_engine" = accepted ]; } \
-     || { [ "$memo_hit" != 1 ] \
-          && LC_ALL=C JIT_PAT="$pat" awk 'BEGIN { if (match("", ENVIRON["JIT_PAT"])) x = 1 }' >/dev/null 2>&1; }; then
+    || { [ "$memo_hit" != 1 ] \
+      && LC_ALL=C JIT_PAT="$pat" awk 'BEGIN { if (match("", ENVIRON["JIT_PAT"])) x = 1 }' > /dev/null 2>&1; }; then
     engine="accepted"
   elif [ -n "$why" ]; then
     # The structural guard refuses this row at load, so the hook never hands it to
@@ -653,7 +680,8 @@ check_pattern() {
       # POSIX class is not the fix here -- there is no class to reach for. Matched on
       # its tail rather than its head so this pattern carries no backslash of its own.
       *"before a non-ASCII byte")
-        hint=" — drop the backslash; an accented or CJK character matches itself" ;;
+        hint=" — drop the backslash; an accented or CJK character matches itself"
+        ;;
       "undefined escape "*) hint=" — use a POSIX class such as [[:space:]], [0-9] or [A-Za-z0-9_]" ;;
     esac
     REFUSED=$((REFUSED + 1))
@@ -761,7 +789,7 @@ jit_scan_symlinks "$BASE"
 
 # Same contract as pat_memo_get(): parameter expansion only, and a miss is what sends
 # check_entry_file() back to its own fork.
-ent_memo_get() {   # VAR, name
+ent_memo_get() { # VAR, name
   # idx_prime() writes every record as "<kind><TAB><value><TAB><verdict>" -- "ent" for
   # this one, exactly like pat_memo_get()'s "why"/"engine" -- so the needle has to open
   # on "ent<TAB>", not on a bare newline, or it can never match a record at all (#346).
@@ -801,16 +829,20 @@ check_entry_file() {
     # The whole-tree case FIRST: its reason contains the words "symbolic link", so the
     # narrower branch below would swallow it and print advice about replacing one link.
     *"too many symbolic links"*)
-      printf '         %-18s %-30s the set of links did not fit the budget the hooks carry it in, so none of this tree could be vouched for\n' "" "" ;;
+      printf '         %-18s %-30s the set of links did not fit the budget the hooks carry it in, so none of this tree could be vouched for\n' "" ""
+      ;;
     *"symbolic link"*)
-      printf '         %-18s %-30s the hook would follow it out of the tree — replace the link with the file\n' "" "" ;;
+      printf '         %-18s %-30s the hook would follow it out of the tree — replace the link with the file\n' "" ""
+      ;;
     *"begins with a dot"*)
       # A third fault with a third second line. This row does not leave the tree and is not
       # itself a link — it is a name the link sweep could never lstat, because a glob does
       # not match a leading dot, so the link check above it was answering about nothing.
-      printf '         %-18s %-30s a dot-name is invisible to the symbolic-link sweep, and rebuild-tsv.sh never writes one\n' "" "" ;;
+      printf '         %-18s %-30s a dot-name is invisible to the symbolic-link sweep, and rebuild-tsv.sh never writes one\n' "" ""
+      ;;
     *)
-      printf '         %-18s %-30s the hook reads <layer>/<name>, so this row leaves the tree\n' "" "" ;;
+      printf '         %-18s %-30s the hook reads <layer>/<name>, so this row leaves the tree\n' "" ""
+      ;;
   esac
   # Unconditional, not "only when the name was withheld". A row is located the same way
   # whichever it was, and a line that appears only sometimes is one a reader learns to read
@@ -876,10 +908,18 @@ check_index_current() {
       # anything. Without the same fold here, a value that rebuild-tsv.sh wrote with a
       # tab replaced by a space never matches the raw, tab-carrying reconstruction, and
       # a row that was correctly rebuilt reads as drifted from itself.
-      tool="${tool//$'\t'/ }"; tool="${tool//$'\r'/ }"; tool="${tool//$'\n'/ }"
-      mode="${mode//$'\t'/ }"; mode="${mode//$'\r'/ }"; mode="${mode//$'\n'/ }"
-      require="${require//$'\t'/ }"; require="${require//$'\r'/ }"; require="${require//$'\n'/ }"
-      forbid="${forbid//$'\t'/ }"; forbid="${forbid//$'\r'/ }"; forbid="${forbid//$'\n'/ }"
+      tool="${tool//$'\t'/ }"
+      tool="${tool//$'\r'/ }"
+      tool="${tool//$'\n'/ }"
+      mode="${mode//$'\t'/ }"
+      mode="${mode//$'\r'/ }"
+      mode="${mode//$'\n'/ }"
+      require="${require//$'\t'/ }"
+      require="${require//$'\r'/ }"
+      require="${require//$'\n'/ }"
+      forbid="${forbid//$'\t'/ }"
+      forbid="${forbid//$'\r'/ }"
+      forbid="${forbid//$'\n'/ }"
       # (#347) build_tool_tsv() also refuses to index a row whose ASSEMBLED mode is not
       # remind/block/once (JIT_VALID_MODE_RE) -- no row is ever written for it, and none
       # ever will be until the frontmatter is fixed. Comparing against an index that will
@@ -898,8 +938,10 @@ check_index_current() {
     # rebuild-tsv.sh's folded value expanded cleanly and wrote the compiled regex to the
     # index; folding only the after-the-fact result would leave those two forever
     # disagreeing for a macro whose match: happens to carry one of those bytes.
-    want="${want//$'\t'/ }"; want="${want//$'\r'/ }"; want="${want//$'\n'/ }"
-    want="$(jit_expand_match "$want" "$dim" "$label/$name" 2>/dev/null)"
+    want="${want//$'\t'/ }"
+    want="${want//$'\r'/ }"
+    want="${want//$'\n'/ }"
+    want="$(jit_expand_match "$want" "$dim" "$label/$name" 2> /dev/null)"
     if [ "$dim" = tools ]; then
       row="$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s' "$tool" "$want" "$name" "${mode:-remind}" "$require" "$forbid" "$requires")"
     else
@@ -918,7 +960,7 @@ check_index_current() {
       idx_cache=""
       # `$(< file)`, not `$(cat file)`: bash reads the file itself, so this is a subshell
       # and not a subshell plus an exec.
-      [ -f "$dir/00-index.tsv" ] && idx_cache="$PAT_NL$(<"$dir/00-index.tsv")$PAT_NL"
+      [ -f "$dir/00-index.tsv" ] && idx_cache="$PAT_NL$(< "$dir/00-index.tsv")$PAT_NL"
     fi
     if [ "${idx_cache#*"$PAT_NL$row$PAT_NL"}" = "$idx_cache" ]; then
       STALE=$((STALE + 1))
@@ -1037,15 +1079,20 @@ for tsv in "$BASE"/tools/*/00-index.tsv; do
     [ -n "${r_match:-}" ] || continue
     [ -n "${r_file:-}" ] || continue
     LISTED=$((LISTED + 1))
-    check_entry_file "$label" "$r_file" "$tsv_dir" "$rown" || { REFUSED=$((REFUSED + 1)); continue; }
+    check_entry_file "$label" "$r_file" "$tsv_dir" "$rown" || {
+      REFUSED=$((REFUSED + 1))
+      continue
+    }
     # A bare match is a substring test (index()), not a regex — nothing to compile.
     case "$r_match" in
       "~"*) check_pattern "$label" "$r_file" "${r_match#\~}" ;;
       # $r_tool is the index's tool column and is tree text too -- `Bash`, `Edit` and every
       # other real value is a plain name, so the policy costs an honest row nothing and
       # keeps the last free-form field on this line from being a sentence.
-      *)    printf 'ok       %-18s %-30s substring, not a regex (tool %s)\n' "$label" "$(jit_report_name "$r_file")" "$(jit_report_name "$r_tool")"
-            check_bare_truncation "$label" "$r_file" "$r_mode" "$r_require" "$r_forbid" ;;
+      *)
+        printf 'ok       %-18s %-30s substring, not a regex (tool %s)\n' "$label" "$(jit_report_name "$r_file")" "$(jit_report_name "$r_tool")"
+        check_bare_truncation "$label" "$r_file" "$r_mode" "$r_require" "$r_forbid"
+        ;;
     esac
   done < <(tr '\t' '\002' < "$tsv")
 done
@@ -1067,7 +1114,10 @@ for tsv in "$BASE"/paths/*/00-index.tsv; do
     [ -n "${p_match:-}" ] || continue
     [ -n "${p_file:-}" ] || continue
     LISTED=$((LISTED + 1))
-    check_entry_file "$label" "$p_file" "$tsv_dir" "$rown" || { REFUSED=$((REFUSED + 1)); continue; }
+    check_entry_file "$label" "$p_file" "$tsv_dir" "$rown" || {
+      REFUSED=$((REFUSED + 1))
+      continue
+    }
     # Only if the pattern can be honoured at all. A refused row is already dead; warning
     # that it is also badly anchored reports one problem as two.
     check_pattern "$label" "$p_file" "$p_match" && check_paths_fragment "$label" "$p_file" "$p_match"
@@ -1111,7 +1161,10 @@ for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; 
         # would misreport a number and change no verdict.
         case "$VOCAB_SEEN" in
           *" $v_file "*) ;;
-          *) VOCAB_SEEN="$VOCAB_SEEN$v_file "; VOCAB_FILES=$((VOCAB_FILES + 1)) ;;
+          *)
+            VOCAB_SEEN="$VOCAB_SEEN$v_file "
+            VOCAB_FILES=$((VOCAB_FILES + 1))
+            ;;
         esac
         ;;
     esac
@@ -1176,7 +1229,7 @@ check_row_bytes() {
     if (jit_bad_entry_file(f[col], dir) != "") next
     why = jit_read_body(dir "/" f[col])
     if (why != "") printf "%d\t%s\t%s\n", NR, why, f[col]
-  }' "$2" 2>/dev/null)
+  }' "$2" 2> /dev/null)
   rc=$?
   if [ "$rc" -ne 0 ]; then
     SKIPPED_READS=$((SKIPPED_READS + 1))
@@ -1193,7 +1246,7 @@ check_row_bytes() {
     if [ -n "$file" ]; then disp="$(jit_report_name "$file")"; else disp="row $rown"; fi
     printf 'REFUSED  %-18s %-30s %s\n' "$label" "$disp" "$why"
     printf '         %-18s %-30s the hooks refuse this row and name it as "%s row %s"\n' "" "" "$label" "$rown"
-  done <<EOF
+  done << EOF
 $rows
 EOF
 }
@@ -1290,13 +1343,18 @@ list_whole() {
     # an unreadable file then prints bash's own "Permission denied", carrying the absolute
     # path, before the 2>/dev/null that follows it could silence anything.
     _fm_first=""
-    IFS= read -r _fm_first 2>/dev/null < "$md"
+    IFS= read -r _fm_first 2> /dev/null < "$md"
     if [ "$_fm_first" != "---" ]; then
-      eff=full; pin=1; why="no frontmatter, so there is nothing to summarise"
+      eff=full
+      pin=1
+      why="no frontmatter, so there is nothing to summarise"
     elif [ "$inj" = full ]; then
-      eff=full; pin=1; why="inject: full in this entry"
+      eff=full
+      pin=1
+      why="inject: full in this entry"
     elif [ "$inj" = summary ]; then
-      eff=summary; pin=1
+      eff=summary
+      pin=1
     else
       eff="$TREE_INJECT"
       if [ -n "$inj" ]; then
@@ -1353,7 +1411,7 @@ list_whole() {
       # "Permission denied" here too, in addition to silently yielding size=0 -- the size
       # was always going to read as 0 on an unreadable file (empty command substitution,
       # $(( )) on nothing), and that half is unchanged; what this closes is the leak.
-      size=$(( $(wc -c 2>/dev/null < "$md") ))
+      size=$(($(wc -c 2> /dev/null < "$md")))
       WHOLE=$((WHOLE + 1))
       # Capped. This runs against user trees of any size, and a budget that scrolls its own
       # total off the screen is not a budget. The COUNT is never capped -- a report that
@@ -1584,9 +1642,9 @@ report_hook() {
   # rather than needing the next sample-call site to remember it too. See the comment
   # above the check itself in common.sh for why a real session has no route to the same
   # suppression.
-  errf="$(mktemp "${TMPDIR:-/tmp}/claude-jit-dry-XXXXXXXX" 2>/dev/null)" || errf=""
+  errf="$(mktemp "${TMPDIR:-/tmp}/claude-jit-dry-XXXXXXXX" 2> /dev/null)" || errf=""
   if [ -n "$errf" ]; then
-    out="$(printf '%s' "$2" | CLAUDE_PROJECT_DIR="$3" JIT_SAMPLE_CALL=1 bash "$SCRIPT_DIR/$1" 2>"$errf")"
+    out="$(printf '%s' "$2" | CLAUDE_PROJECT_DIR="$3" JIT_SAMPLE_CALL=1 bash "$SCRIPT_DIR/$1" 2> "$errf")"
     if [ -s "$errf" ]; then
       SKIPPED_READS=$((SKIPPED_READS + 1))
       printf '  SKIPPED %-19s the hook wrote to stderr — it did not evaluate this call cleanly\n' "$1"
@@ -1598,7 +1656,7 @@ report_hook() {
     # half of it: this is the linter, and a linter that quietly checks less is #98 again.
     printf '  SKIPPED %-19s no temp file available, so this hook stderr was not checked\n' "$1"
     SKIPPED_READS=$((SKIPPED_READS + 1))
-    out="$(printf '%s' "$2" | CLAUDE_PROJECT_DIR="$3" JIT_SAMPLE_CALL=1 bash "$SCRIPT_DIR/$1" 2>/dev/null)"
+    out="$(printf '%s' "$2" | CLAUDE_PROJECT_DIR="$3" JIT_SAMPLE_CALL=1 bash "$SCRIPT_DIR/$1" 2> /dev/null)"
   fi
   # #223: this used to grep raw hook stdout for "(JIT Context|Vocabulary): X.md" text with
   # no manifest awareness at all -- and .claude/jit-context/ is attacker-controlled input
@@ -1645,7 +1703,8 @@ report_hook() {
   # first line, and a forged second one an entry own body might quote lands after it,
   # where this never looks. Taking the first line is therefore exact, not a narrower
   # heuristic that happens to work.
-  decoded="$(printf '%s' "$out" | LC_ALL=C awk "$JIT_AWK_JSON$JIT_AWK_BLOCKS"'
+  decoded="$(
+    printf '%s' "$out" | LC_ALL=C awk "$JIT_AWK_JSON$JIT_AWK_BLOCKS"'
 { input = input $0 }
 END {
   n = jit_json_fields(input, raw, fs, fe)
@@ -1706,7 +1765,7 @@ END {
   print "JIT-DRY-DESYNC\t" desync
 }
 '
-)"
+  )"
   names="$(printf '%s\n' "$decoded" | grep -v '^JIT-DRY-REFUSED	' | grep -v '^JIT-DRY-DESYNC	' | tr '\n' ' ')"
   refused="$(printf '%s\n' "$decoded" | awk -F'\t' '/^JIT-DRY-REFUSED\t/ { print $2 }')"
   desync="$(printf '%s\n' "$decoded" | awk -F'\t' '/^JIT-DRY-DESYNC\t/ { print $2 }')"
@@ -1747,12 +1806,15 @@ END {
     case "$out" in
       *'"reason":"BLOCKED: '*)
         printf '  %s%-20s the call is refused by a require/forbid rule, which reports no entry name\n' \
-          "$verdict" "$1" ;;
+          "$verdict" "$1"
+        ;;
       *'"decision":"block"'*)
         printf '  %s%-20s the call is refused by a row whose entry file has no usable name — see REFUSED above\n' \
-          "$verdict" "$1" ;;
+          "$verdict" "$1"
+        ;;
       *)
-        printf '  %s%-20s no rule fired\n' "$verdict" "$1" ;;
+        printf '  %s%-20s no rule fired\n' "$verdict" "$1"
+        ;;
     esac
   else
     # What each one COST, not just that it fired. A summary marks itself in the injected
@@ -1862,7 +1924,7 @@ if [ -n "$SAMPLE_TOOL$SAMPLE_COMMAND$SAMPLE_PROMPT$SAMPLE_AGENT" ] || [ "${#SAMP
         report_hook pre-tool-hook.sh "$payload" "$PROJECT"
       fi
       if [ -n "$SAMPLE_TOOL" ] && [ -z "$SAMPLE_COMMAND$SAMPLE_PROMPT$SAMPLE_AGENT" ] \
-         && [ "${#SAMPLE_FILES[@]}" -eq 0 ]; then
+        && [ "${#SAMPLE_FILES[@]}" -eq 0 ]; then
         echo "  SKIPPED: --tool needs a target. Add --command, --file or --agent."
       fi
       ;;

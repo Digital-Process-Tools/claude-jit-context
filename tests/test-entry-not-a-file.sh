@@ -39,10 +39,12 @@ trap 'rm -rf "$WORK"' EXIT
 # jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -q -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -q -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:0:300}"
   fi
@@ -50,21 +52,25 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -q -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -q -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: ${output:0:300}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
 assert_equals() {
   local desc="$1" got="$2" want="$3"
   if [ "$got" = "$want" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected: $want"
     echo "    got:      $got"
   fi
@@ -76,10 +82,12 @@ assert_equals() {
 assert_silent_stderr() {
   local desc="$1"
   if [ -s "$ERRFILE" ]; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    stderr carried: $(head -c 300 "$ERRFILE")"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 # --- The awk engine matrix ---
@@ -90,7 +98,7 @@ ENGINE_BIN="$WORK/enginebin"
 ENGINES=""
 ENGINE_SEEN=""
 for cand in awk gawk nawk mawk; do
-  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  cand_path=$(command -v "$cand" 2> /dev/null) || continue
   case " $ENGINE_SEEN " in *" $cand_path "*) continue ;; esac
   ENGINE_SEEN="$ENGINE_SEEN $cand_path"
   mkdir -p "$ENGINE_BIN/$cand"
@@ -151,7 +159,7 @@ mk_tree() {
 run_hook() {
   # $1 engine, $2 hook script, $3 payload, $4 project root
   : > "$ERRFILE"
-  printf '%s' "$3" | PATH="$ENGINE_BIN/$1:$PATH" CLAUDE_PROJECT_DIR="$4" bash "$SCRIPT_DIR/scripts/$2" 2>"$ERRFILE"
+  printf '%s' "$3" | PATH="$ENGINE_BIN/$1:$PATH" CLAUDE_PROJECT_DIR="$4" bash "$SCRIPT_DIR/scripts/$2" 2> "$ERRFILE"
 }
 # =============================================
 # SECTION 1 (#97): the hooks, once per engine, both bad shapes
@@ -238,10 +246,12 @@ for eng in $ENGINES; do
   assert_contains "the sample call shows the block that hook actually makes" "$OUT" "BLOCK"
   assert_not_contains "and never reports that block rule as not firing" "$OUT" "pre-tool-hook.sh   no rule fired"
   if [ "$RC" -eq 0 ]; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: exit is non-zero over a tree that cannot be honoured"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: exit is non-zero over a tree that cannot be honoured"
     echo "    got exit 0"
   else
-    PASS=$((PASS + 1)); echo "  PASS: exit is non-zero over a tree that cannot be honoured"
+    PASS=$((PASS + 1))
+    echo "  PASS: exit is non-zero over a tree that cannot be honoured"
   fi
 
   echo ""
@@ -270,11 +280,11 @@ done
 # timeout is a test nobody reads. So this asserts the one thing the directory legs above
 # cannot: that `[ -e ]` records a non-directory non-file too, which is the branch every
 # claim about FIFOs rests on.
-if command -v mkfifo >/dev/null 2>&1; then
+if command -v mkfifo > /dev/null 2>&1; then
   FIFOROOT="$WORK/fifo"
   mk_tree "$FIFOROOT" clean
   FT="$FIFOROOT/.claude/jit-context/tools/00-manual"
-  if mkfifo "$FT/pipe.md" 2>/dev/null && [ -p "$FT/pipe.md" ]; then
+  if mkfifo "$FT/pipe.md" 2> /dev/null && [ -p "$FT/pipe.md" ]; then
     echo ""
     echo "=== the sweep records a FIFO at an entry path, not only a directory ==="
     NF=$(CLAUDE_PROJECT_DIR="$FIFOROOT" bash -c '. "$0"/scripts/common.sh; printf "%s" "$JIT_NONFILES"' "$SCRIPT_DIR")
@@ -318,10 +328,12 @@ RC=$?
 # report, so an unanchored assertion here would pass over a run that said nothing.
 assert_contains "the index the reader could not finish is reported as skipped, by name" "$OUT" "SKIPPED  tools/00-manual"
 if [ "$RC" -eq 0 ]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: exit is non-zero when a row reader aborted"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: exit is non-zero when a row reader aborted"
   echo "    got exit 0 — CI consumes this code (#47)"
 else
-  PASS=$((PASS + 1)); echo "  PASS: exit is non-zero when a row reader aborted"
+  PASS=$((PASS + 1))
+  echo "  PASS: exit is non-zero when a row reader aborted"
 fi
 
 # The control for the leg above: the same clean tree, without the aborting awk.
@@ -353,10 +365,12 @@ RC=$?
 assert_contains "the sample call reports the hook that wrote to stderr" "$OUT" "SKIPPED pre-tool-hook.sh"
 assert_contains "and still shows what it did fire, because that is not the whole answer" "$OUT" "BLOCK"
 if [ "$RC" -eq 0 ]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: exit is non-zero when a hook wrote to stderr"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: exit is non-zero when a hook wrote to stderr"
   echo "    got exit 0"
 else
-  PASS=$((PASS + 1)); echo "  PASS: exit is non-zero when a hook wrote to stderr"
+  PASS=$((PASS + 1))
+  echo "  PASS: exit is non-zero when a hook wrote to stderr"
 fi
 
 # Control: the same clean tree and the same sample call with an ordinary awk.

@@ -21,7 +21,7 @@ COMMON="$REPO/scripts/common.sh"
 PASS=0
 FAIL=0
 
-TMP="$(mktemp -d 2>/dev/null)" || TMP=""
+TMP="$(mktemp -d 2> /dev/null)" || TMP=""
 if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
   echo "  SKIPPED: mktemp -d produced no directory, so no fixture can be built here."
   exit 2
@@ -30,29 +30,40 @@ trap 'rm -rf "$TMP"' EXIT
 
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:0:400}"
   fi
 }
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: ${output:0:400}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 assert_valid_json_shape() {
   local desc="$1" output="$2"
   case "$output" in
-    '{}'|'{"hookSpecificOutput"'*) PASS=$((PASS + 1)); echo "  PASS: $desc" ;;
-    *) FAIL=$((FAIL + 1)); echo "  FAIL: $desc"; echo "    got: ${output:0:400}" ;;
+    '{}' | '{"hookSpecificOutput"'*)
+      PASS=$((PASS + 1))
+      echo "  PASS: $desc"
+      ;;
+    *)
+      FAIL=$((FAIL + 1))
+      echo "  FAIL: $desc"
+      echo "    got: ${output:0:400}"
+      ;;
   esac
 }
 
@@ -70,7 +81,7 @@ mkdir -p "$LOGDIR"
   printf '[10:01:00.000] pre-prompt 1ms | (none) [shown:0] << preprod deploy is still broken\n'
   printf '[10:02:00.000] pre-prompt 1ms | (none) [shown:0] << can we automate preprod deploy\n'
 } > "$LOGDIR/hooks.log"
-OUT=$(CLAUDE_PROJECT_DIR="$PROJ" bash "$HOOK" < /dev/null 2>/dev/null)
+OUT=$(CLAUDE_PROJECT_DIR="$PROJ" bash "$HOOK" < /dev/null 2> /dev/null)
 assert_valid_json_shape "still valid JSON-object shaped output" "$OUT"
 assert_contains "still names the recurring miss (unchanged behaviour, small log)" "$OUT" "preprod"
 assert_contains "says WHICH window the findings came from (#248)" "$OUT" "line(s) of the log"
@@ -85,7 +96,7 @@ STUBDIR="$TMP/scripts"
 mkdir -p "$STUBDIR"
 cp "$HOOK" "$STUBDIR/session-start-hook.sh"
 cp "$COMMON" "$STUBDIR/common.sh"
-cat > "$STUBDIR/jit-misses.sh" <<'STUB'
+cat > "$STUBDIR/jit-misses.sh" << 'STUB'
 #!/bin/bash
 # Test stub for #248 -- speaks the exact header shape session-start-hook.sh parses.
 printf 'jit-misses: /fake/hooks.log (999999999 bytes)\n'
@@ -99,7 +110,7 @@ chmod +x "$STUBDIR/jit-misses.sh"
 
 PROJ2="$TMP/proj2"
 mkdir -p "$PROJ2/.claude/jit-context"
-OUT2=$(CLAUDE_PROJECT_DIR="$PROJ2" bash "$STUBDIR/session-start-hook.sh" < /dev/null 2>/dev/null)
+OUT2=$(CLAUDE_PROJECT_DIR="$PROJ2" bash "$STUBDIR/session-start-hook.sh" < /dev/null 2> /dev/null)
 assert_valid_json_shape "still valid JSON-object shaped output against the stub" "$OUT2"
 assert_contains "threads the size-watch note through when nothing else fired" "$OUT2" "watch threshold"
 assert_contains "carries the log's own reported byte size" "$OUT2" "999999999 bytes"
@@ -107,7 +118,7 @@ assert_not_contains "an 'ok, nothing recurs' stub does not fabricate a recurring
 
 echo ""
 echo "=== section B control: the same stub, but under threshold -- no size note ==="
-cat > "$STUBDIR/jit-misses.sh" <<'STUB'
+cat > "$STUBDIR/jit-misses.sh" << 'STUB'
 #!/bin/bash
 printf 'jit-misses: /fake/hooks.log (40 bytes)\n'
 printf '  bounded read -- last 5000 line(s) requested (--tail 5000)\n'
@@ -116,7 +127,7 @@ printf '  ok -- no token is shared by 2 or more of them; nothing here is a repea
 exit 0
 STUB
 chmod +x "$STUBDIR/jit-misses.sh"
-OUT3=$(CLAUDE_PROJECT_DIR="$PROJ2" bash "$STUBDIR/session-start-hook.sh" < /dev/null 2>/dev/null)
+OUT3=$(CLAUDE_PROJECT_DIR="$PROJ2" bash "$STUBDIR/session-start-hook.sh" < /dev/null 2> /dev/null)
 assert_valid_json_shape "still valid JSON-object shaped output, under threshold" "$OUT3"
 assert_not_contains "no size note when jit-misses.sh printed none (control)" "$OUT3" "watch threshold"
 

@@ -33,10 +33,12 @@ FAIL=0
 # jit-drive: assert_contains contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:-<EMPTY>}"
   fi
@@ -45,9 +47,11 @@ assert_contains() {
 assert_empty_json() {
   local desc="$1" output="$2"
   if [ "$output" = "{}" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected exactly {} - got: ${output:-<EMPTY>}"
   fi
 }
@@ -55,18 +59,22 @@ assert_empty_json() {
 assert_rc0() {
   local desc="$1" rc="$2"
   if [ "$rc" -eq 0 ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc (exit $rc)"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (exit $rc)"
   fi
 }
 
 assert_file() {
   local desc="$1" path="$2"
   if [ -f "$path" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    this path should exist and be a regular file: $path"
   fi
 }
@@ -74,10 +82,12 @@ assert_file() {
 assert_no_file() {
   local desc="$1" path="$2"
   if [ -e "$path" ]; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    this path should not exist: $path"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
@@ -89,11 +99,11 @@ new_project() {
   local p="$TMP/$1"
   rm -rf "$p"
   mkdir -p "$p/.claude/jit-context/paths/00-manual" \
-           "$p/.claude/jit-context/paths/10-auto" \
-           "$p/.claude/jit-context/paths/20-grouped" \
-           "$p/.claude/jit-context/paths/30-crosscutting" \
-           "$p/.claude/jit-context/tools/00-manual" \
-           "$p/.claude/jit-context/vocabulary/00-manual"
+    "$p/.claude/jit-context/paths/10-auto" \
+    "$p/.claude/jit-context/paths/20-grouped" \
+    "$p/.claude/jit-context/paths/30-crosscutting" \
+    "$p/.claude/jit-context/tools/00-manual" \
+    "$p/.claude/jit-context/vocabulary/00-manual"
   printf '%s\t%s\n' '\.php' 'php-coding.md' > "$p/.claude/jit-context/paths/00-manual/00-index.tsv"
   printf 'php coding rules\n' > "$p/.claude/jit-context/paths/00-manual/php-coding.md"
   : > "$p/.claude/jit-context/paths/10-auto/00-index.tsv"
@@ -126,7 +136,8 @@ echo "=== A: a session sees an entry once, and the second call is silent ==="
 # The pair. The first call must inject or the second proves nothing.
 
 P="$(new_project a)"
-OUT1="$(run_path "$P" "sess-alpha")"; RC1=$?
+OUT1="$(run_path "$P" "sess-alpha")"
+RC1=$?
 OUT2="$(run_path "$P" "sess-alpha")"
 assert_rc0 "first call in a session exits 0" "$RC1"
 assert_contains "first call in a session injects the entry" "$OUT1" "php coding rules"
@@ -171,11 +182,13 @@ OUT1="$(run_path "$P" "")"
 OUT2="$(run_path "$P" "")"
 assert_contains "first call with no session_id injects" "$OUT1" "php coding rules"
 assert_contains "second call with no session_id injects again" "$OUT2" "php coding rules"
-if [ -d "$(state_of "$P")" ] && [ -n "$(ls -A "$(state_of "$P")" 2>/dev/null)" ]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: no session_id wrote a marker anyway"
+if [ -d "$(state_of "$P")" ] && [ -n "$(ls -A "$(state_of "$P")" 2> /dev/null)" ]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: no session_id wrote a marker anyway"
   ls -A "$(state_of "$P")"
 else
-  PASS=$((PASS + 1)); echo "  PASS: no session_id wrote no marker at all"
+  PASS=$((PASS + 1))
+  echo "  PASS: no session_id wrote no marker at all"
 fi
 
 echo ""
@@ -185,12 +198,14 @@ echo "=== E: no hook keys a marker in shared /tmp any more ==="
 # outside. What CAN be asserted is that no marker path is built under /tmp at all.
 # Comment lines are excluded on purpose: session-start-hook.sh quotes the three lines it
 # replaced, and the record of what was wrong is not a code path.
-TMP_MARKERS="$(grep -n 'tmp/claude-[a-z]*-shown' "$SCRIPTS"/*.sh 2>/dev/null \
+TMP_MARKERS="$(grep -n 'tmp/claude-[a-z]*-shown' "$SCRIPTS"/*.sh 2> /dev/null \
   | grep -v ':[0-9]*:[[:space:]]*#')"
 if [ -z "$TMP_MARKERS" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: no script builds a shown-marker path under /tmp"
+  PASS=$((PASS + 1))
+  echo "  PASS: no script builds a shown-marker path under /tmp"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: a script still builds a shown-marker path under /tmp"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: a script still builds a shown-marker path under /tmp"
   echo "$TMP_MARKERS"
 fi
 
@@ -204,11 +219,13 @@ OUT="$(run_path "$P" "../../../../escape")"
 assert_contains "a traversing session id still gets its entry" "$OUT" "php coding rules"
 assert_no_file "and wrote nothing above the state directory" "$TMP/path-shown-escape.txt"
 assert_no_file "and nothing outside the project either" "$TMP/f/.claude/path-shown-escape.txt"
-if [ -d "$(state_of "$P")" ] && [ -n "$(ls -A "$(state_of "$P")" 2>/dev/null)" ]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: a traversing session id was used as a key anyway"
+if [ -d "$(state_of "$P")" ] && [ -n "$(ls -A "$(state_of "$P")" 2> /dev/null)" ]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: a traversing session id was used as a key anyway"
   ls -A "$(state_of "$P")"
 else
-  PASS=$((PASS + 1)); echo "  PASS: a traversing session id is not a session identity"
+  PASS=$((PASS + 1))
+  echo "  PASS: a traversing session id is not a session identity"
 fi
 
 echo ""
@@ -229,7 +246,8 @@ printf 'php-coding.md\n' > "$(state_of "$P")/path-shown-sess-mine.txt"
 printf 'php-coding.md\n' > "$(state_of "$P")/path-shown-sess-theirs.txt"
 FOREIGN="/tmp/claude-hook-log-999999.tmp"
 printf 'in flight\n' > "$FOREIGN"
-OUT="$(run_session_start "$P" "sess-mine")"; RC=$?
+OUT="$(run_session_start "$P" "sess-mine")"
+RC=$?
 assert_rc0 "session-start exits 0" "$RC"
 assert_contains "session-start still answers with JSON" "$OUT" "{}"
 assert_no_file "it cleared this session marker" "$(state_of "$P")/path-shown-sess-mine.txt"
@@ -245,19 +263,20 @@ echo "=== H: a project directory that cannot be written degrades to no dedup, si
 H_SKIPPED=0
 P="$(new_project h)"
 mkdir -p "$P/.claude/jit-context/.discovery"
-chmod 555 "$P/.claude/jit-context/.discovery" 2>/dev/null
+chmod 555 "$P/.claude/jit-context/.discovery" 2> /dev/null
 if [ -w "$P/.claude/jit-context/.discovery" ]; then
   H_SKIPPED=1
   echo "  SKIP-NOTE: chmod did not remove write permission here (running as root, or a"
   echo "             filesystem without POSIX modes). Section H tested nothing."
 else
-  OUT="$(run_path "$P" "sess-ro")"; RC=$?
+  OUT="$(run_path "$P" "sess-ro")"
+  RC=$?
   assert_rc0 "read-only tree: hook still exits 0" "$RC"
   assert_contains "read-only tree: the entry is still injected" "$OUT" "php coding rules"
   OUT2="$(run_path "$P" "sess-ro")"
   assert_contains "read-only tree: it is injected again, rather than lost" "$OUT2" "php coding rules"
 fi
-chmod 755 "$P/.claude/jit-context/.discovery" 2>/dev/null
+chmod 755 "$P/.claude/jit-context/.discovery" 2> /dev/null
 
 echo ""
 # --- Can this platform make a symbolic link at all? --------------------------
@@ -269,7 +288,7 @@ probe_symlinks() {
   local d="$TMP/.symlink-probe"
   rm -rf "$d" || return 1
   mkdir -p "$d/target-dir" || return 1
-  ln -sfn "$d/target-dir" "$d/link-dir" 2>/dev/null
+  ln -sfn "$d/target-dir" "$d/link-dir" 2> /dev/null
   printf 'late\n' > "$d/target-dir/late.txt" || return 1
   [ -L "$d/link-dir" ] || return 1
   [ -f "$d/link-dir/late.txt" ] || return 1
@@ -291,20 +310,24 @@ else
   # entry file names to a file inside it.
 
   OUTDIR="$TMP/outside-i"
-  rm -rf "$OUTDIR"; mkdir -p "$OUTDIR"
+  rm -rf "$OUTDIR"
+  mkdir -p "$OUTDIR"
   P="$(new_project i)"
   ln -sfn "$OUTDIR" "$P/.claude/jit-context/.discovery"
-  OUT="$(run_path "$P" "sess-link")"; RC=$?
+  OUT="$(run_path "$P" "sess-link")"
+  RC=$?
   assert_rc0 "linked .discovery: hook still exits 0" "$RC"
   assert_contains "linked .discovery: the entry is still injected" "$OUT" "php coding rules"
   assert_no_file "linked .discovery: no state directory outside the tree" "$OUTDIR/state"
 
   OUTDIR2="$TMP/outside-i2"
-  rm -rf "$OUTDIR2"; mkdir -p "$OUTDIR2"
+  rm -rf "$OUTDIR2"
+  mkdir -p "$OUTDIR2"
   P="$(new_project i2)"
   mkdir -p "$P/.claude/jit-context/.discovery"
   ln -sfn "$OUTDIR2" "$P/.claude/jit-context/.discovery/state"
-  OUT="$(run_path "$P" "sess-link2")"; RC=$?
+  OUT="$(run_path "$P" "sess-link2")"
+  RC=$?
   assert_rc0 "linked state dir: hook still exits 0" "$RC"
   assert_contains "linked state dir: the entry is still injected" "$OUT" "php coding rules"
   assert_no_file "linked state dir: no marker written through the link" \
@@ -354,7 +377,7 @@ J_REAL_RM=$(command -v rm)
 J_ENGINES=""
 J_SEEN=""
 for cand in awk gawk nawk mawk; do
-  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  cand_path=$(command -v "$cand" 2> /dev/null) || continue
   case " $J_SEEN " in *" $cand_path "*) continue ;; esac
   J_SEEN="$J_SEEN $cand_path"
   mkdir -p "$J_ENGINE_BIN/$cand"
@@ -374,8 +397,9 @@ done
 j_pick_utf8_locale() {
   local c
   for c in en_US.UTF-8 C.UTF-8 en_US.utf8 C.utf8; do
-    if [ "$(LC_ALL="$c" locale charmap 2>/dev/null)" = "UTF-8" ]; then
-      printf '%s' "$c"; return 0
+    if [ "$(LC_ALL="$c" locale charmap 2> /dev/null)" = "UTF-8" ]; then
+      printf '%s' "$c"
+      return 0
     fi
   done
   printf '%s' "${LC_ALL:-${LANG:-C}}"
@@ -383,7 +407,7 @@ j_pick_utf8_locale() {
 J_UTF8="$(j_pick_utf8_locale)"
 J_UTF8_REAL=no
 J_SKIPPED=0
-if [ "$(LC_ALL="$J_UTF8" locale charmap 2>/dev/null)" = "UTF-8" ]; then J_UTF8_REAL=yes; fi
+if [ "$(LC_ALL="$J_UTF8" locale charmap 2> /dev/null)" = "UTF-8" ]; then J_UTF8_REAL=yes; fi
 if [ "$J_UTF8_REAL" != yes ]; then
   # A SKIP, not a note. The five sibling suites print the note and exit 0, which is the
   # convention -- and it is the wrong one HERE, because this file already carries the third
@@ -413,12 +437,12 @@ j_session_start() {
   # $1 project, $2 session id, $3 engine
   printf '{"session_id":"%s","hook_event_name":"SessionStart"}' "$2" \
     | LC_ALL="$J_UTF8" PATH="$J_ENGINE_BIN/$3:$PATH" CLAUDE_PROJECT_DIR="$1" \
-      bash "$SCRIPTS/session-start-hook.sh" 2>/dev/null
+      bash "$SCRIPTS/session-start-hook.sh" 2> /dev/null
 }
 j_path_hook() {
   printf '{"session_id":"%s","tool_name":"Edit","tool_input":{"file_path":"src/a.php"}}' "$2" \
     | LC_ALL="$J_UTF8" PATH="$J_ENGINE_BIN/$3:$PATH" CLAUDE_PROJECT_DIR="$1" \
-      bash "$SCRIPTS/pre-path-hook.sh" 2>/dev/null
+      bash "$SCRIPTS/pre-path-hook.sh" 2> /dev/null
 }
 
 # Whether any argument handed to `rm` during the last run was a marker path. Read with grep
@@ -429,7 +453,7 @@ j_path_hook() {
 # a non-integer. Measured here while writing this. The status is discarded instead.
 j_rm_marker_count() {
   local n
-  n="$(LC_ALL=C grep -c -e '-shown-' "$J_RMLOG" 2>/dev/null)"
+  n="$(LC_ALL=C grep -c -e '-shown-' "$J_RMLOG" 2> /dev/null)"
   printf '%s' "${n:-0}"
 }
 
@@ -441,7 +465,8 @@ for eng in $J_ENGINES; do
   # Leg 1 -- the negative. A byte outside [A-Za-z0-9_-] means this is not a session id, on
   # every engine and in every locale, so the hook must not build a marker name out of it.
   : > "$J_RMLOG"
-  OUT="$(j_session_start "$P" "$J_BAD" "$eng")"; RC=$?
+  OUT="$(j_session_start "$P" "$J_BAD" "$eng")"
+  RC=$?
   N_BAD="$(j_rm_marker_count)"
   assert_rc0 "[$eng] session-start exits 0 on a malformed session id" "$RC"
   assert_contains "[$eng] and still answers with JSON" "$OUT" "{}"

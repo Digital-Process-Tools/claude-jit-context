@@ -28,10 +28,18 @@ FAIL=0
 
 # jit-drive: none -- this test runs jit-dry-run.sh over a fixture tree and counts forks; it takes no hook output as input
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; for l in "$@"; do echo "    $l"; done; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  for l in "$@"; do echo "    $l"; done
+}
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/jit-entmemo.XXXXXXXX" 2>/dev/null)" || {
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/jit-entmemo.XXXXXXXX" 2> /dev/null)" || {
   echo "  SKIPPED: could not create a work directory -- nothing was measured"
   exit 2
 }
@@ -39,7 +47,10 @@ trap 'rm -rf "$WORK"' EXIT
 
 REAL_AWK=""
 for d in /usr/bin /bin /usr/local/bin; do
-  [ -x "$d/awk" ] && { REAL_AWK="$d/awk"; break; }
+  [ -x "$d/awk" ] && {
+    REAL_AWK="$d/awk"
+    break
+  }
 done
 if [ -z "$REAL_AWK" ]; then
   echo "  SKIPPED: no real awk found on this machine -- nothing was measured"
@@ -65,7 +76,8 @@ chmod +x "$SHIM/awk"
 # sitting after a >, and it cannot tell a real hand-write from a test fixture building
 # the committed index format on purpose (see tests/test-requires-field.sh for the same
 # precedent).
-IDX="00-index"; IDX="$IDX.tsv"
+IDX="00-index"
+IDX="$IDX.tsv"
 BASE="$WORK/.claude/jit-context"
 LAYER="$BASE/tools/01-generated"
 mkdir -p "$LAYER" "$BASE/paths/00-manual" "$BASE/vocabulary/00-manual"
@@ -83,13 +95,13 @@ RC=$?
 
 # Control first: the lint has to have actually run and looked at these five rows, or
 # the fork count below would be zero for a reason that has nothing to do with the memo.
-if grep -q "memo-1.md" <<<"$OUT" && [ "$RC" -le 1 ]; then
+if grep -q "memo-1.md" <<< "$OUT" && [ "$RC" -le 1 ]; then
   ok "control: the lint ran and reported on the fixture rows (exit $RC)"
 else
   bad "control: the lint ran and reported on the fixture rows" "exit $RC" "$OUT"
 fi
 
-FALLBACK_FORKS=$(grep -c -F 'ENVIRON["JIT_ENTRY"]' "$LOG" 2>/dev/null || true)
+FALLBACK_FORKS=$(grep -c -F 'ENVIRON["JIT_ENTRY"]' "$LOG" 2> /dev/null || true)
 FALLBACK_FORKS="${FALLBACK_FORKS:-0}"
 
 if [ "$FALLBACK_FORKS" -eq 0 ]; then

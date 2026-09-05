@@ -24,10 +24,18 @@ DRYRUN="$REPO/scripts/jit-dry-run.sh"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+}
 
-if [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
+if [ "$(id -u 2> /dev/null || echo 1)" = "0" ]; then
   echo "  SKIPPED: running as root -- a permission-denied fixture cannot be built (root reads everything)"
   exit 2
 fi
@@ -70,23 +78,23 @@ printf '%s\n' \
 # index, but the script it lives in gates on one existing first. Build the index while
 # the fixture is still readable, then lock it down -- this test is about the READ in
 # list_whole(), not about whether rebuild-tsv.sh itself can see the file.
-CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO/scripts/rebuild-tsv.sh" >/dev/null 2>&1
+CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REPO/scripts/rebuild-tsv.sh" > /dev/null 2>&1
 chmod 000 "$UNREADABLE"
 
 # Control on the fixture itself: if this process can still read a chmod-000 file (root,
 # an ACL, a filesystem that ignores the bit), the whole test is vacuous.
 if [ -r "$UNREADABLE" ]; then
   echo "  SKIPPED: this process can still read a chmod 000 file -- nothing was measured"
-  chmod 644 "$UNREADABLE" 2>/dev/null
+  chmod 644 "$UNREADABLE" 2> /dev/null
   exit 2
 fi
 
 STDOUT_F="$TEST_DIR/out.txt"
 STDERR_F="$TEST_DIR/err.txt"
-CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$DRYRUN" --base "$BASE" >"$STDOUT_F" 2>"$STDERR_F"
+CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$DRYRUN" --base "$BASE" > "$STDOUT_F" 2> "$STDERR_F"
 RC=$?
 
-chmod 644 "$UNREADABLE" 2>/dev/null
+chmod 644 "$UNREADABLE" 2> /dev/null
 
 if grep -q "readable-348" "$STDOUT_F"; then
   ok "control: the readable sibling is reported on"
