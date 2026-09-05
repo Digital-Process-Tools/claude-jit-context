@@ -230,6 +230,15 @@ and a `{"decision":"block"}` stopped a real command from running. Gemini CLI has
 and is still `UNKNOWN`, for exactly the reason Codex no longer is -- nobody has watched
 a block fire under it.
 
+That last sentence was measured on a `Bash` call, and a live Codex run (#364) found the
+same envelope does not mean the same vocabulary: Codex names a file edit `apply_patch`,
+never `Edit` or `Write`, so a rule you write as `tool: Edit|Write` matched nothing on
+Codex until this was fixed -- no error, no warning, the call simply went through. You
+never need to write `apply_patch` in an entry to fix this: `scripts/host.sh` carries a
+`tool_aliases` column that maps a host's own tool name onto the canonical vocabulary
+(Claude Code's own names) before any rule is matched, so `tool: Edit|Write` still means
+exactly that on every host, including one that spells it differently underneath.
+
 ## Your first entry, in one command
 
 A fresh install has nothing to match, so nothing happens — and the first thing anyone

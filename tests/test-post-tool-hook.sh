@@ -423,6 +423,36 @@ assert_rc0 "the hook exits 0" "$RC"
 assert_no_file "an echo merely naming a supertool op marks nothing" "$(state_of "$P")/edited-sess-k7.txt"
 
 echo ""
+echo "=== L: #365 -- apply_patch (Codex) drops the same marker Edit/Write does ==="
+# Codex tool_name for a file edit is apply_patch, never Edit or Write -- this hook own
+# gate (`case "$PT_TOOL" in Write | Edit | Bash)`) could never match it, so a real
+# in-tree Codex edit left no edited-<session>.txt marker and stop-hook.sh read the
+# permanent absence as the positive claim "none updated", exactly the #301 shape one
+# tool name over. jit_canonical_tool() (scripts/host.sh, #364) is supposed to expand
+# apply_patch onto Edit/Write before this gate runs.
+
+P="$(new_project l)"
+FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
+OUT="$(run_post_tool "$P" "sess-l" "apply_patch" "$FP")"
+RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_empty_json "the hook answers empty JSON" "$OUT"
+assert_file "#365: an apply_patch edit under the tree drops a marker too" "$(state_of "$P")/edited-sess-l.txt"
+
+echo ""
+echo "=== M: control -- a tool this hook still does not watch, even after the alias table, marks nothing ==="
+# The alias expansion must not widen the gate to match everything -- Read (Claude
+# Code) and any OTHER name Codex might use for a read-only tool are not in the alias
+# table at all, so they must still fall through to the raw-name gate exactly as before.
+
+P="$(new_project m)"
+FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
+OUT="$(run_post_tool "$P" "sess-m" "Read" "$FP")"
+RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_no_file "#365 control: a tool the alias table does not name still marks nothing" "$(state_of "$P")/edited-sess-m.txt"
+
+echo ""
 echo "=========================================="
 echo "Results: $PASS passed, $FAIL failed"
 echo "=========================================="

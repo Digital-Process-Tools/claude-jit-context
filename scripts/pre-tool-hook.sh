@@ -79,6 +79,7 @@ JIT_MISSING_REQUIRES="$(jit_missing_requires "$JIT_BASE/tools" "$JIT_TOOL_LAYERS
 # hottest path this plugin has, buying nothing.
 LC_ALL=C awk \
   -v tool_layers="$JIT_TOOL_LAYERS" \
+  -v tool_aliases="$JIT_TOOL_ALIASES" \
   -v vocab_layers="$JIT_VOCAB_LAYERS" \
   -v tools_base="$JIT_BASE/tools" \
   -v vocab_base="$JIT_BASE/vocabulary" \
@@ -145,6 +146,21 @@ function jit_re_lit(s,    i, c, out, special) {
     out = out (index(special, c) > 0 ? "\\" c : c)
   }
   return out
+}
+# #364: RAW canon name(s), space-separated, or RAW if ALIASES names none.
+# ALIASES: host.sh jit_all_tool_aliases (comma key=v1;v2 pairs, all hosts unioned).
+function jit_expand_tool_alias(aliases, raw,    n, entries, i, eq, key) {
+  if (aliases == "" || raw == "") return raw
+  n = split(aliases, entries, ",")
+  for (i = 1; i <= n; i++) {
+    eq = index(entries[i], "=")
+    if (eq == 0) continue
+    key = substr(entries[i], 1, eq - 1)
+    if (key != raw) continue
+    gsub(/;/, " ", entries[i])
+    return raw " " substr(entries[i], eq + 1)  # union, not replace (#364)
+  }
+  return raw
 }
 { input = input $0 }
 END {
@@ -224,6 +240,9 @@ END {
   # No tool name at all is a payload this hook has nothing to say about, and there is
   # no rule it could be measured against. Unchanged, and still the only silent exit.
   if (tool_name == "") { print "{}"; exit }
+
+  # #364: raw tool_name unioned with its canonical set (host.sh tool_aliases).
+  n_tool_variants = split(jit_expand_tool_alias(tool_aliases, tool_name), tool_variants, " ")
 
   # THE THIRD STATE, #182. `cmd == ""` used to leave here the same way, and that is the
   # whole defect: "no rule matched" and "no rule could be reached" printed the same {}.
@@ -470,9 +489,14 @@ END {
 
       # tool may name several tools, pipe-separated: `tool: Edit|Write|Read`.
       # Exact-match each alternative — never substring, or `Read` would match `ReadFile`.
+      # #364: every tool_variants entry, not just raw tool_name.
       tool_hit = 0
       nt = split(r_tool, talts, "|")
-      for (ti = 1; ti <= nt; ti++) if (talts[ti] == tool_name) tool_hit = 1
+      for (ti = 1; ti <= nt && !tool_hit; ti++) {
+        for (tvi = 1; tvi <= n_tool_variants; tvi++) {
+          if (talts[ti] == tool_variants[tvi]) { tool_hit = 1; break }
+        }
+      }
       if (!tool_hit) continue
 
       # #182: this row names the tool, and the dispatch gave us nothing to match it
