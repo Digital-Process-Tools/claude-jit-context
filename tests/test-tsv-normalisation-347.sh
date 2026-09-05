@@ -97,6 +97,38 @@ printf '%s\n' \
   "" \
   "TABREQ-347-BODY" > "$TOOLS_DIR/tabreq-347.md"
 
+# --- Fixture 4: an @invocation MACRO whose command phrase carries a literal TAB.
+# rebuild-tsv.sh folds tab->space on the raw match: value BEFORE handing it to
+# jit_expand_match() (both build_tool_tsv() and build_path_tsv() do fold-then-expand),
+# so the macro sees "git tabmacro-347" and expands cleanly into the compiled ERE that
+# gets indexed. Folding AFTER expanding instead reverses that order: jit_expand_match()
+# sees the raw tab in the macro's own argument list, its character-class guard refuses
+# it as "not a plain command word," and the row is written through UNEXPANDED -- a
+# different, and wrong, reconstruction that can never match the real (compiled,
+# expanded) index row. This is the fold/expand ORDER, not just fold presence.
+printf '%s\n' \
+  "---" \
+  "title: Tab in a macro" \
+  "description: An @invocation match: whose command phrase carries a literal tab." \
+  "tool: Bash" \
+  $'match: ~@invocation git\ttabmacro-347' \
+  "mode: remind" \
+  "---" \
+  "" \
+  "TABMACRO-347-BODY" > "$TOOLS_DIR/tabmacro-347.md"
+
+# --- Fixture 5: the PATHS dimension, which has no mode: column but goes through the
+# same jit_tsv_field() fold on its match: value in build_path_tsv() -- the #347 fix
+# must not be tools-only.
+printf '%s\n' \
+  "---" \
+  "title: Tab in a paths match" \
+  "description: A paths rule whose match: value carries a literal tab." \
+  $'match: ^src/tab\tpaths-347\.php$' \
+  "---" \
+  "" \
+  "TABPATH-347-BODY" > "$BASE/paths/00-manual/tabpath-347.md"
+
 CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REBUILD" >/dev/null 2>&1
 
 # Control on rebuild-tsv.sh itself: badmode-347.md must not be indexed at all, and
@@ -135,6 +167,20 @@ if grep -qF "tabreq-347" <<<"$(printf '%s' "$DRYRUN_OUT" | grep STALE)"; then
     "$(printf '%s' "$DRYRUN_OUT" | grep STALE)"
 else
   ok "no false STALE for the entry whose require: tab rebuild-tsv.sh folded to a space"
+fi
+
+if grep -qF "tabmacro-347" <<<"$(printf '%s' "$DRYRUN_OUT" | grep STALE)"; then
+  bad "no false STALE for a macro match: whose tab-carrying arguments fold before expansion" \
+    "$(printf '%s' "$DRYRUN_OUT" | grep STALE)"
+else
+  ok "no false STALE for a macro match: whose tab-carrying arguments fold before expansion"
+fi
+
+if grep -qF "tabpath-347" <<<"$(printf '%s' "$DRYRUN_OUT" | grep STALE)"; then
+  bad "no false STALE for a paths entry whose match: value carries a literal tab" \
+    "$(printf '%s' "$DRYRUN_OUT" | grep STALE)"
+else
+  ok "no false STALE for a paths entry whose match: value carries a literal tab"
 fi
 
 # --- Positive control: a GENUINE drift must still be caught. Edit valid-347.md's

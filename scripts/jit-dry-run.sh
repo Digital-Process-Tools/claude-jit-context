@@ -890,8 +890,16 @@ check_index_current() {
         continue
       fi
     fi
-    want="$(jit_expand_match "$want" "$dim" "$label/$name" 2>/dev/null)"
+    # (#347) The fold has to run BEFORE jit_expand_match(), not after: rebuild-tsv.sh
+    # folds tab/CR/LF on the raw value first (jit_tsv_field(), both build_tool_tsv() and
+    # build_path_tsv()) and only then expands an @invocation macro. jit_expand_match()'s
+    # own character-class guard refuses a macro whose ARGS carry a raw tab -- the
+    # unfolded reconstruction would then be REFUSED and returned unexpanded, while
+    # rebuild-tsv.sh's folded value expanded cleanly and wrote the compiled regex to the
+    # index; folding only the after-the-fact result would leave those two forever
+    # disagreeing for a macro whose match: happens to carry one of those bytes.
     want="${want//$'\t'/ }"; want="${want//$'\r'/ }"; want="${want//$'\n'/ }"
+    want="$(jit_expand_match "$want" "$dim" "$label/$name" 2>/dev/null)"
     if [ "$dim" = tools ]; then
       row="$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s' "$tool" "$want" "$name" "${mode:-remind}" "$require" "$forbid" "$requires")"
     else
