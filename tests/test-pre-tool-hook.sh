@@ -1020,6 +1020,24 @@ assert_blocked "#364: control -- an ordinary Claude-Code Write payload still fir
 OUT=$(run_hook '{"tool_name":"Read","tool_input":{"file_path":"/tmp/index364.tsv"}}')
 assert_not_contains "#364: an unrelated tool name is not swept in by the alias" "$OUT" '"decision":"block"'
 
+# Explore self-review on #364: the RAW name is UNIONED onto the canonical expansion,
+# never replaced by it. A rule written literally as `tool: apply_patch` -- a plausible
+# hand-rolled workaround someone wrote before this fix existed -- matched and blocked
+# before this change; reverting to only the canonical set (dropping the raw name) would
+# have silently stopped that same rule from firing, the identical silent-failure shape
+# this fix exists to close, just on the opposite input. Reproduced live against the
+# pre-fix code: the row below blocked before jit_expand_tool_alias existed.
+#
+# The match keyword and path are deliberately NOT a substring of "index364" (the
+# earlier row in this same fixture) -- a first draft used "index364raw", which
+# contains "index364" as a substring and let the EARLIER Edit|Write row fire on the
+# canonical Edit/Write expansion alone, passing regardless of whether raw is unioned
+# in at all. "rawpatch364" shares no substring with any earlier row in this file.
+printf 'apply_patch\trawpatch364\trawpatch364.md\tblock\t\t\n' >> "$IDX364"
+echo "364 raw-name block rule body" > "$TOOLS_DIR/rawpatch364.md"
+OUT=$(run_hook '{"tool_name":"apply_patch","tool_input":{"file_path":"/tmp/rawpatch364.tsv"}}')
+assert_blocked "#364: a rule written tool: apply_patch still fires on that raw name" "$OUT"
+
 # --- Cleanup ---
 rm -rf "$TEST_DIR"
 

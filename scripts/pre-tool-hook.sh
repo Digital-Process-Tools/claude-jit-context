@@ -163,7 +163,16 @@ function jit_expand_tool_alias(aliases, raw,    n, entries, i, eq, key) {
     key = substr(entries[i], 1, eq - 1)
     if (key != raw) continue
     gsub(/;/, " ", entries[i])
-    return substr(entries[i], eq + 1)
+    # Explore self-review on #364: RAW is UNIONED onto the canonical expansion, never
+    # replaced by it. A row written literally as `tool: apply_patch` -- a hand-rolled
+    # workaround someone reaches for before this fix ships, and this very issue thread
+    # considered shipping as the alternation stopgap -- matched and blocked before
+    # this function existed. Returning only the canonical set here would have silently
+    # stopped that same row from firing: the identical silent-failure shape #364
+    # exists to close, reintroduced on the opposite input. Reproduced against a
+    # canonical-only draft of this function: a `tool: apply_patch` row stopped
+    # matching an apply_patch payload.
+    return raw " " substr(entries[i], eq + 1)
   }
   return raw
 }
@@ -246,12 +255,15 @@ END {
   # no rule it could be measured against. Unchanged, and still the only silent exit.
   if (tool_name == "") { print "{}"; exit }
 
-  # #364: the RAW tool_name a host handed us (Codex own "apply_patch", say) becomes
-  # the CANONICAL set an entry own tool: field is written against (Edit, Write, ...),
-  # space-separated so the match loop below can walk it with a plain split(). A host
-  # whose own vocabulary already IS canonical (claude-code, an unknown host) gets its
-  # raw tool_name straight back -- jit_expand_tool_alias() is the identity function
-  # whenever tool_aliases names no mapping for it.
+  # #364: the RAW tool_name a host handed us (Codex own "apply_patch", say) is
+  # UNIONED with the CANONICAL set an entry own tool: field is written against
+  # (Edit, Write, ...), space-separated so the match loop below can walk it with a
+  # plain split(). Union, not replace: a row written literally as `tool: apply_patch`
+  # must keep matching too, or the fix reintroduces its own silent-failure shape on
+  # the opposite input (Explore self-review). A host whose own vocabulary already IS
+  # canonical (claude-code, an unknown host) gets its raw tool_name straight back --
+  # jit_expand_tool_alias() is the identity function whenever tool_aliases names no
+  # mapping for it.
   n_tool_variants = split(jit_expand_tool_alias(tool_aliases, tool_name), tool_variants, " ")
 
   # THE THIRD STATE, #182. `cmd == ""` used to leave here the same way, and that is the
