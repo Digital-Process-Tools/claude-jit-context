@@ -924,7 +924,17 @@ END {
     if (index(ptoks[pi], "/") > 0) cmd_paths = cmd_paths " " ptoks[pi]
   }
   tt = f_file_path " " cmd_paths
-  gsub(jit_re_lit(home) "/", "", tt)
+  # A GUARDED gsub, not a bare one: `project` always has a byte, from the
+  # "${CLAUDE_PROJECT_DIR:-.}" fallback at the bash -v site (":-" fires on unset AND
+  # empty, so project can never be ""), but `home="$HOME"` carries no such fallback.
+  # An unset or explicitly-empty $HOME (a minimal container, a sandboxed host,
+  # `env -u HOME`) makes jit_re_lit(home) correctly return "" -- there is nothing
+  # to escape -- and an UNGUARDED gsub("" "/", "", tt) then degenerates to
+  # gsub("/", "", tt), which deletes EVERY slash in tt rather than a leading prefix
+  # that was never there. That is the identical corruption class #361 fixed for
+  # `project`, reachable from the other side of the same two lines (found in the
+  # self-review spawned for #362, not by the original #361 report).
+  if (home != "") gsub(jit_re_lit(home) "/", "", tt)
   gsub(jit_re_lit(project) "/", "", tt)
 
   # Word-boundary match prep:
