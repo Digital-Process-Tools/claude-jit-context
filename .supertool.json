@@ -14,10 +14,34 @@
         "gh-prs": {}
       }
     },
-    "watch": { "watch_name": "dpt-claude-jit-context" },
-    "unwatch": { "watch_name": "dpt-claude-jit-context" },
-    "watches": { "watch_name": "dpt-claude-jit-context" },
-    "channel": { "watch_name": "dpt-claude-jit-context" }
+    "watch": {
+      "watch_name": "dpt-claude-jit-context"
+    },
+    "unwatch": {
+      "watch_name": "dpt-claude-jit-context"
+    },
+    "watches": {
+      "watch_name": "dpt-claude-jit-context"
+    },
+    "channel": {
+      "watch_name": "dpt-claude-jit-context"
+    }
+  },
+  "formatters": {
+    "shfmt": {
+      "cmd": "shfmt -w {file}",
+      "match": "*.sh",
+      "hooks_into": ["edit", "replace", "replace_lines", "paste", "append", "vim"],
+      "rollback_on_fail": false,
+      "timeout": 15
+    },
+    "prettier": {
+      "cmd": "prettier --write {file}",
+      "match": "*.{json,yml,yaml}",
+      "hooks_into": ["edit", "replace", "replace_lines", "paste", "append", "vim"],
+      "rollback_on_fail": false,
+      "timeout": 30
+    }
   },
   "validators": {
     "bash-check": {

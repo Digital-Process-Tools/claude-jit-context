@@ -7,12 +7,5 @@
   },
   "license": "Community License",
   "repository": "https://github.com/Digital-Process-Tools/claude-jit-context",
-  "keywords": [
-    "context",
-    "rules",
-    "hooks",
-    "just-in-time",
-    "guardrails",
-    "tokens"
-  ]
+  "keywords": ["context", "rules", "hooks", "just-in-time", "guardrails", "tokens"]
 }

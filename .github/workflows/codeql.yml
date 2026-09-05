@@ -24,7 +24,7 @@ on:
   schedule:
     # Weekly. Advisories land after the code stops changing, so a scan that only
     # runs on a push cannot find one that was published since the last commit.
-    - cron: '17 4 * * 1'
+    - cron: "17 4 * * 1"
 
 permissions:
   contents: read
