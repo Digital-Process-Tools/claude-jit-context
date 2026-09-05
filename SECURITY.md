@@ -6,8 +6,8 @@ Only the latest minor version receives security updates.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.7.x   | :white_check_mark: |
-| < 0.7   | :x:                |
+| 0.8.x   | :white_check_mark: |
+| < 0.8   | :x:                |
 
 ## Trust Model
 

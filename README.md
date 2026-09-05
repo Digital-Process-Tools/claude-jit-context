@@ -6,7 +6,7 @@
 [![Shell](https://img.shields.io/badge/bash-3.2%2B-blue)](https://www.gnu.org/software/bash/)
 [![OS](https://img.shields.io/badge/tested%20on-Linux%20%7C%20macOS%20%7C%20Windows-blue)](https://github.com/Digital-Process-Tools/claude-jit-context/actions/workflows/tests.yml)
 [![License](https://img.shields.io/badge/license-Community-brightgreen)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.7.2-orange)](.claude-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-0.8.0-orange)](.claude-plugin/plugin.json)
 
 **Your agent should know what your team knows.**
 

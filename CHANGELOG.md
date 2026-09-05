@@ -7,6 +7,577 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-05
+
+### Added
+
+- **`run-all.sh` now times every suite and reports it** (#304). Wall-clock seconds
+  per suite, slowest first, printed after the pass/fail tally, plus a total -- so a
+  slow CI leg (Windows, mainly) is a number in the log rather than a guess about
+  whether it hung. Timing never changes the exit code and never fails a slow suite;
+  it only reports. Measured via bash's own `$SECONDS` rather than `date +%s.%N`,
+  which is a GNU extension BSD `date` on macOS prints literally rather than
+  computing -- so there is no platform on which this silently reports a wrong
+  number. If timing genuinely cannot be taken, a suite's line reads `n/a`, never
+  `0s`, so an unmeasured suite is never mistaken for one that ran instantly.
+
+- Codex install instructions in the README (#336). The plugin has shipped a Codex manifest and hook bindings since #252, and the README documented one host. The new section names the catalogue -- `codex plugin marketplace add Digital-Process-Tools/codex-marketplace`, then `codex plugin add claude-jit-context@dpt-plugins` -- and gives the trust step beside it, because an untrusted hook is skipped in silence and "nothing happened" is also what a rule that does not match looks like.
+
+### Changed
+
+- **`test-assertion-helpers.sh` cuts its own driving payload from ~4.6MB to ~1.15MB** (#306). The suite's floor assertion only requires the payload reach 1,000,000 bytes; the loop that builds it doubled 15 times regardless, landing at 4,620,156 bytes when 13 doublings already clears the floor at 1,154,940. #306 measured this suite driving 351 assertion helper calls against the payload, which is where nearly all of the suite's wall clock sits -- a ~4x smaller payload cuts that cost directly. Every assertion is unchanged: 365/365 still pass. Measured locally (macOS): 240s before, 77s after.
+
+- **`test-dogfood-entries.sh` memoises `fired_for()` by path, on disk** (#307).
+  Profiling confirmed the issue's hypothesis: each of the suite's 59 `fired_for()` call
+  sites shells out to `jit-dry-run.sh --file`, and that call spends ~95% of its ~1.3s on
+  a full-tree lint (pattern, index and `config.env` checks over this repository's own
+  `.claude/jit-context/`) that runs unconditionally before the one sample line the
+  helper actually reads -- a bare `jit-dry-run.sh` with no sample flag costs the same as
+  one with `--file`. 20 of the 59 calls repeat a path an earlier assertion in the same
+  run had already queried against an unchanged tree, so `fired_for()` now caches its
+  result per path.
+  The cache lives on disk (a per-run temp directory holding one file per distinct path,
+  plus a manifest mapping path to file), not in a pair of bash arrays: every real call
+  site reads this helper through command substitution -- `out=$(fired_for "$path")` --
+  which always forks a subshell, and a subshell's array writes are discarded when it
+  exits. A first version of this fix used in-memory arrays, passed its own targeted
+  regression test (which called the helper directly, unsubstituted), and shipped no
+  actual speedup at all -- caught by review before merge, not after. What each
+  assertion checks is unchanged: the cache is keyed on the exact query string, so the
+  "must fire" and "must NOT fire" cases still read the real per-path output. Measured on
+  this suite, same machine, back to back: ~87s before this fix, ~47s after.
+  `jit-dry-run.sh` itself was not touched -- the redundant full-tree lint is structural
+  to the tool as it stands today, not to the 39 distinct queries this suite makes, and
+  reducing that lint is a larger blast-radius change out of this issue's scope.
+
+- **The hooks stop forking for work bash does natively** (#307). Counted with a `PATH`
+  shim, one invocation of `pre-path-hook.sh` against this repository's own tree spawned
+  9 external commands, and spawned the same 9 on a miss as on a hit -- so every session
+  paid the full fixed cost on every tool call whether a rule fired or not. Exactly one of
+  the 9 was the matcher. On Windows (Git Bash) a process spawn is the expensive thing,
+  which is the same fact behind that leg's suite times.
+  Four changes, none of which alters what any hook decides. `$(dirname "$0")` in all six
+  hooks and `$(dirname "${BASH_SOURCE[0]}")` in `common.sh` become parameter expansion,
+  with the no-slash case spelled out because `${x%/*}` returns `x` unchanged where
+  `dirname` answers `.`. `_ms()` and `_ts()` read `$EPOCHREALTIME` and `printf %()T` where
+  the shell has them. Four hooks opened with `cat |` in front of something that reads stdin
+  itself -- `pre-path-hook.sh` was the plainest case, since it already calls that same
+  wrapper function without one thirty lines further down. And `stop-hook.sh` sliced its own
+  two-line awk output with `sed -n 1p` and `sed -n 2p`, now two `read`s.
+  Measured on macOS bash 3.2, which has neither clock builtin and keeps the `perl`
+  fallback: `pre-path` 9 to 6, `pre-tool` 12 to 9, `pre-prompt` 10 to 7, `post-tool` 5 to
+  2, `stop` 5 to 3, and no hook forks `dirname` at all. With `$EPOCHREALTIME` present,
+  `pre-path` measures 4; the last `perl` there is `_ts`, which additionally needs
+  `printf %()T` (bash 4.2), so on Git Bash and Linux CI it is 3 -- `mktemp`, its `rm`, and
+  the matcher. That last step is arithmetic, not a measurement: no bash 5 was available on
+  the machine this was written on.
+  `session-start-hook.sh` still spawns `wc`, `tr` and `tail`, from the `jit-misses.sh` it
+  invokes, and they are left alone: it runs once per session rather than once per tool
+  call, so rewriting a build tool to save three forks on one invocation carries more risk
+  than value. Named rather than left out, because a hook missing from a list reads exactly
+  like a hook that passed.
+  Two other spawns stay because they are bought, not wasted: `mktemp` and its `rm`
+  (`O_EXCL` is what stops a symlink race in a shared `/tmp`, which `common.sh` already
+  argues out), and the second `cat` in `post-tool-hook.sh`, which reads `file_path` -- free
+  text that may carry a real newline, where `read -r -d ""` is not a drop-in because it
+  stops at the first NUL byte that command substitution drops and reads past.
+- **`tests/test-hook-spawn-count.sh` pins the fork counts** (#307). It counts, and never
+  times: what a spawn costs in Git Bash is not measurable from a developer machine, and a
+  threshold nobody can reproduce on the leg it is about rots into noise. Every assertion is
+  a count that must be exactly zero or exactly one -- exact, because a floor of 1 is also
+  satisfied by the wrong 1 and an upper bound alone lets a new fork in unnoticed -- so the
+  file opens with a control proving the shim sees the matcher's own `awk`: a shim that
+  never got in front of `$PATH` reports zero of everything and would pass the whole suite.
+  The builtin clock is exercised three ways: live where the shell has `$EPOCHREALTIME`,
+  with the variable forced empty for the `perl` fallback, and with a frozen literal that
+  pins the conversion itself -- a locale comma separator, `10#` against an octal read of a
+  zero-padded microsecond field (040000 base 8 is 16384, so this fails by a plausible
+  amount rather than erroring), and short or long fields padded rather than trusted.
+  The frozen one carries a limit worth stating: `$EPOCHREALTIME` is DYNAMIC on the bash that
+  has it, regenerated on every read, so an assignment does not stick and the frozen value is
+  followed immediately by the real clock. Those checks therefore run only where the variable
+  is an ordinary one -- which is exactly the bash that does NOT take the builtin path. They
+  test the same arithmetic on the platform that does not use it, and the suite skips them
+  elsewhere saying so rather than letting the skip read as coverage.
+  CI established that, not the machine this was written on: the section passed on bash 3.2
+  and failed on both other legs, reporting the real clock as a wrong conversion -- a false
+  red in the suite whose whole job is catching false greens. The `tr` ceiling for
+  `jit-dry-run.sh` was set the same way. It demanded zero, and the two legs with the
+  lowercase builtin correctly reported the per-index tab-to-STX conversion (#203) as a
+  defect: that is one process per index file rather than per row, and load-bearing, so the
+  assertion is a ceiling of one per index now rather than a floor of zero.
+  It asserts nothing about `stop-hook.sh`'s fields still arriving. An attempt at that was
+  written, went red, and was removed rather than weakened: true and false give the same
+  empty JSON unless the session has fired-entry state on disk, so the control compared two
+  identical answers and called it a defect. `tests/test-stop-hook.sh` builds that state and
+  already proves it across seven sections.
+
+- **`jit-dry-run.sh` stops forking for work bash and awk already do** (#307). One bare lint
+  of this repository's 17-entry tree spawned 346 external commands, and CI runs that lint on
+  every merge request. Counted with a `PATH` shim, per command name, not estimated:
+  `dirname` 66, `basename` 55, `awk` 142, `tr` 50, `wc` 16, `sed` 16.
+  The `dirname` count was 66 and not 3 because the call sat inside the row loop while its
+  argument was constant across it -- one fork per row rather than one per index file. It is
+  hoisted. `$(dirname X)` and `$(basename X)` are now `jit_path_dir` and `jit_path_base` in
+  `common.sh`, and the label an index reports under, written out identically six times, is
+  `index_label`. `sed -n 1p "$md"` per entry is a `read`; `wc -c | tr -d ' '` is arithmetic
+  expansion; the `inject:` fold is `${var,,}` where the shell has it.
+  The three helpers ASSIGN INTO A NAMED VARIABLE rather than printing, and that is the
+  point rather than a style choice: a helper that printed would be read as
+  `$(jit_path_dir "$x")`, which still forks a subshell to capture the output -- cheaper
+  than fork+exec of `/usr/bin/dirname`, and not free.
+  Result: 346 to 147 on macOS bash 3.2, and 113 where `${var,,}` is available.
+  `tests/test-jit-dry-run.sh` went from 5,889 process spawns to 2,729.
+- **The row-level probes and the frontmatter reader are batched** (#307). They were the
+  142 `awk`. `check_pattern()` forked twice per row -- once for the structural guard, once
+  to ask the local engine whether it accepts the pattern -- `check_entry_file()` forked once
+  more, and `jit_frontmatter` forked once per FIELD, so an entry whose six fields were read
+  cost six processes each re-reading the same file. The stale-row check re-opened the index
+  with an `awk` per entry to ask a whole-line equality question bash answers with a
+  substring test; it reads the index once per layer now.
+  Both are now one process per index file, with the verdicts held in a memo keyed on the
+  pattern or the field name. The memo is a shell variable rather than a file, and that is
+  load-bearing: a file needs a lookup, a lookup is an `awk` or a `grep`, and that is one
+  fork per row -- the exact cost the cache exists to remove, reintroduced by the cache. The
+  first version of this did precisely that and measured no faster.
+  The engine probe cannot simply loop inside one `awk`, because a pattern the engine
+  refuses is fatal and takes the process down with it -- which is the property the report is
+  about ("it alone silences every rule in its index"). So the batch prints an `ok` line per
+  pattern it survived, flushing after each, and resumes in a fresh process after the first
+  one with no `ok`. A clean index costs one fork; an index with k fatal rows costs k+1.
+  Every lookup miss falls back to the original per-row probe, so the batch changes cost and
+  never outcome: an index it could not pre-scan is exactly as slow, and exactly as correct,
+  as before.
+  The match column is not the same in every dimension, and assuming it was made the first
+  version a silent no-op over two thirds of the tree while reporting nothing: `tools` keeps
+  the match in column 2 and marks a regex with a leading `~`, `paths` keeps a bare ERE in
+  column 1, and `vocabulary` holds literal keywords that never reach `check_pattern()`. The
+  column and the tilde rule are arguments now, named by the caller that knows its own index.
+  **The batch has no minimum index size, and getting there took a wrong turn worth
+  recording.** The first shape ran two extractions, two sorts and two guards -- about eight
+  processes per index -- to remove three per row, so it lost on small indexes and needed a
+  row-count threshold, and evaluating the threshold cost two more processes. Measured, that
+  version made `tests/test-jit-dry-run.sh` SLOWER (2,916 process spawns to 3,564, over
+  dozens of one- and two-row fixtures) while making a real lint twice as fast. A fixture is
+  not an unimportant case here: CI runs far more of them than it runs real trees. Both
+  guards share one pass now, deduplicating with a `seen[]` array rather than a `sort -u`
+  process, so the fixed cost per index is two processes against three per row removed --
+  and there is no index size at which that loses, so there is nothing left to threshold.
+- **`jit_frontmatter`'s value rules moved into one shared awk program** (#307), which
+  `jit_frontmatter_many` and `jit_frontmatter` both run, so the batched reader and the
+  single-field reader cannot drift. Two things this broke and how:
+  `jit_frontmatter` printed through awk's `print` and so emitted a trailing newline. Every
+  caller reads it through `$( )`, which strips it, so no caller noticed -- but
+  `tests/test-entry-bytes.sh` asserts on raw bytes and 54 of its assertions went red. The
+  newline is restored and named as part of the contract.
+  That suite also extracts the function's SOURCE to check it names no POSIX character
+  class, and the regex had just moved out of the function body. The extraction still found a
+  `jit_frontmatter() {` and still passed -- over text that no longer contained a regex at
+  all. It reads both halves now. A check that cannot fail is what this directory exists to
+  refuse, and it arrived by a change that had nothing to do with bytes or locales.
+
+- **`jit-dry-run.sh --file` is repeatable, and the tree is linted once for all of them**
+  (#307). The previous fix under this issue cached `fired_for()` per path and explicitly
+  left the redundant lint alone as out of scope; this is that change. A `--file` call
+  lints the whole of the tree before it answers any sample, and the lint is 224 of the
+  252 external commands one such call spawns -- measured by shimming `awk`, `grep`,
+  `sed`, `tr` and `wc` on `PATH` and counting, not estimated. Passing several `--file`
+  flags now lints once and answers each in turn, and each sample carries a `  file: <path>`
+  subject line so its two hook reports can be told apart. The subject line is printed for
+  one file as well as for forty: a report shape that changed with the argument count
+  would be two things to keep true and one nobody could grep.
+- **`test-dogfood-entries.sh` fills its cache from one evaluation instead of 39** (#307).
+  Every path the suite asks about is primed by a single `jit-dry-run.sh` call. Suite
+  spawn count, same machine, back to back: 10,302 before, 2,104 after -- an 80% cut, and
+  wall clock roughly halved locally. The Windows leg is where this matters: a process
+  spawn is the expensive thing there, which is where the suite's 442s came from.
+  A path the prime list does not carry is still answered lazily and still answered
+  correctly -- the only thing a missing entry costs is a full-tree lint of its own. That
+  cost is invisible to every other assertion in the file, so a new drift guard fails the
+  suite and names any path evaluated outside the primed batch, with its own positive
+  control: an empty drift list and a tracking mechanism that never recorded anything look
+  identical otherwise.
+
+- **`tests/run-all.sh` takes `--shard N/M`, and CI runs four shards per platform** (#307).
+  This makes nothing faster and bills the same minutes: the same suites run, on the same
+  runners. What it splits is the wall clock, and only one leg needed it. Measured on
+  `f5433e2`: `windows-latest` ran the list sequentially in **1,305s** against `ubuntu`'s
+  **162s** for the same commit. The cause is process creation, not the shell and not the
+  scripts -- Windows has no `fork()`, MSYS2 emulates it, and every launch of a new program
+  image costs roughly ten times what it costs elsewhere. The discriminator is in the same
+  run: every suite that spawns programs is 10-11x slower there, while
+  `test-assertion-helpers.sh`, which forks without ever `exec`ing, is 1.4x.
+  Round-robin over the glob rather than N contiguous blocks, and that is what balances it.
+  The glob is C-collated, so the seven suites that dominate the Windows clock fall in
+  alphabetical order and round-robin deals them one per shard; contiguous blocks would put
+  the two heaviest in the same one. Read off the `windows-latest` timing block, not assumed.
+  **The whole risk of a partition is that it stops being one.** A suite in no shard runs
+  NOWHERE, and a leg that ran 30 of 45 suites is green in exactly the way a leg that ran all
+  45 is green. So `tests/test-run-all-shard.sh` asserts the thing that matters: the union of
+  every shard is the complete unsharded list, and no suite appears twice. Both halves are
+  needed -- a `--shard` that parsed its argument and then ignored it would satisfy the union
+  check on its own, and only the duplicate check catches it. It opens with a control proving
+  an unsharded run sees the fixture at all, because otherwise every shard runs zero suites
+  and the union assertion compares two empty lists and passes.
+  A spec that cannot be honoured is refused with exit 2 -- the same could-not-evaluate code
+  every tool under `scripts/` uses -- and never defaulted, because a typo in a CI matrix
+  expression would otherwise run the FULL suite on every leg and read as merely slow. That
+  includes `1/4/2`: `${x%%/*}` and `${x##*/}` take the first and last field and ignore
+  anything between them, so it parsed as 1 of 2 until the spec was round-tripped against
+  what was typed. Found by the suite, not by review.
+  `fail-fast` stays false, so one red shard does not cancel the other three and hide every
+  other suite's verdict.
+  **Only Windows is sharded**, through `matrix.include` rather than an `os` x `shard` cross
+  product, because the shard count differs per platform and a cross product cannot say that.
+  The obvious spelling -- keep the cross product and `exclude` three shards on the fast
+  platforms -- is wrong in this repository's own way: `exclude` removes LEGS, it does not
+  change what the surviving leg runs. Ubuntu would still run `--shard 1/4`, go green having
+  run 11 of 45 suites, and be indistinguishable from a leg that ran all 45. Ubuntu and macOS
+  get `1/1`, which is a real spelling through the same code path rather than a branch around
+  it, and has its own assertion.
+- **Three jobs exist only to carry the check names branch protection pins** (#307).
+  `main` requires `hooks (ubuntu-latest)`, `hooks (macos-latest)` and `hooks
+  (windows-latest)` BY NAME. Sharding renamed the matrix legs, so those three stopped
+  existing -- and a required check that can never report is not a failing check, it is a
+  pull request blocked forever waiting for something that will never arrive. Every future
+  pull request, not just this one. Caught by #324's own merge refusing with BLOCKED while
+  all ten checks were green, and the cause was a rename: exactly the shape this repository
+  is about, committed in the gate itself.
+  The workflow satisfies the gate rather than the gate chasing the workflow, so a future
+  rename cannot silently unhook it again. One honest limit, stated in the file: a matrix job
+  reports one result for all its legs, so these three cannot tell which platform went red --
+  a failure on any leg fails all three. That over-reports and never under-reports, which is
+  the direction that matters for a gate, but `hooks (macos-latest)` going red does not mean
+  macOS failed. The per-leg truth is the job list. They also carry `if: always()`, because a
+  `needs:` job is SKIPPED when its dependency fails and GitHub can count a skipped required
+  check as satisfied -- the same silent pass everything here exists to refuse.
+- **A pull request cancels its own superseded runs** (#307). `concurrency` keyed on
+  `github.workflow` and `github.ref`, with `cancel-in-progress` on pull requests only. Three
+  pushes in one afternoon left three full matrices racing for the same runners, and the two
+  older ones were answering questions about commits nobody was waiting on -- which is worse
+  than waste when runners queue, because the run you ARE waiting on is behind them. Pushes to
+  `main` are never cancelled: that run is the record of whether the commit was green, and
+  cancelling it would leave a merged commit with no verdict at all.
+
+- **`tests/test-jit-dry-run.sh` profiled; hypothesis confirmed, no code change made** (#308). #304 measured this suite third-slowest on the two legs recorded at the time: 34.72s local macOS and 27s CI. Real per-leg numbers from PR #305's own run (`hooks-*`, run #33767181734, before the Defender exclusion in #310) put it at 22s ubuntu-latest, 27s macos-latest, 243s windows-latest — nine- to eleven-fold slower on Windows than on either Unix leg. #307's own suite showed 650s windows vs 58s ubuntu (11.2x) / 115s macos (5.6x) on the same run: comparing like-for-like legs, #308's ubuntu-based multiple (11.05x) is marginally smaller than #307's, but #308's macos-based multiple (9.0x) is larger than #307's — the two suites are the same order of magnitude and the same direction, not reliably "smaller," and this fragment does not claim otherwise.
+
+  Bracketed the ~66 `scripts/jit-dry-run.sh` call sites in this file with a `Time::HiRes` trap around the tool (thrown away after measuring, no instrumentation shipped): across a 245/245-passing local run, the 66 calls summed to 35.77s of a 38-39s wall total — roughly 94% of this suite's time is inside the tool invocations themselves, not the synthetic fixture setup that builds a tree per case. Fixture setup (the `mktemp -d`/`make_tree` calls and their file writes) accounts for the remaining ~5%, and the three long-lived fixtures (`CLEAN`, `BROKEN`, `ELSEWHERE`) are already built once and reused across the file rather than rebuilt per assertion, so there was no cheap fixture-setup win to take either.
+
+  That small a fixture-setup share means fixture cost cannot be what is driving this suite's own Windows multiple: with ~5% of the time in fixture setup, even a fixture-setup-only slowdown on Windows could not by itself produce a 9-11x total. The likelier mechanism, not independently confirmed against Windows here, is that each of the 66 `jit-dry-run.sh` calls forks several further subprocesses internally (`common.sh`, `pre-tool-hook.sh`/`pre-path-hook.sh`, and per-row `awk` pattern compiles — one trivial single-row call traced to ~3000 bash statements and 3 `awk` spawns), and process creation is the well-known expensive operation on Windows CI runners; 66 calls times several forks each is exactly the shape that would punish that. This suggests the DRYRUN-per-call subprocess cost, not only #307's real-tree fixture cost, may be a shared driver of both suites' Windows multiple -- worth a look if #306/#307 or a follow-up investigates the mechanism directly, but not confirmed here.
+
+  Individual call cost (macOS, local) ranged from ~22ms to ~2.5s depending on what a given case exercises (single-row lints vs. multi-engine/byte-accounting cases). The one lever evaluated -- merging assertions onto shared calls -- was rejected: it would conflate the exit codes (0/1/2), awk-rejection cases, and per-engine/per-locale verdicts this suite deliberately isolates, exactly the risk the issue warned against for its own highest-stakes correctness suite. A different lever, running the largely-independent DRYRUN calls concurrently rather than merging them, was not evaluated here -- it does not touch which assertions run and so would not carry the same risk, but it is a structural change to how the suite is driven and was out of this issue's scope (profile first; no fix was mandated), so it is left as a candidate for a follow-up rather than attempted in this change.
+
+  No code changed in this repository: the cost is real per-invocation tool work, not test-side waste in how the suite is currently written, and `scripts/jit-dry-run.sh` is depended on by #306 and #307 running in parallel, so it was left untouched. All 245 assertions in `tests/test-jit-dry-run.sh` still pass, unchanged in what they check.
+
+- **CI's Windows leg excludes the checkout and runner temp directory from Windows Defender scanning** (#309). `#304`'s own timing showed a real gap: `test-assertion-helpers.sh` at 391s on CI against 240s locally on macOS for the same commit. Defender's real-time scanner walking every small temp file these suites create per assertion is a documented `windows-latest`-specific cost that neither macOS nor Linux carries an equivalent for. `Add-MpPreference -ExclusionPath` on the checkout and `$RUNNER_TEMP`, Windows-only, before the test step. No suite is touched; this is disk I/O overhead removal, not a correctness change.
+
+- **`test-stop-hook.sh` drops ~1,600 redundant subprocess forks from its two large fixture loops** (#312). Section H's 600-iteration and section O's 205-iteration loops each called `manual_entry`, which ran `mkdir -p` on the same already-created directory on every pass, and each also re-forked `state_of` (a `$( )` subshell) once per iteration instead of once before the loop; section O additionally re-forked a `$(printf ...)` per iteration to format its own entry name. `manual_entry` now skips `mkdir -p` when the directory already exists (a shell `[ -d ]` test, no fork), both loops hoist `state_of` out of the loop body, and section O formats its name with `printf -v` instead of a subshell. Every assertion is unchanged: 91/91 still pass. Measured locally (macOS, 3-run average): ~11.4s before, ~7.0s after; not separately measured on the Windows CI leg this suite was flagged on (#304/#305's timing mechanism, 84s on the first recorded run), where per-process fork cost is known to run far higher.
+
+- **Profiled `tests/test-pre-tool-hook.sh`'s runtime (64s on the Windows CI run recorded
+  via #304/#305, ~32-36s locally on this machine) and found no safe fix** (#314). Per
+  #306's precedent for the same class of hypothesis, the working guess was
+  "shells out per assertion" -- and it does not survive contact with the file: the suite's
+  296 assertions are driven by roughly 100-190 real subprocess invocations of
+  `scripts/pre-tool-hook.sh`, not 296, because most `run_hook*`/`t1*_run`/`r1*_run`
+  helpers already batch several assertions onto one captured hook call. Wrapping
+  `run_hook` and `run_hook_engine` with a throwaway `perl -MTime::HiRes` timer (discarded
+  once the answer was in hand) measured 98 of those invocations at 18.45s combined --
+  averaging ~0.19s per call on this machine -- which is the dominant share of the
+  suite's own wall time once framework overhead (locale probing, awk-engine discovery,
+  fixture setup) is subtracted.
+
+  That per-call cost is not concentrated in a wasteful loop the way #306's payload
+  construction was. Each fixture the suite writes before a call is already minimal (a
+  handful of TSV rows and one-line `.md` bodies); nothing here builds more data than the
+  assertion beside it needs. The cost is instead the hook binary's own per-invocation
+  overhead -- a fresh `bash` process, sourcing `scripts/common.sh` (~3000 lines), and two
+  `perl -MTime::HiRes` spawns the hook itself makes for its own `_ms()` timing -- paid
+  once per call, and multiplied by three because the suite genuinely drives three
+  installed awk engines (`awk`, `gawk`, `mawk` on this machine) end-to-end rather than
+  mocking any of them. That multiplication is not incidental coverage: comments beside
+  nearly every per-engine block name a specific regression (#6, #7, #14, #15, #17, #23,
+  #31, #68, #76, #97, #103, #112, #139, #140) that a single-engine run would not have
+  caught, several of them a *fail-open* defect on this repo's one `mode: block` hook.
+  Reducing the engine count, or moving any of those assertions off a real subprocess call,
+  would be reducing what this suite actually verifies -- which #314 rules out as
+  explicitly as #306 did.
+
+  No code changed. `tests/test-pre-tool-hook.sh` is unmodified by this change; all 296
+  assertions still pass, unchanged in what they verify.
+
+- **Profiled `tests/test-symlink-required.sh`'s 56s Windows CI runtime and did not find a
+  safe in-scope fix** (#317). Precise per-invocation timing of the six `run_suite` calls
+  this suite makes (`test-symlink-entry.sh` and `test-log-containment.sh`, each in the
+  "requirement not declared / stubbed", "requirement declared / stubbed", and
+  "requirement declared / honoured" configurations, matching the three-way skip/loud/pass
+  contract documented at the top of the file) shows the two "stubbed" runs of each child
+  suite exit almost immediately -- the capability probe fails first and both suites take
+  their documented exit-2 skip before doing any further work. Nearly all of the measured
+  time (roughly 11 of ~14s in a local run) is the single "declared and honoured" run of
+  `test-symlink-entry.sh`, driving its real S3a-S3f containment cases against actual
+  symbolic links.
+
+  That cost is necessary work inside `test-symlink-entry.sh`, a file #317 is scoped not
+  to touch. `test-symlink-required.sh` itself already does the minimum: six subprocess
+  invocations for six genuinely distinct verdicts (two child suites times three
+  declared/stubbed combinations), no redundant setup, no per-assertion subprocess waste
+  beyond the `grep -qF` each `assert_*` helper already needs. There is nothing left to
+  trim inside this file without weakening or removing one of the six cases the suite's
+  own header says it exists to keep apart.
+
+  One real inefficiency was found by the same profiling, but it lives in
+  `test-symlink-entry.sh`'s S3f section (out of scope here): two loops of 200
+  `ln -s` calls each, built to cross the 8192-byte `JIT_SYMLINKS_MAX` budget an
+  ARG_MAX-safety fixture depends on, when a local measurement crosses that budget at
+  around 28 links with this repository's own path lengths. That is a candidate for a
+  future issue against that file, not this one.
+
+  No code changed. `tests/test-symlink-required.sh` is unmodified; its 32 assertions
+  still pass, unchanged in what they verify.
+
+- **`test-symlink-entry.sh`'s S3f fixture builds 60 `ln -s` links instead of 200** (found while profiling #317). The section's own comment already said the byte budget (`JIT_SYMLINKS_MAX=8192`) is crossed "with a few dozen links rather than a few thousand" -- a local measurement puts the actual crossing at roughly 28-42 links depending on the temp directory's own path length, so 200 was overshooting by roughly 5x for no reason the assertion needed. 60 keeps real margin. Both loops (the direct hook run and the `jit-dry-run.sh` sweep) changed identically; 83/83 assertions unchanged.
+
+- **`test-entry-bytes.sh`'s per-case fixture stopped building three layer
+  directories nothing in the suite ever reads** (#318). `new_proj()` created
+  `00-manual`, `10-auto`, `20-grouped` and `30-crosscutting` under all three
+  dimensions for every fixture, even though no case in this file ever writes
+  a fixture into anything but `00-manual`, and every consumer this suite
+  drives reads a layer's index through `getline` or an `[ -f ] || continue`
+  guard, both of which treat a missing layer the same as a present, empty
+  one. Trimming the loop to
+  `00-manual` alone cuts the fixture's own filesystem calls by three quarters
+  with the same 339 pass / 0 fail on every awk engine this suite drives.
+  Measured locally (not the CI machine #318 was filed against): user+sys CPU
+  time for the whole suite dropped from about 20s to about 13.5s, roughly a
+  third, across repeated runs. No assertion's pass/fail behavior changed on
+  any input, positive or negative.
+
+- **Profiled `tests/test-entry-not-a-file.sh`'s 51s Windows CI runtime; structural, no code change made** (#319). Bracketed the suite's four timed phases (the three `SECTION` blocks the file's own comments name, plus the two further `jit-dry-run.sh` blocks after them) with a thrown-away `$SECONDS` trap. The 51s figure is from the `hooks (windows-latest)` job (#100687942781, PR #305) that #304/#305's timing mechanism recorded; re-reading that job's own log directly (`test-entry-not-a-file.sh`'s own summary line) shows it drove **`awk` and `gawk`** on that runner -- 96 assertions -- not the single `awk` Git Bash alone would give. (An earlier draft of this fragment assumed only one awk engine is present on `windows-latest`; that assumption was wrong and is corrected here, caught by an independent audit re-reading the cited CI log rather than by anything checked before the first commit.)
+
+  Reproduced the same 2-engine (`awk`+`gawk`) combination locally with a PATH restricted to those two: 96 assertions, 14.2s wall, split roughly 5s in the 34 hook invocations (the file's own `SECTION 1 (#97)` block) and 8s in the 12 `jit-dry-run.sh` calls (`SECTION 2 (#98)` plus the two unlabelled `jit-dry-run.sh` reader-abort/stderr-noise blocks after `SECTION 3`), with the remainder in fixture setup and process teardown. 51s / 14.2s ≈ 3.6x -- the Windows-vs-local multiple, on a matched engine set, consistent with the well-documented cost of process creation on Windows/MSYS rather than with anything specific to this suite.
+
+  Traced one representative `jit-dry-run.sh` invocation with an `awk` counting shim: a single call over a near-empty tree spawns 19 separate `awk` processes (one per pattern/row compile-probe, by that script's own design, documented in its own comments as deliberate per-engine, per-row work). That per-invocation cost, not anything in this test file's own loop structure, is what the suite's `jit-dry-run.sh` and hook invocations add up to. Unlike #306's sibling finding on `test-assertion-helpers.sh`, there is no oversized or doubling fixture-construction loop here to trim: `mk_tree()` builds each fixture once per case with plain `mkdir`/`printf`, and every engine/shape combination in the matrix is driven by the suite's own stated correctness reason -- the header comment explains the #97 bug is one-true-awk-specific and "a test that only ran under gawk would prove nothing about this bug," which the multi-engine loop exists to cover.
+
+  No lever was found that reduces subprocess count without merging assertions that isolate distinct dimensions (tools/paths/vocabulary), distinct fixture shapes (`dir`/`empty`), or distinct engines -- exactly the coverage the issue's own constraint rules out trading away. No code changed in `tests/test-entry-not-a-file.sh`; the shipped local matrix (`awk`, `gawk`, `mawk` when all three are on `PATH`, 138 assertions) still passes, unchanged in what it checks.
+
+- **`tests/test-invocation-macro.sh` profiled; no safe fix found** (#320). #304 recorded this suite at 49s on `hooks-windows-latest` (job 100687942781, PR #305, before #310's Defender exclusion), not separately measured on macOS or Linux at the time.
+
+  Bracketed the three real subprocess sites this suite drives — `rebuild()` (`scripts/rebuild-tsv.sh`, 9 calls), `drive()` (`scripts/pre-tool-hook.sh`, 21 calls) and the `bash "$DRYRUN"` call sites (`scripts/jit-dry-run.sh`, 8 calls) — with a thrown-away `date +%s.%N` trap, first without checking it against #304's own `changelog.d/304.added.md`, which already documents that `%N` is a GNU extension BSD `date` on macOS prints literally rather than computing. Confirmed the same failure here (`date +%s.%N` → `…N`), and confirmed `awk`'s numeric coercion of that string silently truncates at the decimal point, so every measurement below is whole-second resolution — no finer than `$SECONDS` would have given directly, and #304's own fragment should have been read before choosing the instrument rather than after. Instrumentation removed after measuring; #304/#305's per-suite timing already covers this suite going forward.
+
+  Across a 39/39-passing local run of 12 whole seconds, the 38 instrumented calls accounted for 12 of those 12s: `rebuild()` 8s over 9 calls, `drive()` 3s over 21 calls, the `DRYRUN` sites 1s over 8 calls. `rebuild()` is not the largest of the three scripts by line count — `scripts/jit-dry-run.sh` is (1517 lines vs. `rebuild-tsv.sh`'s 1411 and `pre-tool-hook.sh`'s 1249) — so its outsized share of the wall time is not explained by script size; a plausible account is that `rebuild-tsv.sh` forks more further subprocesses per invocation than the other two (per-directory-layer scans across `tools`/`paths`/`vocabulary`, a per-file `awk` frontmatter parse per entry, and a batched keyword-classification pass), but that was not independently measured here and is not asserted as confirmed.
+
+  Checked both angles #306 named. Not a "shells out per assertion" false lead this time either: every one of the 38 calls corresponds to one `assert_verdict`/`assert_contains` case the file's own header describes as necessary ("both directions for every shape: the command it targets fires, the near-miss is silent"), and merging any of them would mean two distinct behaviors sharing one hook or dry-run invocation — exactly the coverage this suite exists to keep separate. Not #306's oversized-fixture bug either: `write_entry()` writes a fixed 2-3-entry tree per case with no loop that does more work than its assertions need, and the four `stale_after` sub-cases (mode, tool, `require`, `forbid`) are four distinct staleness dimensions asserted individually, not repeats of the same check.
+
+  No code changed: the cost is real product work (three deliberately separate tools, each forking further subprocesses) multiplied by 38 necessary call sites, not test-side waste. Windows CI's well-documented higher process-creation cost is a plausible, unconfirmed reason 49s on `windows-latest` is disproportionate to the 12s local wall time above — reasoned, not observed against a live Windows run here. All 39 assertions in `tests/test-invocation-macro.sh` are unchanged, same pass/fail behavior on the same inputs.
+
+### Fixed
+
+- **The Codex marketplace name collided with `claude-remember`'s, and installing
+  this plugin under Codex was refused outright** (#252). `.agents/plugins/marketplace.json`
+  declared itself `"name": "dpt-plugins"` -- the shared fleet name that the real
+  `Digital-Process-Tools/claude-marketplace` repo legitimately owns for Claude Code
+  installs -- copied into what should have been a repo-local dev/Codex manifest.
+  Codex keys a local marketplace by that declared name, globally across every repo
+  registered on the machine, and `claude-remember`'s own manifest already claimed
+  `dpt-plugins` for itself. `codex plugin marketplace add .` on this repo refused
+  with "marketplace 'dpt-plugins' is already added from a different source", which
+  is a real, observed collision rather than a theoretical one. Renamed this repo's
+  local marketplace to `claude-jit-context-dev`, matching the convention `claude-oss`
+  already uses for its own local marketplace (`claude-oss-dev`). With the rename,
+  `codex plugin marketplace add .` and `codex plugin add claude-jit-context@claude-jit-context-dev`
+  both succeed and the plugin shows `installed, enabled` under `codex plugin list`.
+
+  This is one of four claims #252 asked to be established by direct observation
+  under a real `codex-cli 0.150.1`, and it is the only one this fix reaches: the
+  plugin now loads and its marketplace entry is discovered. Whether its hooks
+  fire, an entry injects, or a `forbid:` rule actually refuses a call remains
+  unestablished -- a freshly-installed Codex plugin's hooks are untrusted until a
+  one-time interactive TUI review ("Trust all and continue"), which `codex exec`
+  (the only mode drivable non-interactively) never performs, and the documented
+  automation bypass (`--dangerously-bypass-hook-trust`) was not exercised in this
+  session. See the issue thread for the fuller accounting.
+
+- **A fired `tools` entry no longer renders `<withheld: not a plain name>` in the Stop hook's report** (#297). `pre-tool-hook.sh` marks a fired, once-mode `tools` rule as `key = "rule:" r_file` — namespacing the mark against a vocabulary mark that happens to share a filename. `stop-hook.sh`'s collection loop never stripped that prefix, so the composed key reached `jit_report_name()` intact, whose byte set refuses the `:` outright — every well-formed `tools` entry rendered as the withheld placeholder, unconditionally, on any session that fired one. The prefix is now stripped once, at collection, before any downstream reader (the 00-manual membership scan, the age lookup, the display line) ever sees it — never a widened `jit_report_name()`, which stays exactly as narrow as it was. The real name now prints, tagged with its dimension: `how-work-lands.md (tools)`, strictly more useful to a reader curating entries than the bare name a vocabulary hit gets, per the issue's own preferred direction.
+
+- **The Stop hook can now see an edit that went through Bash instead of Write/Edit** (#301). `hooks/hooks.json`'s `PostToolUse` matcher used to be `Write|Edit` only, so a tree that routes every edit through Bash (a `mode: block` tools rule refusing `Edit`/`Write`/`MultiEdit`/`NotebookEdit`, or any wrapper or formatter that shells out) produced a real write under `$JIT_BASE` that `post-tool-hook.sh` never observed — no `edited-<session>.txt` marker was ever written on such a tree, in any session, no matter how many entries were actually corrected, and `stop-hook.sh` read that permanent absence as the positive claim "none updated". The matcher now also fires on `Bash`; `post-tool-hook.sh`'s new Bash branch is a heuristic over the command text rather than a file-path canonicalisation (Bash carries no `file_path` to canonicalise) — it marks only when the command both names this project's jit-context tree and carries a recognisable write form (`>`/`>>`, `tee`, an in-place `sed`/`perl`, or this project's own mandated `supertool 'edit:@-'`/`'paste:@-'`/`'git-commit:@-'` write path), deliberately biased toward a false negative (a missed nag) over a false positive (silently hiding a genuine "none updated"). The mtime-based alternative the issue also named is not what this builds on: `post-tool-hook.sh`'s own header already documents why a signal built on `jit_scan_entry_ages()` would reopen #243's fresh-clone trap.
+
+  The heuristic's two substring gates were tightened during self-review after two false positives were live-reproduced: an unanchored `sed`/`perl` "-i" test marked a plain, non-writing `sed` command whose target filename merely started with those two letters, and an unanchored `supertool` test marked a plain `echo` that only mentioned a write op in prose. Both gates are now anchored on a command-word boundary (start of command, or after `;`/`&`/`|`), closing both reproductions without claiming more precision than a substring test over shell text can honestly have.
+
+  The issue's third, independent suggestion — capping the printed fired-entry list well below 200 — is left out of this change. #300 (already shipped) made the whole model-facing report opt-in and off by default, which already removes the every-turn wallpaper effect the suggestion was aimed at; the existing 200-name cap (with a "see hooks.log" pointer) stays as it was.
+
+  **Known gap, left for a follow-up rather than fixed here:** `hooks/hooks.codex.json` (the Codex-host install manifest) still declares its own `PostToolUse` matcher as `Write|Edit` — a Codex-host install whose tree routes edits through Bash still hits #301's exact symptom. Left out of this change because that file is owned by a concurrently running lane (#252) on this same repository; not an oversight.
+
+- **`test-silent-drops.sh` no longer calls `jit-dry-run.sh --file` twice for the same
+  input** (#311). Profiled first, per #311's own instruction not to assume the "shells
+  out per assertion" shape implies its cost: `fired_for()`'s `jit-dry-run.sh --file` call
+  is the suite's single most expensive subprocess (it re-lints the whole tree in Phase 1
+  before Phase 2 ever answers the sample-file question), and two of its nine call sites
+  passed the identical path (`templates/jit-context/vocabulary/00-manual/writing-rules.md`)
+  to check two different substrings of the same, deterministic output. The second call
+  is now a reuse of the first result rather than a second subprocess (nine calls become
+  eight; eighteen total subprocess calls in the suite become seventeen); every other call
+  site passes a distinct path and was left untouched. No assertion's pass/fail behavior
+  changed -- verified by diffing the suite's full stdout/stderr before and after the
+  change, byte for byte identical, still 45/45 passing, and independently reproduced by
+  two reviewing agents. The remaining cost is structural:
+  `jit-dry-run.sh`'s own unconditional Phase 1 tree-relint on every `--file` invocation,
+  which is out of this issue's scope (`tests/test-silent-drops.sh` only) and was not
+  touched.
+
+- **`test-layer-enumeration.sh`'s bound-crossing fixture no longer over-builds** (#313). Section H needed
+  more than `JIT_LAYERS_MAX` (64) layer directories to exercise the "layer list was cut"
+  path, and built 80 of them; each one costs `rebuild-tsv.sh` a real pass (two `_ms()`
+  forks, a `wc`, a `report_bad_bytes` awk) that this fragment cannot touch. Measured
+  in-place on one machine: real time down ~33% and user+sys down ~13% across three runs
+  each, against the suite's own 66s Windows CI runtime recorded by #304/#305's timing
+  (not separately re-measured on that platform). 66 clears the bound with the same
+  three-layer refusal margin the assertions already expect, for the identical pass/fail
+  behavior.
+
+- **`tests/test-agent-subject.sh`'s census fixture no longer reparses 200 real
+  frontmatter files just to overflow a byte cap** (#315). Section G built its 200
+  unreachable-tool rows the slow way -- one `.md` fixture per row, then a full
+  `rebuild-tsv.sh` pass over the whole tree -- when nothing downstream of that
+  point reads the rows back out of frontmatter; only the resulting index rows
+  matter, and G2 two blocks later already writes its own 200 rows straight into
+  the index for exactly the same reason. The census rows now do the same:
+  appended directly, in the shape `rebuild-tsv.sh` itself writes, after a single
+  real rebuild for the one entry that still needs to prove it is reachable.
+  Every assertion's pass/fail behavior is unchanged -- measured identical output,
+  byte for byte, before and after. Local wall-clock for the suite dropped from
+  ~16.5s to ~7.8s (macOS); this was the suite's eighth-slowest leg on Windows CI
+  at 61s (#304/#305's timing), and the fixed cost was concentrated in the same
+  loop.
+
+- **`test-jit-dry-run-report-forgery.sh` trimmed to the layers each section actually
+  reads** (#316). Profiled after #304/#305's per-suite timing flagged this suite at 57s
+  on Windows CI: every fixture in the file built a full four-layer, three-dimension tree
+  (`paths/`, `tools/`, `vocabulary/` x 4 layers each) even though each section's
+  assertions only ever read one dimension and one layer. `jit-dry-run.sh`'s own lint pass
+  spawns one `awk` subprocess per `00-index.tsv` it globs, so the unused layers cost real
+  process-spawn time -- measured locally at 22 `awk` calls per sample call before this
+  fix, 11 after, roughly halving it -- on a platform (Windows) where spawning a process is
+  markedly more expensive than on macOS or Linux. Every assertion's pass/fail behavior is
+  unchanged; the vocabulary-only fixtures are now additionally a stronger instance of
+  #55's own guarantee (a vocabulary-only tree, with no `tools/` or `paths/` directory at
+  all, is not mistaken for one that could not be evaluated) than the four-layer fixture
+  they replace.
+
+- **`test-rebuild-exit-codes.sh` no longer carries an unused vocabulary fixture**
+  (#321). The suite wrote a `widget.md` vocabulary entry before every case and never
+  removed it, so every one of the ~10 `rebuild-tsv.sh` invocations in the suite --
+  including the ones only exercising the tools/paths exit-code paths -- paid
+  `rebuild-tsv.sh`'s generic-word classification pass against the shipped ~1MB
+  wordlist, even though no assertion in sections A-D, F or G ever reads a
+  vocabulary row. Removing the unused entry measured roughly a fifth off this
+  suite's wall time locally, with no change to any assertion's pass/fail
+  behavior. Profiled first per #321/#306's precedent: a "shells out per
+  assertion" hypothesis was checked and rejected -- the dominant cost is
+  `rebuild-tsv.sh`'s own necessary work, not the assertion helpers.
+
+- **`tests/test-inject-mode.sh`'s assertion helpers no longer fork `grep` per
+  assertion** (#323). Profiled the suite's 40s Windows CI runtime (hooks-windows-latest,
+  before #310's Defender exclusion) against both angles #306 named: the 46 hook
+  invocations (`run_prompt`/`run_tool`/`run_path`, already batched several assertions
+  per call rather than one call each) and the 3 `rebuild-tsv.sh` calls are necessary
+  work, unchanged; the oversized-fixture angle #306 actually found elsewhere does not
+  hold here either -- benchmarked `pre-tool-hook.sh` against a `match:` column from 200
+  to 20,000 bytes (the suite's own `LONG_PAT`/`LONG_FILE` fixtures use 4,000) and saw no
+  measurable runtime difference, since the 160/255-byte header bound is applied after
+  the pattern is already in memory.
+
+  What was found: `assert_contains`, `assert_not_contains` and `assert_blocked` -- ~150
+  call sites across the suite -- each ran `grep -qF -- "$needle" <<<"$output"`, one fork
+  per assertion. Replaced with bash's own `[[ "$output" == *"$needle"* ]]`, which is
+  byte-for-byte equivalent for a literal-string containment test: quoting `"$needle"`
+  inside the pattern strips any glob meaning a needle like `[clipped]` would otherwise
+  carry, and `[[ ]]` matches across the whole (possibly multiline) string the same way
+  `grep -qF` does against a here-string. All 129 assertions pass unchanged, same as
+  before. Local macOS wall-clock dropped from a 12.5s mean to a 9.9s mean over five runs
+  each (noisy, single machine); a fork this suite no longer pays 150 times is expected
+  to matter more, not less, on the Windows shell this was measured against, where
+  process creation is the dominant cost this whole effort (#304-#315) keeps finding.
+
+- **`scripts/jit-dry-run.sh` lost its executable bit and nothing noticed** (#324). The squash that landed the profiling work changed its mode from `100755` to `100644`. Every caller in this tree runs it as `bash scripts/jit-dry-run.sh`, so nothing broke and nothing reported anything either -- the mode is how the file says whether it is an entry point or a sourced library, and under `scripts/` that split was exact until this. `tests/test-exec-bits.sh` now sweeps every tracked `scripts/*.sh`, exempting the two sourced libraries behind a control that checks they really are sourced and never invoked. `tests/` is deliberately not swept: 36 of its 45 files carry no bit, so there is no convention there to enforce.
+
+- **`hooks.codex.json`'s `PostToolUse` matcher now sees a Bash-routed edit too** (#328). #301 widened `hooks/hooks.json`'s `PostToolUse` matcher from `Write|Edit` to `Write|Edit|Bash` so a tree that routes every edit through `Bash` (this repo's own `mode: block` rule `tools/00-manual/harness-write-tools-blocked.md`, or any wrapper that shells out) still gets an `edited-<session>.txt` marker written. `hooks/hooks.codex.json` is a separate, hand-duplicated manifest (#252's two-manifest convention) and was never widened alongside it, so the identical bug — a permanent, unsilenceable false "none updated" — still existed on a Codex-host install. Its matcher now also reads `Write|Edit|Bash`.
+
+  `scripts/post-tool-hook.sh`'s Bash-command heuristic added for #301 needed no Codex-specific change to reach this: it decides purely from the generic `tool_name`/`command` fields in the PostToolUse payload. #288's live capture directly observed those field names on a Codex *PreToolUse* call only; `scripts/host.sh`'s own comment treats the same names carrying over to Codex's *PostToolUse* payload as a documented inference from that observation (Codex's envelope is symmetric pre/post), not a separate capture -- so widening the matcher alone being sufficient rests on that inference, stated here as such rather than as an independently confirmed fact.
+
+  `tests/test-host-registry.sh` used to compare only which hook *scripts* the two manifests bind, never their matcher *strings* — which is why this drifted silently the moment #301 fixed one side only. It now also asserts the two `PostToolUse` matcher strings are byte-identical, so a future single-sided matcher edit fails a test instead of drifting again.
+
+- **`jit-dry-run.sh`'s per-entry report no longer globs against the caller's working directory** (#334). `report_hook()` builds its per-entry annotation from an unquoted word-split of `$names` — the entry file names decoded out of a hook's own output, i.e. tree text an entry author chose, not this script's own literal. Unquoted, that split also underwent pathname expansion: an entry literally named `*.md` matched files sitting in whatever directory `jit-dry-run.sh` happened to be run from, and the report then annotated — and counted a `fired` figure for — files that never fired at all. Both the `for nm in $names` loop and the nested `printf '%s\n' $names | grep -c -x -F "$nm"` shared the same unquoted `$names`, so fixing one and not the other would have moved the wrong count one line down rather than closing it.
+
+  Fixed by scoping `set -f` around the loop (both expansions live inside it) and turning it back off immediately after, since nothing else in `report_hook()` relies on globbing being enabled. No code execution and no write were ever possible here — this is a report-integrity defect in the tool contributors are pointed at precisely when they cannot trust what they are looking at.
+
+  `tests/test-jit-dry-run.sh` adds a case that lints a fixture entry with a glob-shaped file name, from a cwd holding an unrelated `.md` file the glob would match, asserting the report never names that unrelated file as fired — paired with a positive control that an ordinary, non-glob-shaped entry name still reports correctly in the same run. The fixture uses a `[g]lob.md`-style bracket expression rather than the `*.md` the issue was filed against: `*` is one of the characters NTFS refuses in a file name outright, so a fixture entry literally named `*.md` cannot be created on a Windows CI leg at all, and creating it would abort the whole suite file under its own `set -euo pipefail` rather than exercise the bug — found by review of this fix, not by the original report.
+
+- **`jit_fm_get()`'s own comment stopped claiming an exit code it did not return**
+  (#339). The comment above it said a field the entry does not carry gives "the same
+  answer `jit_frontmatter()` gives for an absent field" -- but `jit_frontmatter()` ends
+  with `[ -n "$_out" ] || return 0`, while `jit_fm_get()`'s own miss branch did
+  `return 1`. Resolved by unifying the contract rather than only fixing the comment:
+  `jit_fm_get()` now returns 0 on a miss too, matching `jit_frontmatter()` for real
+  instead of merely saying so. No caller depended on the old status -- every call site
+  in `jit-dry-run.sh` tests the output variable with `[ -n "$var" ]` and discards the
+  exit code -- so this closes a `set -e` landmine at no behavioral cost today.
+  `tests/test-fm-get-exit-code-339.sh` pins both functions' exit status and output on a
+  missing field, with a hit on an existing field as the positive control.
+
+- **`jit-dry-run.sh`'s per-entry `fired` count no longer misparses a hyphen-led entry name as a `grep` flag** (#343). `report_hook()`'s `grep -c -x -F "$nm"` had no `--`/`-e` marking the end of options, and `$nm` comes from `.md` entry names decoded out of the hook's own output -- tree text an entry author chose, not this script's own literal. An entry named `-e.md` (or any name starting with a hyphen that survives `grep`'s own flag parsing) was then read by `grep` as an option rather than as the search pattern: confirmed directly by piping a literal matching line through `grep -c -x -F` with a hyphen-prefixed pattern, which returns `0` at a nonzero exit even though the line matches byte for byte.
+
+  The miscount is invisible on a single hit -- both the honest `1` and the buggy `0` land in the same reporting branch -- so it only becomes observable when the same basename fires twice in one call (a `paths/` row and a `vocabulary/` row sharing a name, both matching the same sample path). There the wrong `fired` figure silently dropped the "both a summary and a whole body" annotation the honest count would have produced, understating the budget in the same direction the sibling defect (#334, already fixed) understated it.
+
+  Fixed by adding `--` to the `grep -c -x -F` call. The file's other `grep`/`awk` call sites were checked for the same shape: every other one either receives tree-derived text through `-v`/`ENVIRON` (never as a positional argument) or reads it from stdin, and the one other positional use of `$nm` (`grep -o -F "/$nm for the entry"`) is safe on its own terms because the pattern always opens with a literal `/`, which `grep` can never read as an option marker. No code execution and no write were ever possible here -- this is a report-integrity defect in the tool contributors are pointed at precisely when they cannot trust what they are looking at.
+
+  `tests/test-jit-dry-run.sh` adds a case with a `-e.md` entry shared across a `paths/` row (whole body) and a `vocabulary/` row (summary, `JIT_CONTEXT_VOCAB_PATHS=1`) that both match the same sample file, asserting the report correctly counts both and says so -- paired with a positive control that an ordinary, non-hyphen-led shared name reports the same way in the same shape of fixture.
+
+### Security
+
+- The tests workflow now declares `permissions: contents: read` at the top level instead of inheriting the repository default token (#324). CodeQL flagged the two gate jobs; the block covers every job in the file, and `actions/checkout` is the only action any of them uses.
+
+- **`rebuild-tsv.sh` no longer follows a symlinked index, layer, or dimension directory**
+  (#332). A hostile clone could commit a symlink at `00-index.tsv`, at a whole layer
+  directory, or at a dimension directory (`tools/`, `paths/`, `vocabulary/` themselves)
+  pointing outside `.claude/jit-context/` -- `git clone` recreates the link, and running
+  `bash scripts/rebuild-tsv.sh` (which this repo's own `CLAUDE.md` instructs after every
+  frontmatter edit) truncated and wrote through it, clobbering an arbitrary file the
+  attacker chose. All three shapes are now refused with a non-zero exit and the target
+  named, rather than followed; a symlinked layer or dimension is skipped on its own, and
+  the rest of the tree still rebuilds. Two read-only reports (the ambiguous-keyword
+  collision report and the "what a match costs" report) walk the tree again independently
+  of the writers and could still open and print a file's name and size through a
+  symlinked LAYER even after the writers refused to index it -- both now carry a
+  layer-level `[ -L ]` check. **A symlinked DIMENSION directory reaching the "what a
+  match costs" report was a separate gap this fragment originally overclaimed as closed
+  -- see #338, which closes it.**
+
+- **A literal tab in tool-rule frontmatter can no longer forge a TSV column** (#333). Each
+  row `rebuild-tsv.sh` writes is tab-joined from `tool:`, `match:`, `mode:`, `require:` and
+  `forbid:`, and only `requires:` was ever stripped of an embedded tab or newline -- an
+  interior tab hidden in an earlier field, `tool:` in particular, shifted every column
+  after it, so an entry that read as a narrow `mode: remind` reminder could index as
+  `mode: block` matching every command. Every field written into a row is now
+  stripped the same way `requires:` already was, and `mode:` is additionally whitelisted
+  against `remind`/`block`/`once` at index time, closing the block-flip independently of
+  the column-shift itself.
+
+- **`rebuild-tsv.sh`'s "what a match costs" report no longer follows a symlinked
+  DIMENSION directory** (#338). #332 closed three of the four {layer, dimension} x
+  {write, read} cells: both writers and the ambiguous-keyword collision report already
+  refused or skipped a symlinked `tools/`, `paths/` or `vocabulary/` directory itself, and
+  the layer-level leak in both read-only reports was closed too. The fourth cell stayed
+  open: the "what a match costs" report's own glob (`"$JIT_BASE"/*/*/*.md`) was rooted
+  directly at `JIT_BASE` rather than at one of the three already-redirected
+  `TOOLS_BASE`/`PATHS_BASE`/`VOCAB_BASE` variables, and its one `[ -L ]` guard tested only
+  the file's immediate LAYER parent -- one level too shallow to catch a symlinked
+  DIMENSION two levels up. A cloned tree carrying a symlinked `tools/`, `paths/` or
+  `vocabulary/` directory could still have this report enumerate every real file reachable
+  through it and print that file's path and exact byte size to the run's own stderr,
+  though nothing was written through it. The loop now builds its glob from the same three
+  `*_BASE` variables the writers already trust, closing the leak the same way rather than
+  adding a fourth, independent `[ -L ]` check to keep in sync.
+
 ## [0.7.2] - 2026-09-03
 
 ### Added
@@ -2719,7 +3290,8 @@ and publishes it.
 
 Initial internal version: tool and path rules, configured through `config.json`.
 
-[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.8.0
 [0.7.2]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.7.2
 [0.7.1]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.7.1
 [0.7.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.7.0

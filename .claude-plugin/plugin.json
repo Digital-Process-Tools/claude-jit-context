@@ -1,7 +1,7 @@
 {
   "name": "claude-jit-context",
   "description": "Project knowledge that loads only when needed. Rules, conventions and domain notes are matched against the prompt, the file being touched, or the tool being run — and injected just in time instead of sitting in context all session.",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "author": {
     "name": "Digital Process Tools"
   },
