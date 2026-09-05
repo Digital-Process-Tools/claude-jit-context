@@ -79,6 +79,7 @@ JIT_MISSING_REQUIRES="$(jit_missing_requires "$JIT_BASE/tools" "$JIT_TOOL_LAYERS
 # hottest path this plugin has, buying nothing.
 LC_ALL=C awk \
   -v tool_layers="$JIT_TOOL_LAYERS" \
+  -v tool_aliases="$JIT_TOOL_ALIASES" \
   -v vocab_layers="$JIT_VOCAB_LAYERS" \
   -v tools_base="$JIT_BASE/tools" \
   -v vocab_base="$JIT_BASE/vocabulary" \
@@ -145,6 +146,26 @@ function jit_re_lit(s,    i, c, out, special) {
     out = out (index(special, c) > 0 ? "\\" c : c)
   }
   return out
+}
+# #364: RAW canonical tool name(s), space-separated, or RAW unchanged when ALIASES
+# names no mapping for it. ALIASES is the shape scripts/host.sh jit_all_tool_aliases
+# hands back: comma-joined key=v1;v2 pairs, unioned across every host row rather than
+# scoped to one detected host -- see that function and the column-8 comment above
+# JIT_HOST_REGISTRY in host.sh for why. Reimplemented here rather than shelled out to
+# bash: a fork per tool call on the hottest path this plugin has, to reparse a table
+# small enough that the awk version of the same parse is a handful of lines.
+function jit_expand_tool_alias(aliases, raw,    n, entries, i, eq, key) {
+  if (aliases == "" || raw == "") return raw
+  n = split(aliases, entries, ",")
+  for (i = 1; i <= n; i++) {
+    eq = index(entries[i], "=")
+    if (eq == 0) continue
+    key = substr(entries[i], 1, eq - 1)
+    if (key != raw) continue
+    gsub(/;/, " ", entries[i])
+    return substr(entries[i], eq + 1)
+  }
+  return raw
 }
 { input = input $0 }
 END {
@@ -224,6 +245,14 @@ END {
   # No tool name at all is a payload this hook has nothing to say about, and there is
   # no rule it could be measured against. Unchanged, and still the only silent exit.
   if (tool_name == "") { print "{}"; exit }
+
+  # #364: the RAW tool_name a host handed us (Codex own "apply_patch", say) becomes
+  # the CANONICAL set an entry own tool: field is written against (Edit, Write, ...),
+  # space-separated so the match loop below can walk it with a plain split(). A host
+  # whose own vocabulary already IS canonical (claude-code, an unknown host) gets its
+  # raw tool_name straight back -- jit_expand_tool_alias() is the identity function
+  # whenever tool_aliases names no mapping for it.
+  n_tool_variants = split(jit_expand_tool_alias(tool_aliases, tool_name), tool_variants, " ")
 
   # THE THIRD STATE, #182. `cmd == ""` used to leave here the same way, and that is the
   # whole defect: "no rule matched" and "no rule could be reached" printed the same {}.
@@ -470,9 +499,19 @@ END {
 
       # tool may name several tools, pipe-separated: `tool: Edit|Write|Read`.
       # Exact-match each alternative — never substring, or `Read` would match `ReadFile`.
+      # #364: matched against every CANONICAL variant the raw tool_name expanded to
+      # (tool_variants, above), not the raw name itself -- a Codex apply_patch payload
+      # expands to "Edit Write" and must fire a row written as `tool: Edit` exactly as
+      # it fires one written `tool: Write`, and a row this host names nothing for
+      # (tool_variants holding the raw name unchanged, the identity case) keeps the
+      # exact single-value match this loop always did.
       tool_hit = 0
       nt = split(r_tool, talts, "|")
-      for (ti = 1; ti <= nt; ti++) if (talts[ti] == tool_name) tool_hit = 1
+      for (ti = 1; ti <= nt && !tool_hit; ti++) {
+        for (tvi = 1; tvi <= n_tool_variants; tvi++) {
+          if (talts[ti] == tool_variants[tvi]) { tool_hit = 1; break }
+        }
+      }
       if (!tool_hit) continue
 
       # #182: this row names the tool, and the dispatch gave us nothing to match it

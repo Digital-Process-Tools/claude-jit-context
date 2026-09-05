@@ -106,6 +106,27 @@ PT_FP=""
   PT_FP="$(cat)"
 } <<< "$PT_PARSED"
 
+# #365: PT_TOOL is expanded onto the canonical vocabulary the case below is written
+# against BEFORE that case ever runs, the same normalisation #364 applies to the tools
+# dimension one hook over. Codex own tool_name for a file edit is apply_patch, never
+# Write or Edit -- this gate could never match it, no marker was ever written for a
+# real in-tree Codex edit, and stop-hook.sh read that permanent absence as the
+# positive claim "none updated": the #301 shape one tool name over, sharing #364 own
+# root cause rather than a defect of its own. jit_canonical_tool() (scripts/host.sh)
+# is a pure, no-I/O function -- safe to call unconditionally, on every call, even the
+# overwhelming majority naming a tool this alias table says nothing about, where it is
+# the identity function and PT_TOOL is left exactly as it arrived. Priority order
+# below (Bash, then Write, then Edit) only matters for a host whose one tool name maps
+# to more than one canonical name (codex own apply_patch=Edit;Write) and happens to
+# also share a canonical name with Bash, which no host does today -- named so the
+# order is a decision on record rather than an accident of which case arm sorts first.
+PT_TOOL_CANON=" $(jit_canonical_tool "$JIT_TOOL_ALIASES" "$PT_TOOL") "
+case "$PT_TOOL_CANON" in
+  *" Bash "*) PT_TOOL="Bash" ;;
+  *" Write "*) PT_TOOL="Write" ;;
+  *" Edit "*) PT_TOOL="Edit" ;;
+esac
+
 # #301: `hooks/hooks.json`'s PostToolUse matcher used to be Write|Edit only, so a tree
 # that routes every edit through Bash instead -- a `mode: block` tools rule refusing
 # Edit/Write/MultiEdit/NotebookEdit, or any wrapper/formatter that shells out -- had a

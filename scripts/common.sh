@@ -109,6 +109,12 @@ JIT_BASE="${CLAUDE_PROJECT_DIR:-${PWD:-.}}/.claude/jit-context"
 # the first line any hook runs.
 JIT_HOST="unknown"
 JIT_HOST_REFUSAL_STATE="refusal-not-established"
+# #364: the tool-name alias table, unioned across EVERY row regardless of which host
+# jit_host_detect() thinks this process is -- see scripts/host.sh's own column-8
+# comment for why this one lookup is deliberately not gated behind $JIT_HOST. A
+# hook-not-fail-hard default of "" degrades to the identity mapping every caller of
+# jit_canonical_tool() already takes for a raw name it has no alias for.
+JIT_TOOL_ALIASES=""
 # Parameter expansion, not a `dirname` fork: this runs on every invocation of every hook,
 # on every platform, for a string operation bash does natively. `${x%/*}` returns x
 # UNCHANGED when there is no slash to strip, where dirname answers ".", so the no-slash
@@ -124,8 +130,15 @@ if [ -r "$_jit_host_sh" ]; then
     && JIT_HOST_REFUSAL_STATE="$(jit_host_refusal_state "$JIT_HOST" 2> /dev/null)"
   [ -n "$JIT_HOST" ] || JIT_HOST="unknown"
   [ -n "$JIT_HOST_REFUSAL_STATE" ] || JIT_HOST_REFUSAL_STATE="refusal-not-established"
+  # Deliberately its OWN command substitution, not chained onto the `&&` above: the
+  # alias table must still be computed even when jit_host_detect()/jit_host_refusal_state()
+  # somehow failed (an empty $JIT_HOST is a real, expected case -- see column 8's own
+  # comment in host.sh), so this must not go dark just because an earlier link in that
+  # chain did.
+  JIT_TOOL_ALIASES="$(jit_all_tool_aliases 2> /dev/null)"
+  [ -n "$JIT_TOOL_ALIASES" ] || JIT_TOOL_ALIASES=""
 fi
-export JIT_HOST JIT_HOST_REFUSAL_STATE
+export JIT_HOST JIT_HOST_REFUSAL_STATE JIT_TOOL_ALIASES
 unset _jit_host_sh
 
 # --- Entry files and layer directories that are SYMBOLIC LINKS ---------------

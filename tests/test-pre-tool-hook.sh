@@ -993,6 +993,33 @@ done
 
 rm -rf "$ENGINE_BIN"
 
+# --- #364: a Codex `apply_patch` payload must fire an Edit|Write rule ---------------
+# Codex's tool_name for a file edit is `apply_patch`, never `Edit` or `Write` -- a block
+# rule declaring `tool: Edit|Write` (this repo's own no-hand-editing-the-index.md is a
+# real one) could never match it, so the call proceeded, nothing errored, nothing
+# warned. scripts/host.sh's tool_aliases column is supposed to normalise `apply_patch`
+# onto `Edit`/`Write` before this loop's exact-match test runs. Two "must fire" cases --
+# the Codex-shaped payload AND an ordinary Claude-Code-shaped payload against the SAME
+# rule -- so the fix is not silently vacuous for the host it already worked on.
+IDX364="$TOOLS_DIR"
+IDX364="$IDX364/00-index.tsv"
+printf 'Edit|Write\tindex364\tindex364.md\tblock\t\t\n' >> "$IDX364"
+echo "364 block rule body" > "$TOOLS_DIR/index364.md"
+
+OUT=$(run_hook '{"tool_name":"apply_patch","tool_input":{"file_path":"/tmp/index364.tsv"}}')
+assert_blocked "#364: a Codex apply_patch payload fires an Edit|Write block rule" "$OUT"
+
+OUT=$(run_hook '{"tool_name":"Edit","tool_input":{"file_path":"/tmp/index364.tsv"}}')
+assert_blocked "#364: control -- an ordinary Claude-Code Edit payload still fires it" "$OUT"
+
+OUT=$(run_hook '{"tool_name":"Write","tool_input":{"file_path":"/tmp/index364.tsv"}}')
+assert_blocked "#364: control -- an ordinary Claude-Code Write payload still fires it" "$OUT"
+
+# A tool this row never named must still not fire -- the alias must not widen the rule
+# to match everything.
+OUT=$(run_hook '{"tool_name":"Read","tool_input":{"file_path":"/tmp/index364.tsv"}}')
+assert_not_contains "#364: an unrelated tool name is not swept in by the alias" "$OUT" '"decision":"block"'
+
 # --- Cleanup ---
 rm -rf "$TEST_DIR"
 
