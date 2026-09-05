@@ -162,11 +162,15 @@ echo "=== C: the collision driven deterministically, from a marker written by ha
 
 P="$(new_project c)"
 mkdir -p "$(state_of "$P")"
-printf 'php-coding.md\n' > "$(state_of "$P")/path-shown-sess-other.txt"
+# #299: the mark the hook actually writes is "loc:paths:00-manual:php-coding.md",
+# not the bare basename -- writing the bare form here would test the OLD hook's
+# format, and would be silently reinterpreted as an unknown/mixed-version mark
+# rather than as this session's own dedup key.
+printf 'loc:paths:00-manual:php-coding.md\n' > "$(state_of "$P")/path-shown-sess-other.txt"
 OUT="$(run_path "$P" "sess-mine")"
 assert_contains "another session marker does not silence this one" "$OUT" "php coding rules"
 
-printf 'php-coding.md\n' > "$(state_of "$P")/path-shown-sess-mine.txt"
+printf 'loc:paths:00-manual:php-coding.md\n' > "$(state_of "$P")/path-shown-sess-mine.txt"
 OUT="$(run_path "$P" "sess-mine")"
 assert_empty_json "this session own marker does silence it" "$OUT"
 

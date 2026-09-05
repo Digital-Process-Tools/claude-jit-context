@@ -589,7 +589,7 @@ END {
       key = ""
       hushed = 0
       if (index(r_modes, "once") > 0) {
-        key = "rule:" r_file
+        key = jit_loc_key("tools", tool_layer, r_file)
         # `held` as well as `shown`: an advisory rule delivered earlier in THIS scan is not in
         # `shown` yet -- its mark waits on the block decision below (#112) -- and without this
         # a second row naming the same file would inject it twice in one call.
@@ -1060,7 +1060,8 @@ END {
           }
           continue
         }
-        if (!(vfile in shown) && (index(padded, " " kw " ") > 0 || (stale != "" && index(stale, " " kw " ") > 0))) {
+        vlk = jit_loc_key("vocabulary", layer, vfile)
+        if (!(vlk in shown) && (index(padded, " " kw " ") > 0 || (stale != "" && index(stale, " " kw " ") > 0))) {
           # Named once -- see the same guard in pre-prompt-hook.sh. Folding the keyword
           # makes two spellings of it collide, and the header read `(matched: x|x)`.
           if (vfile in vmatch) {
@@ -1105,9 +1106,10 @@ END {
             wsep = ", "
             continue
           }
+          vlk = jit_loc_key("vocabulary", layer, vfile)
           if (!generic_only) {
-            shown[vfile] = 1
-            jit_shown_mark(shown_file, vfile)
+            shown[vlk] = 1
+            jit_shown_mark(shown_file, vlk)
           }
           # #233: same lookup and same "" fallback as pre-prompt-hook.sh -- see the
           # comment there.

@@ -49,7 +49,7 @@ assert_not_contains() {
 assert_valid_json_shape() {
   local desc="$1" output="$2"
   case "$output" in
-    '{}' | '{"hookSpecificOutput"'*)
+    '{}' | '{"hookSpecificOutput"'* | '{"systemMessage"'*)
       PASS=$((PASS + 1))
       echo "  PASS: $desc"
       ;;

@@ -349,7 +349,7 @@ for ENG in $ENGINES; do
   assert_injected "something was injected at all" "$OUT"
   assert_utf8 "stdout is valid UTF-8 JSON" "$OUT"
   assert_has "the clean row still fires" "$OUT" "vocab body KAPPA"
-  assert_marker_has "the entry that WAS injected is marked shown" "$MARK" "okfile.md"
+  assert_marker_has "the entry that WAS injected is marked shown" "$MARK" "loc:vocabulary:00-manual:okfile.md"
   assert_marker_lacks "the truncated key is not marked shown" "$MARK" "det"
   assert_marker_lacks "and neither is the name it was cut from" "$MARK" "detail.md"
   assert_has "the row is named by position rather than dropped" "$OUT" "vocabulary/00-manual row 1"

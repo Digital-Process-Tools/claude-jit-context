@@ -7,17 +7,24 @@
 # This hook is the one reader of both marker sets, run once at session end, which is why
 # the per-tool-call cost budget that shapes post-tool-hook.sh does not apply here.
 #
+# #367: what this hook says to a HUMAN moved to `systemMessage`, gated by
+# JIT_CONTEXT_STATUS (common.sh, JIT_STATUS) rather than the old JIT_CONTEXT_STOP_REPORT
+# -- two different knobs for two different audiences, and this file only ever wrote for
+# one of them even before this change (#291/#295: a human curating .claude/jit-context/,
+# never the model). JIT_STOP_REPORT is still parsed and validated in common.sh for
+# backward config compatibility; nothing in this file reads it any more, because the
+# additionalContext line it used to gate no longer exists to gate.
+#
 # THREE STATES, and #244's own body is explicit the third must never render as the
 # first:
 #
 #   * entries fired this session and NONE were edited -- one line, framed as
-#     informational and non-actionable (#292); the numbered, per-entry detail #233
-#     originally asked for is unchanged, it just moved to hooks.log. #291/#295 split
-#     this state in two, further down: a flat "N entries injected... none updated" when
-#     every one of them is backed by a real 00-manual file (the reader authored all of
-#     them), or "N entries injected... M of them yours and not updated" when only SOME
-#     are -- the entries outside 00-manual have no author this reader can point at, so
-#     the flat count used to overstate what was theirs to fix.
+#     informational and non-actionable (#292), now the entry COUNT only. #291/#295's
+#     "M of them yours" split moved OFF this line with #367: dropping it is what
+#     removed this hook's dependency on #299 for the human-facing message (a session
+#     with every fired entry outside 00-manual is no longer a nag with nobody to act on
+#     it -- it is a neutral fact, so it is said plainly rather than suppressed).
+#     hooks.log keeps the fuller split (see #299 below) for whoever curates the tree.
 #   * entries fired and SOME were edited -- silence. The healthy case, the same posture
 #     SessionStart's own "ok, nothing recurs" already takes (session-start-hook.sh):
 #     a hook must never fail hard, and here that includes not nagging about a session
@@ -26,14 +33,26 @@
 #     empty (common.sh: an unwritable checkout, a linked ancestor), so neither the fired
 #     count nor the edit marker can be trusted. This says so rather than falling through
 #     to the silent, healthy-looking branch above. #291/#295 add a SECOND could-not-tell
-#     shape further down: the state directory is fine, but a 00-manual directory itself
-#     could not be read, so this hook cannot tell whether a fired entry is the reader's.
+#     shape further down: a 00-manual directory exists but cannot be opened, so this hook
+#     cannot tell whether ANY fired entry belongs to the reader -- a systemic readability
+#     question, decided once per dimension, independent of which entries actually fired.
 #
 # A fourth kind of silence is not one of the three: nothing fired this session at all,
-# so there is nothing to compare and nothing worth saying either way. #291/#295 add a
-# FIFTH kind, further down: entries fired, but every one of them resolves to a layer
-# outside 00-manual -- there is nobody for this message to ask, which is the same
-# "nothing to compare" shape as the fourth kind, just discovered later in the scan.
+# so there is nothing to compare and nothing worth saying either way.
+#
+# #299: the marker files behind all three dimensions now carry a `loc:<dim>:<layer>:
+# <file>` key rather than a bare file name (common.sh: jit_loc_key()), so a fired entry
+# says which dimension AND which layer it fired from -- fixing the ownership question
+# this hook asks for both shapes #299 measured live: a plugin-owned entry in one
+# dimension misreported as the reader's own because an UNRELATED 00-manual file of the
+# same basename existed in a different dimension, and `rector.md`, the same collision
+# one dimension over, between two LAYERS of vocabulary alone. THREE states again, and
+# the second is new: a `loc:`-keyed mark is a known fact (its layer says yours or not);
+# a BARE mark -- written by a hook from an earlier version of this plugin, still
+# possible inside one session that started before an upgrade landed mid-session -- is
+# UNKNOWN, and must render as unknown rather than guessed either way. hooks.log's
+# per-session detail line carries this exact three-way split; #299's own tests assert
+# all three appear in one message.
 #
 # THE TRAP THIS HOOK DOES NOT REACH FOR: jit_scan_entry_ages() (common.sh) reads
 # filesystem mtimes and inherits #243 -- a fresh clone reports every file as "0d old"
@@ -42,16 +61,6 @@
 # to decide the fired-vs-edited question itself. Reusing it for that boolean is the
 # exact defect #244's own issue body names as the reason this shipped separately from
 # #233's other two parts.
-#
-# #300: EVERY model-facing shape above -- the flat "none updated" line, the "M of them
-# yours" split, and all three could-not-tell states -- is gated on JIT_CONTEXT_STOP_REPORT
-# (common.sh, JIT_STOP_REPORT), off unless a project asks for it. #291/#295 found the
-# audience for this report is a human curating .claude/jit-context/, who does not read
-# a model's turn -- they read hooks.log, written unconditionally in every branch below,
-# flag or no flag. With the report off, the three could-not-tell shapes describe the
-# degraded state of something the reader asked not to hear about, so they go quiet with
-# the rest rather than surviving as noise with no subject. `JIT_STOP_REPORT=1` restores
-# every shape below byte-for-byte.
 case "$0" in */*) SCRIPT_DIR="${0%/*}" ;; *) SCRIPT_DIR="." ;; esac
 source "$SCRIPT_DIR/common.sh"
 
@@ -110,6 +119,14 @@ fi
 # "unknown" (#284) takes the identical branch: when this hook cannot tell whether the
 # harness is re-entering, staying silent is the safe direction -- a Stop hook that
 # says nothing costs a missing report; one that speaks costs a turn that will not end.
+#
+# #367: systemMessage is NOT known to carry this same re-entry risk -- Claude Code's
+# own docs describe additionalContext, never systemMessage, as the field that can hold
+# a turn open, and #367/#368's own probes never observed a re-entry from a
+# systemMessage-only response. Kept anyway: nothing in this file has measured the
+# NEGATIVE (systemMessage definitely cannot re-trigger Stop), and a Stop hook that goes
+# quiet on a re-entry it cannot tell apart from a first stop costs a missing status
+# line, never a stuck turn -- the same asymmetry #284 already decided on.
 if [ "$STOP_HOOK_ACTIVE" = "true" ] || [ "$STOP_HOOK_ACTIVE" = "unknown" ]; then
   echo '{}'
   exit 0
@@ -128,13 +145,8 @@ fi
 # so there is no fired count and no edit signal to compare: this is state three, and it
 # must say so rather than fall through to the silent branches below.
 if [ -z "$JIT_STATE_DIR" ] || [ -z "$SESSION_ID" ]; then
-  # #300: the whole model-facing report is gated on JIT_STOP_REPORT (common.sh),
-  # off by default. The degraded state this branch describes is a property of
-  # something the reader asked not to hear about with the report off, so it has
-  # no subject left to speak to -- {} is the same silent shape every other gated
-  # branch below takes when the flag is off.
-  if [ "$JIT_STOP_REPORT" = "1" ]; then
-    printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): could not tell whether any entry fired or was edited this session (no session state to read back)"}}\n'
+  if [ "$JIT_STATUS" != "off" ]; then
+    printf '{"systemMessage":"JIT : cannot tell what fired (no session state)"}\n'
   else
     echo '{}'
   fi
@@ -157,93 +169,93 @@ EDIT_DECLINED_MARK="$JIT_STATE_DIR/edited-declined-$SESSION_ID.txt"
 # The `shown` marks carry a handful of sentinel keys beside real entry names --
 # `jit-refused-*`, `jit-no-subject` -- written by the same jit_shown_mark() call sites
 # a real fired entry uses, so they cannot be told apart by which function wrote them.
-# Excluded here the same way jit_shown_apply() already validates a mark line: only a
-# bare name survives, everything else (a slash, a backslash, one of the known
-# sentinels) is dropped rather than reported as an entry nobody wrote.
+# Excluded here the same way jit_shown_apply() already validates a mark line.
 #
 # THE DEDUP SCAN IS BOUNDED, the same shape JIT_LAYERS_MAX and JIT_ENTRY_AGES_MAX
 # already give a table an untrusted-in-size tree can grow (common.sh): the `case`
 # below re-scans the WHOLE accumulator on every line, so an unbounded accumulator is
-# quadratic in the number of distinct names two marker files can hold. In the ordinary
+# quadratic in the number of distinct KEYS two marker files can hold. In the ordinary
 # case each hook already dedups before it ever marks an entry (it loads its own
 # `shown` set from this same file before matching), so this cap is never reached by a
 # real session; it exists so a two-file union this hook did not write itself cannot
 # choose how long Stop takes to answer.
+#
+# #299: deduped by the RAW mark -- the full "loc:dim:layer:file" key for a mark written
+# under the new format, or the bare name itself for one written by an older hook this
+# session. That is a WIDER identity than the bare file name alone: two marks that share
+# a basename but differ in dimension or layer are no longer collapsed into one fired
+# entry, which is the same collision #299 measured as `rector.md` (vocabulary/00-manual
+# against vocabulary/10-auto) reaching THIS accumulator too, not only the once-per-call
+# dedup inside each writer hook. Verified with a fixture (tests/test-marker-loc-299.sh)
+# rather than assumed: the issue itself asks this to be checked, not silently patched.
 JIT_FIRED_MAX=500
-JIT_FIRED=""
+JIT_FIRED_KEYS=""
 JIT_FIRED_N=0
 JIT_FIRED_OVERFLOW=0
-# #297: pre-tool-hook.sh marks a fired `tools` (once-mode) rule as `key = "rule:" r_file`
-# -- namespacing it against a vocabulary mark that happens to share a filename. That
-# prefix is an internal composed key, not a name: left on the line, it survives every
-# exclusion below (it is not empty, carries no slash or backslash, and matches neither
-# sentinel), reaches jit_report_name() intact, and its `:` is exactly the byte that
-# guard exists to refuse -- so every well-formed `tools` entry rendered as
-# `<withheld: not a plain name>`, unconditionally, on every session that ever fired
-# one (#297's own reproduction). The prefix is stripped HERE, once, at collection time,
-# so every reader further down (the 00-manual membership scan, jit_age_for(), the
-# display loop) sees the same bare name a vocabulary or path entry already carries --
-# never a second "is this composed" question re-asked at each site. `JIT_TOOL_NAMES`
-# remembers which bare names arrived this way, so the display loop can still say WHICH
-# dimension fired (#297 direction 2: `how-work-lands.md (tools)`, strictly more useful
-# to a reader curating entries than the bare name a vocabulary hit gets, per the issue's
-# own stated preference) without threading a second field through every accumulator
-# below. `jit_report_name()`'s own byte set is untouched -- #297 is explicit that
-# widening it is the wrong fix; the composed key never reaches it in the first place now.
-JIT_TOOL_NAMES=""
+# Parallel arrays, one slot per accepted (deduped) fired mark, same index as each other.
+# Arrays rather than a fourth NL-joined string: this loop already builds one per entry
+# (name, dimension, layer, classification), and a fifth "is this the Nth line" lookup
+# over NL-joined strings in lockstep is more failure-prone than an index a shell array
+# already gives for free. Bounded by the same JIT_FIRED_MAX as the dedup key string.
+JIT_FIRED_NAME=()
+JIT_FIRED_DIM=()
+JIT_FIRED_LAYER=()
+JIT_FIRED_CLASS=() # Y (00-manual, known), N (another layer, known), U (bare, unknown)
 for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
   [ -f "$_jit_mf" ] && [ ! -L "$_jit_mf" ] || continue
-  while IFS= read -r _jit_name || [ -n "$_jit_name" ]; do
-    case "$_jit_name" in
-      '' | */* | *\\*) continue ;;
+  while IFS= read -r _jit_line || [ -n "$_jit_line" ]; do
+    case "$_jit_line" in
+      '') continue ;;
       jit-refused-* | jit-no-subject) continue ;;
     esac
-    _jit_is_tool=0
-    case "$_jit_name" in
-      rule:*)
-        _jit_name="${_jit_name#rule:}"
-        _jit_is_tool=1
-        # The stripped name still has to pass the same bare-name shape the raw marker
-        # line was already checked against above -- a `rule:` prefix in front of an
-        # otherwise-empty or slash-carrying remainder is not a name either, and must
-        # not be treated as one just because the known prefix matched.
-        case "$_jit_name" in
-          '' | */* | *\\*) continue ;;
+    _jit_dim=""
+    _jit_layer=""
+    _jit_class="U"
+    case "$_jit_line" in
+      loc:*)
+        _jit_rest="${_jit_line#loc:}"
+        _jit_dim="${_jit_rest%%:*}"
+        _jit_rest="${_jit_rest#*:}"
+        # A malformed loc: line (no second colon -- a hand-edited marker, an older test
+        # fixture) falls through the case below to its own `*) continue` arm: treated
+        # as though the line were never there, rather than trusted as evidence of
+        # anything, the same posture jit_shown_apply() already takes in common.sh
+        # toward a mark line it cannot make sense of.
+        case "$_jit_rest" in
+          *:*)
+            _jit_layer="${_jit_rest%%:*}"
+            _jit_name="${_jit_rest#*:}"
+            case "$_jit_name" in
+              '' | */* | *\\*) continue ;;
+            esac
+            _jit_class="N"
+            [ "$_jit_layer" = "00-manual" ] && _jit_class="Y"
+            ;;
+          *) continue ;;
         esac
+        ;;
+      */* | *\\*) continue ;;
+      *)
+        _jit_name="$_jit_line"
+        _jit_class="U"
         ;;
     esac
     if [ "$JIT_FIRED_N" -ge "$JIT_FIRED_MAX" ]; then
-      # Past the cap, a name is counted but not deduped or stored -- the accumulator
-      # stays at its capped size instead of growing, which is the whole point, and the
-      # displayed count below may over-count a genuine repeat as a result. That is the
-      # same trade-off the codebase already makes elsewhere: bounded cost, not exact
-      # accounting, past a size no real session reaches.
       JIT_FIRED_OVERFLOW=$((JIT_FIRED_OVERFLOW + 1))
       continue
     fi
-    case "$JIT_NL$JIT_FIRED$JIT_NL" in
-      *"$JIT_NL$_jit_name$JIT_NL"*)
-        # Already collected (from either marker file, or a bare and a `rule:`-prefixed
-        # mark that happen to share a name) -- still worth recording the tool tag if
-        # this occurrence carries one and an earlier one did not, so a later "(tools)"
-        # tag is not lost to whichever marker file this loop happened to read first.
-        if [ "$_jit_is_tool" -eq 1 ]; then
-          case "$JIT_NL$JIT_TOOL_NAMES$JIT_NL" in
-            *"$JIT_NL$_jit_name$JIT_NL"*) ;;
-            *) JIT_TOOL_NAMES="$JIT_TOOL_NAMES${JIT_TOOL_NAMES:+$JIT_NL}$_jit_name" ;;
-          esac
-        fi
-        continue
-        ;;
+    case "$JIT_NL$JIT_FIRED_KEYS$JIT_NL" in
+      *"$JIT_NL$_jit_line$JIT_NL"*) continue ;;
     esac
-    JIT_FIRED="$JIT_FIRED${JIT_FIRED:+$JIT_NL}$_jit_name"
+    JIT_FIRED_KEYS="$JIT_FIRED_KEYS${JIT_FIRED_KEYS:+$JIT_NL}$_jit_line"
+    JIT_FIRED_NAME[$JIT_FIRED_N]="$_jit_name"
+    JIT_FIRED_DIM[$JIT_FIRED_N]="$_jit_dim"
+    JIT_FIRED_LAYER[$JIT_FIRED_N]="$_jit_layer"
+    JIT_FIRED_CLASS[$JIT_FIRED_N]="$_jit_class"
     JIT_FIRED_N=$((JIT_FIRED_N + 1))
-    if [ "$_jit_is_tool" -eq 1 ]; then
-      JIT_TOOL_NAMES="$JIT_TOOL_NAMES${JIT_TOOL_NAMES:+$JIT_NL}$_jit_name"
-    fi
   done < "$_jit_mf"
 done
-unset _jit_mf _jit_name _jit_is_tool
+unset _jit_mf _jit_line _jit_dim _jit_layer _jit_class _jit_rest _jit_name
 
 # Nothing fired this session at all -- there is no injected-vs-edited comparison to
 # make, which is not the same claim as "nothing was edited" and gets no message either
@@ -266,119 +278,88 @@ fi
 # unknown, checked above): this says so explicitly rather than falling through to the
 # "none updated" list below, which would misreport a refused write as a clean session.
 if [ -f "$EDIT_DECLINED_MARK" ] && [ ! -L "$EDIT_DECLINED_MARK" ]; then
-  # #300: gated the same way as every other model-facing shape below -- {} when the
-  # reader has not asked for the report.
-  if [ "$JIT_STOP_REPORT" = "1" ]; then
-    printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): an edit under this tree may have happened this session but could not be confirmed (marker write was declined)"}}\n'
+  if [ "$JIT_STATUS" != "off" ]; then
+    printf '{"systemMessage":"JIT : an edit here may not have been recorded (marker write declined)"}\n'
   else
     echo '{}'
   fi
   exit 0
 fi
 
-# #291/#295: the report below is aimed at whoever authors .claude/jit-context/00-manual
-# -- the only layer with a human owner, the same reason jit_scan_entry_ages() below
-# only ever asks about that layer. An entry that fired from any OTHER layer (plugin-
-# shipped, generated) has no file this reader can curate, so counting it toward "none
-# updated" asks for maintenance nobody can perform -- #291 documented a completed
-# subagent waking three times to answer that line as though it were a task, and #295
-# measured a real project where EVERY fired entry lived outside 00-manual, so the nag
-# fired on nearly every session with nothing to act on.
-#
-# This is the SAME "nothing to compare" rule the "nothing fired at all" branch above
-# already takes: when no fired name is backed by a real 00-manual file, this exits
-# exactly like that branch -- no message, no hooks.log write, because there is nothing
-# to log either. Membership is a plain file-existence check, not jit_scan_entry_ages()'s
-# own age table further down: that table is deliberately silent whenever a whole
-# 00-manual layer's mtimes look like a checkout (#243), and reusing it here would fold
-# "not yours" and "yours, but this run could not tell its age" into the same false
-# answer.
-#
-# oss:auditor self-review on this change (finding, live-reproduced): a 00-manual
-# directory that EXISTS but cannot be opened (permissions, not absence) makes the glob
-# below return nothing -- silently, with no way to tell that apart from a 00-manual
-# layer that genuinely holds nothing manual. JIT_MANUAL_SCAN_DEGRADED below names that
-# case so the branch further down can render it as its own "could not tell" state
-# (test section S) rather than let it undercount into the silent Q/R case, the same
-# "third state renders as the first" shape #244's own header already refuses for the state
-# directory (case D). A dimension whose 00-manual directory simply does not EXIST is
-# not degraded -- that is the ordinary, common case this hook must not warn about.
+# #291/#295/#299: a 00-manual directory that EXISTS but cannot be OPENED (permissions,
+# not absence) is a systemic readability question, answered once per dimension and
+# independent of which entries actually fired -- unlike #299's per-entry Y/N/U
+# classification above, which needs no directory read at all, because a `loc:` key
+# already says which layer an entry fired from. A dimension whose 00-manual directory
+# simply does not exist is the ordinary case and is not degraded.
 JIT_MANUAL_SCAN_DEGRADED=0
-JIT_MANUAL_NAMES=""
 for _jit_dim in vocabulary tools paths; do
   _jit_manual_dir="$JIT_BASE/$_jit_dim/00-manual"
   [ -d "$_jit_manual_dir" ] || continue
   if [ ! -r "$_jit_manual_dir" ] || [ ! -x "$_jit_manual_dir" ]; then
     JIT_MANUAL_SCAN_DEGRADED=1
-    continue
   fi
-  for _jit_mf in "$_jit_manual_dir"/*; do
-    [ -f "$_jit_mf" ] && [ ! -L "$_jit_mf" ] || continue
-    JIT_MANUAL_NAMES="$JIT_MANUAL_NAMES${JIT_MANUAL_NAMES:+$JIT_NL}${_jit_mf##*/}"
-  done
 done
-unset _jit_dim _jit_manual_dir _jit_mf
+unset _jit_dim _jit_manual_dir
 
-JIT_MANUAL_FIRED_N=0
-while IFS= read -r _jit_mname; do
-  [ -n "$_jit_mname" ] || continue
-  case "$JIT_NL$JIT_MANUAL_NAMES$JIT_NL" in
-    *"$JIT_NL$_jit_mname$JIT_NL"*) JIT_MANUAL_FIRED_N=$((JIT_MANUAL_FIRED_N + 1)) ;;
-  esac
-done << EOF_MANUAL_CHECK
-$JIT_FIRED
-EOF_MANUAL_CHECK
-unset _jit_mname
-
-# JIT_FIRED_OVERFLOW names entered past the JIT_FIRED_MAX cap above and were never
-# individually checked here -- their 00-manual membership is genuinely unknown, not
-# "not yours", so their presence forces the split-reporting branch below rather than
-# the silent one: reporting an uncertain split is the safe direction, the same
-# principle #284's "unknown takes the safe branch" already applies to STOP_HOOK_ACTIVE.
-if [ "$JIT_MANUAL_FIRED_N" -eq 0 ] && [ "$JIT_FIRED_OVERFLOW" -eq 0 ]; then
-  # oss:auditor self-review finding: a degraded 00-manual read (above) means "zero
-  # confirmed manual entries" here could equally mean "genuinely zero" or "could not
-  # look" -- distinct from the ordinary silent case, this says so rather than folding
-  # into it, the same posture case D already takes for the state directory itself.
-  if [ "$JIT_MANUAL_SCAN_DEGRADED" = 1 ]; then
-    # #300: gated -- {} when the reader has not asked for the report.
-    if [ "$JIT_STOP_REPORT" = "1" ]; then
-      printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): could not tell whether any fired entry is yours (a 00-manual directory could not be read)"}}\n'
-    else
-      echo '{}'
-    fi
-    exit 0
+if [ "$JIT_MANUAL_SCAN_DEGRADED" = 1 ]; then
+  if [ "$JIT_STATUS" != "off" ]; then
+    printf '{"systemMessage":"JIT : cannot tell if any fired entry is yours (00-manual unreadable)"}\n'
+  else
+    echo '{}'
   fi
-  echo '{}'
   exit 0
 fi
 
 # Ages are read for the MAINTENANCE LOG ONLY (#292), on entries this hook has already
-# decided (from the real marker above) were not edited. Only 00-manual is asked, for
-# the same reason jit_scan_entry_ages() itself gives: it is the only layer with an
+# decided (from the real edit marker above) were not edited. Only 00-manual is asked,
+# for the same reason jit_scan_entry_ages() itself gives: it is the only layer with an
 # author to point at. A dimension that does not exist here scans to nothing and costs
 # nothing extra; this runs once per session, not once per tool call, so the
 # per-dimension cost budget that shapes post-tool-hook.sh does not apply.
+#
+# #299: prefixed with the DIMENSION at concatenation time (jit_scan_entry_ages() itself
+# is unchanged and untouched -- its own table still carries "<layer>/<file>", the same
+# shape every other caller already relies on) so jit_age_for() below can be scoped by
+# dimension too. Before this, "install.md" existing as 00-manual in both `paths` and
+# `vocabulary` made JIT_AGES_ALL ambiguous about which one a lookup meant -- the same
+# cross-consumer ambiguity #299's own issue names as pre-existing for this exact
+# function, now closed by the same loc: information rather than left as a separate
+# open question.
 JIT_AGES_ALL=""
 for _jit_dim in vocabulary tools paths; do
   jit_scan_layers "$JIT_BASE/$_jit_dim" "$_jit_dim"
   jit_scan_entry_ages "$JIT_BASE/$_jit_dim"
   [ -n "$JIT_ENTRY_AGES" ] || continue
-  JIT_AGES_ALL="$JIT_AGES_ALL${JIT_AGES_ALL:+$JIT_NL}$JIT_ENTRY_AGES"
+  _jit_dim_ages=""
+  while IFS= read -r _jit_age_line; do
+    [ -n "$_jit_age_line" ] || continue
+    _jit_dim_ages="$_jit_dim_ages${_jit_dim_ages:+$JIT_NL}$_jit_dim/$_jit_age_line"
+  done << EOF_DIM_AGES
+$JIT_ENTRY_AGES
+EOF_DIM_AGES
+  [ -n "$_jit_dim_ages" ] || continue
+  JIT_AGES_ALL="$JIT_AGES_ALL${JIT_AGES_ALL:+$JIT_NL}$_jit_dim_ages"
 done
-unset _jit_dim
+unset _jit_dim _jit_dim_ages _jit_age_line
 
-# "<layer>/<file>\t<days>" is jit_scan_entry_ages()'s own table format (common.sh); the
-# key this hook has is a bare file name with no layer, so only the 00-manual row is
-# ever looked up. "" is a real answer, not a defect (common.sh's own jit_entry_age()
-# comment): an entry outside 00-manual, one this platform could not stat, or one from
-# a layer whose whole mtime spread looked like a checkout rather than real history.
+# "<dim>/<layer>/<file>\t<days>" now (see above). Looked up by dimension AND name, so a
+# lookup can never answer about the wrong dimension's identically-named file. "" is a
+# real answer, not a defect (common.sh's own jit_entry_age() comment): an entry outside
+# 00-manual, one this platform could not stat, one from a layer whose whole mtime
+# spread looked like a checkout, or one this hook could not even attribute to a
+# dimension (the unknown/bare-mark case -- dim is "" there, and the needle below can
+# never match, which is correct: an age claim needs a dimension to be about).
 jit_age_for() {
-  local name="$1" needle
-  needle="${JIT_NL}00-manual/$name$(printf '\t')"
+  local dim="$1" name="$2" needle
+  [ -n "$dim" ] || {
+    printf ''
+    return 0
+  }
+  needle="${JIT_NL}$dim/00-manual/$name$(printf '\t')"
   case "$JIT_NL$JIT_AGES_ALL$JIT_NL" in
     *"$needle"*)
-      local rest="${JIT_AGES_ALL#*00-manual/"$name"$(printf '\t')}"
+      local rest="${JIT_AGES_ALL#*"$dim"/00-manual/"$name"$(printf '\t')}"
       rest="${rest%%$JIT_NL*}"
       printf '%s' "$rest"
       ;;
@@ -386,106 +367,79 @@ jit_age_for() {
   esac
 }
 
-# #292: the model-facing line built below carries only bare names, one line, no
-# per-entry breakdown -- the maintainer decided this reads as an instruction
-# otherwise. The numbered, age-annotated detail #233 originally asked for still
-# exists, and is NEVER bounded by the 200-name cap below -- only jit_report_name()'s
-# own guard applies to it; it moves to hooks.log via jit_log_write() (common.sh: "a
-# file on the disk of whoever runs the hook that a person reads and no model does"),
-# never dropped and never truncated a second time on top of it. Self-review on this
-# change (#292) caught a first draft that applied the SAME 200-entry break to both
-# lists at once -- that dropped the 200th fired entry's name from the model line
-# while still logging it (an off-by-one in the "N more" count), and separately
-# silently truncated hooks.log too, contradicting the model line's own "see
-# hooks.log" pointer. Two lists, two caps, decoupled below; tests/test-stop-hook.sh
-# section O drives both at 205 fired entries.
+# #292: the model-facing line built below carries only the entry COUNT -- #367 dropped
+# the per-name list and the ownership split from the human-facing line entirely (there
+# is no wrong number left to show once the split moved to hooks.log alone). The
+# numbered, age-annotated, per-name detail #233 originally asked for still exists in
+# hooks.log, unbounded except by jit_report_name()'s own guard, and now carries the
+# Y/N/U split #299 asks for.
 JIT_NAMES=""
 JIT_LOG_LIST=""
+JIT_YOURS_N=0
+JIT_NOT_YOURS_N=0
+JIT_UNKNOWN_N=0
 JIT_I=0
-while IFS= read -r _jit_name; do
-  [ -n "$_jit_name" ] || continue
-  JIT_I=$((JIT_I + 1))
-  _jit_age="$(jit_age_for "$_jit_name")"
-  _jit_shown="$(jit_report_name "$_jit_name")"
-  # #297 direction 2: a name that arrived via the "rule:" prefix (stripped above, into
-  # JIT_TOOL_NAMES) is a `tools` entry -- tagged here, after jit_report_name() has
-  # already decided whether the bare name itself is printable or withheld, so the tag
-  # rides on either outcome rather than only the happy one.
-  case "$JIT_NL$JIT_TOOL_NAMES$JIT_NL" in
-    *"$JIT_NL$_jit_name$JIT_NL"*) _jit_shown="$_jit_shown (tools)" ;;
+while [ "$JIT_I" -lt "$JIT_FIRED_N" ]; do
+  _jit_name="${JIT_FIRED_NAME[$JIT_I]}"
+  _jit_dim="${JIT_FIRED_DIM[$JIT_I]}"
+  _jit_layer="${JIT_FIRED_LAYER[$JIT_I]}"
+  _jit_class="${JIT_FIRED_CLASS[$JIT_I]}"
+  case "$_jit_class" in
+    Y) JIT_YOURS_N=$((JIT_YOURS_N + 1)) ;;
+    N) JIT_NOT_YOURS_N=$((JIT_NOT_YOURS_N + 1)) ;;
+    *) JIT_UNKNOWN_N=$((JIT_UNKNOWN_N + 1)) ;;
   esac
+  _jit_age="$(jit_age_for "$_jit_dim" "$_jit_name")"
+  _jit_shown="$(jit_report_name "$_jit_name")"
+  case "$_jit_dim" in
+    tools) _jit_shown="$_jit_shown (tools)" ;;
+    paths) _jit_shown="$_jit_shown (paths)" ;;
+  esac
+  case "$_jit_class" in
+    U) _jit_shown="$_jit_shown [unknown: marker from an older hook this session]" ;;
+    N) _jit_shown="$_jit_shown [$_jit_layer]" ;;
+  esac
+  JIT_I=$((JIT_I + 1))
   # "; " rather than a literal "\n": hooks.log is one physical line per record
-  # (jit-misses.sh parses it that way -- paths/00-manual/hooks.md), so an escaped
-  # newline embedded in the text here would be misleading bytes on disk, not an
-  # actual line break for whoever reads the file.
+  # (jit-misses.sh parses it that way -- paths/00-manual/hooks.md).
   if [ -n "$_jit_age" ]; then
     JIT_LOG_LIST="$JIT_LOG_LIST${JIT_LOG_LIST:+; }$JIT_I. $_jit_shown (last edited ${_jit_age}d ago)"
   else
     JIT_LOG_LIST="$JIT_LOG_LIST${JIT_LOG_LIST:+; }$JIT_I. $_jit_shown"
   fi
-  # A hard cap for the same reason JIT_LAYERS_MAX exists: the fired count is chosen by
-  # what matched this session, not by this hook, and a report that keeps growing
-  # unbounded is the resource #64 already measured and capped once in this codebase --
-  # here bounding only the model-facing NAME list; a name past this count is still
-  # logged above, just not repeated into the session's own transcript.
   if [ "$JIT_I" -le 200 ]; then
     JIT_NAMES="$JIT_NAMES${JIT_NAMES:+, }$_jit_shown"
   fi
-done << EOF_FIRED
-$JIT_FIRED
-EOF_FIRED
-unset _jit_name _jit_age _jit_shown
+done
+unset _jit_name _jit_dim _jit_layer _jit_class _jit_age _jit_shown
 
 if [ "$JIT_FIRED_N" -gt 200 ]; then
   JIT_NAMES="$JIT_NAMES, and $((JIT_FIRED_N - 200)) more (not named here, see hooks.log)"
 fi
 
-# JIT_FIRED_OVERFLOW is 0 in the ordinary case (see the cap comment above) -- named
-# explicitly only when the collection pass above actually hit it, so the count in the
-# ordinary sentence stays exact rather than always carrying a caveat nobody needs.
+# JIT_FIRED_OVERFLOW names entered past the JIT_FIRED_MAX cap above and were never
+# individually classified -- unknown, not "not yours", the same reasoning #284 already
+# applies to STOP_HOOK_ACTIVE: an uncertain split is reported as uncertain rather than
+# folded into a confident count on either side.
 JIT_TOTAL=$((JIT_FIRED_N + JIT_FIRED_OVERFLOW))
 if [ "$JIT_FIRED_OVERFLOW" -gt 0 ]; then
+  JIT_UNKNOWN_N=$((JIT_UNKNOWN_N + JIT_FIRED_OVERFLOW))
   JIT_NAMES="$JIT_NAMES, plus $JIT_FIRED_OVERFLOW more past this hook's own $JIT_FIRED_MAX-entry cap, not deduplicated or listed"
   JIT_LOG_LIST="$JIT_LOG_LIST; plus $JIT_FIRED_OVERFLOW more past this hook's own $JIT_FIRED_MAX-entry cap, not deduplicated or listed"
 fi
 
 # hooks.log keeps the full, unbounded (past the 200 cap above) numbered, age-annotated
-# detail the model-facing line below no longer carries -- the maintainer curating
-# .claude/jit-context/ reads that file; the model reads only the one line handed to
-# additionalContext.
-#
-# #291/#295: "mixed" here means either a genuine non-00-manual entry among the fired
-# set, or the JIT_FIRED_OVERFLOW uncertainty named above -- either way the reader did
-# not author every fired entry, so the flat "none updated" sentence overstates what is
-# theirs to fix. JIT_MANUAL_FIRED_N against JIT_FIRED_N (not JIT_TOTAL, which folds in
-# the overflow count) is deliberate: an overflow-only session with every checked name
-# manual-owned still counts as mixed, because the un-checked overflow names are
-# unknown, not confirmed non-manual.
-#
-# Explore self-review finding: when overflow names exist, JIT_MANUAL_FIRED_N is a
-# FLOOR, not an exact count -- some of the unchecked overflow names could be manual
-# too, and the flat "M of them yours" phrasing read as an exact claim it did not have
-# the evidence for. "at least " only appears when that floor is genuinely inexact.
-JIT_YOURS_QUALIFIER=""
-if [ "$JIT_FIRED_OVERFLOW" -gt 0 ]; then
-  JIT_YOURS_QUALIFIER="at least "
-fi
-# #300: hooks.log is written EXACTLY as before, on every branch, regardless of the
-# flag -- that is the whole point of the change, the signal moves to the reader who
-# wants it rather than being deleted. Only the printf that reaches the model below is
-# gated.
-if [ "$JIT_MANUAL_FIRED_N" -lt "$JIT_FIRED_N" ] || [ "$JIT_FIRED_OVERFLOW" -gt 0 ]; then
-  jit_log_write "$(printf '[%s] stop: %s entries fired this session, %s%s of them yours and not updated. %s' "$(_ts)" "$JIT_TOTAL" "$JIT_YOURS_QUALIFIER" "$JIT_MANUAL_FIRED_N" "$JIT_LOG_LIST")"
-  if [ "$JIT_STOP_REPORT" = "1" ]; then
-    printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): %s entries injected this session, %s%s of them yours and not updated -- fired: %s"}}\n' "$JIT_TOTAL" "$JIT_YOURS_QUALIFIER" "$JIT_MANUAL_FIRED_N" "$JIT_NAMES"
-  else
-    echo '{}'
-  fi
+# detail -- written unconditionally, on every branch, regardless of JIT_STATUS. #299:
+# the three counts below are the fixture this issue asks for -- a session with both a
+# `loc:`-keyed mark and a bare one asserts all three appear in the SAME message.
+jit_log_write "$(printf '[%s] stop: %s entries fired this session, %s yours, %s not yours, %s unknown, not updated. %s' \
+  "$(_ts)" "$JIT_TOTAL" "$JIT_YOURS_N" "$JIT_NOT_YOURS_N" "$JIT_UNKNOWN_N" "$JIT_LOG_LIST")"
+
+# #367: the human-facing line is the total alone -- JIT_CONTEXT_STATUS=fired and
+# =summary render it identically here, because "fired" already said one line per entry
+# AS IT FIRED, in the hook that fired it; Stop only ever adds the running total.
+if [ "$JIT_STATUS" != "off" ]; then
+  printf '{"systemMessage":"JIT : %s %s this session"}\n' "$JIT_TOTAL" "$([ "$JIT_TOTAL" = 1 ] && echo entry || echo entries)"
 else
-  jit_log_write "$(printf '[%s] stop: %s entries fired this session, none updated. %s' "$(_ts)" "$JIT_TOTAL" "$JIT_LOG_LIST")"
-  if [ "$JIT_STOP_REPORT" = "1" ]; then
-    printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"jit-context (about .claude/jit-context/*.md entry files, not addressed to you -- informational only, no action needed): %s entries injected this session, none updated -- fired: %s"}}\n' "$JIT_TOTAL" "$JIT_NAMES"
-  else
-    echo '{}'
-  fi
+  echo '{}'
 fi

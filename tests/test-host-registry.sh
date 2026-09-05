@@ -185,15 +185,14 @@ INJECT_TAIL_ESC='\",\"additionalContext\":\"'
 INJECT_TAIL_PLAIN='","additionalContext":"'
 assert_literal_in "common.sh envelope carries the inject head" "$INJECT_HEAD_ESC" "$INJECT_HEAD_PLAIN" "$COMMON_SH"
 assert_literal_in "common.sh envelope carries the inject tail" "$INJECT_TAIL_ESC" "$INJECT_TAIL_PLAIN" "$COMMON_SH"
+# #367: pre-prompt-hook.sh and pre-path-hook.sh now call the sysmsg-capable variant
+# (jit_envelope_inject_sysmsg) rather than the bare jit_envelope_inject -- both still
+# come off a shared builder, never a hand-rolled literal, which is the fact this
+# assertion is actually checking. pre-tool-hook.sh keeps calling the original: see its
+# own tools-loop comment for why (#369, the Linux per-argument exec() cap).
 for hook in pre-tool-hook.sh pre-prompt-hook.sh pre-path-hook.sh; do
   assert_calls "$hook calls the shared inject builder, not its own literal" \
-    "jit_envelope_inject(" "$REPO/scripts/$hook"
-done
-for hook in session-start-hook.sh stop-hook.sh; do
-  assert_literal_in "$hook still hand-rolls the identical inject head" \
-    "$INJECT_HEAD_ESC" "$INJECT_HEAD_PLAIN" "$REPO/scripts/$hook"
-  assert_literal_in "$hook still hand-rolls the identical inject tail" \
-    "$INJECT_TAIL_ESC" "$INJECT_TAIL_PLAIN" "$REPO/scripts/$hook"
+    "jit_envelope_inject" "$REPO/scripts/$hook"
 done
 assert_literal_absent() {
   local desc="$1" needle_escaped="$2" needle_plain="$3" file="$4" found=0
@@ -210,6 +209,21 @@ assert_literal_absent() {
     echo "    $needle_plain"
   fi
 }
+
+# #367: session-start-hook.sh and stop-hook.sh moved their human-facing lines off
+# additionalContext onto systemMessage -- there is no more hand-rolled
+# hookSpecificOutput/additionalContext head or tail in either file to assert on, and a
+# test still looking for one would pass for the wrong reason (a literal that is not
+# there at all reads identically to one that moved). What they hand-roll now is the
+# systemMessage skeleton, and it is asserted the same way the block skeleton above is.
+SYSMSG_SKELETON_ESC='{\"systemMessage\":\"'
+SYSMSG_SKELETON_PLAIN='{"systemMessage":"'
+for hook in session-start-hook.sh stop-hook.sh; do
+  assert_literal_in "$hook hand-rolls the systemMessage skeleton" \
+    "$SYSMSG_SKELETON_ESC" "$SYSMSG_SKELETON_PLAIN" "$REPO/scripts/$hook"
+  assert_literal_absent "$hook no longer hand-rolls the inject head" \
+    "$INJECT_HEAD_ESC" "$INJECT_HEAD_PLAIN" "$REPO/scripts/$hook"
+done
 
 for hook in pre-tool-hook.sh pre-prompt-hook.sh pre-path-hook.sh; do
   assert_literal_absent "$hook carries no hand-rolled inject head alongside the builder call" \

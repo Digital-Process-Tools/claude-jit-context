@@ -165,15 +165,14 @@ mkdir -p "$(state_of "$P")"
 # point is that entry, so it needs a real file the same way test-stop-hook.sh's own
 # sections do.
 : > "$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
-# #300: the model-facing report is off by default now -- this fixture asserts the
-# message's own TEXT, so it needs the same JIT_CONTEXT_STOP_REPORT=1 twin
-# tests/test-stop-hook.sh gives every one of its own message-asserting sections.
-printf 'JIT_CONTEXT_STOP_REPORT=1\n' > "$P/.claude/jit-context/config.env"
+# #367: the human-facing line defaults to JIT_CONTEXT_STATUS=summary now (common.sh,
+# JIT_STATUS) rather than the retired JIT_CONTEXT_STOP_REPORT, and summary is already
+# the default -- no config.env is needed to see the message's own text any more.
 printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-d.txt"
 OUT="$(run_stop_no_project_dir "$P" "sess-d")"
 RC=$?
 assert_rc0 "the hook exits 0" "$RC"
-assert_contains "stop-hook still reports the honest 'none updated' when nothing was" "$OUT" "none updated"
+assert_contains "stop-hook still reports the fired entry when nothing was edited" "$OUT" "1 entry this session"
 
 echo ""
 echo "=========================================="

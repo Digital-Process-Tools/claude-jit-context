@@ -838,7 +838,7 @@ for eng in $ENGINES; do
   assert_path_not_contains "[$eng] the vocabulary body is not in the block reason" "$T112_OUT" "billing vocabulary body"
   assert_path_not_contains "[$eng] the advisory rule body is not in the block reason" "$T112_OUT" "advisory rule body"
   assert_path_not_contains "[$eng] the blocked call did not mark the vocabulary entry" "$T112_BLK_MARK" "billing.md"
-  assert_path_not_contains "[$eng] the blocked call did not mark the once rule" "$T112_BLK_MARK" "rule:adv.md"
+  assert_path_not_contains "[$eng] the blocked call did not mark the once rule" "$T112_BLK_MARK" "loc:tools:00-manual:adv.md"
   assert_path_contains "[$eng] the log does not count an undelivered entry as shown" "$T112_BLK_LOG" "[shown:0]"
   assert_path_contains "[$eng] the log names what was withheld instead" "$T112_BLK_LOG" "withheld["
 
@@ -847,7 +847,7 @@ for eng in $ENGINES; do
   assert_path_contains "[$eng] the vocabulary entry survived the blocked call" "$T112_OUT" "billing vocabulary body"
   assert_path_contains "[$eng] the once rule survived the blocked call" "$T112_OUT" "advisory rule body"
   assert_path_contains "[$eng] control: NOW the marker names the vocabulary entry" "$T112_BLK_MARK" "billing.md"
-  assert_path_contains "[$eng] control: and the once rule" "$T112_BLK_MARK" "rule:adv.md"
+  assert_path_contains "[$eng] control: and the once rule" "$T112_BLK_MARK" "loc:tools:00-manual:adv.md"
 
   # 3. The positive control, in a tree of its own: a session with no blocked call injects
   #    on the first call and is silent on the second. Without this pair, everything above
@@ -908,7 +908,7 @@ for eng in $ENGINES; do
   assert_path_contains "[$eng] with the same reason, not an empty one" "$T139_OUT" "once block rule body"
   t139_run "pushcmd now"
   assert_path_contains "[$eng] and the third" "$T139_OUT" '"decision":"block"'
-  assert_path_not_contains "[$eng] a refusal spends no once-budget" "$T139_MARK" "rule:ob139.md"
+  assert_path_not_contains "[$eng] a refusal spends no once-budget" "$T139_MARK" "loc:tools:00-manual:ob139.md"
 
   # A `once` rule carrying `require` is the same shape: the refusal must survive, and the
   # advisory injection beside it must still be once. Call 1 satisfies the requirement and
@@ -924,7 +924,7 @@ for eng in $ENGINES; do
   # assertions on the require row would still pass and this pair would not.
   t139_run "advcmd now"
   assert_path_contains "[$eng] control: a plain once rule injects on call 1" "$T139_OUT" "once advisory rule body"
-  assert_path_contains "[$eng] control: and marks itself shown" "$T139_MARK" "rule:adv139.md"
+  assert_path_contains "[$eng] control: and marks itself shown" "$T139_MARK" "loc:tools:00-manual:adv139.md"
   t139_run "advcmd now"
   assert_path_not_contains "[$eng] control: and is silent on call 2" "$T139_OUT" "once advisory rule body"
 
