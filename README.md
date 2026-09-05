@@ -2,6 +2,8 @@
 
 ![claude-jit-context — know more, carry less](docs/jit-context.png)
 
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-d97757)](#from-our-marketplace-recommended)
+[![Codex](https://img.shields.io/badge/Codex-plugin-000000)](#codex)
 [![Tests](https://github.com/Digital-Process-Tools/claude-jit-context/actions/workflows/tests.yml/badge.svg)](https://github.com/Digital-Process-Tools/claude-jit-context/actions/workflows/tests.yml)
 [![Shell](https://img.shields.io/badge/bash-3.2%2B-blue)](https://www.gnu.org/software/bash/)
 [![OS](https://img.shields.io/badge/tested%20on-Linux%20%7C%20macOS%20%7C%20Windows-blue)](https://github.com/Digital-Process-Tools/claude-jit-context/actions/workflows/tests.yml)
@@ -205,10 +207,10 @@ Linux, macOS and Windows. The suite runs on all three in CI — including macOS'
 
 ### Hosts
 
-This plugin runs under Claude Code, and Claude Code is the only host it has ever been
-watched run under. `scripts/host.sh` holds a small registry -- one row per host, the
-variables it uses, and whether this plugin has *observed* it fire -- rather than a
-Codex-shaped branch bolted onto each hook.
+This plugin runs under Claude Code and Codex, and both are hosts it has been watched
+run under. `scripts/host.sh` holds a small registry -- one row per host, the variables
+it uses, and whether this plugin has *observed* it fire -- rather than a Codex-shaped
+branch bolted onto each hook.
 
 Two things live in that registry per host: which environment variables identify it, and
 its **output envelope contract** -- what an injected note looks like, what a refused
@@ -216,11 +218,17 @@ tool call looks like, and whether refusing is even possible there. That second p
 the sharper question here than for a plugin that only injects: a `forbid:` rule silently
 degrading to advisory the moment a host's refusal contract is assumed rather than
 watched is this plugin's worst failure mode, so an unobserved host reads as exactly
-that -- `refusal-not-established` -- never as `block` or `advisory`. Codex and Gemini
-CLI both have rows in the registry (their variable names are grounded in the
-[`remember`](https://github.com/Digital-Process-Tools/claude-remember) plugin's own,
-separately-observed prior art), and both are `UNKNOWN` for this plugin until someone
-watches this plugin's own `PreToolUse` block fire under them.
+that -- `refusal-not-established` -- never as `block` or `advisory`.
+
+Codex was `UNKNOWN` for a while on purpose. The
+[`remember`](https://github.com/Digital-Process-Tools/claude-remember) plugin had
+watched Codex fire its own inject-only hooks, and that was never evidence about this
+plugin's harder contract -- a row here is never set to `OBSERVED` on the strength of
+another plugin's observation. #288 supplied the missing half, on codex-cli 0.150.1:
+`PreToolUse` fired, the payload carried `tool_name` and `tool_input` under those names,
+and a `{"decision":"block"}` stopped a real command from running. Gemini CLI has a row
+and is still `UNKNOWN`, for exactly the reason Codex no longer is -- nobody has watched
+a block fire under it.
 
 ## Your first entry, in one command
 
