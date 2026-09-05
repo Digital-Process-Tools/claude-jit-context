@@ -36,10 +36,12 @@ REQUIRED_MARKER="SYMBOLIC LINKS WERE REQUIRED AND NOT OBTAINED"
 # jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:-<EMPTY STDOUT>}"
   fi
@@ -47,21 +49,25 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: ${output:-<EMPTY STDOUT>}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
 assert_rc() {
   local desc="$1" want="$2" got="$3"
   if [ "$got" = "$want" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected exit $want, got exit $got"
   fi
 }
@@ -79,8 +85,8 @@ probe_symlinks() {
   rm -rf "$d" || return 1
   mkdir -p "$d/target-dir" || return 1
   printf 'probe\n' > "$d/target-file" || return 1
-  ln -sf "$d/target-file" "$d/link-file" 2>/dev/null
-  ln -sfn "$d/target-dir" "$d/link-dir" 2>/dev/null
+  ln -sf "$d/target-file" "$d/link-file" 2> /dev/null
+  ln -sfn "$d/target-dir" "$d/link-dir" 2> /dev/null
   printf 'late\n' > "$d/target-dir/late.txt" || return 1
   [ -L "$d/link-file" ] || return 1
   [ -L "$d/link-dir" ] || return 1
@@ -94,7 +100,7 @@ echo ""
 # --- The copying `ln`, which is MSYS without winsymlinks:nativestrict --------
 STUB="$TMP/stub-bin"
 mkdir -p "$STUB"
-cat > "$STUB/ln" <<'STUBEOF'
+cat > "$STUB/ln" << 'STUBEOF'
 #!/bin/bash
 # Stands in for the MSYS `ln`, which copies the target instead of linking it.
 src=""; dst=""
@@ -126,25 +132,31 @@ echo "=== Control: the stub really removes the capability, and only the stub doe
 
 # Without this pair, every "the suite skipped" assertion below could hold because the stub
 # broke something unrelated rather than because it copied.
-STUBPROBE="$TMP/stubprobe"; mkdir -p "$STUBPROBE"
+STUBPROBE="$TMP/stubprobe"
+mkdir -p "$STUBPROBE"
 printf 'x\n' > "$STUBPROBE/target"
 PATH="$STUB:$PATH" ln -sf "$STUBPROBE/target" "$STUBPROBE/link"
 if [ -L "$STUBPROBE/link" ]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: stub ln produced a real symbolic link"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: stub ln produced a real symbolic link"
 else
-  PASS=$((PASS + 1)); echo "  PASS: stub ln produced a copy, not a link"
+  PASS=$((PASS + 1))
+  echo "  PASS: stub ln produced a copy, not a link"
 fi
 if [ -f "$STUBPROBE/link" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: stub ln still produced the destination, as a copy does"
+  PASS=$((PASS + 1))
+  echo "  PASS: stub ln still produced the destination, as a copy does"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: stub ln produced nothing at all -- that is not the MSYS behaviour"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: stub ln produced nothing at all -- that is not the MSYS behaviour"
 fi
 
 echo ""
 echo "=== Requirement NOT declared, platform cannot link: the honest skip is unchanged ==="
 
 for suite in test-symlink-entry.sh test-log-containment.sh; do
-  OUT="$(run_suite "$suite" 0 1)"; RC=$?
+  OUT="$(run_suite "$suite" 0 1)"
+  RC=$?
   assert_rc "$suite: exits 2, this repo's could-not-evaluate" 2 "$RC"
   assert_contains "$suite: says it skipped" "$OUT" "SKIPPED"
   assert_contains "$suite: reports the probe as no" "$OUT" "symlink support: no"
@@ -155,7 +167,8 @@ echo ""
 echo "=== Requirement declared, platform cannot link: loud, and never a pass ==="
 
 for suite in test-symlink-entry.sh test-log-containment.sh; do
-  OUT="$(run_suite "$suite" 1 1)"; RC=$?
+  OUT="$(run_suite "$suite" 1 1)"
+  RC=$?
   assert_rc "$suite: exits 1 -- a configuration we asked for and did not get is a failure" 1 "$RC"
   assert_contains "$suite: names the broken configuration" "$OUT" "$REQUIRED_MARKER"
   assert_contains "$suite: names the variable that declared it" "$OUT" "JIT_TESTS_REQUIRE_SYMLINKS"
@@ -163,9 +176,9 @@ for suite in test-symlink-entry.sh test-log-containment.sh; do
   # run-all.sh renders exit 2 green, so the platform-cannot verdict must not be the one
   # this run closes on. Each suite has its own wording for it.
   case "$suite" in
-    test-symlink-entry.sh)   SKIPVERDICT="every containment case SKIPPED" ;;
+    test-symlink-entry.sh) SKIPVERDICT="every containment case SKIPPED" ;;
     test-log-containment.sh) SKIPVERDICT="SKIPPED (no symbolic links on this platform)" ;;
-    *)                       SKIPVERDICT="__no such suite__" ;;
+    *) SKIPVERDICT="__no such suite__" ;;
   esac
   assert_not_contains "$suite: does not close on the platform-cannot verdict" "$OUT" "$SKIPVERDICT"
 done
@@ -191,11 +204,12 @@ echo "=== Requirement declared AND honoured: the suites are untouched ==="
 # non-zero one is a finding.
 for suite in test-symlink-entry.sh test-log-containment.sh; do
   case "$suite" in
-    test-symlink-entry.sh)   RAN_MARKER="=== S3a" ;;
+    test-symlink-entry.sh) RAN_MARKER="=== S3a" ;;
     test-log-containment.sh) RAN_MARKER="=== S4a" ;;
-    *)                       RAN_MARKER="__no such suite__" ;;
+    *) RAN_MARKER="__no such suite__" ;;
   esac
-  OUT="$(run_suite "$suite" 1 0)"; RC=$?
+  OUT="$(run_suite "$suite" 1 0)"
+  RC=$?
   assert_rc "$suite: still passes clean with the requirement declared" 0 "$RC"
   assert_contains "$suite: reports the probe as yes" "$OUT" "symlink support: yes"
   assert_contains "$suite: the requirement is stated in the log" "$OUT" "REQUIRED by this environment"

@@ -74,7 +74,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PASS=0
 FAIL=0
 
-TMP="$(mktemp -d 2>/dev/null)" || TMP=""
+TMP="$(mktemp -d 2> /dev/null)" || TMP=""
 if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
   echo "  SKIPPED: mktemp -d produced no directory, so no fixture can be built here."
   exit 2
@@ -83,8 +83,17 @@ trap 'rm -rf "$TMP"' EXIT
 
 SKIP=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; for l in "$@"; do echo "    $l"; done; return 0; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  for l in "$@"; do echo "    $l"; done
+  return 0
+}
 
 OUT="$TMP/out.txt"
 ERR="$TMP/err.txt"
@@ -97,17 +106,21 @@ ERR="$TMP/err.txt"
 # Returns the command exit status, or 124 if the bound was reached -- 124 to read like
 # `timeout`, which this deliberately is not.
 run_bounded() {
-  local secs="$1"; shift
+  local secs="$1"
+  shift
   local pid watchdog st=0
   : > "$OUT"
   : > "$ERR"
   "$@" > "$OUT" 2> "$ERR" &
   pid=$!
-  ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) &
+  (
+    sleep "$secs"
+    kill -9 "$pid" 2> /dev/null
+  ) &
   watchdog=$!
-  wait "$pid" 2>/dev/null || st=$?
-  kill "$watchdog" 2>/dev/null
-  wait "$watchdog" 2>/dev/null
+  wait "$pid" 2> /dev/null || st=$?
+  kill "$watchdog" 2> /dev/null
+  wait "$watchdog" 2> /dev/null
   # A signal death is the watchdog: these tools exit 0, 1 or 2 and nothing else.
   [ "$st" -ge 128 ] && return 124
   return "$st"
@@ -124,16 +137,33 @@ ARG_LOOP='/^while \[ \$# -gt 0 \]; do/'
 has_arg_loop() { awk "$ARG_LOOP"' { found = 1 } END { exit !found }' "$1"; }
 
 # Every case arm in a script own argument loop that consumes a value.
+#
+# The arm label and its `shift 2` are not necessarily on the same line, so the label is
+# remembered from the arm opener and used when the `shift 2` arrives. That reads both
+# shapes: a one-line arm, and one split across lines by a formatter (#357).
+#
+# The opener is matched on what a case pattern may contain rather than on "a line with a
+# `)` in it". A line INSIDE an arm can carry its own -- `FILES+=("$2")`, a command
+# substitution -- and taking the last such line as the label drops the flag whose arm it
+# sits in, silently, while every other assertion here still passes.
 valued_flags() {
   awk "$ARG_LOOP"' { inloop = 1; next }
     inloop && /^done$/           { inloop = 0 }
-    inloop && /shift 2/ {
-      n = $0
-      sub(/^[[:space:]]*/, "", n)
-      sub(/\).*$/, "", n)
-      k = split(n, part, "|")
-      for (j = 1; j <= k; j++) if (part[j] ~ /^--[A-Za-z]/) print part[j]
+    inloop && /^[[:space:]]*\(?[-A-Za-z0-9_*?.|[:space:]]+\)/ {
+      arm = $0
+      sub(/^[[:space:]]*/, "", arm)
+      sub(/\).*$/, "", arm)
     }
+    inloop && /shift 2/ && arm != "" {
+      k = split(arm, part, "|")
+      for (j = 1; j <= k; j++) {
+        f = part[j]
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", f)
+        if (f ~ /^--[A-Za-z]/) print f
+      }
+      arm = ""
+    }
+    inloop && /;;/ { arm = "" }
   ' "$1"
 }
 
@@ -169,7 +199,7 @@ loop_consumes_value() {
 # never written in (#193).
 is_bash_script() {
   local first
-  first=$(head -n 1 "$1" 2>/dev/null)
+  first=$(head -n 1 "$1" 2> /dev/null)
   case "$first" in
     '#!'*bash*) return 0 ;;
     *) return 1 ;;
@@ -181,11 +211,17 @@ is_bash_script() {
 # indirection further out, and it goes stale in exactly the same silence.
 classify_script() {
   local f="$1"
-  if [ ! -f "$f" ] || [ ! -r "$f" ]; then echo "unreadable-file"; return; fi
-  if ! is_bash_script "$f"; then echo "not-bash-script"; return; fi
+  if [ ! -f "$f" ] || [ ! -r "$f" ]; then
+    echo "unreadable-file"
+    return
+  fi
+  if ! is_bash_script "$f"; then
+    echo "not-bash-script"
+    return
+  fi
   if has_arg_loop "$f"; then
     # To a file, not $( ): a captured variable silently drops NUL bytes.
-    valued_flags "$f" > "$TMP/flags.txt" 2>/dev/null
+    valued_flags "$f" > "$TMP/flags.txt" 2> /dev/null
     if [ -s "$TMP/flags.txt" ]; then
       echo "drive"
     elif loop_consumes_value "$f"; then
@@ -206,7 +242,7 @@ classify_script() {
 # a reason that has nothing to do with argument handling. The cost is that a brand-new
 # script is invisible here until it is staged -- which is before CI sees it either.
 tracked_scripts() {
-  (cd "$1" && git ls-files -- scripts 2>/dev/null | LC_ALL=C sort)
+  (cd "$1" && git ls-files -- scripts 2> /dev/null | LC_ALL=C sort)
 }
 
 # --- Fixtures ------------------------------------------------------------------------
@@ -250,17 +286,20 @@ positive_argv() {
         --base)
           FRESH_N=$((FRESH_N + 1))
           mkdir -p "$TMP/fresh$FRESH_N"
-          printf '%s\n%s\n' "--base" "$TMP/fresh$FRESH_N/.claude/jit-context" ;;
-      esac ;;
+          printf '%s\n%s\n' "--base" "$TMP/fresh$FRESH_N/.claude/jit-context"
+          ;;
+      esac
+      ;;
     jit-dry-run.sh)
       case "$2" in
-        --base)    printf '%s\n%s\n' "--base" "$TREE" ;;
-        --tool)    printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--tool" "Bash" ;;
+        --base) printf '%s\n%s\n' "--base" "$TREE" ;;
+        --tool) printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--tool" "Bash" ;;
         --command) printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--command" "git status" ;;
-        --file)    printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--file" "src/Billing/Total.php" ;;
-        --prompt)  printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--prompt" "how do totals work" ;;
-        --agent)   printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--agent" "explore" ;;
-      esac ;;
+        --file) printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--file" "src/Billing/Total.php" ;;
+        --prompt) printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--prompt" "how do totals work" ;;
+        --agent) printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--agent" "explore" ;;
+      esac
+      ;;
     jit-misses.sh)
       case "$2" in
         --log) printf '%s\n%s\n' "--log" "$LOGFILE" ;;
@@ -268,18 +307,21 @@ positive_argv() {
         --top) printf '%s\n%s\n%s\n%s\n' "--log" "$LOGFILE" "--top" "5" ;;
         --tail) printf '%s\n%s\n%s\n%s\n' "--log" "$LOGFILE" "--tail" "1" ;;
         --size-threshold) printf '%s\n%s\n%s\n%s\n' "--log" "$LOGFILE" "--size-threshold" "1000000" ;;
-      esac ;;
+      esac
+      ;;
     jit-doctor.sh)
       case "$2" in
         --base) printf '%s\n%s\n' "--base" "$TREE" ;;
-      esac ;;
+      esac
+      ;;
     jit-match.sh)
       case "$2" in
-        --base)   printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--text" "anything" ;;
-        --text)   printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--text" "anything" ;;
+        --base) printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--text" "anything" ;;
+        --text) printf '%s\n%s\n%s\n%s\n' "--base" "$TREE" "--text" "anything" ;;
         --format) printf '%s\n%s\n%s\n%s\n%s\n%s\n' "--base" "$TREE" "--text" "anything" "--format" "json" ;;
-        --limit)  printf '%s\n%s\n%s\n%s\n%s\n%s\n' "--base" "$TREE" "--text" "anything" "--limit" "3" ;;
-      esac ;;
+        --limit) printf '%s\n%s\n%s\n%s\n%s\n%s\n' "--base" "$TREE" "--text" "anything" "--limit" "3" ;;
+      esac
+      ;;
   esac
 }
 
@@ -294,7 +336,7 @@ drive_script() {
 
   if [ -z "$flags" ]; then
     bad "$name: its argument loop exposes no valued flag" \
-        "either the loop moved or valued_flags() no longer reads it -- this suite is checking nothing"
+      "either the loop moved or valued_flags() no longer reads it -- this suite is checking nothing"
     return
   fi
 
@@ -306,16 +348,16 @@ drive_script() {
       ok "$name $flag with no value exits 2"
     elif [ "$st" -eq 124 ]; then
       bad "$name $flag with no value exits 2" \
-          "it did not exit at all -- still running after 8s (#114)"
+        "it did not exit at all -- still running after 8s (#114)"
     else
       bad "$name $flag with no value exits 2" "exit $st"
     fi
 
-    if grep -qF -- "$flag" "$OUT" "$ERR" 2>/dev/null; then
+    if grep -qF -- "$flag" "$OUT" "$ERR" 2> /dev/null; then
       ok "$name $flag with no value names the flag"
     else
       bad "$name $flag with no value names the flag" \
-          "stdout and stderr carried nothing mentioning $flag"
+        "stdout and stderr carried nothing mentioning $flag"
     fi
 
     if [ -s "$OUT" ] || [ -s "$ERR" ]; then
@@ -328,12 +370,12 @@ drive_script() {
     argv="$(positive_argv "$name" "$flag")"
     if [ -z "$argv" ]; then
       bad "$name $flag has a positive control" \
-          "no value declared in positive_argv() for a flag its own loop consumes" \
-          "add one line there -- a new valued flag with no positive control is untested"
+        "no value declared in positive_argv() for a flag its own loop consumes" \
+        "add one line there -- a new valued flag with no positive control is untested"
       continue
     fi
     local args=()
-    while IFS= read -r a; do args+=("$a"); done <<EOF
+    while IFS= read -r a; do args+=("$a"); done << EOF
 $argv
 EOF
     st=0
@@ -343,7 +385,7 @@ EOF
     else
       bad "$name $flag WITH a value still succeeds" "exit $st" "$(head -3 "$ERR")"
     fi
-    if grep -qF "needs a value" "$OUT" "$ERR" 2>/dev/null; then
+    if grep -qF "needs a value" "$OUT" "$ERR" 2> /dev/null; then
       bad "$name $flag WITH a value is not refused for a missing one" "$(head -3 "$ERR")"
     else
       ok "$name $flag WITH a value is not refused for a missing one"
@@ -373,7 +415,7 @@ META="$TMP/sweepfix"
 mkdir -p "$META/scripts"
 
 # A tool nobody listed here, whose argument loop is the shape valued_flags() reads.
-cat > "$META/scripts/jit-newtool.sh" <<'FIXTURE'
+cat > "$META/scripts/jit-newtool.sh" << 'FIXTURE'
 #!/bin/bash
 set -uo pipefail
 need_value() { echo "$1 needs a value" >&2; exit 2; }
@@ -389,7 +431,7 @@ FIXTURE
 
 # The positive control for the no-flags verdict: a script that really does take no
 # arguments, the shape all four hooks and common.sh are in.
-cat > "$META/scripts/plain-hook.sh" <<'FIXTURE'
+cat > "$META/scripts/plain-hook.sh" << 'FIXTURE'
 #!/bin/bash
 set -uo pipefail
 cat > /dev/null
@@ -398,7 +440,7 @@ FIXTURE
 
 # And the case a skip list gets wrong: it takes a valued flag, in a shape this suite
 # cannot read. Silently reporting it as "no flags" is the absence #188 is about.
-cat > "$META/scripts/odd-parse.sh" <<'FIXTURE'
+cat > "$META/scripts/odd-parse.sh" << 'FIXTURE'
 #!/bin/bash
 set -uo pipefail
 BASE=""
@@ -413,7 +455,7 @@ FIXTURE
 # The loop is there and every arm is a boolean. Nothing consumes a value, so there is
 # nothing here for #114 to happen to -- a named pass, not a failure. Without this fixture
 # the boolean-flags-only verdict is a branch nothing in the corpus ever reaches.
-cat > "$META/scripts/bool-only.sh" <<'FIXTURE'
+cat > "$META/scripts/bool-only.sh" << 'FIXTURE'
 #!/bin/bash
 set -uo pipefail
 VERBOSE=0
@@ -430,7 +472,7 @@ FIXTURE
 # carries `shift 2`, so valued_flags() sees nothing while the script plainly takes a value.
 # This is the "the parser rotted" verdict, and it had no fixture until the audit of #188
 # pointed out that three of the verdicts were driven and this one was not.
-cat > "$META/scripts/hidden-value.sh" <<'FIXTURE'
+cat > "$META/scripts/hidden-value.sh" << 'FIXTURE'
 #!/bin/bash
 set -uo pipefail
 BASE=""
@@ -443,20 +485,48 @@ done
 echo "ok $BASE"
 FIXTURE
 
+# #357: a formatter splits a one-line case arm across four lines, so the arm label and
+# its `shift 2` stop sharing a line -- and one of those lines can itself carry a `)`, from
+# an array append or a command substitution. This fixture names two flags in that shape,
+# so extracting one of the two is red here rather than quiet.
+cat > "$META/scripts/split-arm.sh" << 'FIXTURE'
+#!/bin/bash
+set -uo pipefail
+BASE=""
+FILES=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --base)
+      BASE="$2"
+      shift 2
+      ;;
+    --file)
+      FILES+=("$2")
+      shift 2
+      ;;
+    *)
+      echo "unknown flag: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+echo "ok $BASE ${FILES[*]:-}"
+FIXTURE
+
 # #193: a non-bash tool under scripts/ matches none of the bash argument-loop shapes
 # above, so without this fixture it would quietly classify as no-flags and be reported
 # as having nothing to drive -- whatever its actual argument handling does. It is
 # CLAUDE.md, not this file, that says scripts/ is bash/awk/perl only today; this file
 # only assumes that rule, and this fixture is what makes the assumption fail loudly
 # rather than silently if a non-bash tool ever lands here.
-cat > "$META/scripts/not-bash.py" <<'FIXTURE'
+cat > "$META/scripts/not-bash.py" << 'FIXTURE'
 #!/usr/bin/env python3
 import sys
 print("ok", sys.argv[1:])
 FIXTURE
 
 META_READY=1
-( cd "$META" && git init -q . && git add -A ) > /dev/null 2>&1 || META_READY=0
+(cd "$META" && git init -q . && git add -A) > /dev/null 2>&1 || META_READY=0
 if [ "$META_READY" -eq 1 ] && [ -z "$(cd "$META" && git ls-files -- scripts)" ]; then
   META_READY=0
 fi
@@ -481,40 +551,54 @@ if [ "$META_READY" -eq 0 ]; then
 else
   META_LIST="$(tracked_scripts "$META")"
   for want in scripts/jit-newtool.sh scripts/plain-hook.sh scripts/odd-parse.sh \
-              scripts/bool-only.sh scripts/hidden-value.sh scripts/not-bash.py; do
-    if grep -qxF "$want" <<<"$META_LIST"; then
+    scripts/bool-only.sh scripts/hidden-value.sh scripts/not-bash.py \
+    scripts/split-arm.sh; do
+    if grep -qxF "$want" <<< "$META_LIST"; then
       ok "the enumeration finds $want, which is named nowhere in this file"
     else
       bad "the enumeration finds $want, which is named nowhere in this file" \
-          "got: ${META_LIST:-<nothing>}"
+        "got: ${META_LIST:-<nothing>}"
     fi
   done
 
   class_is "a new tool with a readable argument loop must be DRIVEN" \
-           "$META/scripts/jit-newtool.sh" "drive"
+    "$META/scripts/jit-newtool.sh" "drive"
   class_is "a script with no argument parsing at all is no-flags, by its own source" \
-           "$META/scripts/plain-hook.sh" "no-flags"
+    "$META/scripts/plain-hook.sh" "no-flags"
   class_is "a flag in a shape this suite cannot read is a FAILURE, not a skip" \
-           "$META/scripts/odd-parse.sh" "flags-elsewhere"
+    "$META/scripts/odd-parse.sh" "flags-elsewhere"
   # The two halves of "the loop yielded no valued flag", which must never be one answer.
   class_is "a loop of boolean flags has nothing to drive, and is not a failure" \
-           "$META/scripts/bool-only.sh" "boolean-flags-only"
+    "$META/scripts/bool-only.sh" "boolean-flags-only"
   class_is "a loop that consumes \$2 with no 'shift 2' is the parser having rotted" \
-           "$META/scripts/hidden-value.sh" "loop-no-flags"
+    "$META/scripts/hidden-value.sh" "loop-no-flags"
   class_is "a non-bash tool under scripts/ is refused rather than read as no-flags (#193)" \
-           "$META/scripts/not-bash.py" "not-bash-script"
+    "$META/scripts/not-bash.py" "not-bash-script"
+  class_is "an arm split across lines by a formatter is still DRIVEN (#357)" \
+    "$META/scripts/split-arm.sh" "drive"
+
+  # The control the classifier alone cannot give: `drive` says the parser read SOMETHING,
+  # not that it read every flag. A line inside an arm carrying its own `)` is what would
+  # cost `--file` here, so this asserts the whole set rather than its emptiness.
+  SPLIT_FLAGS="$(valued_flags "$META/scripts/split-arm.sh" | tr '\n' ' ')"
+  if [ "$SPLIT_FLAGS" = "--base --file " ]; then
+    ok "both flags of a split arm are extracted, not just the first (#357)"
+  else
+    bad "both flags of a split arm are extracted, not just the first (#357)" \
+      "expected '--base --file ', got '${SPLIT_FLAGS:-<nothing>}'"
+  fi
 
   # The red, executed rather than reasoned about. An unlisted tool routes into
   # drive_script, which has no positive control for it and has to say so. Run in a subshell
   # so its PASS/FAIL increments stay out of this run totals, and read from a file rather
   # than $( ) because a captured variable silently drops NUL bytes.
-  ( drive_script "$META/scripts/jit-newtool.sh" ) > "$TMP/meta-drive.txt" 2>&1
+  (drive_script "$META/scripts/jit-newtool.sh") > "$TMP/meta-drive.txt" 2>&1
   if grep -qF "FAIL: jit-newtool.sh --base has a positive control" "$TMP/meta-drive.txt"; then
     ok "an unlisted tool goes RED here rather than being silently untested (#188)"
   else
     bad "an unlisted tool goes RED here rather than being silently untested (#188)" \
-        "driving it produced no failure about a missing positive control" \
-        "$(head -5 "$TMP/meta-drive.txt")"
+      "driving it produced no failure about a missing positive control" \
+      "$(head -5 "$TMP/meta-drive.txt")"
   fi
   # Paired with it, on the same fixture: a red proves nothing if the fixture is simply
   # broken, so the assertions that must have PASSED are checked too.
@@ -522,8 +606,8 @@ else
     ok "and the fixture is sound -- its refusal path ran and passed on the same run"
   else
     bad "and the fixture is sound -- its refusal path ran and passed on the same run" \
-        "the red above may be a broken fixture rather than a guard that fired" \
-        "$(head -5 "$TMP/meta-drive.txt")"
+      "the red above may be a broken fixture rather than a guard that fired" \
+      "$(head -5 "$TMP/meta-drive.txt")"
   fi
 fi
 
@@ -546,7 +630,7 @@ fi
 SCRIPT_LIST="$(tracked_scripts "$REPO")"
 # The enumeration control, first and loud. An empty or partial listing would drive nothing
 # and print a perfect score for it, which is the absence this suite exists to refuse.
-if ! grep -qxF "scripts/jit-dry-run.sh" <<<"$SCRIPT_LIST"; then
+if ! grep -qxF "scripts/jit-dry-run.sh" <<< "$SCRIPT_LIST"; then
   echo "  FAIL: could not enumerate scripts/ -- nothing below would have been driven,"
   echo "        and this suite would have reported a clean run over an empty sweep."
   echo "        got: ${SCRIPT_LIST:-<nothing>}"
@@ -567,46 +651,53 @@ handle_verdict() {
       N_DRIVEN=$((N_DRIVEN + 1))
       DRIVEN_LIST="$DRIVEN_LIST$script
 "
-      drive_script "$REPO/$script" ;;
+      drive_script "$REPO/$script"
+      ;;
     no-flags)
       # The third state, printed rather than skipped: this is what "nothing to drive here"
       # looks like, and it must never be spelled the same way as "never ran".
       N_NOFLAG=$((N_NOFLAG + 1))
-      ok "$script takes no flag arguments -- nothing to drive, by its own source" ;;
+      ok "$script takes no flag arguments -- nothing to drive, by its own source"
+      ;;
     boolean-flags-only)
       # Also the third state: a loop whose arms are all booleans consumes no value, so
       # there is nothing here for #114 to happen to. Named, for the same reason no-flags is.
       N_NOFLAG=$((N_NOFLAG + 1))
-      ok "$script has an argument loop, and no arm of it consumes a value -- nothing to drive" ;;
+      ok "$script has an argument loop, and no arm of it consumes a value -- nothing to drive"
+      ;;
     loop-no-flags)
       echo ""
       echo "=== $script ==="
       bad "$script has an argument loop this suite can no longer read" \
-          "the loop is there, an arm of it reaches for \$2, and valued_flags() found no" \
-          "valued flag -- either the loop shape moved or the parser rotted. Every flag of" \
-          "this script is untested, and nothing else in this suite would have said so." ;;
+        "the loop is there, an arm of it reaches for \$2, and valued_flags() found no" \
+        "valued flag -- either the loop shape moved or the parser rotted. Every flag of" \
+        "this script is untested, and nothing else in this suite would have said so."
+      ;;
     flags-elsewhere)
       echo ""
       echo "=== $script ==="
       bad "$script parses flags in a shape this suite cannot drive" \
-          "no '"'"'while [ \$# -gt 0 ]'"'"' loop, but getopts / shift 2 / a dash case arm is present." \
-          "Give it the loop shape the other tools use, or teach valued_flags() to read this" \
-          "one -- reporting it as a tool with no flags would be the silence #188 is about." ;;
+        "no '"'"'while [ \$# -gt 0 ]'"'"' loop, but getopts / shift 2 / a dash case arm is present." \
+        "Give it the loop shape the other tools use, or teach valued_flags() to read this" \
+        "one -- reporting it as a tool with no flags would be the silence #188 is about."
+      ;;
     unreadable-file)
       echo ""
       echo "=== $script ==="
       bad "$script could not be read at all" \
-          "it is tracked under scripts/ and this suite could not open it to classify it" ;;
+        "it is tracked under scripts/ and this suite could not open it to classify it"
+      ;;
     not-bash-script)
       echo ""
       echo "=== $script ==="
       bad "$script is not a bash script, and this classifier only reads bash shapes" \
-          "CLAUDE.md permits bash, awk and perl under scripts/ -- this classifier is" \
-          "coupled to something narrower than that (bash specifically), which was only" \
-          "ever true because every tracked script happened to be bash. This suite needs" \
-          "to learn awk's or perl's argument-handling shape before it can sweep this file" \
-          "honestly; reading it as no-flags would report coverage this suite does not" \
-          "have (#193)." ;;
+        "CLAUDE.md permits bash, awk and perl under scripts/ -- this classifier is" \
+        "coupled to something narrower than that (bash specifically), which was only" \
+        "ever true because every tracked script happened to be bash. This suite needs" \
+        "to learn awk's or perl's argument-handling shape before it can sweep this file" \
+        "honestly; reading it as no-flags would report coverage this suite does not" \
+        "have (#193)."
+      ;;
   esac
 }
 
@@ -616,19 +707,19 @@ N_NOFLAG=0
 while IFS= read -r script; do
   [ -n "$script" ] || continue
   handle_verdict "$script" "$(classify_script "$REPO/$script")"
-done <<<"$SCRIPT_LIST"
+done <<< "$SCRIPT_LIST"
 
 # The not-bash-script arm above has no fixture in THIS repository's own scripts/ --
 # every tracked script here is bash, so the loop just above has never actually exercised
 # it. Driven directly, in a subshell so its own PASS/FAIL and N_DRIVEN/N_NOFLAG stay out
 # of this run's totals, the same pattern already used for jit-newtool.sh's drive path.
-( handle_verdict "scripts/not-bash.py" "not-bash-script" ) > "$TMP/meta-notbash.txt" 2>&1
+(handle_verdict "scripts/not-bash.py" "not-bash-script") > "$TMP/meta-notbash.txt" 2>&1
 if grep -qF "FAIL: scripts/not-bash.py is not a bash script" "$TMP/meta-notbash.txt"; then
   ok "the not-bash-script verdict's own printed message is exercised, not just its classifier return (#193)"
 else
   bad "the not-bash-script verdict's own printed message is exercised, not just its classifier return (#193)" \
-      "handle_verdict() did not print the expected FAIL line" \
-      "$(head -5 "$TMP/meta-notbash.txt")"
+    "handle_verdict() did not print the expected FAIL line" \
+    "$(head -5 "$TMP/meta-notbash.txt")"
 fi
 
 echo ""
@@ -639,8 +730,8 @@ if [ "$N_DRIVEN" -ge 1 ] && [ "$N_NOFLAG" -ge 1 ]; then
   ok "the classifier told the two apart in this tree rather than answering one of them"
 else
   bad "the classifier told the two apart in this tree rather than answering one of them" \
-      "$N_DRIVEN driven and $N_NOFLAG with no flags -- one of those is 0, so the verdict" \
-      "it produced is the same for every script and says nothing about any of them"
+    "$N_DRIVEN driven and $N_NOFLAG with no flags -- one of those is 0, so the verdict" \
+    "it produced is the same for every script and says nothing about any of them"
 fi
 
 # A second reading of the same question, written a different way on purpose. The floors
@@ -650,14 +741,14 @@ fi
 while IFS= read -r script; do
   [ -n "$script" ] || continue
   grep -qF "shift 2" "$REPO/$script" || continue
-  if grep -qxF "$script" <<<"$DRIVEN_LIST"; then
+  if grep -qxF "$script" <<< "$DRIVEN_LIST"; then
     ok "cross-check: $script consumes flag values and the sweep drove it"
   else
     bad "cross-check: $script consumes flag values and the sweep drove it" \
-        "it mentions 'shift 2' and the sweep did not drive it -- classify_script() has" \
-        "silently dropped a script the old hand-written list would have named"
+      "it mentions 'shift 2' and the sweep did not drive it -- classify_script() has" \
+      "silently dropped a script the old hand-written list would have named"
   fi
-done <<<"$SCRIPT_LIST"
+done <<< "$SCRIPT_LIST"
 
 echo ""
 echo "========================"

@@ -53,10 +53,12 @@ printf '0' > "$SID_FILE"
 # jit-drive: assert_contains contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:-<EMPTY>}"
   fi
@@ -65,21 +67,25 @@ assert_contains() {
 # jit-drive: assert_missing not_contains capture
 assert_missing() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should not contain: $unexpected"
     echo "    got: ${output:-<EMPTY>}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
 assert_rc0() {
   local desc="$1" rc="$2"
   if [ "$rc" = 0 ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc (exit $rc)"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (exit $rc)"
   fi
 }
 
@@ -111,14 +117,14 @@ mk_vocab_entry() {
 }
 
 rebuild() {
-  CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/rebuild-tsv.sh" >/dev/null 2>&1
+  CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/rebuild-tsv.sh" > /dev/null 2>&1
 }
 
 # A fresh session id per call unless one is named -- every notice in this hook is
 # once-per-session, so a reused id turns a real assertion into a dedup test.
 next_sid() {
   local n
-  n=$(( $(cat "$SID_FILE") + 1 ))
+  n=$(($(cat "$SID_FILE") + 1))
   printf '%s' "$n" > "$SID_FILE"
   printf 'sess%03d' "$n"
 }
@@ -128,32 +134,35 @@ next_sid() {
 # quote, so there is no way to write these through a naive quoting helper.
 run_bash_raw() {
   printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"session_id":"%s"}' "$2" "$(next_sid)" \
-    | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null
+    | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-tool-hook.sh" 2> /dev/null
 }
 
 # $1 project. TodoWrite carries no key this hook reads: the #182 no-subject state.
 run_todo() {
   printf '{"tool_name":"TodoWrite","tool_input":{"todos":[]},"session_id":"%s"}' "$(next_sid)" \
-    | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null
+    | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-tool-hook.sh" 2> /dev/null
 }
 
 # ---------------------------------------------------------------------------
 echo "=== A: a ~match rule reaches a command the cut emptied ==="
 
-PROJ="$TMPROOT/a"; BASE="$PROJ/.claude/jit-context"
-mk_tool_entry "$BASE" 00-manual are   Bash '~git[[:space:]]+push' remind
-mk_tool_entry "$BASE" 00-manual actrl Bash 'ctrltarget'           remind
+PROJ="$TMPROOT/a"
+BASE="$PROJ/.claude/jit-context"
+mk_tool_entry "$BASE" 00-manual are Bash '~git[[:space:]]+push' remind
+mk_tool_entry "$BASE" 00-manual actrl Bash 'ctrltarget' remind
 rebuild "$PROJ"
 
-OUT=$(run_bash_raw "$PROJ" "ctrltarget now"); RC=$?
-assert_rc0      "A the hook exits 0" "$RC"
+OUT=$(run_bash_raw "$PROJ" "ctrltarget now")
+RC=$?
+assert_rc0 "A the hook exits 0" "$RC"
 assert_contains "A POSITIVE CONTROL: an unrelated rule fires in this tree" "$OUT" "TOOLBODY-actrl"
 
 OUT=$(run_bash_raw "$PROJ" "git push origin main")
 assert_contains "A POSITIVE CONTROL: the regex rule fires without the leading semicolon" "$OUT" "TOOLBODY-are"
 
-OUT=$(run_bash_raw "$PROJ" "; git push origin main"); RC=$?
-assert_rc0      "A the hook exits 0 on a cut-to-nothing command" "$RC"
+OUT=$(run_bash_raw "$PROJ" "; git push origin main")
+RC=$?
+assert_rc0 "A the hook exits 0 on a cut-to-nothing command" "$RC"
 assert_contains "A the regex rule fires on a leading-semicolon command (the reproduction)" "$OUT" "TOOLBODY-are"
 
 # The regex arm has always matched the WHOLE command, which is why `cd x && git push`
@@ -167,9 +176,10 @@ echo "=== B: a mode:block ~match rule no longer fails open ==="
 
 # The tools dimension is the only one that can refuse a call. A block rule that reads as
 # enforced and is not is the worst outcome this repository names.
-PROJ="$TMPROOT/b"; BASE="$PROJ/.claude/jit-context"
+PROJ="$TMPROOT/b"
+BASE="$PROJ/.claude/jit-context"
 mk_tool_entry "$BASE" 00-manual bblock Bash '~git[[:space:]]+push' block
-mk_tool_entry "$BASE" 00-manual bctrl  Bash 'ctrltarget'           remind
+mk_tool_entry "$BASE" 00-manual bctrl Bash 'ctrltarget' remind
 rebuild "$PROJ"
 
 OUT=$(run_bash_raw "$PROJ" "ctrltarget now")
@@ -178,15 +188,16 @@ assert_contains "B POSITIVE CONTROL: an unrelated rule fires in this tree" "$OUT
 OUT=$(run_bash_raw "$PROJ" "git push origin main")
 assert_contains "B POSITIVE CONTROL: the block rule refuses the uncut command" "$OUT" '"decision":"block"'
 
-OUT=$(run_bash_raw "$PROJ" "; git push origin main"); RC=$?
-assert_rc0      "B the hook still exits 0 when it blocks" "$RC"
+OUT=$(run_bash_raw "$PROJ" "; git push origin main")
+RC=$?
+assert_rc0 "B the hook still exits 0 when it blocks" "$RC"
 assert_contains "B the block rule refuses a leading-semicolon command" "$OUT" '"decision":"block"'
 assert_contains "B and the refusal carries the rule body" "$OUT" "TOOLBODY-bblock"
 
 # NEGATIVE CONTROL, and it is the one that keeps B from being a test that passes because
 # everything is blocked: a cut-to-nothing command the rule does not describe goes through.
 OUT=$(run_bash_raw "$PROJ" "; ls -la")
-assert_missing  "B NEGATIVE CONTROL: a cut-to-nothing command the rule does not match is not blocked" "$OUT" '"decision":"block"'
+assert_missing "B NEGATIVE CONTROL: a cut-to-nothing command the rule does not match is not blocked" "$OUT" '"decision":"block"'
 
 # ---------------------------------------------------------------------------
 echo ""
@@ -196,8 +207,9 @@ echo "=== C: the #7 cut is KEPT -- a substring rule still does not see past it =
 # quote is what stops a substring rule about git push firing on an echo of those words,
 # and `; git push` is the degenerate case of `true; git push`, which is silent today and
 # stays silent.
-PROJ="$TMPROOT/c"; BASE="$PROJ/.claude/jit-context"
-mk_tool_entry "$BASE" 00-manual csub  Bash 'git push'   remind
+PROJ="$TMPROOT/c"
+BASE="$PROJ/.claude/jit-context"
+mk_tool_entry "$BASE" 00-manual csub Bash 'git push' remind
 mk_tool_entry "$BASE" 00-manual cctrl Bash 'ctrltarget' remind
 rebuild "$PROJ"
 
@@ -206,21 +218,23 @@ assert_contains "C POSITIVE CONTROL: the substring rule fires on the uncut comma
 
 # {"command":"echo \"git push\""} -- the #7 shape, JSON-escaped.
 OUT=$(run_bash_raw "$PROJ" 'echo \"git push\"')
-assert_missing  "C the #7 shape stays unmatched: an echo of the same words" "$OUT" "TOOLBODY-csub"
+assert_missing "C the #7 shape stays unmatched: an echo of the same words" "$OUT" "TOOLBODY-csub"
 
 OUT=$(run_bash_raw "$PROJ" "true; git push origin main")
-assert_missing  "C a substring rule does not see past a chain operator (unchanged)" "$OUT" "TOOLBODY-csub"
+assert_missing "C a substring rule does not see past a chain operator (unchanged)" "$OUT" "TOOLBODY-csub"
 
-OUT=$(run_bash_raw "$PROJ" "; git push origin main"); RC=$?
-assert_rc0      "C the hook exits 0" "$RC"
-assert_missing  "C nor past a LEADING one -- the same cut, not a new hole" "$OUT" "TOOLBODY-csub"
+OUT=$(run_bash_raw "$PROJ" "; git push origin main")
+RC=$?
+assert_rc0 "C the hook exits 0" "$RC"
+assert_missing "C nor past a LEADING one -- the same cut, not a new hole" "$OUT" "TOOLBODY-csub"
 
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== D: every byte the cut looks for, not just the semicolon ==="
 
-PROJ="$TMPROOT/d"; BASE="$PROJ/.claude/jit-context"
-mk_tool_entry "$BASE" 00-manual dre   Bash '~cutmarker' remind
+PROJ="$TMPROOT/d"
+BASE="$PROJ/.claude/jit-context"
+mk_tool_entry "$BASE" 00-manual dre Bash '~cutmarker' remind
 mk_tool_entry "$BASE" 00-manual dctrl Bash 'ctrltarget' remind
 rebuild "$PROJ"
 
@@ -249,30 +263,35 @@ echo "=== E: the #182 census is NOT widened -- these are different states ==="
 # A subject that was built and then cut is not a subject that could not be built. #184
 # reported the second; reporting the first would tell an author that every Bash rule in
 # their tree is unreachable on a call that carried a command the whole time.
-PROJ="$TMPROOT/e"; BASE="$PROJ/.claude/jit-context"
-mk_tool_entry "$BASE" 00-manual etodo TodoWrite 'anything'   remind
-mk_tool_entry "$BASE" 00-manual ectrl Bash      'ctrltarget' remind
+PROJ="$TMPROOT/e"
+BASE="$PROJ/.claude/jit-context"
+mk_tool_entry "$BASE" 00-manual etodo TodoWrite 'anything' remind
+mk_tool_entry "$BASE" 00-manual ectrl Bash 'ctrltarget' remind
 rebuild "$PROJ"
 
 OUT=$(run_todo "$PROJ")
 assert_contains "E POSITIVE CONTROL: a genuinely subject-less dispatch is still reported" "$OUT" "could build no subject"
 
-OUT=$(run_bash_raw "$PROJ" "; cat /etc/hosts"); RC=$?
-assert_rc0     "E the hook exits 0 on a cut-to-nothing command" "$RC"
+OUT=$(run_bash_raw "$PROJ" "; cat /etc/hosts")
+RC=$?
+assert_rc0 "E the hook exits 0 on a cut-to-nothing command" "$RC"
 assert_missing "E a cut-to-nothing command does NOT claim the Bash rules are unreachable" "$OUT" "could build no subject"
 
 # And with no rule matching it, the answer is still exactly {} -- the cost of this fix on
 # the overwhelmingly common call is zero.
-PROJ="$TMPROOT/e2"; BASE="$PROJ/.claude/jit-context"
+PROJ="$TMPROOT/e2"
+BASE="$PROJ/.claude/jit-context"
 mk_tool_entry "$BASE" 00-manual e2ctrl Bash 'ctrltarget' remind
 rebuild "$PROJ"
 OUT=$(run_bash_raw "$PROJ" "ctrltarget now")
 assert_contains "E POSITIVE CONTROL: the rule fires in the second tree" "$OUT" "TOOLBODY-e2ctrl"
 OUT=$(run_bash_raw "$PROJ" "; cat /etc/hosts")
 if [ "$OUT" = "{}" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: E a cut-to-nothing command matching no rule is still {}"
+  PASS=$((PASS + 1))
+  echo "  PASS: E a cut-to-nothing command matching no rule is still {}"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: E a cut-to-nothing command matching no rule is still {}"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: E a cut-to-nothing command matching no rule is still {}"
   echo "    got: ${OUT:-<EMPTY>}"
 fi
 
@@ -291,9 +310,10 @@ echo "=== F: the vocabulary pass binds on the path it was always reading ==="
 # section for a reason that has nothing to do with what it tests. A keyword no
 # dictionary carries keeps this section a test of the cut-to-nothing fix, not of the
 # generic-word list's current contents.
-PROJ="$TMPROOT/f"; BASE="$PROJ/.claude/jit-context"
+PROJ="$TMPROOT/f"
+BASE="$PROJ/.claude/jit-context"
 mk_vocab_entry "$BASE" 00-manual fbilling 'billingz'
-mk_tool_entry  "$BASE" 00-manual fctrl Bash 'ctrltarget' remind
+mk_tool_entry "$BASE" 00-manual fctrl Bash 'ctrltarget' remind
 rebuild "$PROJ"
 
 OUT=$(run_bash_raw "$PROJ" "ctrltarget now")
@@ -303,14 +323,15 @@ assert_contains "F POSITIVE CONTROL: the vocab entry binds on an uncut command" 
 OUT=$(run_bash_raw "$PROJ" "true; cat src/Billingz/x.php")
 assert_contains "F POSITIVE CONTROL: and after a chain operator (always did)" "$OUT" "VOCABBODY-fbilling"
 
-OUT=$(run_bash_raw "$PROJ" "; cat src/Billingz/x.php"); RC=$?
-assert_rc0      "F the hook exits 0" "$RC"
+OUT=$(run_bash_raw "$PROJ" "; cat src/Billingz/x.php")
+RC=$?
+assert_rc0 "F the hook exits 0" "$RC"
 assert_contains "F and now on a cut-to-nothing command too" "$OUT" "VOCABBODY-fbilling"
 
 # NEGATIVE CONTROL: a cut-to-nothing command naming no path binds nothing. Without it,
 # F would pass on a hook that injected every vocabulary entry unconditionally.
 OUT=$(run_bash_raw "$PROJ" "; echo hello")
-assert_missing  "F NEGATIVE CONTROL: a cut-to-nothing command naming no path binds nothing" "$OUT" "VOCABBODY-fbilling"
+assert_missing "F NEGATIVE CONTROL: a cut-to-nothing command naming no path binds nothing" "$OUT" "VOCABBODY-fbilling"
 
 # ---------------------------------------------------------------------------
 echo ""

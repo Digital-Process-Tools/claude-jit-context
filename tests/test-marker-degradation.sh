@@ -40,19 +40,27 @@ FAIL=0
 assert_contains() {
   local desc="$1" output="$2" needle="$3"
   case "$output" in
-    *"$needle"*) PASS=$((PASS + 1)); echo "  PASS: $desc" ;;
-    *) FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
-       echo "    expected to contain: $needle"
-       echo "    got: ${output:-<EMPTY>}" ;;
+    *"$needle"*)
+      PASS=$((PASS + 1))
+      echo "  PASS: $desc"
+      ;;
+    *)
+      FAIL=$((FAIL + 1))
+      echo "  FAIL: $desc"
+      echo "    expected to contain: $needle"
+      echo "    got: ${output:-<EMPTY>}"
+      ;;
   esac
 }
 
 assert_equal() {
   local desc="$1" got="$2" want="$3"
   if [ "$got" = "$want" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected: [$want]"
     echo "    got:      [$got]"
   fi
@@ -61,9 +69,11 @@ assert_equal() {
 assert_silent() {
   local desc="$1" err="$2"
   if [ -z "$err" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    stderr should have been empty, got: $err"
   fi
 }
@@ -71,18 +81,22 @@ assert_silent() {
 assert_rc0() {
   local desc="$1" rc="$2"
   if [ "$rc" -eq 0 ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc (exit $rc)"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (exit $rc)"
   fi
 }
 
 assert_file() {
   local desc="$1" path="$2"
   if [ -f "$path" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    this path should exist and be a regular file: $path"
   fi
 }
@@ -96,9 +110,9 @@ new_path_project() {
   local p="$TMP/$1"
   rm -rf "$p"
   mkdir -p "$p/.claude/jit-context/paths/00-manual" \
-           "$p/.claude/jit-context/paths/10-auto" \
-           "$p/.claude/jit-context/paths/20-grouped" \
-           "$p/.claude/jit-context/paths/30-crosscutting"
+    "$p/.claude/jit-context/paths/10-auto" \
+    "$p/.claude/jit-context/paths/20-grouped" \
+    "$p/.claude/jit-context/paths/30-crosscutting"
   printf '%s\t%s\n' '\.php' 'php-coding.md' > "$p/.claude/jit-context/paths/00-manual/00-index.tsv"
   printf 'php coding rules\n' > "$p/.claude/jit-context/paths/00-manual/php-coding.md"
   : > "$p/.claude/jit-context/paths/10-auto/00-index.tsv"
@@ -113,10 +127,10 @@ new_tool_project() {
   local p="$TMP/$1"
   rm -rf "$p"
   mkdir -p "$p/.claude/jit-context/tools/00-manual" \
-           "$p/.claude/jit-context/vocabulary/00-manual" \
-           "$p/.claude/jit-context/vocabulary/10-auto" \
-           "$p/.claude/jit-context/vocabulary/20-grouped" \
-           "$p/.claude/jit-context/vocabulary/30-crosscutting"
+    "$p/.claude/jit-context/vocabulary/00-manual" \
+    "$p/.claude/jit-context/vocabulary/10-auto" \
+    "$p/.claude/jit-context/vocabulary/20-grouped" \
+    "$p/.claude/jit-context/vocabulary/30-crosscutting"
   printf 'Bash\tgit push\tno-push.md\t%s\t\tforce\n' "$2" \
     > "$p/.claude/jit-context/tools/00-manual/00-index.tsv"
   printf 'never force push\n' > "$p/.claude/jit-context/tools/00-manual/no-push.md"
@@ -133,19 +147,20 @@ state_of() { printf '%s' "$1/.claude/jit-context/.discovery/state"; }
 # same string the entry was asserted against.
 run_path() {
   printf '{"session_id":"%s","tool_name":"Edit","tool_input":{"file_path":"src/a.php"}}' "$2" \
-    | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-path-hook.sh" 2>"$ERR"
+    | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-path-hook.sh" 2> "$ERR"
 }
 
 run_tool() {
   printf '{"session_id":"%s","tool_name":"Bash","tool_input":{"command":"git push --force"}}' "$2" \
-    | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-tool-hook.sh" 2>"$ERR"
+    | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-tool-hook.sh" 2> "$ERR"
 }
 
 echo "=== A: the harness control -- a healthy marker injects, records and dedups ==="
 # Nothing below this line is evidence if this section is red.
 
 P="$(new_path_project a)"
-OUT1="$(run_path "$P" "sess-a")"; RC1=$?
+OUT1="$(run_path "$P" "sess-a")"
+RC1=$?
 E1="$(cat "$ERR")"
 OUT2="$(run_path "$P" "sess-a")"
 assert_rc0 "control: hook exits 0" "$RC1"
@@ -170,7 +185,8 @@ echo "=== B: the marker path names a directory -- the entry still arrives (#50) 
 
 P="$(new_path_project b)"
 mkdir -p "$(state_of "$P")/path-shown-sess-b.txt"
-OUT="$(run_path "$P" "sess-b")"; RC=$?
+OUT="$(run_path "$P" "sess-b")"
+RC=$?
 assert_rc0 "unopenable marker: hook exits 0" "$RC"
 assert_contains "unopenable marker: THE ENTRY IS STILL INJECTED" "$OUT" "php coding rules"
 OUT2="$(run_path "$P" "sess-b")"
@@ -191,19 +207,20 @@ B2_SKIPPED=0
 P="$(new_path_project b2)"
 mkdir -p "$(state_of "$P")"
 printf 'some-other-entry.md\n' > "$(state_of "$P")/path-shown-sess-b2.txt"
-chmod 444 "$(state_of "$P")/path-shown-sess-b2.txt" 2>/dev/null
+chmod 444 "$(state_of "$P")/path-shown-sess-b2.txt" 2> /dev/null
 if [ -w "$(state_of "$P")/path-shown-sess-b2.txt" ]; then
   B2_SKIPPED=1
   echo "  SKIP-NOTE: chmod did not remove write permission here (running as root, or a"
   echo "             filesystem without POSIX modes). Section B2 tested nothing."
 else
-  OUT="$(run_path "$P" "sess-b2")"; RC=$?
+  OUT="$(run_path "$P" "sess-b2")"
+  RC=$?
   E="$(cat "$ERR")"
   assert_rc0 "unwritable marker: hook exits 0" "$RC"
   assert_contains "unwritable marker: THE ENTRY IS STILL INJECTED" "$OUT" "php coding rules"
   assert_silent "unwritable marker: nothing on the session stderr" "$E"
 fi
-chmod 644 "$(state_of "$P")/path-shown-sess-b2.txt" 2>/dev/null
+chmod 644 "$(state_of "$P")/path-shown-sess-b2.txt" 2> /dev/null
 
 echo ""
 echo "=== B3: SessionStart clears a link or an empty directory at this session's marker ==="
@@ -215,12 +232,14 @@ P="$(new_path_project b3)"
 mkdir -p "$(state_of "$P")/path-shown-sess-b3.txt"
 SS_ERR="$TMP/ss-stderr"
 printf '{"session_id":"sess-b3","hook_event_name":"SessionStart"}' \
-  | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/session-start-hook.sh" >/dev/null 2>"$SS_ERR"
+  | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/session-start-hook.sh" > /dev/null 2> "$SS_ERR"
 assert_silent "session-start: nothing on the session stderr" "$(cat "$SS_ERR")"
 if [ -e "$(state_of "$P")/path-shown-sess-b3.txt" ]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: session-start left the directory at the marker name"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: session-start left the directory at the marker name"
 else
-  PASS=$((PASS + 1)); echo "  PASS: session-start cleared the directory at the marker name"
+  PASS=$((PASS + 1))
+  echo "  PASS: session-start cleared the directory at the marker name"
 fi
 OUT="$(run_path "$P" "sess-b3")"
 E="$(cat "$ERR")"
@@ -241,10 +260,11 @@ echo "=== C: the state directory vanishes between the check and the write (#50) 
 
 P="$(new_path_project c)"
 mkdir -p "$(state_of "$P")"
-OUT="$( { printf '{"session_id":"sess-c","tool_name":"Edit","tool_input":{"file_path":"src/a.php"}}'
-          sleep 1
-          rm -rf "$(state_of "$P")"
-        } | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/pre-path-hook.sh" 2>"$ERR" )"
+OUT="$({
+  printf '{"session_id":"sess-c","tool_name":"Edit","tool_input":{"file_path":"src/a.php"}}'
+  sleep 1
+  rm -rf "$(state_of "$P")"
+} | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/pre-path-hook.sh" 2> "$ERR")"
 RC=$?
 E="$(cat "$ERR")"
 assert_rc0 "state dir removed mid-flight: hook exits 0" "$RC"
@@ -273,7 +293,8 @@ for MODES in "block" "block,once"; do
 
   P="$(new_tool_project "d-bad-$TAG" "$MODES")"
   mkdir -p "$(state_of "$P")/vocab-shown-sess-d.txt"
-  OUT="$(run_tool "$P" "sess-d")"; RC=$?
+  OUT="$(run_tool "$P" "sess-d")"
+  RC=$?
   assert_rc0 "modes=$MODES unopenable marker: hook exits 0" "$RC"
   assert_contains "modes=$MODES unopenable marker: THE BLOCK IS STILL EMITTED" "$OUT" '"decision":"block"'
 done
@@ -288,7 +309,7 @@ probe_symlinks() {
   local d="$TMP/.symlink-probe"
   rm -rf "$d" || return 1
   mkdir -p "$d/target-dir" || return 1
-  ln -sfn "$d/target-dir" "$d/link-dir" 2>/dev/null
+  ln -sfn "$d/target-dir" "$d/link-dir" 2> /dev/null
   printf 'late\n' > "$d/target-dir/late.txt" || return 1
   [ -L "$d/link-dir" ] || return 1
   [ -f "$d/link-dir/late.txt" ] || return 1
@@ -310,13 +331,15 @@ else
   # check.
 
   VICTIM="$TMP/outside-e/victim.txt"
-  rm -rf "$TMP/outside-e"; mkdir -p "$TMP/outside-e"
+  rm -rf "$TMP/outside-e"
+  mkdir -p "$TMP/outside-e"
   printf '# original\n' > "$VICTIM"
 
   P="$(new_path_project e)"
   mkdir -p "$(state_of "$P")"
   ln -sfn "$VICTIM" "$(state_of "$P")/path-shown-sess-e.txt"
-  OUT="$(run_path "$P" "sess-e")"; RC=$?
+  OUT="$(run_path "$P" "sess-e")"
+  RC=$?
   E="$(cat "$ERR")"
   assert_rc0 "linked marker: hook exits 0" "$RC"
   assert_contains "linked marker: the entry is still injected" "$OUT" "php coding rules"

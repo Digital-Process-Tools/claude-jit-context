@@ -18,7 +18,7 @@ TOOL_HOOK="$REPO/scripts/pre-tool-hook.sh"
 PASS=0
 FAIL=0
 
-TMP="$(mktemp -d 2>/dev/null)" || TMP=""
+TMP="$(mktemp -d 2> /dev/null)" || TMP=""
 if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
   echo "  SKIPPED: mktemp -d produced no directory, so no fixture can be built here."
   exit 2
@@ -30,7 +30,8 @@ BASE="$PROJ/.claude/jit-context"
 VOCAB="$BASE/vocabulary"
 mkdir -p "$VOCAB/00-manual" "$VOCAB/10-auto"
 
-IDXNAME="00-index"; IDXNAME="$IDXNAME.tsv"
+IDXNAME="00-index"
+IDXNAME="$IDXNAME.tsv"
 
 printf 'bridgekw\tbridge.md\n' > "$VOCAB/00-manual/$IDXNAME"
 echo "bridge entry body" > "$VOCAB/00-manual/bridge.md"
@@ -46,10 +47,10 @@ touch -t 202001010000 "$VOCAB/00-manual/bridge.md"
 EXPECT_DAYS="$(perl -e 'print int(-M $ARGV[0])' "$VOCAB/00-manual/bridge.md")"
 
 run_prompt() {
-  echo "$1" | CLAUDE_PROJECT_DIR="$PROJ" bash "$PROMPT_HOOK" 2>/dev/null
+  echo "$1" | CLAUDE_PROJECT_DIR="$PROJ" bash "$PROMPT_HOOK" 2> /dev/null
 }
 run_tool() {
-  printf '%s' "$1" | CLAUDE_PROJECT_DIR="$PROJ" bash "$TOOL_HOOK" 2>/dev/null
+  printf '%s' "$1" | CLAUDE_PROJECT_DIR="$PROJ" bash "$TOOL_HOOK" 2> /dev/null
 }
 
 # Vocabulary matching in pre-tool-hook.sh binds to WHERE the tool acts, not what the
@@ -58,22 +59,26 @@ run_tool() {
 
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:0:400}"
   fi
 }
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: ${output:0:400}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
@@ -108,13 +113,14 @@ echo "=== a filename with a literal tab in a 00-manual layer never reaches the a
 TABPROJ="$TMP/tabproj"
 TABBASE="$TABPROJ/.claude/jit-context/vocabulary"
 mkdir -p "$TABBASE/00-manual"
-IDXNAME="00-index"; IDXNAME="$IDXNAME.tsv"
+IDXNAME="00-index"
+IDXNAME="$IDXNAME.tsv"
 printf 'bridgekw\tbridge.md\n' > "$TABBASE/00-manual/$IDXNAME"
 echo "bridge entry body" > "$TABBASE/00-manual/bridge.md"
 touch -t 202001010000 "$TABBASE/00-manual/bridge.md"
 # The adversarial neighbour: a name that starts with the legitimate one's bytes plus a
 # real TAB, so a naive first-tab split would fold this row onto "bridge.md"'s key.
-perl -e 'my $n = "bridge.md" . "\t" . "1"; open(my $fh, ">", "'"$TABBASE"'/00-manual/$n") or exit 0; print $fh "poisoned\n"; close $fh;' 2>/dev/null
+perl -e 'my $n = "bridge.md" . "\t" . "1"; open(my $fh, ">", "'"$TABBASE"'/00-manual/$n") or exit 0; print $fh "poisoned\n"; close $fh;' 2> /dev/null
 
 TABLE="$(bash -c '
   set -u

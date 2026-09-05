@@ -25,8 +25,16 @@ REBUILD="$REPO/scripts/rebuild-tsv.sh"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+}
 
 # Here-string, never a pipe: `| grep -q` exits on the first match and the writer takes
 # SIGPIPE, which under pipefail reports the opposite of what was found (#56, carried from
@@ -34,7 +42,7 @@ bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    
 # jit-drive: assert_contains contains capture
 assert_contains() {
   local desc="$1" out="$2" want="$3"
-  if grep -qF -- "$want" <<<"$out"; then
+  if grep -qF -- "$want" <<< "$out"; then
     ok "$desc"
   else
     bad "$desc" "expected to contain: $want"
@@ -51,24 +59,24 @@ assert_rc() {
   fi
 }
 
-if ! git --version >/dev/null 2>&1; then
+if ! git --version > /dev/null 2>&1; then
   echo "SKIP-NOTE: no git on PATH -- this suite tests the git-worktree case specifically"
   echo "           and cannot construct it without git. Nothing here was tested."
   exit 2
 fi
 
-ROOT="$(mktemp -d 2>/dev/null || mktemp -d -t jit231)"
+ROOT="$(mktemp -d 2> /dev/null || mktemp -d -t jit231)"
 trap 'chmod -R u+rwX "$ROOT" 2>/dev/null; rm -rf "$ROOT"' EXIT
 
 MAIN="$ROOT/main"
 mkdir -p "$MAIN"
 if ! (
-  cd "$MAIN" &&
-  git init -q &&
-  git config user.email "t@example.com" &&
-  git config user.name "t" &&
-  git commit -q --allow-empty -m init
-) >"$ROOT/git-init.log" 2>&1; then
+  cd "$MAIN" \
+    && git init -q \
+    && git config user.email "t@example.com" \
+    && git config user.name "t" \
+    && git commit -q --allow-empty -m init
+) > "$ROOT/git-init.log" 2>&1; then
   echo "SKIP-NOTE: could not initialise a git repo here -- see $ROOT/git-init.log."
   echo "           Nothing here was tested."
   exit 2
@@ -96,7 +104,7 @@ write_entry "$MAIN" tools/00-manual/main-entry.md \
   "match: main-tree-literal" \
   "mode: remind"
 
-if ! (cd "$MAIN" && git worktree add -q "$ROOT/wt" -b jit231-wt) >"$ROOT/worktree-add.log" 2>&1; then
+if ! (cd "$MAIN" && git worktree add -q "$ROOT/wt" -b jit231-wt) > "$ROOT/worktree-add.log" 2>&1; then
   echo "SKIP-NOTE: 'git worktree add' failed on this platform -- see $ROOT/worktree-add.log."
   echo "           Nothing here was tested."
   exit 2
@@ -116,7 +124,7 @@ echo "=== A. positive control: matching cwd and CLAUDE_PROJECT_DIR writes THAT t
 # Proves the harness can see the worktree's own index move before section B asks it to
 # prove something never moved.
 ERR="$ROOT/normal.err"
-( cd "$WT" && CLAUDE_PROJECT_DIR="$WT" bash "$REBUILD" >/dev/null 2>"$ERR" )
+(cd "$WT" && CLAUDE_PROJECT_DIR="$WT" bash "$REBUILD" > /dev/null 2> "$ERR")
 RC=$?
 assert_rc "cwd == CLAUDE_PROJECT_DIR still exits 0" 0 "$RC"
 if [ -f "$WT_TSV" ]; then
@@ -133,7 +141,7 @@ echo "=== B. cwd inside the worktree, CLAUDE_PROJECT_DIR stale at the clone: ref
 # This is #231 itself: an agent's session cwd moved into the worktree, but
 # CLAUDE_PROJECT_DIR is whatever the harness set when the session started -- the clone.
 ERR="$ROOT/stale.err"
-( cd "$WT" && CLAUDE_PROJECT_DIR="$MAIN" bash "$REBUILD" >/dev/null 2>"$ERR" )
+(cd "$WT" && CLAUDE_PROJECT_DIR="$MAIN" bash "$REBUILD" > /dev/null 2> "$ERR")
 RC=$?
 assert_rc "a stale CLAUDE_PROJECT_DIR from inside the worktree is refused" 2 "$RC"
 assert_contains "and says why" "$(cat "$ERR")" "cwd's git tree is not CLAUDE_PROJECT_DIR's"
@@ -156,7 +164,7 @@ echo "=== C. the escape hatch takes the identical setup and DOES write the clone
 # var different. If B's silence were actually the harness never detecting any write, this
 # section would be silent too.
 ERR="$ROOT/escape.err"
-( cd "$WT" && JIT_CONTEXT_ALLOW_CROSS_TREE=1 CLAUDE_PROJECT_DIR="$MAIN" bash "$REBUILD" >/dev/null 2>"$ERR" )
+(cd "$WT" && JIT_CONTEXT_ALLOW_CROSS_TREE=1 CLAUDE_PROJECT_DIR="$MAIN" bash "$REBUILD" > /dev/null 2> "$ERR")
 RC=$?
 assert_rc "the escape hatch exits 0" 0 "$RC"
 if [ -f "$MAIN_TSV" ]; then
@@ -175,7 +183,7 @@ echo "=== D. the escape hatch is compared by VALUE, not by presence ==="
 # one, and silently defeat the guard on the spelling most likely to be tried by someone
 # who means the opposite.
 ERR="$ROOT/zero.err"
-( cd "$WT" && JIT_CONTEXT_ALLOW_CROSS_TREE=0 CLAUDE_PROJECT_DIR="$MAIN" bash "$REBUILD" >/dev/null 2>"$ERR" )
+(cd "$WT" && JIT_CONTEXT_ALLOW_CROSS_TREE=0 CLAUDE_PROJECT_DIR="$MAIN" bash "$REBUILD" > /dev/null 2> "$ERR")
 RC=$?
 assert_rc "JIT_CONTEXT_ALLOW_CROSS_TREE=0 still refuses" 2 "$RC"
 if [ -f "$MAIN_TSV" ]; then
@@ -194,7 +202,7 @@ echo "=== E. cwd is not inside any git tree: the guard cannot evaluate, and says
 NOTGIT="$ROOT/notgit"
 mkdir -p "$NOTGIT"
 ERR="$ROOT/notgit.err"
-( cd "$NOTGIT" && CLAUDE_PROJECT_DIR="$MAIN" bash "$REBUILD" >/dev/null 2>"$ERR" )
+(cd "$NOTGIT" && CLAUDE_PROJECT_DIR="$MAIN" bash "$REBUILD" > /dev/null 2> "$ERR")
 RC=$?
 assert_rc "a cwd with no git tree at all still writes CLAUDE_PROJECT_DIR's tree" 0 "$RC"
 if [ -f "$MAIN_TSV" ]; then
@@ -214,7 +222,7 @@ echo "=== F. CLAUDE_PROJECT_DIR does not resolve to a git tree: the other empty 
 # elif in rebuild-tsv.sh -- cwd resolvable, CLAUDE_PROJECT_DIR empty -- so the message text
 # for that branch is exercised too, not just traced by reading the code.
 ERR="$ROOT/notgit-proj.err"
-( cd "$WT" && CLAUDE_PROJECT_DIR="$NOTGIT" bash "$REBUILD" >/dev/null 2>"$ERR" )
+(cd "$WT" && CLAUDE_PROJECT_DIR="$NOTGIT" bash "$REBUILD" > /dev/null 2> "$ERR")
 RC=$?
 assert_rc "a CLAUDE_PROJECT_DIR with no git tree at all is a FATAL, not a silent write" 2 "$RC"
 assert_contains "and stderr names the check as unable to run" "$(cat "$ERR")" \
@@ -236,7 +244,7 @@ echo "=== G. both sides fail to resolve a git tree: the combined message (#240) 
 NOTGIT2="$ROOT/notgit2"
 mkdir -p "$NOTGIT2"
 ERR="$ROOT/notgit-both.err"
-( cd "$NOTGIT" && CLAUDE_PROJECT_DIR="$NOTGIT2" bash "$REBUILD" >/dev/null 2>"$ERR" )
+(cd "$NOTGIT" && CLAUDE_PROJECT_DIR="$NOTGIT2" bash "$REBUILD" > /dev/null 2> "$ERR")
 RC=$?
 assert_rc "neither side resolving a git tree is a FATAL, not a silent write" 2 "$RC"
 assert_contains "and stderr names the check as unable to run" "$(cat "$ERR")" \

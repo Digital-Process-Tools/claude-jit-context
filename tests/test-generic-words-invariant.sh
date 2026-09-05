@@ -25,12 +25,23 @@ WORDLIST="$REPO/data/generic-words.txt"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+}
 
 echo "=== the bundled wordlist itself: every data row is a bare [a-z]+ word ==="
 
-[ -f "$WORDLIST" ] || { echo "FAIL: $WORDLIST does not exist"; exit 1; }
+[ -f "$WORDLIST" ] || {
+  echo "FAIL: $WORDLIST does not exist"
+  exit 1
+}
 
 BAD_LINES=$(LC_ALL=C grep -vE '^(#.*)?$' "$WORDLIST" | LC_ALL=C grep -vE '^[a-z]+$' || true)
 if [ -z "$BAD_LINES" ]; then
@@ -39,7 +50,7 @@ else
   # Truncated by array slicing, never by piping into an early-exiting reader (#56's own
   # class -- this suite's sibling test-assertion-helpers.sh refuses a `| head` on sight).
   BAD_ARR=()
-  while IFS= read -r line; do BAD_ARR+=("$line"); done <<<"$BAD_LINES"
+  while IFS= read -r line; do BAD_ARR+=("$line"); done <<< "$BAD_LINES"
   bad "found row(s) outside [a-z]+ -- these can never match a folded keyword" \
     "${BAD_ARR[*]:0:5}"
 fi
@@ -48,12 +59,12 @@ echo ""
 echo "=== POSITIVE CONTROL: the check above actually looks -- an accented row is caught ==="
 # Without this, the PASS above could mean "the grep found nothing" for the wrong reason
 # (a typo in the pattern, an empty file) as easily as for the right one.
-TMPD=$(mktemp -d 2>/dev/null || mktemp -d -t jitwordlist)
+TMPD=$(mktemp -d 2> /dev/null || mktemp -d -t jitwordlist)
 trap 'rm -rf "$TMPD"' EXIT
 BAD_COPY="$TMPD/generic-words.txt"
 cp "$WORDLIST" "$BAD_COPY"
-printf 'detail\n' >> "$BAD_COPY"          # already-clean row: must NOT trip the check
-printf '\xc3\xa9quipe\n' >> "$BAD_COPY"    # "équipe", accented: MUST trip the check
+printf 'detail\n' >> "$BAD_COPY"        # already-clean row: must NOT trip the check
+printf '\xc3\xa9quipe\n' >> "$BAD_COPY" # "équipe", accented: MUST trip the check
 
 CONTROL_BAD=$(LC_ALL=C grep -vE '^(#.*)?$' "$BAD_COPY" | LC_ALL=C grep -vE '^[a-z]+$' || true)
 if printf '%s' "$CONTROL_BAD" | LC_ALL=C grep -qF $'\xc3\xa9quipe'; then

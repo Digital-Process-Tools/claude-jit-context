@@ -54,10 +54,12 @@ FAIL=0
 # jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:-<EMPTY>}"
   fi
@@ -65,36 +67,42 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: ${output:-<EMPTY>}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
 assert_rc0() {
   local desc="$1" rc="$2"
   if [ "$rc" -eq 0 ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc (exit $rc)"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (exit $rc)"
   fi
 }
 
 assert_eq() {
   local desc="$1" got="$2" want="$3"
   if [ "$got" = "$want" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected: $want"
     echo "    got:      ${got:-<EMPTY>}"
   fi
 }
 
-TMP="$(mktemp -d 2>/dev/null || mktemp -d -t jit60)"
+TMP="$(mktemp -d 2> /dev/null || mktemp -d -t jit60)"
 trap 'chmod -R u+rwX "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 
 VICTIM_TEXT="ORIGINAL VICTIM CONTENT"
@@ -107,7 +115,7 @@ new_project() {
   rm -rf "$p"
   base="$p/.claude/jit-context"
   mkdir -p "$base/paths/00-manual" "$base/paths/10-auto" "$base/paths/20-grouped" \
-           "$base/paths/30-crosscutting" "$base/tools/00-manual" "$base/vocabulary/00-manual"
+    "$base/paths/30-crosscutting" "$base/tools/00-manual" "$base/vocabulary/00-manual"
   printf '%s\t%s\n' '\.php' 'php-coding.md' > "$base/paths/00-manual/00-index.tsv"
   printf 'php coding rules\n' > "$base/paths/00-manual/php-coding.md"
   : > "$base/paths/10-auto/00-index.tsv"
@@ -127,36 +135,36 @@ log_of() { printf '%s' "$1/.claude/jit-context/.discovery/logs/hooks.log"; }
 HOOKS="path tool prompt"
 hook_script() {
   case "$1" in
-    path)   printf '%s' "$SCRIPTS/pre-path-hook.sh" ;;
-    tool)   printf '%s' "$SCRIPTS/pre-tool-hook.sh" ;;
+    path) printf '%s' "$SCRIPTS/pre-path-hook.sh" ;;
+    tool) printf '%s' "$SCRIPTS/pre-tool-hook.sh" ;;
     prompt) printf '%s' "$SCRIPTS/pre-prompt-hook.sh" ;;
   esac
 }
 hook_payload() {
   case "$1" in
-    path)   printf '%s' '{"tool_name":"Read","tool_input":{"file_path":"/x/app.php"}}' ;;
-    tool)   printf '%s' '{"tool_name":"Bash","tool_input":{"command":"toolcanary now"}}' ;;
+    path) printf '%s' '{"tool_name":"Read","tool_input":{"file_path":"/x/app.php"}}' ;;
+    tool) printf '%s' '{"tool_name":"Bash","tool_input":{"command":"toolcanary now"}}' ;;
     prompt) printf '%s' '{"prompt":"zorkword please"}' ;;
   esac
 }
 hook_needle() {
   case "$1" in
-    path)   printf '%s' 'php coding rules' ;;
-    tool)   printf '%s' 'tool note body' ;;
+    path) printf '%s' 'php coding rules' ;;
+    tool) printf '%s' 'tool note body' ;;
     prompt) printf '%s' 'vocab note body' ;;
   esac
 }
 hook_legacy_prefix() {
   case "$1" in
-    path)   printf '%s' '/tmp/claude-path-log-' ;;
-    tool)   printf '%s' '/tmp/claude-hook-log-' ;;
+    path) printf '%s' '/tmp/claude-path-log-' ;;
+    tool) printf '%s' '/tmp/claude-hook-log-' ;;
     prompt) printf '%s' '/tmp/claude-prompt-log-' ;;
   esac
 }
 hook_logtag() {
   case "$1" in
-    path)   printf '%s' 'pre-path' ;;
-    tool)   printf '%s' 'pre-tool' ;;
+    path) printf '%s' 'pre-path' ;;
+    tool) printf '%s' 'pre-tool' ;;
     prompt) printf '%s' 'pre-prompt' ;;
   esac
 }
@@ -177,8 +185,8 @@ probe_symlinks() {
   rm -rf "$d" || return 1
   mkdir -p "$d/target-dir" || return 1
   printf 'probe\n' > "$d/target-file" || return 1
-  ln -sf "$d/target-file" "$d/link-file" 2>/dev/null
-  ln -sfn "$d/target-dir" "$d/link-dir" 2>/dev/null
+  ln -sf "$d/target-file" "$d/link-file" 2> /dev/null
+  ln -sfn "$d/target-dir" "$d/link-dir" 2> /dev/null
   printf 'late\n' > "$d/target-dir/late.txt" || return 1
   [ -L "$d/link-file" ] || return 1
   [ -L "$d/link-dir" ] || return 1
@@ -196,7 +204,7 @@ echo ""
 # the link is planted under exactly the `$$` the hook then expands -- no polling, no
 # window, no flake. $BASHPID would be the obvious spelling and is unusable: macOS ships
 # bash 3.2, which does not have it.
-cat > "$TMP/stage.sh" <<'STAGE'
+cat > "$TMP/stage.sh" << 'STAGE'
 #!/bin/bash
 printf '%s' "$$" > "$JIT_PIDFILE"
 ln -sf "$JIT_VICTIM" "$JIT_LINK_PREFIX$$.tmp"
@@ -206,7 +214,8 @@ STAGE
 echo "=== Positive control: an honest run injects and logs, on all three hooks ==="
 for H in $HOOKS; do
   P="$(new_project "ctl-$H")"
-  OUT="$(run_hook "$H" "$P")"; RC=$?
+  OUT="$(run_hook "$H" "$P")"
+  RC=$?
   assert_rc0 "$H: honest run exits 0" "$RC"
   assert_contains "$H: honest run injects its entry" "$OUT" "$(hook_needle "$H")"
   LOG="$(log_of "$P")"
@@ -249,7 +258,8 @@ else
       JIT_LINK_PREFIX="$(hook_legacy_prefix "$H")" \
       JIT_HOOK="$(hook_script "$H")" \
       JIT_PIDFILE="$PIDFILE" \
-      bash "$TMP/stage.sh" 2>&1)"; RC=$?
+      bash "$TMP/stage.sh" 2>&1)"
+    RC=$?
     PLANTED="$(hook_legacy_prefix "$H")$(cat "$PIDFILE").tmp"
 
     assert_eq "$H: the victim file is byte-identical" "$(cat "$VICTIM")" "$VICTIM_TEXT"
@@ -274,7 +284,8 @@ echo "=== B: no script builds a temp path out of its own pid ==="
 PIDPATHS="$(awk '/^[[:space:]]*#/ { next }
   /(\/tmp|TMPDIR|TMP)[^"]*\$\$/ { print FILENAME ":" FNR ": " $0 }' "$SCRIPTS"/*.sh)"
 if [ -z "$PIDPATHS" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: no scratch path is concatenated from \$\$"
+  PASS=$((PASS + 1))
+  echo "  PASS: no scratch path is concatenated from \$\$"
 else
   FAIL=$((FAIL + 1))
   echo "  FAIL: a temp path is still built from the pid -- predictable, and pre-creatable"
@@ -287,7 +298,7 @@ echo "=== C: the scratch file lives under \$TMPDIR, and losing it is not an erro
 # log line. Before #60 the path ignored $TMPDIR entirely and the line was written anyway.
 C_TMPDIR="$TMP/notmp"
 mkdir -p "$C_TMPDIR"
-chmod 555 "$C_TMPDIR" 2>/dev/null
+chmod 555 "$C_TMPDIR" 2> /dev/null
 if [ -w "$C_TMPDIR" ]; then
   echo "  SKIP-NOTE: chmod did not remove write permission here (running as root, or a"
   echo "             filesystem without POSIX modes). Section C tested nothing."
@@ -295,9 +306,10 @@ else
   for H in $HOOKS; do
     P="$(new_project "c-$H")"
     OUT="$(hook_payload "$H" | CLAUDE_PROJECT_DIR="$P" TMPDIR="$C_TMPDIR" \
-      bash "$(hook_script "$H")" 2>/dev/null)"; RC=$?
+      bash "$(hook_script "$H")" 2> /dev/null)"
+    RC=$?
     ERR="$(hook_payload "$H" | CLAUDE_PROJECT_DIR="$P" TMPDIR="$C_TMPDIR" \
-      bash "$(hook_script "$H")" 2>&1 >/dev/null)"
+      bash "$(hook_script "$H")" 2>&1 > /dev/null)"
     assert_rc0 "$H: unwritable TMPDIR: still exits 0" "$RC"
     assert_contains "$H: unwritable TMPDIR: still injects its entry" "$OUT" "$(hook_needle "$H")"
     assert_eq "$H: unwritable TMPDIR: nothing on stderr" "$ERR" ""
@@ -311,7 +323,7 @@ else
     fi
   done
 fi
-chmod 755 "$C_TMPDIR" 2>/dev/null
+chmod 755 "$C_TMPDIR" 2> /dev/null
 
 echo ""
 echo "=== D: a foreign file in the same directory survives, and nothing is left ==="
@@ -331,7 +343,8 @@ printf 'in flight\n' > "$FOREIGN"
 for H in $HOOKS; do
   P="$(new_project "d-$H")"
   OUT="$(hook_payload "$H" | CLAUDE_PROJECT_DIR="$P" TMPDIR="$D_TMPDIR" \
-    bash "$(hook_script "$H")" 2>&1)"; RC=$?
+    bash "$(hook_script "$H")" 2>&1)"
+  RC=$?
   assert_rc0 "$H: private TMPDIR: exits 0" "$RC"
   assert_contains "$H: private TMPDIR: injects its entry" "$OUT" "$(hook_needle "$H")"
 done
@@ -366,7 +379,7 @@ E_ROOT="$TMP/forge"
 rm -rf "$E_ROOT"
 E_BASE="$E_ROOT/.claude/jit-context"
 mkdir -p "$E_BASE/paths/00-manual" "$E_BASE/paths/10-auto" "$E_BASE/paths/20-grouped" \
-         "$E_BASE/paths/30-crosscutting" "$E_BASE/tools/00-manual" "$E_BASE/vocabulary/00-manual"
+  "$E_BASE/paths/30-crosscutting" "$E_BASE/tools/00-manual" "$E_BASE/vocabulary/00-manual"
 printf 'nomatchxx\tunused.md\n' > "$E_BASE/paths/00-manual/00-index.tsv"
 printf 'unused\n' > "$E_BASE/paths/00-manual/unused.md"
 : > "$E_BASE/paths/10-auto/00-index.tsv"
@@ -412,35 +425,36 @@ E_MARKER="$E_ROOT/.claude/jit-context/.discovery/state/vocab-shown-S.txt"
 if [ -f "$E_MARKER" ]; then
   assert_not_contains "no forged mark was written" "$(cat "$E_MARKER")" "rule:b.md"
 else
-  PASS=$((PASS + 1)); echo "  PASS: no forged mark was written (no marker file at all)"
+  PASS=$((PASS + 1))
+  echo "  PASS: no forged mark was written (no marker file at all)"
 fi
 
 # The assertion with teeth: the block still fires in the session the forgery targeted.
-E_PUSH=$( cd "$E_ROOT" && printf '{"session_id":"S","tool_name":"Bash","tool_input":{"command":"gitpush now"}}' \
-  | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null )
+E_PUSH=$(cd "$E_ROOT" && printf '{"session_id":"S","tool_name":"Bash","tool_input":{"command":"gitpush now"}}' \
+  | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2> /dev/null)
 assert_contains "the block still fires in the session the forgery targeted" "$E_PUSH" '"decision":"block"'
 
 # Positive control, same fixture: an untouched session blocks on the ordinary payload.
-E_CTL=$( cd "$E_ROOT" && printf '{"session_id":"T","tool_name":"Bash","tool_input":{"command":"gitpush now"}}' \
-  | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null )
+E_CTL=$(cd "$E_ROOT" && printf '{"session_id":"T","tool_name":"Bash","tool_input":{"command":"gitpush now"}}' \
+  | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2> /dev/null)
 assert_contains "control: an untouched session blocks on the same payload" "$E_CTL" '"decision":"block"'
 
 # The second `gitpush` of that session. This assertion used to expect {} -- a `once, block`
 # row refusing once and permitting every call after it, which is #139. It made this whole
 # section weaker than it read: the forgery defended against here was buying an attacker
 # nothing that the second honest call did not hand over anyway.
-E_AGAIN=$( cd "$E_ROOT" && printf '{"session_id":"T","tool_name":"Bash","tool_input":{"command":"gitpush now"}}' \
-  | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null )
+E_AGAIN=$(cd "$E_ROOT" && printf '{"session_id":"T","tool_name":"Bash","tool_input":{"command":"gitpush now"}}' \
+  | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2> /dev/null)
 assert_contains "the second call of the session is refused too" "$E_AGAIN" '"decision":"block"'
 
 # And the mark channel still WORKS. Without this a fix that deleted the channel outright
 # would pass everything above: the advisory row is once-mode, so the second call naming it
 # in session T has to find its own honest mark and stay quiet.
-E_ADV=$( cd "$E_ROOT" && printf '{"session_id":"T","tool_name":"Bash","tool_input":{"command":"advonce now"}}' \
-  | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null )
+E_ADV=$(cd "$E_ROOT" && printf '{"session_id":"T","tool_name":"Bash","tool_input":{"command":"advonce now"}}' \
+  | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2> /dev/null)
 assert_contains "control: the advisory once rule fires on its first call" "$E_ADV" "ADVISORY ONCE"
-E_ADV2=$( cd "$E_ROOT" && printf '{"session_id":"T","tool_name":"Bash","tool_input":{"command":"advonce now"}}' \
-  | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null )
+E_ADV2=$(cd "$E_ROOT" && printf '{"session_id":"T","tool_name":"Bash","tool_input":{"command":"advonce now"}}' \
+  | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2> /dev/null)
 assert_eq "an honest mark is still written, so once-mode still dedups" "$E_ADV2" "{}"
 
 echo ""
@@ -458,7 +472,7 @@ F_ROOT="$TMP/backslash"
 rm -rf "$F_ROOT"
 mkdir -p "$F_ROOT/.claude/jit-context/.discovery/state"
 F_OUT=$(
-  CLAUDE_PROJECT_DIR="$F_ROOT" . "$SCRIPTS/common.sh" >/dev/null 2>&1
+  CLAUDE_PROJECT_DIR="$F_ROOT" . "$SCRIPTS/common.sh" > /dev/null 2>&1
   # Read by jit_shown_apply(), which shellcheck cannot see through the `.` above.
   # shellcheck disable=SC2034
   JIT_MARKS_IN=(
@@ -469,7 +483,7 @@ F_OUT=$(
   JIT_MARKS_OK=1
   # </dev/null on purpose: jit_shown_apply reads its marks from the array, never from
   # stdin, and a version that reached for stdin would hang this suite rather than fail it.
-  jit_shown_apply </dev/null
+  jit_shown_apply < /dev/null
   ls -A "$JIT_STATE_DIR"
 )
 assert_contains "the legitimate marker name is still written" "$F_OUT" "vocab-shown-ok.txt"
@@ -482,8 +496,8 @@ echo "=== G: a multi-line payload field does not truncate its own log line ==="
 # read a shorter prompt than the user sent. Stripped at the point the field is built.
 G_ROOT="$(new_project "g")"
 printf '{"prompt":"zorkword on line one\\nbeta on line two"}' \
-  | CLAUDE_PROJECT_DIR="$G_ROOT" bash "$SCRIPTS/pre-prompt-hook.sh" >/dev/null 2>&1
-G_LOG="$(cat "$(log_of "$G_ROOT")" 2>/dev/null)"
+  | CLAUDE_PROJECT_DIR="$G_ROOT" bash "$SCRIPTS/pre-prompt-hook.sh" > /dev/null 2>&1
+G_LOG="$(cat "$(log_of "$G_ROOT")" 2> /dev/null)"
 assert_contains "the log line records the first line of the prompt" "$G_LOG" "zorkword on line one"
 assert_contains "and the second line, on the same log line" "$G_LOG" "beta on line two"
 

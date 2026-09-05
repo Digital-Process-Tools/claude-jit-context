@@ -18,8 +18,15 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PASS=0
 FAIL=0
 
-pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; [ $# -gt 1 ] && echo "    $2"; }
+pass() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+fail() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  [ $# -gt 1 ] && echo "    $2"
+}
 
 README="$REPO/README.md"
 
@@ -65,12 +72,12 @@ done
 
 if grep -q 'PCRE shorthand classes do not exist' "$README"; then
   fail "the awk-vs-PCRE explanation is not duplicated into README.md" \
-       "found the full sentence in README.md; it should live only in docs/patterns.md"
+    "found the full sentence in README.md; it should live only in docs/patterns.md"
 else
   pass "the awk-vs-PCRE explanation is not duplicated into README.md"
 fi
 
-if grep -q 'PCRE shorthand classes do not exist' "$REPO/docs/patterns.md" 2>/dev/null; then
+if grep -q 'PCRE shorthand classes do not exist' "$REPO/docs/patterns.md" 2> /dev/null; then
   pass "the awk-vs-PCRE explanation lives in docs/patterns.md"
 else
   fail "the awk-vs-PCRE explanation lives in docs/patterns.md" "not found"

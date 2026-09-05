@@ -57,12 +57,12 @@ export PATH="$BIN_DIR:$PATH"
 #   6. mode: remind,   requires: absentbin (no refusing column at all) -> ordinary
 #      advisory row, unaffected: #203 is about a check that stops ENFORCING.
 printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-  Bash "git deploy"  block-absent.md  block  ""       ""        absentbin \
-  Bash "git ship"    block-present.md block  ""       ""        presentbin \
-  Bash "git launch"  block-plain.md   block  ""       ""        "" \
-  Bash "git haul"    req-absent.md    remind "--safe" ""        absentbin \
-  Bash "git toss"    forb-absent.md   remind ""       "--danger" absentbin \
-  Bash "git nudge"   remind-absent.md remind ""       ""        absentbin \
+  Bash "git deploy" block-absent.md block "" "" absentbin \
+  Bash "git ship" block-present.md block "" "" presentbin \
+  Bash "git launch" block-plain.md block "" "" "" \
+  Bash "git haul" req-absent.md remind "--safe" "" absentbin \
+  Bash "git toss" forb-absent.md remind "" "--danger" absentbin \
+  Bash "git nudge" remind-absent.md remind "" "" absentbin \
   > "$TOOLS_DIR/$TSV_NAME"
 
 echo "BLOCK-ABSENT-BODY-MARKER" > "$TOOLS_DIR/block-absent.md"
@@ -73,16 +73,18 @@ echo "FORB-ABSENT-BODY-MARKER" > "$TOOLS_DIR/forb-absent.md"
 echo "REMIND-ABSENT-BODY-MARKER" > "$TOOLS_DIR/remind-absent.md"
 
 run_hook() {
-  printf '%s' "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2>/dev/null
+  printf '%s' "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2> /dev/null
 }
 run_tool() { run_hook "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"$1\"}}"; }
 
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:0:300}"
   fi
@@ -90,21 +92,25 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: ${output:0:300}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
 assert_blocked() {
   local desc="$1" output="$2"
-  if grep -q "\"decision\":\"block\"" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -q "\"decision\":\"block\"" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected decision:block"
     echo "    got: ${output:0:300}"
   fi
@@ -112,11 +118,13 @@ assert_blocked() {
 
 assert_not_blocked() {
   local desc="$1" output="$2"
-  if grep -q "\"decision\":\"block\"" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -q "\"decision\":\"block\"" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected no block, got: ${output:0:300}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
@@ -127,9 +135,9 @@ echo ""
 echo "=== mode: block, requires: absentbin -- degrades to advisory (#203) ==="
 OUT=$(run_tool "git deploy the thing")
 assert_not_blocked "the call is NOT blocked" "$OUT"
-assert_contains     "the row still fires, as advisory" "$OUT" "block-absent.md"
-assert_contains     "and says which binary is missing" "$OUT" "absentbin"
-assert_contains     "and says it degraded" "$OUT" "degraded to advisory"
+assert_contains "the row still fires, as advisory" "$OUT" "block-absent.md"
+assert_contains "and says which binary is missing" "$OUT" "absentbin"
+assert_contains "and says it degraded" "$OUT" "degraded to advisory"
 
 # The positive control that makes the leg above mean anything: the SAME shape of row,
 # the SAME command family, but its requires: binary IS on PATH -- and it still blocks.
@@ -137,8 +145,8 @@ assert_contains     "and says it degraded" "$OUT" "degraded to advisory"
 echo ""
 echo "=== Control: mode: block, requires: presentbin -- still blocks ==="
 OUT=$(run_tool "git ship the thing")
-assert_blocked   "the call is blocked, same as before requires: existed" "$OUT"
-assert_contains  "and carries the entry text" "$OUT" "BLOCK-PRESENT-BODY-MARKER"
+assert_blocked "the call is blocked, same as before requires: existed" "$OUT"
+assert_contains "and carries the entry text" "$OUT" "BLOCK-PRESENT-BODY-MARKER"
 assert_not_contains "and does not claim a degrade that did not happen" "$OUT" "degraded to advisory"
 
 # The other control: an ordinary block row with no requires: column at all must not
@@ -146,7 +154,7 @@ assert_not_contains "and does not claim a degrade that did not happen" "$OUT" "d
 echo ""
 echo "=== Control: mode: block, no requires: -- unaffected ==="
 OUT=$(run_tool "git launch the thing")
-assert_blocked  "an ordinary block rule still blocks" "$OUT"
+assert_blocked "an ordinary block rule still blocks" "$OUT"
 assert_not_contains "and never mentions a degrade" "$OUT" "degraded to advisory"
 
 # =============================================
@@ -156,15 +164,15 @@ echo ""
 echo "=== require: + requires: absentbin -- the requirement refusal degrades too ==="
 OUT=$(run_tool "git haul the thing")
 assert_not_blocked "not blocked, even though --safe is missing" "$OUT"
-assert_contains    "the row still fires, as advisory" "$OUT" "req-absent.md"
-assert_contains    "and names the missing binary" "$OUT" "absentbin"
+assert_contains "the row still fires, as advisory" "$OUT" "req-absent.md"
+assert_contains "and names the missing binary" "$OUT" "absentbin"
 
 echo ""
 echo "=== forbid: + requires: absentbin -- the forbid refusal degrades too ==="
 OUT=$(run_tool "git toss it --danger")
 assert_not_blocked "not blocked, even though --danger is present" "$OUT"
-assert_contains    "the row still fires, as advisory" "$OUT" "forb-absent.md"
-assert_contains    "and names the missing binary" "$OUT" "absentbin"
+assert_contains "the row still fires, as advisory" "$OUT" "forb-absent.md"
+assert_contains "and names the missing binary" "$OUT" "absentbin"
 
 # =============================================
 # SECTION 3: an ordinary advisory row naming requires: is unaffected
@@ -175,9 +183,9 @@ assert_contains    "and names the missing binary" "$OUT" "absentbin"
 echo ""
 echo "=== mode: remind, requires: absentbin -- an ordinary advisory row, untouched ==="
 OUT=$(run_tool "git nudge the thing")
-assert_contains     "the row fires normally" "$OUT" "REMIND-ABSENT-BODY-MARKER"
+assert_contains "the row fires normally" "$OUT" "REMIND-ABSENT-BODY-MARKER"
 assert_not_contains "and never claims a degrade -- it was never enforcing anything" \
-                    "$OUT" "degraded to advisory"
+  "$OUT" "degraded to advisory"
 
 # =============================================
 # SECTION 4: rebuild-tsv.sh writes the column, and jit-dry-run.sh agrees with it
@@ -195,7 +203,7 @@ printf '%s\n' \
   "---" \
   "" \
   "REBUILD-DEPLOY-BODY-MARKER" > "$TOOLS_DIR/rebuild-deploy.md"
-CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REBUILD" >/dev/null 2>&1
+CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REBUILD" > /dev/null 2>&1
 ROW=$(grep -F "rebuild-deploy.md" "$TOOLS_DIR/$TSV_NAME" || true)
 assert_contains "the rebuilt row carries the requires: value" "$ROW" "rebuildtool"
 

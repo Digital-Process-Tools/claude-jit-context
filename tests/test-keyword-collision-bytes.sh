@@ -32,21 +32,31 @@ REBUILD="$REPO/scripts/rebuild-tsv.sh"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+}
 
 # jit-drive: assert_has contains path-arg
 # jit-drive: assert_lacks not_contains path-arg
 assert_has() {
   if LC_ALL=C grep -qF -- "$3" "$2"; then ok "$1"; else
     bad "$1" "expected to contain: $3"
-    echo "    --- got ---"; cat "$2"
+    echo "    --- got ---"
+    cat "$2"
   fi
 }
 assert_lacks() {
   if LC_ALL=C grep -qF -- "$3" "$2"; then
     bad "$1" "expected NOT to contain: $3"
-    echo "    --- got ---"; cat "$2"
+    echo "    --- got ---"
+    cat "$2"
   else
     ok "$1"
   fi
@@ -65,16 +75,20 @@ assert_block_has() {
   got=$(LC_ALL=C grep -A1 -F "\"$kwtext\"" "$file" | tail -n1)
   case "$got" in
     *"$want"*) ok "$desc" ;;
-    *) bad "$desc" "the files: line right after \"$kwtext\" was expected to contain: $want"
-       echo "    got: $got" ;;
+    *)
+      bad "$desc" "the files: line right after \"$kwtext\" was expected to contain: $want"
+      echo "    got: $got"
+      ;;
   esac
 }
 assert_block_lacks() {
   local desc="$1" file="$2" kwtext="$3" nope="$4" got
   got=$(LC_ALL=C grep -A1 -F "\"$kwtext\"" "$file" | tail -n1)
   case "$got" in
-    *"$nope"*) bad "$desc" "the files: line right after \"$kwtext\" was expected NOT to contain: $nope"
-       echo "    got: $got" ;;
+    *"$nope"*)
+      bad "$desc" "the files: line right after \"$kwtext\" was expected NOT to contain: $nope"
+      echo "    got: $got"
+      ;;
     *) ok "$desc" ;;
   esac
 }
@@ -116,19 +130,19 @@ for i in 1 2 3 4 5 6; do
 done
 
 ERR=$(mktemp)
-JIT_CONTEXT_COLLISION_BYTES=1000 CLAUDE_PROJECT_DIR="$PROJ" bash "$REBUILD" >/dev/null 2>"$ERR"
+JIT_CONTEXT_COLLISION_BYTES=1000 CLAUDE_PROJECT_DIR="$PROJ" bash "$REBUILD" > /dev/null 2> "$ERR"
 
 echo ""
 echo "=== #204: cross-layer, byte-ranked collision report, floor=1000 ==="
-assert_has   "the cross-layer keyword is reported at all" "$ERR" "modern nav"
-assert_has   "layer A's file is named with its own layer" "$ERR" "gate.md[vocabulary/00-manual]"
-assert_has   "layer B's file is named with its own layer, not folded into A's tally" \
+assert_has "the cross-layer keyword is reported at all" "$ERR" "modern nav"
+assert_has "layer A's file is named with its own layer" "$ERR" "gate.md[vocabulary/00-manual]"
+assert_has "layer B's file is named with its own layer, not folded into A's tally" \
   "$ERR" "component.md[vocabulary/10-auto]"
-assert_has   "the entry count for a 2-file cross-layer collision is 2" "$ERR" "2 entr(ies)"
+assert_has "the entry count for a 2-file cross-layer collision is 2" "$ERR" "2 entr(ies)"
 
-assert_has   "the same-layer collision still fires" "$ERR" "a11y runtime"
-assert_has   "and both its files are named" "$ERR" "a11y-one.md[vocabulary/00-manual]"
-assert_has   "both of them, not just one" "$ERR" "a11y-two.md[vocabulary/00-manual]"
+assert_has "the same-layer collision still fires" "$ERR" "a11y runtime"
+assert_has "and both its files are named" "$ERR" "a11y-one.md[vocabulary/00-manual]"
+assert_has "both of them, not just one" "$ERR" "a11y-two.md[vocabulary/00-manual]"
 
 assert_lacks "six tiny files under the byte floor are NOT reported, file count notwithstanding" \
   "$ERR" "six pack"
@@ -136,7 +150,7 @@ assert_lacks "six tiny files under the byte floor are NOT reported, file count n
 echo ""
 echo "=== #204: the floor is configurable, and the default is stated ==="
 ERR2=$(mktemp)
-CLAUDE_PROJECT_DIR="$PROJ" bash "$REBUILD" >/dev/null 2>"$ERR2"
+CLAUDE_PROJECT_DIR="$PROJ" bash "$REBUILD" > /dev/null 2> "$ERR2"
 assert_has "the header states the floor in effect (unset -> the 4096-byte default)" "$ERR2" ">4096b"
 rm -f "$ERR2"
 
@@ -161,12 +175,12 @@ printf -- '---\ntitle: t\nkeywords: zzz big kw\n---\n\n%s' "$(pad 3000)" > "$SBA
 printf -- '---\ntitle: t\nkeywords: zzz big kw\n---\n\n%s' "$(pad 3000)" > "$SBASE/zzz-two.md"
 
 SERR=$(mktemp)
-JIT_CONTEXT_COLLISION_BYTES=50 CLAUDE_PROJECT_DIR="$SPROJ" bash "$REBUILD" >/dev/null 2>"$SERR"
+JIT_CONTEXT_COLLISION_BYTES=50 CLAUDE_PROJECT_DIR="$SPROJ" bash "$REBUILD" > /dev/null 2> "$SERR"
 
-assert_block_has  "the small (alphabetically-first, byte-ascending) keyword keeps its OWN files" \
+assert_block_has "the small (alphabetically-first, byte-ascending) keyword keeps its OWN files" \
   "$SERR" "aaa small kw" "aaa-one.md"
 assert_block_lacks "not the big keyword's files" "$SERR" "aaa small kw" "zzz-one.md"
-assert_block_has  "the big keyword keeps ITS OWN files" "$SERR" "zzz big kw" "zzz-one.md"
+assert_block_has "the big keyword keeps ITS OWN files" "$SERR" "zzz big kw" "zzz-one.md"
 assert_block_lacks "not the small keyword's files" "$SERR" "zzz big kw" "aaa-one.md"
 
 # The bigger collision is printed FIRST (descending by bytes), even though its keyword was
@@ -196,7 +210,7 @@ mkdir -p "$OBASE"
 printf -- '---\ntitle: t\nkeywords: solo fat entry\n---\n\n%s' "$(pad 3000)" > "$OBASE/solo.md"
 
 OERR=$(mktemp)
-JIT_CONTEXT_COLLISION_BYTES=50 CLAUDE_PROJECT_DIR="$OPROJ" bash "$REBUILD" >/dev/null 2>"$OERR"
+JIT_CONTEXT_COLLISION_BYTES=50 CLAUDE_PROJECT_DIR="$OPROJ" bash "$REBUILD" > /dev/null 2> "$OERR"
 assert_lacks "a single fat entry, however far over the floor, is not an ambiguity finding" \
   "$OERR" "solo fat entry"
 rm -f "$OERR"

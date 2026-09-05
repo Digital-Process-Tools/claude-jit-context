@@ -73,9 +73,16 @@ need_value() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --base)    [ $# -ge 2 ] || need_value "$1"; BASE="$2"; shift 2 ;;
-    -h|--help) usage 0 ;;
-    *) echo "unknown argument: $1" >&2; usage 2 ;;
+    --base)
+      [ $# -ge 2 ] || need_value "$1"
+      BASE="$2"
+      shift 2
+      ;;
+    -h | --help) usage 0 ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage 2
+      ;;
   esac
 done
 
@@ -130,7 +137,7 @@ resolve_dir() {
   # the implementation. Do not call this with a relative path.
   local head="$1" tail="" phys out c
   while [ ! -d "$head" ]; do
-    case "$head" in */*) ;; *) break ;; esac    # "C:" on Git Bash, or a bare word
+    case "$head" in */*) ;; *) break ;; esac # "C:" on Git Bash, or a bare word
     tail="${head##*/}${tail:+/}$tail"
     head="${head%/*}"
     [ -n "$head" ] || head="/"
@@ -139,7 +146,7 @@ resolve_dir() {
     # A directory that exists but cannot be entered leaves the path unresolved rather
     # than aborting here: mkdir under it is about to fail anyway, and that failure is
     # already an exit 2 naming the directory.
-    phys="$(CDPATH='' cd -P "$head" 2>/dev/null && pwd -P)"
+    phys="$(CDPATH='' cd -P "$head" 2> /dev/null && pwd -P)"
     [ -n "$phys" ] && head="$phys"
   fi
   if [ -z "$tail" ]; then
@@ -151,9 +158,9 @@ resolve_dir() {
   set -f
   for c in $tail; do
     case "$c" in
-      ''|.) ;;
-      ..)   out="${out%/*}" ;;
-      *)    out="$out/$c" ;;
+      '' | .) ;;
+      ..) out="${out%/*}" ;;
+      *) out="$out/$c" ;;
     esac
   done
   set +f

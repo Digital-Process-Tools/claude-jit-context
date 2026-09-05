@@ -99,9 +99,12 @@ jit_host_row() {
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     case "$line" in
-      "$want"'|'*) printf '%s\n' "$line"; return 0 ;;
+      "$want"'|'*)
+        printf '%s\n' "$line"
+        return 0
+        ;;
     esac
-  done <<JIT_HOST_ROW_EOF
+  done << JIT_HOST_ROW_EOF
 $JIT_HOST_REGISTRY
 JIT_HOST_ROW_EOF
   return 1
@@ -128,7 +131,7 @@ jit_host_detect() {
       fi
     done
     IFS="$old_ifs"
-  done <<JIT_HOST_DETECT_EOF
+  done << JIT_HOST_DETECT_EOF
 $JIT_HOST_REGISTRY
 JIT_HOST_DETECT_EOF
   printf 'unknown\n'
@@ -140,16 +143,22 @@ JIT_HOST_DETECT_EOF
 # and absence of observation read the same way here on purpose.
 jit_host_state() {
   local row
-  row=$(jit_host_row "$1") || { printf 'UNKNOWN\n'; return 0; }
-  IFS='|' read -r _ _ _ _ state _ _ <<<"$row"
+  row=$(jit_host_row "$1") || {
+    printf 'UNKNOWN\n'
+    return 0
+  }
+  IFS='|' read -r _ _ _ _ state _ _ <<< "$row"
   printf '%s\n' "${state:-UNKNOWN}"
 }
 
 # jit_host_inject_envelope NAME -- the inject shape identifier, or UNKNOWN.
 jit_host_inject_envelope() {
   local row
-  row=$(jit_host_row "$1") || { printf 'UNKNOWN\n'; return 0; }
-  IFS='|' read -r _ _ _ _ _ inject _ <<<"$row"
+  row=$(jit_host_row "$1") || {
+    printf 'UNKNOWN\n'
+    return 0
+  }
+  IFS='|' read -r _ _ _ _ _ inject _ <<< "$row"
   printf '%s\n' "${inject:-UNKNOWN}"
 }
 
@@ -182,9 +191,15 @@ jit_host_inject_envelope() {
 #                              refuse anything.
 jit_host_refusal_state() {
   local name="${1:-}" row refusal
-  [ -n "$name" ] || { printf 'refusal-not-established\n'; return 0; }
-  row=$(jit_host_row "$name") || { printf 'refusal-not-established\n'; return 0; }
-  IFS='|' read -r _ _ _ _ _ _ refusal <<<"$row"
+  [ -n "$name" ] || {
+    printf 'refusal-not-established\n'
+    return 0
+  }
+  row=$(jit_host_row "$name") || {
+    printf 'refusal-not-established\n'
+    return 0
+  }
+  IFS='|' read -r _ _ _ _ _ _ refusal <<< "$row"
   printf '%s\n' "${refusal:-refusal-not-established}"
 }
 
@@ -196,7 +211,7 @@ jit_host_refusal_state() {
 # string literals at each call site.
 jit_host_refusal_state_for_envelope() {
   case "${1:-}" in
-    claude-decision-block|unsupported|hook-not-trusted) printf '%s\n' "$1" ;;
+    claude-decision-block | unsupported | hook-not-trusted) printf '%s\n' "$1" ;;
     *) printf 'refusal-not-established\n' ;;
   esac
 }

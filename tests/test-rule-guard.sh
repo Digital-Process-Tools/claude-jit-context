@@ -65,7 +65,7 @@ echo "billing path body" > "$PATHS_DIR/00-manual/billing.md"
 echo "fatal path body" > "$PATHS_DIR/00-manual/path-fatal.md"
 echo "dead path body" > "$PATHS_DIR/00-manual/path-dead.md"
 
-run_tool() { echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2>/dev/null; }
+run_tool() { echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2> /dev/null; }
 # The same call with stderr KEPT, written to a file. A hook that exits 0 having printed a
 # diagnostic into a stranger's session has still failed, and 2>/dev/null above cannot see
 # that -- which is how #116 lived under a green suite.
@@ -74,21 +74,23 @@ run_tool_keep_stderr() {
   # $1 payload, $2 optional directory to put first on PATH (an awk shim)
   : > "$STDERR_FILE"
   if [ -n "${2:-}" ]; then
-    echo "$1" | PATH="$2:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2>"$STDERR_FILE"
+    echo "$1" | PATH="$2:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2> "$STDERR_FILE"
   else
-    echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2>"$STDERR_FILE"
+    echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2> "$STDERR_FILE"
   fi
 }
-run_path() { echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PATH_HOOK" 2>/dev/null; }
+run_path() { echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PATH_HOOK" 2> /dev/null; }
 
 # jit-drive: assert_contains contains capture
 # jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: $(echo "$output" | cut -c1-300)"
   fi
@@ -96,12 +98,14 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: $(echo "$output" | cut -c1-300)"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
@@ -182,10 +186,12 @@ echo ""
 echo "=== and no engine writes into the session on the way to exit 0 (#116) ==="
 run_tool_keep_stderr '{"tool_name":"Bash","tool_input":{"command":"run éx now"}}' > /dev/null
 if [ -s "$STDERR_FILE" ]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: the hook wrote to stderr on the local awk"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the hook wrote to stderr on the local awk"
   echo "    $(head -2 "$STDERR_FILE")"
 else
-  PASS=$((PASS + 1)); echo "  PASS: the hook wrote nothing to stderr on the local awk"
+  PASS=$((PASS + 1))
+  echo "  PASS: the hook wrote nothing to stderr on the local awk"
 fi
 
 # The local awk decides which half of #116 this leg can see. one-true-awk drops the
@@ -200,10 +206,12 @@ if command -v gawk > /dev/null 2>&1; then
   chmod +x "$SHIM/awk"
   run_tool_keep_stderr '{"tool_name":"Bash","tool_input":{"command":"run éx now"}}' "$SHIM" > /dev/null
   if [ -s "$STDERR_FILE" ]; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: the hook wrote to stderr under gawk"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: the hook wrote to stderr under gawk"
     echo "    $(head -2 "$STDERR_FILE")"
   else
-    PASS=$((PASS + 1)); echo "  PASS: the hook wrote nothing to stderr under gawk"
+    PASS=$((PASS + 1))
+    echo "  PASS: the hook wrote nothing to stderr under gawk"
   fi
 else
   echo "  (no gawk on this runner -- the gawk-only half of #116 was NOT checked here)"
@@ -228,7 +236,8 @@ if [ -f "$LOG" ]; then
   assert_contains "log still names the fatal rule file for the author" "$(cat "$LOG")" "fatal.md"
   assert_contains "log still names the dead-escape rule file" "$(cat "$LOG")" "dead-escape.md"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: log file written"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: log file written"
 fi
 
 rm -rf "$TEST_DIR"

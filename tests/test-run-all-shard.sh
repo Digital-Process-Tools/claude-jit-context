@@ -26,15 +26,24 @@ RUN_ALL="$REPO/tests/run-all.sh"
 PASS=0
 FAIL=0
 
-TMP="$(mktemp -d 2>/dev/null)" || TMP=""
+TMP="$(mktemp -d 2> /dev/null)" || TMP=""
 if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
   echo "  SKIPPED: mktemp -d produced no directory, so no fixture can be built here."
   exit 2
 fi
 trap 'rm -rf "$TMP"' EXIT
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -gt 0 ] && echo "    $*"; return 0; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -gt 0 ] && echo "    $*"
+  return 0
+}
 
 # Nine stub suites, all trivially passing. Nine and not two: with four shards, a count that
 # divides evenly would hide an off-by-one in the round-robin, and nine over four leaves a
@@ -52,7 +61,7 @@ chmod +x "$FIX"/test-*.sh
 # banner run-all.sh prints per suite. Read from a file, never through $( ) on the whole
 # output: `paths/00-manual/tests.md` is explicit that command substitution drops NUL bytes,
 # and a banner is the one thing this file's verdicts are built from.
-ran_suites() {   # shard-spec-or-empty -> names, one per line, into $TMP/ran
+ran_suites() { # shard-spec-or-empty -> names, one per line, into $TMP/ran
   if [ -n "$1" ]; then
     (cd "$FIX" && bash run-all.sh --shard "$1") > "$TMP/out" 2>&1
   else
@@ -93,7 +102,7 @@ done
 LC_ALL=C sort "$TMP/union" > "$TMP/union.sorted"
 LC_ALL=C sort "$TMP/all" > "$TMP/all.sorted"
 
-if diff -q "$TMP/union.sorted" "$TMP/all.sorted" >/dev/null 2>&1; then
+if diff -q "$TMP/union.sorted" "$TMP/all.sorted" > /dev/null 2>&1; then
   ok "the union of 1/4..4/4 is exactly the unsharded list (counts:$SHARD_COUNTS)"
 else
   bad "the union of 1/4..4/4 is exactly the unsharded list" "counts:$SHARD_COUNTS"

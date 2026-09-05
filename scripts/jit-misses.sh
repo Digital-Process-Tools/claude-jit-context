@@ -40,7 +40,7 @@ TAIL=""
 SIZE_THRESHOLD=10000000
 
 usage() {
-  cat <<'EOF'
+  cat << 'EOF'
 jit-misses.sh -- the vocabulary this project keeps not having
 
   bash scripts/jit-misses.sh [--log PATH] [--min N] [--top N] [--tail N] [--size-threshold N]
@@ -120,12 +120,35 @@ need_value() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --log)  [ $# -ge 2 ] || need_value "$1"; LOG="$2"; shift 2 ;;
-    --min)  [ $# -ge 2 ] || need_value "$1"; MIN="$2"; shift 2 ;;
-    --top)  [ $# -ge 2 ] || need_value "$1"; TOP="$2"; shift 2 ;;
-    --tail) [ $# -ge 2 ] || need_value "$1"; TAIL="$2"; shift 2 ;;
-    --size-threshold) [ $# -ge 2 ] || need_value "$1"; SIZE_THRESHOLD="$2"; shift 2 ;;
-    --help|-h) usage; exit 0 ;;
+    --log)
+      [ $# -ge 2 ] || need_value "$1"
+      LOG="$2"
+      shift 2
+      ;;
+    --min)
+      [ $# -ge 2 ] || need_value "$1"
+      MIN="$2"
+      shift 2
+      ;;
+    --top)
+      [ $# -ge 2 ] || need_value "$1"
+      TOP="$2"
+      shift 2
+      ;;
+    --tail)
+      [ $# -ge 2 ] || need_value "$1"
+      TAIL="$2"
+      shift 2
+      ;;
+    --size-threshold)
+      [ $# -ge 2 ] || need_value "$1"
+      SIZE_THRESHOLD="$2"
+      shift 2
+      ;;
+    --help | -h)
+      usage
+      exit 0
+      ;;
     *)
       # An unknown flag is refused rather than ignored. A silently dropped --min reads as
       # a threshold that applied, which is the failure this whole script is written about.
@@ -136,18 +159,34 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-case "$MIN" in ""|*[!0-9]*) echo "jit-misses: SKIPPED -- --min takes a whole number" >&2; exit 2 ;; esac
-case "$TOP" in ""|*[!0-9]*) echo "jit-misses: SKIPPED -- --top takes a whole number" >&2; exit 2 ;; esac
+case "$MIN" in "" | *[!0-9]*)
+  echo "jit-misses: SKIPPED -- --min takes a whole number" >&2
+  exit 2
+  ;;
+esac
+case "$TOP" in "" | *[!0-9]*)
+  echo "jit-misses: SKIPPED -- --top takes a whole number" >&2
+  exit 2
+  ;;
+esac
 [ "$MIN" -ge 1 ] || MIN=1
 [ "$TOP" -ge 1 ] || TOP=1
 
 # --tail is unset by default (empty string), which means "whole log" and skips this
 # check entirely -- only validate it when a caller actually asked for a bound.
 if [ -n "$TAIL" ]; then
-  case "$TAIL" in ""|*[!0-9]*) echo "jit-misses: SKIPPED -- --tail takes a whole number" >&2; exit 2 ;; esac
+  case "$TAIL" in "" | *[!0-9]*)
+    echo "jit-misses: SKIPPED -- --tail takes a whole number" >&2
+    exit 2
+    ;;
+  esac
   [ "$TAIL" -ge 1 ] || TAIL=1
 fi
-case "$SIZE_THRESHOLD" in ""|*[!0-9]*) echo "jit-misses: SKIPPED -- --size-threshold takes a whole number" >&2; exit 2 ;; esac
+case "$SIZE_THRESHOLD" in "" | *[!0-9]*)
+  echo "jit-misses: SKIPPED -- --size-threshold takes a whole number" >&2
+  exit 2
+  ;;
+esac
 
 if [ -z "$LOG" ]; then
   LOG="${CLAUDE_PROJECT_DIR:-.}/.claude/jit-context/.discovery/logs/hooks.log"
@@ -169,8 +208,8 @@ skip() {
 # follows and stays honest about growth even on an unbounded read. wc failing (it
 # should not, given the checks above just passed) leaves LOGBYTES empty rather than
 # wrong, and the header omits the figure rather than printing a lie.
-LOGBYTES="$(wc -c < "$LOG" 2>/dev/null | tr -d '[:space:]')"
-case "$LOGBYTES" in ""|*[!0-9]*) LOGBYTES="" ;; esac
+LOGBYTES="$(wc -c < "$LOG" 2> /dev/null | tr -d '[:space:]')"
+case "$LOGBYTES" in "" | *[!0-9]*) LOGBYTES="" ;; esac
 
 # LC_ALL=C, for the same reason the three hooks pin it (#68) and one that is specific to
 # this tool: the file it reads is one THE HOOKS WROTE, and they truncate the prompt copy at

@@ -29,10 +29,12 @@ TAB="$(printf '\t')"
 # jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:-<EMPTY STDOUT>}"
   fi
@@ -40,12 +42,14 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: ${output:-<EMPTY STDOUT>}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
@@ -89,23 +93,29 @@ D="$P/.claude/jit-context/tools/00-manual"
 
 run_rebuild "$P"
 if [ "$RC" -eq 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the rebuild itself still exits 0 (the forgery is defused, not crashed on)"
+  PASS=$((PASS + 1))
+  echo "  PASS: the rebuild itself still exits 0 (the forgery is defused, not crashed on)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the rebuild exited $RC: $OUT"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the rebuild exited $RC: $OUT"
 fi
-ROW="$(grep -F "attack.md" "$D/$TSV_NAME" 2>/dev/null || true)"
-NCOLS="$(awk -F'\t' '{print NF; exit}' <<<"$ROW")"
+ROW="$(grep -F "attack.md" "$D/$TSV_NAME" 2> /dev/null || true)"
+NCOLS="$(awk -F'\t' '{print NF; exit}' <<< "$ROW")"
 if [ "$NCOLS" = "7" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the row has exactly 7 tab-separated columns ($NCOLS)"
+  PASS=$((PASS + 1))
+  echo "  PASS: the row has exactly 7 tab-separated columns ($NCOLS)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the row has $NCOLS tab-separated columns, expected 7"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the row has $NCOLS tab-separated columns, expected 7"
   echo "    row: $ROW"
 fi
-MODE_COL="$(awk -F'\t' '{print $4; exit}' <<<"$ROW")"
+MODE_COL="$(awk -F'\t' '{print $4; exit}' <<< "$ROW")"
 if [ "$MODE_COL" != "block" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: column 4 (mode) did not get forged to block (got: $MODE_COL)"
+  PASS=$((PASS + 1))
+  echo "  PASS: column 4 (mode) did not get forged to block (got: $MODE_COL)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: column 4 (mode) reads block -- the forgery worked"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: column 4 (mode) reads block -- the forgery worked"
 fi
 assert_not_contains "the match column was not forged to a wildcard" "$ROW" $'\t.*\t'
 
@@ -128,16 +138,20 @@ printf '%s\n' \
   "body" > "$D/ordinary.md"
 run_rebuild "$P"
 if [ "$RC" -eq 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the control rebuild exits 0"
+  PASS=$((PASS + 1))
+  echo "  PASS: the control rebuild exits 0"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the control rebuild exited $RC: $OUT"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the control rebuild exited $RC: $OUT"
 fi
-ROW="$(grep -F "ordinary.md" "$D/$TSV_NAME" 2>/dev/null || true)"
-NCOLS="$(awk -F'\t' '{print NF; exit}' <<<"$ROW")"
+ROW="$(grep -F "ordinary.md" "$D/$TSV_NAME" 2> /dev/null || true)"
+NCOLS="$(awk -F'\t' '{print NF; exit}' <<< "$ROW")"
 if [ "$NCOLS" = "7" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the control row has exactly 7 columns"
+  PASS=$((PASS + 1))
+  echo "  PASS: the control row has exactly 7 columns"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the control row has $NCOLS columns, expected 7"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the control row has $NCOLS columns, expected 7"
 fi
 assert_contains "the control row's mode column reads remind" "$ROW" $'\tremind\t'
 
@@ -162,22 +176,28 @@ printf '%s\n' \
   "body" > "$D/bogus.md"
 run_rebuild "$P"
 if [ "$RC" -ne 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the run reports a non-zero exit for the unrecognised mode ($RC)"
+  PASS=$((PASS + 1))
+  echo "  PASS: the run reports a non-zero exit for the unrecognised mode ($RC)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the run exited 0 despite an unrecognised mode: value"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the run exited 0 despite an unrecognised mode: value"
 fi
 assert_contains "the run names the unrecognised mode as the reason" "$OUT" "remind/block/once"
-ROW="$(grep -F "bogus.md" "$D/$TSV_NAME" 2>/dev/null || true)"
-MODE_COL="$(awk -F'\t' '{print $4; exit}' <<<"$ROW")"
+ROW="$(grep -F "bogus.md" "$D/$TSV_NAME" 2> /dev/null || true)"
+MODE_COL="$(awk -F'\t' '{print $4; exit}' <<< "$ROW")"
 if [ "$MODE_COL" != "block-ish-but-not-really" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the bogus mode value was not indexed verbatim (got: $MODE_COL)"
+  PASS=$((PASS + 1))
+  echo "  PASS: the bogus mode value was not indexed verbatim (got: $MODE_COL)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the bogus mode value was indexed verbatim: $MODE_COL"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the bogus mode value was indexed verbatim: $MODE_COL"
 fi
-if ! grep -qF "$(printf '\tblock\t')" <<<"$ROW" && [ "$MODE_COL" != "block" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the row never reads as a block rule"
+if ! grep -qF "$(printf '\tblock\t')" <<< "$ROW" && [ "$MODE_COL" != "block" ]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: the row never reads as a block rule"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the row reads as a block rule: $ROW"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the row reads as a block rule: $ROW"
 fi
 
 # Positive control: a genuinely valid mode value (block) is still indexed as block --
@@ -198,16 +218,20 @@ printf '%s\n' \
   "body" > "$D/real-block.md"
 run_rebuild "$P"
 if [ "$RC" -eq 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: a genuine block mode still exits 0"
+  PASS=$((PASS + 1))
+  echo "  PASS: a genuine block mode still exits 0"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: a genuine block mode made the run exit $RC: $OUT"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: a genuine block mode made the run exit $RC: $OUT"
 fi
-ROW="$(grep -F "real-block.md" "$D/$TSV_NAME" 2>/dev/null || true)"
-MODE_COL="$(awk -F'\t' '{print $4; exit}' <<<"$ROW")"
+ROW="$(grep -F "real-block.md" "$D/$TSV_NAME" 2> /dev/null || true)"
+MODE_COL="$(awk -F'\t' '{print $4; exit}' <<< "$ROW")"
 if [ "$MODE_COL" = "block" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: a genuine block mode still indexes as block"
+  PASS=$((PASS + 1))
+  echo "  PASS: a genuine block mode still indexes as block"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: a genuine block mode indexed as: $MODE_COL"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: a genuine block mode indexed as: $MODE_COL"
 fi
 
 echo ""

@@ -27,12 +27,20 @@ DRYRUN="$SCRIPT_DIR/scripts/jit-dry-run.sh"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+}
 
 assert_contains() {
   local desc="$1" out="$2" want="$3"
-  if grep -qF -- "$want" <<<"$out"; then ok "$desc"; else
+  if grep -qF -- "$want" <<< "$out"; then ok "$desc"; else
     bad "$desc" "expected to contain: $want"
     echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-400)"
   fi
@@ -40,7 +48,7 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" out="$2" unwanted="$3"
-  if grep -qF -- "$unwanted" <<<"$out"; then
+  if grep -qF -- "$unwanted" <<< "$out"; then
     bad "$desc" "must NOT contain: $unwanted"
     echo "    got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-400)"
   else
@@ -129,19 +137,19 @@ printf '%s\n' \
   "" \
   "TABPATH-347-BODY" > "$BASE/paths/00-manual/tabpath-347.md"
 
-CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REBUILD" >/dev/null 2>&1
+CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REBUILD" > /dev/null 2>&1
 
 # Control on rebuild-tsv.sh itself: badmode-347.md must not be indexed at all, and
 # tabreq-347.md's require column must have the tab folded to a space -- otherwise the
 # fixtures below are not testing what they claim to.
-IDX_CONTENT=$(cat "$TOOLS_DIR/00-index.tsv" 2>/dev/null || true)
-if ! grep -qF "badmode-347.md" <<<"$IDX_CONTENT"; then
+IDX_CONTENT=$(cat "$TOOLS_DIR/00-index.tsv" 2> /dev/null || true)
+if ! grep -qF "badmode-347.md" <<< "$IDX_CONTENT"; then
   ok "control: rebuild-tsv.sh refuses the invalid-mode entry"
 else
   bad "control: rebuild-tsv.sh refuses the invalid-mode entry" "found it indexed"
 fi
-if grep -qF -- "--safe --extra" <<<"$IDX_CONTENT" \
-   && ! printf '%s' "$IDX_CONTENT" | LC_ALL=C awk '/\t--safe\t--extra\t/ { found = 1 } END { exit !found }'; then
+if grep -qF -- "--safe --extra" <<< "$IDX_CONTENT" \
+  && ! printf '%s' "$IDX_CONTENT" | LC_ALL=C awk '/\t--safe\t--extra\t/ { found = 1 } END { exit !found }'; then
   ok "control: rebuild-tsv.sh folds the interior tab in require: to a space"
 else
   bad "control: rebuild-tsv.sh folds the interior tab in require: to a space" "$IDX_CONTENT"
@@ -155,28 +163,28 @@ assert_not_contains "no STALE for the valid sibling" "$DRYRUN_OUT" "STALE"
 # above: if STALE appeared anywhere at all in this run, one of these three files is
 # the reason, since the sibling above is clean. Narrower per-file assertions below make
 # the failure easy to place.
-if grep -qF "badmode-347" <<<"$(printf '%s' "$DRYRUN_OUT" | grep STALE)"; then
+if grep -qF "badmode-347" <<< "$(printf '%s' "$DRYRUN_OUT" | grep STALE)"; then
   bad "no false STALE for the entry rebuild-tsv.sh correctly refused to index" \
     "$(printf '%s' "$DRYRUN_OUT" | grep STALE)"
 else
   ok "no false STALE for the entry rebuild-tsv.sh correctly refused to index"
 fi
 
-if grep -qF "tabreq-347" <<<"$(printf '%s' "$DRYRUN_OUT" | grep STALE)"; then
+if grep -qF "tabreq-347" <<< "$(printf '%s' "$DRYRUN_OUT" | grep STALE)"; then
   bad "no false STALE for the entry whose require: tab rebuild-tsv.sh folded to a space" \
     "$(printf '%s' "$DRYRUN_OUT" | grep STALE)"
 else
   ok "no false STALE for the entry whose require: tab rebuild-tsv.sh folded to a space"
 fi
 
-if grep -qF "tabmacro-347" <<<"$(printf '%s' "$DRYRUN_OUT" | grep STALE)"; then
+if grep -qF "tabmacro-347" <<< "$(printf '%s' "$DRYRUN_OUT" | grep STALE)"; then
   bad "no false STALE for a macro match: whose tab-carrying arguments fold before expansion" \
     "$(printf '%s' "$DRYRUN_OUT" | grep STALE)"
 else
   ok "no false STALE for a macro match: whose tab-carrying arguments fold before expansion"
 fi
 
-if grep -qF "tabpath-347" <<<"$(printf '%s' "$DRYRUN_OUT" | grep STALE)"; then
+if grep -qF "tabpath-347" <<< "$(printf '%s' "$DRYRUN_OUT" | grep STALE)"; then
   bad "no false STALE for a paths entry whose match: value carries a literal tab" \
     "$(printf '%s' "$DRYRUN_OUT" | grep STALE)"
 else

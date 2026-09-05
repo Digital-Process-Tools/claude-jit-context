@@ -51,10 +51,12 @@ printf '0' > "$SID_FILE"
 # jit-drive: assert_contains contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:-<EMPTY>}"
   fi
@@ -63,21 +65,25 @@ assert_contains() {
 # jit-drive: assert_missing not_contains capture
 assert_missing() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should not contain: $unexpected"
     echo "    got: ${output:-<EMPTY>}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
 assert_rc0() {
   local desc="$1" rc="$2"
   if [ "$rc" = 0 ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc (exit $rc)"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (exit $rc)"
   fi
 }
 
@@ -125,7 +131,7 @@ mk_vocab_entry() {
 }
 
 rebuild() {
-  CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/rebuild-tsv.sh" >/dev/null 2>&1
+  CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/rebuild-tsv.sh" > /dev/null 2>&1
 }
 
 # A fresh session id per call: every dimension dedups on a shown-file, so reusing one id
@@ -141,44 +147,48 @@ rebuild() {
 # Set beside the trap above, where TMPROOT exists.
 next_sid() {
   local n
-  n=$(( $(cat "$SID_FILE") + 1 ))
+  n=$(($(cat "$SID_FILE") + 1))
   printf '%s' "$n" > "$SID_FILE"
   printf 'sess%03d' "$n"
 }
 
 run_tool() {
   printf '{"tool_name":"Bash","tool_input":{"command":"%s"},"session_id":"%s"}' "$2" "$(next_sid)" \
-    | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-tool-hook.sh" 2>/dev/null
+    | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-tool-hook.sh" 2> /dev/null
 }
 
 run_path() {
   printf '{"tool_name":"Read","tool_input":{"file_path":"%s"},"session_id":"%s"}' "$2" "$(next_sid)" \
-    | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-path-hook.sh" 2>/dev/null
+    | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-path-hook.sh" 2> /dev/null
 }
 
 run_prompt() {
   printf '{"prompt":"%s","session_id":"%s"}' "$2" "$(next_sid)" \
-    | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-prompt-hook.sh" 2>/dev/null
+    | CLAUDE_PROJECT_DIR="$1" bash "$SCRIPTS/pre-prompt-hook.sh" 2> /dev/null
 }
 
 # ---------------------------------------------------------------------------
 echo "=== A: paths -- an 01-oss layer beside an 00-manual one ==="
 
-PROJ="$TMPROOT/a"; BASE="$PROJ/.claude/jit-context"
+PROJ="$TMPROOT/a"
+BASE="$PROJ/.claude/jit-context"
 mk_path_entry "$BASE" 00-manual manual 'manualfile\.php$'
-mk_path_entry "$BASE" 01-oss    ossp   'ossfile\.php$'
+mk_path_entry "$BASE" 01-oss ossp 'ossfile\.php$'
 rebuild "$PROJ"
 
 # The rebuild indexed BOTH. This is the asymmetry: every tool that writes or counts saw
 # the layer, and only the matcher did not.
 if [ -s "$BASE/paths/01-oss/00-index.tsv" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: A rebuild-tsv.sh indexed the 01-oss layer"
+  PASS=$((PASS + 1))
+  echo "  PASS: A rebuild-tsv.sh indexed the 01-oss layer"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: A rebuild-tsv.sh wrote no 01-oss index -- the fixture is wrong, not the hook"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: A rebuild-tsv.sh wrote no 01-oss index -- the fixture is wrong, not the hook"
 fi
 
-OUT=$(run_path "$PROJ" "/x/manualfile.php"); RC=$?
-assert_rc0      "A the path hook exits 0" "$RC"
+OUT=$(run_path "$PROJ" "/x/manualfile.php")
+RC=$?
+assert_rc0 "A the path hook exits 0" "$RC"
 assert_contains "A POSITIVE CONTROL: the 00-manual entry fires" "$OUT" "PATHBODY-manual"
 OUT=$(run_path "$PROJ" "/x/ossfile.php")
 assert_contains "A the 01-oss entry fires too" "$OUT" "PATHBODY-ossp"
@@ -187,16 +197,18 @@ assert_contains "A the 01-oss entry fires too" "$OUT" "PATHBODY-ossp"
 echo ""
 echo "=== B: tools -- the dimension that can BLOCK read one layer and no others ==="
 
-PROJ="$TMPROOT/b"; BASE="$PROJ/.claude/jit-context"
-mk_tool_entry "$BASE" 00-manual  tmanual 'manualtarget'
-mk_tool_entry "$BASE" 01-oss     toss    'osstarget'
+PROJ="$TMPROOT/b"
+BASE="$PROJ/.claude/jit-context"
+mk_tool_entry "$BASE" 00-manual tmanual 'manualtarget'
+mk_tool_entry "$BASE" 01-oss toss 'osstarget'
 # Not an invented name: docs/layers.md says a `20-grouped` entry is indexed and fires. In the
 # tools dimension it never did, because there was no layer loop there at all.
-mk_tool_entry "$BASE" 20-grouped tgroup  'grouptarget'
+mk_tool_entry "$BASE" 20-grouped tgroup 'grouptarget'
 rebuild "$PROJ"
 
-OUT=$(run_tool "$PROJ" "manualtarget now"); RC=$?
-assert_rc0      "B the tool hook exits 0" "$RC"
+OUT=$(run_tool "$PROJ" "manualtarget now")
+RC=$?
+assert_rc0 "B the tool hook exits 0" "$RC"
 assert_contains "B POSITIVE CONTROL: the 00-manual tool rule fires" "$OUT" "TOOLBODY-tmanual"
 OUT=$(run_tool "$PROJ" "osstarget now")
 assert_contains "B the 01-oss tool rule fires" "$OUT" "TOOLBODY-toss"
@@ -217,20 +229,22 @@ mkdir -p "$BASE/tools/01-oss"
 } > "$BASE/tools/01-oss/tblock.md"
 rebuild "$PROJ"
 OUT=$(run_tool "$PROJ" "blocktarget now")
-assert_contains "B a mode:block rule in 01-oss actually blocks" "$OUT" '"decision":"block"' 
+assert_contains "B a mode:block rule in 01-oss actually blocks" "$OUT" '"decision":"block"'
 assert_contains "B and the denial names the rule" "$OUT" "TOOLBODY-block"
 
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== C: vocabulary at prompt time ==="
 
-PROJ="$TMPROOT/c"; BASE="$PROJ/.claude/jit-context"
+PROJ="$TMPROOT/c"
+BASE="$PROJ/.claude/jit-context"
 mk_vocab_entry "$BASE" 00-manual vmanual 'manualword'
-mk_vocab_entry "$BASE" 01-oss    voss    'osssword'
+mk_vocab_entry "$BASE" 01-oss voss 'osssword'
 rebuild "$PROJ"
 
-OUT=$(run_prompt "$PROJ" "tell me about manualword please"); RC=$?
-assert_rc0      "C the prompt hook exits 0" "$RC"
+OUT=$(run_prompt "$PROJ" "tell me about manualword please")
+RC=$?
+assert_rc0 "C the prompt hook exits 0" "$RC"
 assert_contains "C POSITIVE CONTROL: the 00-manual vocab entry fires" "$OUT" "VOCABBODY-vmanual"
 OUT=$(run_prompt "$PROJ" "tell me about osssword please")
 assert_contains "C the 01-oss vocab entry fires" "$OUT" "VOCABBODY-voss"
@@ -239,9 +253,10 @@ assert_contains "C the 01-oss vocab entry fires" "$OUT" "VOCABBODY-voss"
 echo ""
 echo "=== D: vocabulary reached from the tool hook, on a path token ==="
 
-PROJ="$TMPROOT/d"; BASE="$PROJ/.claude/jit-context"
+PROJ="$TMPROOT/d"
+BASE="$PROJ/.claude/jit-context"
 mk_vocab_entry "$BASE" 00-manual dmanual 'dmanualword'
-mk_vocab_entry "$BASE" 01-oss    doss    'dosssword'
+mk_vocab_entry "$BASE" 01-oss doss 'dosssword'
 rebuild "$PROJ"
 
 OUT=$(run_tool "$PROJ" "cat src/dmanualword/x.php")
@@ -257,21 +272,24 @@ echo "=== E: vocabulary path mappings, the second index of the same layer ==="
 # bases. Once layers are enumerated per dimension those two lists can legitimately
 # differ, so this section builds a tree where they DO: `paths/` here has no 01-oss layer
 # at all and `vocabulary/` does.
-PROJ="$TMPROOT/e"; BASE="$PROJ/.claude/jit-context"
-mk_path_entry  "$BASE" 00-manual epath   'epathfile\.php$'
+PROJ="$TMPROOT/e"
+BASE="$PROJ/.claude/jit-context"
+mk_path_entry "$BASE" 00-manual epath 'epathfile\.php$'
 mk_vocab_entry "$BASE" 00-manual emanual 'emanualword' 'Emanualmod'
-mk_vocab_entry "$BASE" 01-oss    eoss    'eosssword'   'Eossmod'
+mk_vocab_entry "$BASE" 01-oss eoss 'eosssword' 'Eossmod'
 rebuild "$PROJ"
 
 if [ -s "$BASE/vocabulary/01-oss/01-paths.tsv" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: E rebuild-tsv.sh wrote the 01-oss path mappings"
+  PASS=$((PASS + 1))
+  echo "  PASS: E rebuild-tsv.sh wrote the 01-oss path mappings"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: E no 01-oss 01-paths.tsv -- the fixture is wrong, not the hook"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: E no 01-oss 01-paths.tsv -- the fixture is wrong, not the hook"
 fi
 
 e_run() {
   printf '{"tool_name":"Read","tool_input":{"file_path":"%s"},"session_id":"%s"}' "$1" "$(next_sid)" \
-    | env DYNAMIC_RULES_VOCAB_PATHS=1 CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPTS/pre-path-hook.sh" 2>/dev/null
+    | env DYNAMIC_RULES_VOCAB_PATHS=1 CLAUDE_PROJECT_DIR="$PROJ" bash "$SCRIPTS/pre-path-hook.sh" 2> /dev/null
 }
 OUT=$(e_run "src/x/epathfile.php")
 assert_contains "E POSITIVE CONTROL: the paths dimension still fires here" "$OUT" "PATHBODY-epath"
@@ -290,7 +308,8 @@ echo "=== F: the third state -- a layer the matcher declines to read is NAMED ==
 # The layer name arrives with the clone, so it is attacker-chosen text of the family
 # common.sh cites above jit_report_name() (#35, #113, #124): refused when it is not
 # [A-Za-z0-9._-]+, and never echoed into a report.
-PROJ="$TMPROOT/f"; BASE="$PROJ/.claude/jit-context"
+PROJ="$TMPROOT/f"
+BASE="$PROJ/.claude/jit-context"
 mk_path_entry "$BASE" 00-manual fmanual 'ffile\.php$'
 rebuild "$PROJ"
 # After the rebuild, so the hand-written index below is what the matcher would find if it
@@ -300,33 +319,37 @@ mkdir -p "$BASE/paths/bad name"
 printf 'zzz\tnope.md\t\t\t\t\n' > "$BASE/paths/bad name/00-index.tsv"
 printf -- '---\ntitle: x\nmatch: zzz\n---\n\nNOPEBODY\n' > "$BASE/paths/bad name/nope.md"
 
-OUT=$(run_path "$PROJ" "/x/ffile.php"); RC=$?
-assert_rc0      "F the hook still exits 0 with an unreadable layer present" "$RC"
+OUT=$(run_path "$PROJ" "/x/ffile.php")
+RC=$?
+assert_rc0 "F the hook still exits 0 with an unreadable layer present" "$RC"
 assert_contains "F POSITIVE CONTROL: the honest layer beside it still fires" "$OUT" "PATHBODY-fmanual"
 assert_contains "F the refused layer is reported rather than skipped in silence" "$OUT" "layer directory"
-assert_missing  "F and its name is never echoed into the report" "$OUT" "bad name"
-assert_missing  "F nothing from the refused layer is injected" "$OUT" "NOPEBODY"
+assert_missing "F and its name is never echoed into the report" "$OUT" "bad name"
+assert_missing "F nothing from the refused layer is injected" "$OUT" "NOPEBODY"
 
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== G: ordering is precedence, and the numeric prefixes are what decide it ==="
 
-PROJ="$TMPROOT/g"; BASE="$PROJ/.claude/jit-context"
+PROJ="$TMPROOT/g"
+BASE="$PROJ/.claude/jit-context"
 # One match token, three layers. The injected text must carry them in prefix order.
-mk_path_entry "$BASE" 30-crosscutting gcross  'gfile\.php$'
-mk_path_entry "$BASE" 01-oss          goss    'gfile\.php$'
-mk_path_entry "$BASE" 00-manual       gmanual 'gfile\.php$'
+mk_path_entry "$BASE" 30-crosscutting gcross 'gfile\.php$'
+mk_path_entry "$BASE" 01-oss goss 'gfile\.php$'
+mk_path_entry "$BASE" 00-manual gmanual 'gfile\.php$'
 rebuild "$PROJ"
 
 OUT=$(run_path "$PROJ" "/x/gfile.php")
-assert_contains "G all three layers fire (00-manual)"       "$OUT" "PATHBODY-gmanual"
-assert_contains "G all three layers fire (01-oss)"          "$OUT" "PATHBODY-goss"
+assert_contains "G all three layers fire (00-manual)" "$OUT" "PATHBODY-gmanual"
+assert_contains "G all three layers fire (01-oss)" "$OUT" "PATHBODY-goss"
 assert_contains "G all three layers fire (30-crosscutting)" "$OUT" "PATHBODY-gcross"
-ORDER=$(grep -o 'PATHBODY-g[a-z]*' <<<"$OUT" | tr '\n' ' ')
+ORDER=$(grep -o 'PATHBODY-g[a-z]*' <<< "$OUT" | tr '\n' ' ')
 if [ "$ORDER" = "PATHBODY-gmanual PATHBODY-goss PATHBODY-gcross " ]; then
-  PASS=$((PASS + 1)); echo "  PASS: G layers are scanned in numeric-prefix order"
+  PASS=$((PASS + 1))
+  echo "  PASS: G layers are scanned in numeric-prefix order"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: G layer order is not the prefix order"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: G layer order is not the prefix order"
   echo "    expected: PATHBODY-gmanual PATHBODY-goss PATHBODY-gcross "
   echo "    got: $ORDER"
 fi
@@ -344,7 +367,8 @@ echo "=== H: the count is bounded, and crossing the bound says so ==="
 # overridable by env, so crossing it needs more than 64 real layer directories -- but not
 # 80 of them. 66 clears the bound with a 3-layer margin (65th, 66th, 67th refused) instead
 # of a 17-layer one, for the same assertions below.
-PROJ="$TMPROOT/h"; BASE="$PROJ/.claude/jit-context"
+PROJ="$TMPROOT/h"
+BASE="$PROJ/.claude/jit-context"
 mk_path_entry "$BASE" 00-manual hmanual 'hfile\.php$'
 i=0
 while [ "$i" -lt 66 ]; do
@@ -353,8 +377,9 @@ while [ "$i" -lt 66 ]; do
 done
 rebuild "$PROJ"
 
-OUT=$(run_path "$PROJ" "/x/hfile.php"); RC=$?
-assert_rc0      "H the hook exits 0 over the bound" "$RC"
+OUT=$(run_path "$PROJ" "/x/hfile.php")
+RC=$?
+assert_rc0 "H the hook exits 0 over the bound" "$RC"
 assert_contains "H POSITIVE CONTROL: 00-manual still fires -- the bound never costs the first layers" "$OUT" "PATHBODY-hmanual"
 assert_contains "H and the hook says the layer list was cut" "$OUT" "layer directories"
 
@@ -389,13 +414,14 @@ I_CHECKED=0
 I_LOADED=0
 I_REFUSED=0
 for nm in "${I_NAMES[@]}"; do
-  PROJ="$TMPROOT/i-case"; rm -rf "$PROJ"
+  PROJ="$TMPROOT/i-case"
+  rm -rf "$PROJ"
   BASE="$PROJ/.claude/jit-context"
-  mkdir -p "$BASE/paths/$nm" 2>/dev/null || continue
+  mkdir -p "$BASE/paths/$nm" 2> /dev/null || continue
   printf -- '---\ntitle: t\nmatch: ifile\\.php$\n---\n\nIBODY\n' > "$BASE/paths/$nm/i.md"
   rebuild "$PROJ"
   OUT=$(run_path "$PROJ" "/x/ifile.php")
-  if grep -qF -- "IBODY" <<<"$OUT"; then loaded=yes; else loaded=no; fi
+  if grep -qF -- "IBODY" <<< "$OUT"; then loaded=yes; else loaded=no; fi
   # A subshell on purpose: sourcing common.sh into this shell would export its refusal
   # accumulators into every hook this suite runs afterwards.
   # shellcheck disable=SC1091
@@ -413,22 +439,28 @@ done
 # reports zero disagreements, which is the shape of every silent pass this repository has
 # had to fix -- so the count is asserted before the verdict is believed.
 if [ "$I_CHECKED" -lt 10 ]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: I only $I_CHECKED name(s) were driven -- the verdict below is about the harness"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: I only $I_CHECKED name(s) were driven -- the verdict below is about the harness"
 else
-  PASS=$((PASS + 1)); echo "  PASS: I $I_CHECKED layer names were driven through both halves"
+  PASS=$((PASS + 1))
+  echo "  PASS: I $I_CHECKED layer names were driven through both halves"
 fi
 # BOTH verdicts must have been observed. "They agree on every one" is satisfied for free
 # by a harness where nothing ever loads, and equally by one where nothing is ever refused,
 # and those are the two ways this section could pass while testing nothing.
 if [ "$I_LOADED" -gt 0 ] && [ "$I_REFUSED" -gt 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: I both verdicts were seen ($I_LOADED loaded, $I_REFUSED refused)"
+  PASS=$((PASS + 1))
+  echo "  PASS: I both verdicts were seen ($I_LOADED loaded, $I_REFUSED refused)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: I only one verdict was ever produced ($I_LOADED loaded, $I_REFUSED refused) -- the agreement below is vacuous"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: I only one verdict was ever produced ($I_LOADED loaded, $I_REFUSED refused) -- the agreement below is vacuous"
 fi
 if [ "$I_DISAGREE" -eq 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: I the loader and jit_report_name agree on every one"
+  PASS=$((PASS + 1))
+  echo "  PASS: I the loader and jit_report_name agree on every one"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: I $I_DISAGREE name(s) load and report differently"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: I $I_DISAGREE name(s) load and report differently"
 fi
 
 # ---------------------------------------------------------------------------
@@ -454,7 +486,7 @@ ENGINE_BIN=$(mktemp -d "$TMPROOT/engines-XXXXXX")
 ENGINES=""
 ENGINE_SEEN=""
 for cand in awk gawk nawk mawk; do
-  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  cand_path=$(command -v "$cand" 2> /dev/null) || continue
   case " $ENGINE_SEEN " in *" $cand_path "*) continue ;; esac
   ENGINE_SEEN="$ENGINE_SEEN $cand_path"
   mkdir -p "$ENGINE_BIN/$cand"
@@ -465,23 +497,26 @@ done
 
 if [ -z "$ENGINES" ]; then
   # Never a silent pass: no engine means this section checked nothing.
-  FAIL=$((FAIL + 1)); echo "  FAIL: J no awk was found on PATH, so no engine was driven"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: J no awk was found on PATH, so no engine was driven"
 else
   # Two layers that must both fire, and a dimension whose every layer is refused so that
   # the empty-list case is reached on the same run.
-  PROJ="$TMPROOT/j"; BASE="$PROJ/.claude/jit-context"
+  PROJ="$TMPROOT/j"
+  BASE="$PROJ/.claude/jit-context"
   mk_path_entry "$BASE" 00-manual jmanual 'jfile\.php$'
-  mk_path_entry "$BASE" 01-oss    joss    'jfile\.php$'
+  mk_path_entry "$BASE" 01-oss joss 'jfile\.php$'
   rebuild "$PROJ"
   mkdir -p "$BASE/vocabulary/bad name"
 
   for eng in $ENGINES; do
     OUT=$(printf '{"tool_name":"Read","tool_input":{"file_path":"/x/jfile.php"},"session_id":"%s"}' "$(next_sid)" \
       | env DYNAMIC_RULES_VOCAB_PATHS=1 PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$PROJ" \
-        bash "$SCRIPTS/pre-path-hook.sh" 2>/dev/null); RC=$?
-    assert_rc0      "J [$eng] the hook exits 0" "$RC"
+        bash "$SCRIPTS/pre-path-hook.sh" 2> /dev/null)
+    RC=$?
+    assert_rc0 "J [$eng] the hook exits 0" "$RC"
     assert_contains "J [$eng] both layers of a two-layer list fire (00-manual)" "$OUT" "PATHBODY-jmanual"
-    assert_contains "J [$eng] both layers of a two-layer list fire (01-oss)"    "$OUT" "PATHBODY-joss"
+    assert_contains "J [$eng] both layers of a two-layer list fire (01-oss)" "$OUT" "PATHBODY-joss"
     assert_contains "J [$eng] a dimension with no readable layer is reported, not scanned" "$OUT" "layer directory"
 
     # The empty-list half, probed DIRECTLY rather than through the hook. An earlier cut of
@@ -490,19 +525,23 @@ else
     # a path that does not exist returns -1 and the path is never printed. That assertion
     # would have passed if the code did nothing, which is the thing this suite exists to
     # not do. The property is engine-facing, so it is asked of the engine.
-    SPLIT0=$(PATH="$ENGINE_BIN/$eng:$PATH" awk 'BEGIN { printf "%d", split("", a, " ") }' 2>/dev/null)
+    SPLIT0=$(PATH="$ENGINE_BIN/$eng:$PATH" awk 'BEGIN { printf "%d", split("", a, " ") }' 2> /dev/null)
     if [ "$SPLIT0" = "0" ]; then
-      PASS=$((PASS + 1)); echo "  PASS: J [$eng] an empty layer list splits to zero elements, not one empty name"
+      PASS=$((PASS + 1))
+      echo "  PASS: J [$eng] an empty layer list splits to zero elements, not one empty name"
     else
-      FAIL=$((FAIL + 1)); echo "  FAIL: J [$eng] an empty layer list split to '$SPLIT0' elements -- the loop would read an index under the dimension root"
+      FAIL=$((FAIL + 1))
+      echo "  FAIL: J [$eng] an empty layer list split to '$SPLIT0' elements -- the loop would read an index under the dimension root"
     fi
     # ...and the control for that probe: the same engine must split a real list to two, or
     # a `0` above could be an engine that failed to run at all.
-    SPLIT2=$(PATH="$ENGINE_BIN/$eng:$PATH" awk 'BEGIN { n = split("00-manual 01-oss", a, " "); printf "%d:%s:%s", n, a[1], a[2] }' 2>/dev/null)
+    SPLIT2=$(PATH="$ENGINE_BIN/$eng:$PATH" awk 'BEGIN { n = split("00-manual 01-oss", a, " "); printf "%d:%s:%s", n, a[1], a[2] }' 2> /dev/null)
     if [ "$SPLIT2" = "2:00-manual:01-oss" ]; then
-      PASS=$((PASS + 1)); echo "  PASS: J [$eng] POSITIVE CONTROL: a two-layer list splits to two, in order"
+      PASS=$((PASS + 1))
+      echo "  PASS: J [$eng] POSITIVE CONTROL: a two-layer list splits to two, in order"
     else
-      FAIL=$((FAIL + 1)); echo "  FAIL: J [$eng] a two-layer list gave '$SPLIT2' -- the zero above says nothing"
+      FAIL=$((FAIL + 1))
+      echo "  FAIL: J [$eng] a two-layer list gave '$SPLIT2' -- the zero above says nothing"
     fi
   done
 fi
@@ -523,47 +562,51 @@ echo "=== K: the two refusal branches that need a permission bit to reach ==="
 # render as one that was constructed and held.
 k_probe_denied() {
   # Did chmod actually deny us? Root ignores the bits entirely.
-  [ "$(id -u 2>/dev/null || echo 1)" != "0" ] || return 1
-  ! ls "$1" >/dev/null 2>&1
+  [ "$(id -u 2> /dev/null || echo 1)" != "0" ] || return 1
+  ! ls "$1" > /dev/null 2>&1
 }
 
-PROJ="$TMPROOT/k1"; BASE="$PROJ/.claude/jit-context"
+PROJ="$TMPROOT/k1"
+BASE="$PROJ/.claude/jit-context"
 mk_path_entry "$BASE" 00-manual kmanual 'kfile\.php$'
 mk_path_entry "$BASE" 01-locked klocked 'kfile\.php$'
 rebuild "$PROJ"
-chmod 000 "$BASE/paths/01-locked" 2>/dev/null
+chmod 000 "$BASE/paths/01-locked" 2> /dev/null
 if ! k_probe_denied "$BASE/paths/01-locked"; then
-  chmod 755 "$BASE/paths/01-locked" 2>/dev/null
+  chmod 755 "$BASE/paths/01-locked" 2> /dev/null
   echo "  SKIPPED: this filesystem or user ignores the directory permission bits, so the"
   echo "           unopenable-layer branch went undriven -- neither a pass nor a failure"
 else
-  OUT=$(run_path "$PROJ" "/x/kfile.php"); RC=$?
-  chmod 755 "$BASE/paths/01-locked" 2>/dev/null
-  assert_rc0      "K the hook exits 0 with an unopenable layer present" "$RC"
+  OUT=$(run_path "$PROJ" "/x/kfile.php")
+  RC=$?
+  chmod 755 "$BASE/paths/01-locked" 2> /dev/null
+  assert_rc0 "K the hook exits 0 with an unopenable layer present" "$RC"
   assert_contains "K POSITIVE CONTROL: the readable layer beside it still fires" "$OUT" "PATHBODY-kmanual"
   assert_contains "K the unopenable layer is named, not skipped" "$OUT" "could not be opened"
-  assert_missing  "K and nothing from it is injected" "$OUT" "PATHBODY-klocked"
+  assert_missing "K and nothing from it is injected" "$OUT" "PATHBODY-klocked"
 fi
 
-PROJ="$TMPROOT/k2"; BASE="$PROJ/.claude/jit-context"
+PROJ="$TMPROOT/k2"
+BASE="$PROJ/.claude/jit-context"
 mk_path_entry "$BASE" 00-manual kmanual2 'kfile\.php$'
 mk_path_entry "$BASE" 01-noindex knoindex 'kfile\.php$'
 rebuild "$PROJ"
-chmod 000 "$BASE/paths/01-noindex/00-index.tsv" 2>/dev/null
+chmod 000 "$BASE/paths/01-noindex/00-index.tsv" 2> /dev/null
 # `( : < file )` rather than a reader: it opens the file and nothing else, so there is no
 # process to close a pipe early. tests/test-inert-without-tree.sh probes the write bit the
 # same way, and tests/test-assertion-helpers.sh refuses the `head -c1` spelling by name.
-if [ "$(id -u 2>/dev/null || echo 1)" = "0" ] || ( : < "$BASE/paths/01-noindex/00-index.tsv" ) 2>/dev/null; then
-  chmod 644 "$BASE/paths/01-noindex/00-index.tsv" 2>/dev/null
+if [ "$(id -u 2> /dev/null || echo 1)" = "0" ] || (: < "$BASE/paths/01-noindex/00-index.tsv") 2> /dev/null; then
+  chmod 644 "$BASE/paths/01-noindex/00-index.tsv" 2> /dev/null
   echo "  SKIPPED: this filesystem or user ignores the file permission bits, so the"
   echo "           unreadable-index branch went undriven -- neither a pass nor a failure"
 else
-  OUT=$(run_path "$PROJ" "/x/kfile.php"); RC=$?
-  chmod 644 "$BASE/paths/01-noindex/00-index.tsv" 2>/dev/null
-  assert_rc0      "K the hook exits 0 with an unreadable index present" "$RC"
+  OUT=$(run_path "$PROJ" "/x/kfile.php")
+  RC=$?
+  chmod 644 "$BASE/paths/01-noindex/00-index.tsv" 2> /dev/null
+  assert_rc0 "K the hook exits 0 with an unreadable index present" "$RC"
   assert_contains "K POSITIVE CONTROL: the readable layer beside it still fires" "$OUT" "PATHBODY-kmanual2"
   assert_contains "K the layer whose index cannot be read is named" "$OUT" "an index inside it could not be opened"
-  assert_missing  "K and nothing from it is injected" "$OUT" "PATHBODY-knoindex"
+  assert_missing "K and nothing from it is injected" "$OUT" "PATHBODY-knoindex"
 fi
 
 # ---------------------------------------------------------------------------
@@ -578,7 +621,8 @@ echo "=== L: the refusal LIST is capped in bytes and the COUNT is not ==="
 # The property that matters is the asymmetry: the list is truncated and says so, and the
 # COUNT is the whole total anyway. A notice that quietly stopped at N would tell the reader
 # N layers were refused, which is a false statement produced by a defence.
-PROJ="$TMPROOT/l"; BASE="$PROJ/.claude/jit-context"
+PROJ="$TMPROOT/l"
+BASE="$PROJ/.claude/jit-context"
 mk_path_entry "$BASE" 00-manual lmanual 'lfile\.php$'
 rebuild "$PROJ"
 i=0
@@ -589,12 +633,13 @@ while [ "$i" -lt 70 ]; do
   i=$((i + 1))
 done
 
-OUT=$(run_path "$PROJ" "/x/lfile.php"); RC=$?
-assert_rc0      "L the hook exits 0 with 70 refused layers" "$RC"
+OUT=$(run_path "$PROJ" "/x/lfile.php")
+RC=$?
+assert_rc0 "L the hook exits 0 with 70 refused layers" "$RC"
 assert_contains "L POSITIVE CONTROL: the honest layer still fires" "$OUT" "PATHBODY-lmanual"
 assert_contains "L the count is the whole total, not the number that fitted" "$OUT" "70 jit-context layer directories"
 assert_contains "L the list says plainly that the rest are not in it" "$OUT" "the remaining refused layer directories are not listed here"
-assert_missing  "L and no refused directory name is echoed" "$OUT" "bad 42"
+assert_missing "L and no refused directory name is echoed" "$OUT" "bad 42"
 
 echo ""
 echo "=========================================="

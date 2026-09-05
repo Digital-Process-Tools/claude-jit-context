@@ -18,12 +18,21 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$SCRIPT_DIR" || { echo "SKIPPED: cannot reach the repository root"; exit 2; }
+cd "$SCRIPT_DIR" || {
+  echo "SKIPPED: cannot reach the repository root"
+  exit 2
+}
 
 PASS=0
 FAIL=0
-pass() { PASS=$((PASS + 1)); echo "ok   - $1"; }
-fail() { FAIL=$((FAIL + 1)); echo "FAIL - $1: $2"; }
+pass() {
+  PASS=$((PASS + 1))
+  echo "ok   - $1"
+}
+fail() {
+  FAIL=$((FAIL + 1))
+  echo "FAIL - $1: $2"
+}
 
 # Sourced by other scripts, never invoked. Executable would be a lie about how they run.
 is_library() {
@@ -35,7 +44,7 @@ is_library() {
 
 echo "=== the harness can see this tree's own scripts ==="
 
-MODES="$(git ls-files -s 'scripts/*.sh' 2>/dev/null)"
+MODES="$(git ls-files -s 'scripts/*.sh' 2> /dev/null)"
 COUNT="$(printf '%s\n' "$MODES" | grep -c 'scripts/' || true)"
 if [ "${COUNT:-0}" -lt 5 ]; then
   echo "SKIPPED: git ls-files returned $COUNT tracked scripts/*.sh -- every assertion below"
@@ -57,7 +66,7 @@ for lib in scripts/common.sh scripts/host.sh; do
   fi
 
   base="${lib#scripts/}"
-  sourced="$(grep -lE "^[[:space:]]*(\\.|source)[[:space:]]+.*${base}" scripts/*.sh 2>/dev/null | grep -cv "^${lib}$" || true)"
+  sourced="$(grep -lE "^[[:space:]]*(\\.|source)[[:space:]]+.*${base}" scripts/*.sh 2> /dev/null | grep -cv "^${lib}$" || true)"
   if [ "${sourced:-0}" -ge 1 ]; then
     pass "$lib is sourced by $sourced script(s) under scripts/"
   else
@@ -69,8 +78,8 @@ for lib in scripts/common.sh scripts/host.sh; do
   invoked=0
   for f in scripts/*.sh; do
     [ "$f" = "$lib" ] && continue
-    body="$(grep -vE "^[[:space:]]*#" "$f" 2>/dev/null)"
-    grep -qE -- "(^|[[:space:]])(bash|sh)[[:space:]]+[^|;&]*${base}" <<<"$body" \
+    body="$(grep -vE "^[[:space:]]*#" "$f" 2> /dev/null)"
+    grep -qE -- "(^|[[:space:]])(bash|sh)[[:space:]]+[^|;&]*${base}" <<< "$body" \
       && invoked=$((invoked + 1))
   done
   if [ "${invoked:-0}" -eq 0 ]; then

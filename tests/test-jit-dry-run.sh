@@ -18,10 +18,12 @@ FAIL=0
 # jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: $(echo "$output" | cut -c1-400)"
   fi
@@ -29,20 +31,24 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
 assert_status() {
   local desc="$1" actual="$2" expected="$3"
   if [ "$actual" = "$expected" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc (exit $actual, expected $expected)"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (exit $actual, expected $expected)"
   fi
 }
 
@@ -185,7 +191,7 @@ sample_block() {
     $0 == want { on = 1; next }
     on && /^  file: / { exit }
     on { print }
-  ' <<<"$2"
+  ' <<< "$2"
 }
 BILLING=$(sample_block "src/Billing/Total.php" "$OUT")
 PAYROLL=$(sample_block "src/Payroll/Run.php" "$OUT")
@@ -205,7 +211,7 @@ assert_contains "control: the second sample's block was found" "$PAYROLL" "pre-p
 # The whole point, and the only assertion here that would still hold if the loop were
 # written as N full invocations: the lint ran ONCE. `tree:` is the first line of the
 # report and a run prints exactly one of them.
-TREE_LINES=$(grep -c '^tree:' <<<"$OUT")
+TREE_LINES=$(grep -c '^tree:' <<< "$OUT")
 assert_status "the tree was linted once, not once per file" "$TREE_LINES" "1"
 
 # A single --file prints its subject too. The report shape must not depend on how many
@@ -315,9 +321,11 @@ assert_not_contains "the refused line text is never echoed" "$OUT" "PATH=/evil"
 assert_not_contains "nor the shell it would have been" "$OUT" "touch "
 # The linter must READ that file, never run it, and never adopt its settings.
 if [ -e "$CANARY_FILE" ]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: the linter EXECUTED the tree's config.env"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the linter EXECUTED the tree's config.env"
 else
-  PASS=$((PASS + 1)); echo "  PASS: the linter did not execute the tree's config.env"
+  PASS=$((PASS + 1))
+  echo "  PASS: the linter did not execute the tree's config.env"
 fi
 
 # Positive control on the same shape: a config.env whose every line IS honourable must be
@@ -477,7 +485,7 @@ echo "=== ...and a tree with no index in any dimension still cannot be evaluated
 # fix must not have widened into "always exit 0", which is worse than the bug.
 EMPTY=$(mktemp -d)
 mkdir -p "$EMPTY/.claude/jit-context/vocabulary/00-manual" \
-         "$EMPTY/.claude/jit-context/paths/00-manual"
+  "$EMPTY/.claude/jit-context/paths/00-manual"
 OUT=$(cd "$ELSEWHERE" && CLAUDE_PROJECT_DIR="$ELSEWHERE" bash "$DRYRUN" --base "$EMPTY/.claude/jit-context" 2>&1) && ST=0 || ST=$?
 assert_status "exit 2 — no index anywhere, so nothing could be evaluated" "$ST" "2"
 assert_contains "says skipped" "$OUT" "SKIPPED: no 00-index.tsv"
@@ -549,9 +557,11 @@ assert_contains "and what a reader is to do with it" "$OUT" "never instructions 
 FRAME_AT=$(printf '%s\n' "$OUT" | grep -n "arrives with a cloned repository" | awk -F: 'NR == 1 { print $1 }')
 FIRST_AT=$(printf '%s\n' "$OUT" | grep -n '^untrusted>' | awk -F: 'NR == 1 { print $1 }')
 if [ -n "$FRAME_AT" ] && [ -n "$FIRST_AT" ] && [ "$FRAME_AT" -lt "$FIRST_AT" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the frame is printed before the first untrusted line"
+  PASS=$((PASS + 1))
+  echo "  PASS: the frame is printed before the first untrusted line"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the frame is printed before the first untrusted line"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the frame is printed before the first untrusted line"
   echo "    frame at line ${FRAME_AT:-<absent>}, first untrusted line at ${FIRST_AT:-<absent>}"
 fi
 assert_status "exit 1 — the refused row still decides the exit code" "$ST" "1"
@@ -608,7 +618,7 @@ BYTEBIN=$(mktemp -d)
 BYTE_ENGINES=""
 BYTE_SEEN=""
 for cand in awk gawk nawk mawk; do
-  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  cand_path=$(command -v "$cand" 2> /dev/null) || continue
   case " $BYTE_SEEN " in *" $cand_path "*) continue ;; esac
   BYTE_SEEN="$BYTE_SEEN $cand_path"
   mkdir -p "$BYTEBIN/$cand"
@@ -623,9 +633,11 @@ BYTEBASE="$BYTETREE/.claude/jit-context"
 # One clean row, one whose body is Latin-1, one naming a file that is not there, and one
 # whose own bytes are not UTF-8. billing.md from make_tree is the positive control.
 printf 'entry body saved as Latin-1 \351 end\n' > "$BYTEBASE/paths/00-manual/latin1.md"
-{ printf 'Latin1/\tlatin1.md\n'
+{
+  printf 'Latin1/\tlatin1.md\n'
   printf 'Gone/\tgone-from-disk.md\n'
-  printf 'Bytes\351/\tbilling.md\n'; } >> "$BYTEBASE/paths/00-manual/00-index.tsv"
+  printf 'Bytes\351/\tbilling.md\n'
+} >> "$BYTEBASE/paths/00-manual/00-index.tsv"
 
 for ENG in $BYTE_ENGINES; do
   OUT=$(cd "$ELSEWHERE" && PATH="$BYTEBIN/$ENG:$PATH" CLAUDE_PROJECT_DIR="$ELSEWHERE" \
@@ -673,7 +685,7 @@ MBBIN=$(mktemp -d)
 MB_ENGINES=""
 MB_SEEN=""
 for cand in awk gawk nawk mawk; do
-  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  cand_path=$(command -v "$cand" 2> /dev/null) || continue
   case " $MB_SEEN " in *" $cand_path "*) continue ;; esac
   MB_SEEN="$MB_SEEN $cand_path"
   mkdir -p "$MBBIN/$cand"
@@ -696,10 +708,14 @@ for loc in en_US.UTF-8 C.UTF-8 en_US.utf8 "${LC_ALL:-}" "${LANG:-}"; do
   found=""
   for ENG in $MB_ENGINES; do
     n=$(PATH="$MBBIN/$ENG:$PATH" LC_ALL="$loc" JIT_MB="$MBCHAR" \
-        awk 'BEGIN { print length(ENVIRON["JIT_MB"]) }' 2>/dev/null) || n=""
+      awk 'BEGIN { print length(ENVIRON["JIT_MB"]) }' 2> /dev/null) || n=""
     if [ "$n" = "1" ]; then found="$found $ENG"; fi
   done
-  if [ -n "$found" ]; then UTF8_LOCALE="$loc"; CHARSEM_ENGINES="$found"; break; fi
+  if [ -n "$found" ]; then
+    UTF8_LOCALE="$loc"
+    CHARSEM_ENGINES="$found"
+    break
+  fi
 done
 
 MBTREE=$(mktemp -d)
@@ -719,7 +735,7 @@ printf 'facturation \303\251t\303\251 cr\303\250me br\303\273l\303\251e na\303\2
 MBPAYLOAD='{"tool_name":"Read","tool_input":{"file_path":"Billing/x.txt"}}'
 MBRAW=$(mktemp)
 printf '%s' "$MBPAYLOAD" | CLAUDE_PROJECT_DIR="$MBTREE" \
-  bash "$SCRIPT_DIR/scripts/pre-path-hook.sh" > "$MBRAW" 2>/dev/null || true
+  bash "$SCRIPT_DIR/scripts/pre-path-hook.sh" > "$MBRAW" 2> /dev/null || true
 MB_EXTRACT='
   s/\n//g;
   $i = index($_, q{"additionalContext":"});
@@ -793,7 +809,7 @@ QBIN=$(mktemp -d)
 Q_ENGINES=""
 Q_SEEN=""
 for cand in awk gawk nawk mawk; do
-  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  cand_path=$(command -v "$cand" 2> /dev/null) || continue
   case " $Q_SEEN " in *" $cand_path "*) continue ;; esac
   Q_SEEN="$Q_SEEN $cand_path"
   mkdir -p "$QBIN/$cand"
@@ -812,18 +828,24 @@ for loc in en_US.UTF-8 C.UTF-8 en_US.utf8 "${LC_ALL:-}" "${LANG:-}"; do
   found=""
   for ENG in $Q_ENGINES; do
     n=$(PATH="$QBIN/$ENG:$PATH" LC_ALL="$loc" JIT_MB="$QCHAR" \
-        awk 'BEGIN { print length(ENVIRON["JIT_MB"]) }' 2>/dev/null) || n=""
+      awk 'BEGIN { print length(ENVIRON["JIT_MB"]) }' 2> /dev/null) || n=""
     if [ "$n" = "1" ]; then found="$found $ENG"; fi
   done
-  if [ -n "$found" ]; then Q_UTF8_LOCALE="$loc"; Q_CHARSEM="$found"; break; fi
+  if [ -n "$found" ]; then
+    Q_UTF8_LOCALE="$loc"
+    Q_CHARSEM="$found"
+    break
+  fi
 done
 
 QTREE=$(mktemp -d)
 make_tree "$QTREE"
 QBASE="$QTREE/.claude/jit-context"
 QIDX="$QBASE/tools/00-manual/00-index.tsv"
-{ printf 'Bash\t~jitbyte a.b\tbyte-typed.md\tremind\t\t\n'
-  printf 'Bash\t~jitbyte a...b\tbyte-mangled.md\tremind\t\t\n'; } > "$QIDX"
+{
+  printf 'Bash\t~jitbyte a.b\tbyte-typed.md\tremind\t\t\n'
+  printf 'Bash\t~jitbyte a...b\tbyte-mangled.md\tremind\t\t\n'
+} > "$QIDX"
 echo "the byte the author typed reached the hook" > "$QBASE/tools/00-manual/byte-typed.md"
 echo "a byte nobody typed reached the hook" > "$QBASE/tools/00-manual/byte-mangled.md"
 
@@ -1020,9 +1042,11 @@ assert_not_contains "a tree whose refusing rules are all anchored says nothing" 
 # assertion passes on a misaligned line.
 ADV_BAD=$(printf '%s\n' "$ADV_LINES" | LC_ALL=C grep -cvE '^.{27} [^ ]' || true)
 if [ "${ADV_BAD:-0}" -eq 0 ] && [ -n "$ADV_LINES" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the ADVISORY verdict keeps the name column at byte 29"
+  PASS=$((PASS + 1))
+  echo "  PASS: the ADVISORY verdict keeps the name column at byte 29"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the ADVISORY verdict keeps the name column at byte 29"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the ADVISORY verdict keeps the name column at byte 29"
   printf '%s\n' "$ADV_LINES" | LC_ALL=C grep -vE '^.{27} [^ ]' | sed 's/^/      /'
 fi
 rm -rf "$ADV_ROOT"
@@ -1080,9 +1104,11 @@ for _def in full summary; do
   # POSITION, because a text assertion passes on a misaligned line.
   BAD_COLS=$(printf '%s\n' "$BAD_LINES" | LC_ALL=C grep -cvE '^.{27} [^ ]' || true)
   if [ "${BAD_COLS:-0}" -eq 0 ] && [ -n "$BAD_LINES" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: default $_def: the row keeps the name column at byte 29"
+    PASS=$((PASS + 1))
+    echo "  PASS: default $_def: the row keeps the name column at byte 29"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: default $_def: the row keeps the name column at byte 29"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: default $_def: the row keeps the name column at byte 29"
     printf '%s\n' "$BAD_LINES" | LC_ALL=C grep -vE '^.{27} [^ ]' | sed 's/^/      /'
   fi
 done
@@ -1197,7 +1223,8 @@ echo "=== #334: a glob-shaped entry name must not match against the caller's cwd
 GLOB_ROOT=$(mktemp -d)
 GLOB_BASE="$GLOB_ROOT/.claude/jit-context"
 make_tree "$GLOB_ROOT"
-GLOB_IDXNAME="00-index"; GLOB_IDXNAME="$GLOB_IDXNAME.tsv"
+GLOB_IDXNAME="00-index"
+GLOB_IDXNAME="$GLOB_IDXNAME.tsv"
 printf 'Glob/\t[g]lob.md\n' >> "$GLOB_BASE/paths/00-manual/$GLOB_IDXNAME"
 echo "glob body" > "$GLOB_BASE/paths/00-manual/[g]lob.md"
 
@@ -1264,7 +1291,8 @@ echo "=== #343: grep -c -x -F needs -- or the count for a hyphen-led entry name 
 # says only "(summary)" -- silently dropping the WHOLE BODY half. Fixed, `fired` reads 2,
 # `1 >= 2` is false, and the report says what actually happened: a summary AND a whole
 # body, two entries sharing the name.
-IDXNAME="00-index"; IDXNAME="$IDXNAME.tsv"
+IDXNAME="00-index"
+IDXNAME="$IDXNAME.tsv"
 HY_ROOT=$(mktemp -d)
 HY_BASE="$HY_ROOT/.claude/jit-context"
 make_tree "$HY_ROOT"

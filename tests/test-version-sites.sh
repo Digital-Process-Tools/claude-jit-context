@@ -59,7 +59,7 @@ extract_plugin_version() {
          sub(/"$/, "", s)
          print s
          exit
-       }' "$1" 2>/dev/null
+       }' "$1" 2> /dev/null
 }
 
 # [![Version](https://img.shields.io/badge/version-0.3.0-orange)](...)  ->  0.3.0
@@ -78,7 +78,7 @@ extract_readme_badge_version() {
          gsub(/--/, "-", s)
          print s
          exit
-       }' "$1" 2>/dev/null
+       }' "$1" 2> /dev/null
 }
 
 # ## [0.3.0] -- Containment  ->  0.3.0
@@ -92,7 +92,7 @@ extract_changelog_version() {
          match($0, /\[[^]]*\]/)
          print substr($0, RSTART + 1, RLENGTH - 2)
          exit
-       }' "$1" 2>/dev/null
+       }' "$1" 2> /dev/null
 }
 
 # | 0.3.x   | :white_check_mark: |  ->  0.3
@@ -108,7 +108,7 @@ extract_security_minor() {
          match($0, /[0-9]+\.[0-9]+/)
          print substr($0, RSTART, RLENGTH)
          exit
-       }' "$1" 2>/dev/null
+       }' "$1" 2> /dev/null
 }
 
 # --- the guard that makes the comparison mean something ---------------------
@@ -117,28 +117,35 @@ extract_security_minor() {
 # wrong line can return a non-empty string that is not a version, and "orange" = "orange"
 # passes just as quietly as "" = "".
 require_version() {
-  site="$1"; file="$2"; value="$3"
+  site="$1"
+  file="$2"
+  value="$3"
   if [ ! -f "$file" ]; then
     echo "  FAIL: $site -- no such file: $file"
-    FAIL=$((FAIL + 1)); return 1
+    FAIL=$((FAIL + 1))
+    return 1
   fi
   if [ -z "$value" ]; then
     echo "  FAIL: $site -- no version string could be parsed out of $file"
     echo "        this suite refuses to compare an empty match; fix the parse or the file"
-    FAIL=$((FAIL + 1)); return 1
+    FAIL=$((FAIL + 1))
+    return 1
   fi
   if ! printf '%s\n' "$value" \
-     | awk '{ exit !($0 ~ /^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$/) }'; then
+    | awk '{ exit !($0 ~ /^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$/) }'; then
     echo "  FAIL: $site -- parsed [$value] out of $file, which is not a version string"
-    FAIL=$((FAIL + 1)); return 1
+    FAIL=$((FAIL + 1))
+    return 1
   fi
   echo "  PASS: $site -- read $value"
-  PASS=$((PASS + 1)); return 0
+  PASS=$((PASS + 1))
+  return 0
 }
 
 # jit-drive: none -- both helpers compare version strings, not hook output; there is no payload to make long
 assert_same() {
-  site="$1"; value="$2"
+  site="$1"
+  value="$2"
   if [ "$value" = "$PLUGIN_V" ]; then
     echo "  PASS: $site agrees with plugin.json ($PLUGIN_V)"
     PASS=$((PASS + 1))
@@ -156,7 +163,10 @@ assert_same() {
 # awkward shape a real one will eventually have: a pre-release, whose hyphen shields.io
 # doubles in the badge URL and neither other site escapes at all.
 echo "=== the extractors read a synthetic pre-release correctly ==="
-FIXTURE=$(mktemp -d) || { echo "  FAIL: could not create a fixture directory"; exit 1; }
+FIXTURE=$(mktemp -d) || {
+  echo "  FAIL: could not create a fixture directory"
+  exit 1
+}
 trap 'rm -rf "$FIXTURE"' EXIT
 mkdir -p "$FIXTURE/.claude-plugin"
 printf '{\n  "name": "x",\n  "version": "9.4.0-rc.1"\n}\n' > "$FIXTURE/.claude-plugin/plugin.json"
@@ -164,7 +174,9 @@ printf '[![Version](https://img.shields.io/badge/version-9.4.0--rc.1-orange)](.c
 printf '## [Unreleased]\n\n## [9.4.0-rc.1] - Something\n\n## [9.3.0] - Older\n' > "$FIXTURE/CHANGELOG.md"
 
 assert_extracts() {
-  desc="$1"; want="$2"; got="$3"
+  desc="$1"
+  want="$2"
+  got="$3"
   if [ "$got" = "$want" ]; then
     echo "  PASS: $desc -> $got"
     PASS=$((PASS + 1))
@@ -190,9 +202,9 @@ PLUGIN_V=$(extract_plugin_version "$PLUGIN_JSON")
 README_V=$(extract_readme_badge_version "$README")
 CHANGELOG_V=$(extract_changelog_version "$CHANGELOG")
 
-require_version "plugin.json"       "$PLUGIN_JSON" "$PLUGIN_V"
-require_version "README badge"      "$README"      "$README_V"
-require_version "CHANGELOG heading" "$CHANGELOG"   "$CHANGELOG_V"
+require_version "plugin.json" "$PLUGIN_JSON" "$PLUGIN_V"
+require_version "README badge" "$README" "$README_V"
+require_version "CHANGELOG heading" "$CHANGELOG" "$CHANGELOG_V"
 
 SECURITY_M=$(extract_security_minor "$SECURITY")
 if [ ! -f "$SECURITY" ]; then
@@ -218,7 +230,7 @@ if [ "$FAIL" -ne "$FAIL_BEFORE_READ" ]; then
   echo "  FAIL: not compared -- a site above could not be read"
   FAIL=$((FAIL + 1))
 else
-  assert_same "README badge"      "$README_V"
+  assert_same "README badge" "$README_V"
   assert_same "CHANGELOG heading" "$CHANGELOG_V"
 
   # major.minor, because SECURITY.md names a supported LINE and not a release. Comparing it

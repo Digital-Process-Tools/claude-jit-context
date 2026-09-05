@@ -40,8 +40,8 @@ if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
 # would make JIT_CONTEXT_ALLOW_CROSS_TREE=0, set by someone spelling "leave the guard ON",
 # silently do the opposite.
 if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ "${JIT_CONTEXT_ALLOW_CROSS_TREE:-}" != "1" ]; then
-  JIT_CWD_TOP="$(git rev-parse --show-toplevel 2>/dev/null)"
-  JIT_PROJ_TOP="$(git -C "$CLAUDE_PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null)"
+  JIT_CWD_TOP="$(git rev-parse --show-toplevel 2> /dev/null)"
+  JIT_PROJ_TOP="$(git -C "$CLAUDE_PROJECT_DIR" rev-parse --show-toplevel 2> /dev/null)"
   if [ -n "$JIT_CWD_TOP" ] && [ -n "$JIT_PROJ_TOP" ] && [ "$JIT_CWD_TOP" != "$JIT_PROJ_TOP" ]; then
     # "different git worktree" describes #231's own scenario, the one this guard was
     # written for. What is actually detected is narrower and does not know that shape:
@@ -160,7 +160,10 @@ fi
 # the same report block as the ambiguity tally.
 JIT_RC=0
 # 2 outranks 1: an index that was not written is a worse claim than one that was.
-jit_rc() { [ "$1" -gt "$JIT_RC" ] && JIT_RC="$1"; return 0; }
+jit_rc() {
+  [ "$1" -gt "$JIT_RC" ] && JIT_RC="$1"
+  return 0
+}
 
 # --- What a report may say about a name that arrived with the clone (#113, #131) ----
 # Every name printed by the reports below is a directory entry under
@@ -327,7 +330,7 @@ truncate_index() {
   # one while stderr was still the terminal: bash printed its own diagnostic, carrying the
   # ABSOLUTE path -- layer directory included -- and the 2>/dev/null that follows silenced
   # nothing. Measured against `00-index.tsv` shipped as a directory.
-  if : 2>/dev/null > "$tsv"; then return 0; fi
+  if : 2> /dev/null > "$tsv"; then return 0; fi
   # bash own reason is gone with that message, so the one case a clone can construct on
   # purpose is classified here instead. Everything else stays unattributed rather than
   # guessed at.
@@ -639,7 +642,7 @@ elif [ ! -r "$GENERIC_WORDS_FILE" ]; then
   echo "FATAL    generic-word classifier: $GENERIC_WORDS_FILE_SAFE exists but is not readable -- every keyword this run will read as non-generic (the pre-#232 degrade), which would otherwise be silent. Fix its permissions or unset JIT_CONTEXT_GENERIC_WORDS to accept the degrade on purpose." >&2
   jit_rc 2
 else
-  GENERIC_WORDS_LINES=$(LC_ALL=C awk 'END{print NR+0}' "$GENERIC_WORDS_FILE" 2>/dev/null)
+  GENERIC_WORDS_LINES=$(LC_ALL=C awk 'END{print NR+0}' "$GENERIC_WORDS_FILE" 2> /dev/null)
   if [ -z "$GENERIC_WORDS_LINES" ] || [ "$GENERIC_WORDS_LINES" -eq 0 ]; then
     echo "FATAL    generic-word classifier: $GENERIC_WORDS_FILE_SAFE exists and is readable but is empty -- every keyword this run will read as non-generic (the pre-#232 degrade), which would otherwise be silent." >&2
     jit_rc 2
@@ -790,7 +793,10 @@ build_vocab_tsv() {
       # keywords: normalised to nothing" for a reason that had nothing to do with the
       # normaliser. `LC_ALL=C` makes both read bytes, matching the awk half's own fix.
       kw=$(echo "$kw" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sed 's/[^a-z0-9 -]/ /g; s/  */ /g; s/^ *//; s/ *$//')
-      if [ -z "$kw" ]; then kw_empty=$((kw_empty + 1)); continue; fi
+      if [ -z "$kw" ]; then
+        kw_empty=$((kw_empty + 1))
+        continue
+      fi
       # Skip overly generic single words — they collide with op flags and path tokens.
       # Skipped, and now SAID: the row is not written, so the entry never fires on this
       # word, and the only place that can be reported is here (#95).
@@ -1560,9 +1566,13 @@ echo "" >&2
 # the detail, but they scroll past inside two reports; this is what is on screen when the
 # shell hands the prompt back, and it is the only place the number itself is spelled out.
 case "$JIT_RC" in
-  1) echo "rebuild-tsv: exit 1 -- the index was written, and at least one row above will be REFUSED" >&2
-     echo "             by the matcher. That rule is on disk and will never fire." >&2 ;;
-  2) echo "rebuild-tsv: exit 2 -- an index could not be written. What is on disk is NOT what this" >&2
-     echo "             run built." >&2 ;;
+  1)
+    echo "rebuild-tsv: exit 1 -- the index was written, and at least one row above will be REFUSED" >&2
+    echo "             by the matcher. That rule is on disk and will never fire." >&2
+    ;;
+  2)
+    echo "rebuild-tsv: exit 2 -- an index could not be written. What is on disk is NOT what this" >&2
+    echo "             run built." >&2
+    ;;
 esac
 exit "$JIT_RC"

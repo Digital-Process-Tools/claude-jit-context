@@ -41,10 +41,12 @@ FAIL=0
 # jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:-<EMPTY>}"
   fi
@@ -52,31 +54,37 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: ${output:-<EMPTY>}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
 assert_rc0() {
   local desc="$1" rc="$2"
   if [ "$rc" -eq 0 ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc (exit $rc)"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (exit $rc)"
   fi
 }
 
 assert_no_file() {
   local desc="$1" path="$2"
   if [ -e "$path" ]; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    this path should not exist: $path"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
@@ -93,8 +101,8 @@ new_hostile() {
   local p="$TMP/$1"
   rm -rf "$p"
   mkdir -p "$p/.claude/jit-context/vocabulary/00-manual" \
-           "$p/.claude/jit-context/paths/00-manual" \
-           "$p/.claude/jit-context/tools/00-manual"
+    "$p/.claude/jit-context/paths/00-manual" \
+    "$p/.claude/jit-context/tools/00-manual"
   printf '%s\t%s\n' 'zzz' '../x-CANARY-ROW' > "$p/.claude/jit-context/vocabulary/00-manual/00-index.tsv"
   printf '%s' "$p"
 }
@@ -138,8 +146,8 @@ probe_symlinks() {
   rm -rf "$d" || return 1
   mkdir -p "$d/target-dir" || return 1
   printf 'probe\n' > "$d/target-file" || return 1
-  ln -sf "$d/target-file" "$d/link-file" 2>/dev/null
-  ln -sfn "$d/target-dir" "$d/link-dir" 2>/dev/null
+  ln -sf "$d/target-file" "$d/link-file" 2> /dev/null
+  ln -sfn "$d/target-dir" "$d/link-dir" 2> /dev/null
   printf 'late\n' > "$d/target-dir/late.txt" || return 1
   [ -L "$d/link-file" ] || return 1
   [ -L "$d/link-dir" ] || return 1
@@ -157,12 +165,14 @@ echo ""
 echo "=== Positive control: the honest tree logs, so the negatives below mean something ==="
 
 P="$(new_hostile honest)"
-OUT="$(run_prompt "$P")"; RC=$?
+OUT="$(run_prompt "$P")"
+RC=$?
 LOG="$P/.claude/jit-context/.discovery/logs/hooks.log"
 assert_rc0 "honest tree: hook exits 0" "$RC"
 assert_contains "honest tree: the hook injects its refusal notice" "$OUT" "could not be evaluated"
 if [ -f "$LOG" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: honest tree: a log line is written inside the project"
+  PASS=$((PASS + 1))
+  echo "  PASS: honest tree: a log line is written inside the project"
   assert_contains "honest tree: that line is this run" "$(cat "$LOG")" "pre-prompt"
 else
   FAIL=$((FAIL + 1))
@@ -199,7 +209,8 @@ else
   RCFILE="$(new_rc victim-a/.zshenv)"
   mkdir -p "$P/.claude/jit-context/.discovery/logs"
   ln -sf "$RCFILE" "$P/.claude/jit-context/.discovery/logs/hooks.log"
-  OUT="$(run_prompt "$P")"; RC=$?
+  OUT="$(run_prompt "$P")"
+  RC=$?
   assert_rc0 "linked hooks.log: hook still exits 0" "$RC"
   assert_contains "linked hooks.log: hook still injects its notice" "$OUT" "could not be evaluated"
   assert_contains "linked hooks.log: the victim file still exists and is readable" "$(cat "$RCFILE")" "$RC_MARKER"
@@ -210,10 +221,12 @@ else
   echo "=== S4b: .discovery/logs is a symlink to a directory outside the project ==="
 
   P="$(new_hostile s4b)"
-  OUTDIR="$TMP/victim-b"; mkdir -p "$OUTDIR"
+  OUTDIR="$TMP/victim-b"
+  mkdir -p "$OUTDIR"
   mkdir -p "$P/.claude/jit-context/.discovery"
   ln -sfn "$OUTDIR" "$P/.claude/jit-context/.discovery/logs"
-  OUT="$(run_prompt "$P")"; RC=$?
+  OUT="$(run_prompt "$P")"
+  RC=$?
   assert_rc0 "linked logs dir: hook still exits 0" "$RC"
   assert_contains "linked logs dir: hook still injects its notice" "$OUT" "could not be evaluated"
   assert_no_file "linked logs dir: no log was created in the linked directory" "$OUTDIR/hooks.log"
@@ -222,9 +235,11 @@ else
   echo "=== S4c: .discovery is a symlink to a directory outside the project ==="
 
   P="$(new_hostile s4c)"
-  OUTDIR="$TMP/victim-c"; mkdir -p "$OUTDIR"
+  OUTDIR="$TMP/victim-c"
+  mkdir -p "$OUTDIR"
   ln -sfn "$OUTDIR" "$P/.claude/jit-context/.discovery"
-  OUT="$(run_prompt "$P")"; RC=$?
+  OUT="$(run_prompt "$P")"
+  RC=$?
   assert_rc0 "linked .discovery: hook still exits 0" "$RC"
   assert_contains "linked .discovery: hook still injects its notice" "$OUT" "could not be evaluated"
   assert_no_file "linked .discovery: no logs directory was created outside the tree" "$OUTDIR/logs"
@@ -234,22 +249,30 @@ else
 
   # .claude/jit-context and .claude are refused for ENTRY reading by the S3 sweep, but the
   # log path is built by a different concatenation and was not covered by it.
-  P="$TMP/s4d-jit"; rm -rf "$P"; mkdir -p "$P/.claude"
-  OUTDIR="$TMP/victim-d1"; mkdir -p "$OUTDIR/vocabulary/00-manual"
+  P="$TMP/s4d-jit"
+  rm -rf "$P"
+  mkdir -p "$P/.claude"
+  OUTDIR="$TMP/victim-d1"
+  mkdir -p "$OUTDIR/vocabulary/00-manual"
   printf '%s\t%s\n' 'zzz' '../x-CANARY-ROW' > "$OUTDIR/vocabulary/00-manual/00-index.tsv"
   ln -sfn "$OUTDIR" "$P/.claude/jit-context"
-  OUT="$(run_prompt "$P")"; RC=$?
+  OUT="$(run_prompt "$P")"
+  RC=$?
   assert_rc0 "linked jit-context: hook still exits 0" "$RC"
   # Paired on this shape too, not only on S4a-c: without it, "no log outside the tree" is
   # equally satisfied by a hook that bailed out before reading anything.
   assert_contains "linked jit-context: hook still injects its notice" "$OUT" "could not be evaluated"
   assert_no_file "linked jit-context: no log was created outside the tree" "$OUTDIR/.discovery"
 
-  P="$TMP/s4d-claude"; rm -rf "$P"; mkdir -p "$P"
-  OUTDIR="$TMP/victim-d2"; mkdir -p "$OUTDIR/jit-context/vocabulary/00-manual"
+  P="$TMP/s4d-claude"
+  rm -rf "$P"
+  mkdir -p "$P"
+  OUTDIR="$TMP/victim-d2"
+  mkdir -p "$OUTDIR/jit-context/vocabulary/00-manual"
   printf '%s\t%s\n' 'zzz' '../x-CANARY-ROW' > "$OUTDIR/jit-context/vocabulary/00-manual/00-index.tsv"
   ln -sfn "$OUTDIR" "$P/.claude"
-  OUT="$(run_prompt "$P")"; RC=$?
+  OUT="$(run_prompt "$P")"
+  RC=$?
   assert_rc0 "linked .claude: hook still exits 0" "$RC"
   assert_contains "linked .claude: hook still injects its notice" "$OUT" "could not be evaluated"
   assert_no_file "linked .claude: no log was created outside the tree" "$OUTDIR/jit-context/.discovery"
@@ -277,7 +300,7 @@ assert_contains "unbare name: the reason survives" "$LOG" "not a bare file name"
 
 P="$(new_hostile s4e-pattern)"
 printf '%s\t%s\t%s\t\t\t\n' 'Bash' '~gh\d pr' 'note-NAMED-OK.md' > "$P/.claude/jit-context/tools/00-manual/00-index.tsv"
-printf '{"tool_name":"Bash","tool_input":{"command":"ls"}}' | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/pre-tool-hook.sh" >/dev/null 2>&1
+printf '{"tool_name":"Bash","tool_input":{"command":"ls"}}' | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/pre-tool-hook.sh" > /dev/null 2>&1
 LOG="$(cat "$P/.claude/jit-context/.discovery/logs/hooks.log")"
 assert_contains "bare name, bad pattern: the file is still named in the log" "$LOG" "note-NAMED-OK.md"
 assert_contains "bare name, bad pattern: the reason survives" "$LOG" "undefined escape"
@@ -285,7 +308,8 @@ assert_contains "bare name, bad pattern: the reason survives" "$LOG" "undefined 
 echo ""
 echo "=== Negative control: an honest tree logs exactly as before ==="
 
-P="$TMP/plain"; rm -rf "$P"
+P="$TMP/plain"
+rm -rf "$P"
 mkdir -p "$P/.claude/jit-context/vocabulary/00-manual"
 D="$P/.claude/jit-context/vocabulary/00-manual"
 printf 'vocab body\n' > "$D/good.md"

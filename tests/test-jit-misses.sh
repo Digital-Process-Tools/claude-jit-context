@@ -22,10 +22,12 @@ FAIL=0
 # jit-drive: assert_no_token_row no_token_row capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: $(echo "$output" | cut -c1-400)"
   fi
@@ -33,12 +35,14 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: $(echo "$output" | cut -c1-400)"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
@@ -47,20 +51,24 @@ assert_not_contains() {
 # the output either way. The claim is about the ROW, so match the whole line.
 assert_no_token_row() {
   local desc="$1" output="$2" token="$3"
-  if grep -qE "^ +[0-9]+x  $token\$" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qE "^ +[0-9]+x  $token\$" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should have no row for token: $token"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
 assert_token_row() {
   local desc="$1" output="$2" token="$3"
-  if grep -qE "^ +[0-9]+x  $token\$" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qE "^ +[0-9]+x  $token\$" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected a row for token: $token"
     echo "    got: $(echo "$output" | cut -c1-400)"
   fi
@@ -69,9 +77,11 @@ assert_token_row() {
 assert_status() {
   local desc="$1" actual="$2" expected="$3"
   if [ "$actual" = "$expected" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc (exit $actual, expected $expected)"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (exit $actual, expected $expected)"
   fi
 }
 
@@ -91,7 +101,7 @@ fi
 # counted -- the tool and path dimensions dominate this log by volume (976 of 1242
 # `(none)` rows on the maintainer's machine) and none of them is a vocabulary gap.
 A="$TMP/a.log"
-cat > "$A" <<'LOG'
+cat > "$A" << 'LOG'
 [10:00:00.001] pre-prompt 9ms | 00-manual:jit-context.md(rebuild-tsv) [shown:1] << how does rebuild-tsv build the index
 [10:00:01.001] pre-prompt 9ms | (none) [shown:1] << how do i do xsd validation here
 [10:00:02.001] pre-prompt 9ms | (none) [shown:1] << validate the xsd please
@@ -154,7 +164,7 @@ assert_contains "and says so" "$OUT" "SKIPPED"
 assert_contains "naming emptiness as the reason" "$OUT" "empty"
 
 FOREIGN="$TMP/foreign.log"
-cat > "$FOREIGN" <<'LOG'
+cat > "$FOREIGN" << 'LOG'
 2026-08-12 04:00:00 INFO  something entirely else happened
 2026-08-12 04:00:01 WARN  and again
 LOG
@@ -167,7 +177,7 @@ assert_contains "naming the format as the reason" "$OUT" "format"
 # hook. Volume looks like evidence and is not -- this must not read as "prompts, no
 # misses", which is exactly what a row count would say.
 NOPROMPT="$TMP/noprompt.log"
-cat > "$NOPROMPT" <<'LOG'
+cat > "$NOPROMPT" << 'LOG'
 [10:00:07.001] pre-tool (Bash) 29ms | (none) [shown:2] << wsdl generate --all
 [10:00:08.001] pre-path 13ms | (none) << src/Wsdl/Thing.php
 [10:00:09.001] pre-tool (Read) 11ms | (none) [shown:2] << src/Other.php
@@ -181,7 +191,7 @@ assert_not_contains "and never claims there was nothing to find" "$OUT" "ok --"
 echo ""
 echo "=== a log with prompt records and nothing recurring is ok, not SKIPPED ==="
 CLEAN="$TMP/clean.log"
-cat > "$CLEAN" <<'LOG'
+cat > "$CLEAN" << 'LOG'
 [10:00:00.001] pre-prompt 9ms | 00-manual:jit-context.md(rebuild-tsv) [shown:1] << how does rebuild-tsv build the index
 [10:00:01.001] pre-prompt 9ms | (none) [shown:1] << who owns the deployment calendar
 LOG
@@ -202,7 +212,7 @@ assert_contains "while still reporting what it read" "$OUT" "2 prompt record(s)"
 # a path (`src/Billing/Totals.php`) and a dotted filename (`common.sh`). A rule that ate
 # either would be a worse bug than the one it fixes.
 URLS="$TMP/urls.log"
-cat > "$URLS" <<'LOG'
+cat > "$URLS" << 'LOG'
 [10:00:01.001] pre-prompt 9ms | (none) [shown:1] << the changelog at https://github.com/digital-process-tools/claude-jit-context/pull/54
 [10:00:02.001] pre-prompt 9ms | (none) [shown:1] << changelog, see https://github.com/digital-process-tools/claude-jit-context/pull/55
 [10:00:03.001] pre-prompt 9ms | (none) [shown:1] << the totals in src/Billing/Totals.php are wrong
@@ -238,7 +248,7 @@ assert_contains "and it says how many links it dropped" "$OUT" "2 link(s) stripp
 # The header says `link(s)`, so it must count LINKS. Counting records instead is a number
 # that reads as a link count and halves on the prompt that pastes two.
 MULTI="$TMP/multilink.log"
-cat > "$MULTI" <<'LOG'
+cat > "$MULTI" << 'LOG'
 [10:00:01.001] pre-prompt 9ms | (none) [shown:1] << compare https://acme.example.com/one with https://acme.example.com/two
 [10:00:02.001] pre-prompt 9ms | (none) [shown:1] << compare https://acme.example.com/three with https://acme.example.com/four
 LOG
@@ -262,9 +272,9 @@ TRUNC_WORD_FULL="settlement batch quarterly closingstatementreconciliationproced
 TRUNC_WORD="${TRUNC_WORD_FULL:0:80}"
 TRUNC_FRAG="${TRUNC_WORD##* }"
 
-if [ "${#TRUNC_URL}" -ne 80 ] || [ "${#TRUNC_WORD}" -ne 80 ] ||
-   [ "${TRUNC_URL#*://}" = "$TRUNC_URL" ] ||
-   [ "$TRUNC_FRAG" = "${TRUNC_WORD_FULL##* }" ] || [ "${#TRUNC_FRAG}" -lt 3 ]; then
+if [ "${#TRUNC_URL}" -ne 80 ] || [ "${#TRUNC_WORD}" -ne 80 ] \
+  || [ "${TRUNC_URL#*://}" = "$TRUNC_URL" ] \
+  || [ "$TRUNC_FRAG" = "${TRUNC_WORD_FULL##* }" ] || [ "${#TRUNC_FRAG}" -lt 3 ]; then
   echo "  FAIL: harness guard -- the truncation fixtures are not the shape they claim"
   echo "    url record: ${#TRUNC_URL} chars, word record: ${#TRUNC_WORD} chars, fragment: $TRUNC_FRAG"
   exit 1
@@ -309,7 +319,7 @@ echo "=== a record from a tool nobody hardcoded is still a recognised record ===
 # tool is mcp__server__thing. A log made only of those is "no prompt records", NOT
 # "unrecognised format" -- the right verdict for the wrong reason is still wrong.
 MCP="$TMP/mcp.log"
-cat > "$MCP" <<'LOG'
+cat > "$MCP" << 'LOG'
 [10:00:07.001] pre-tool (mcp__claude-in-chrome__navigate) 29ms | (none) [shown:2] << go to page
 [10:00:08.001] pre-tool (mcp__claude-in-chrome__navigate) 31ms | (none) [shown:2] << go to page again
 LOG
@@ -370,9 +380,11 @@ if [ -z "$T_MISSES" ] || [ -z "$T_COMMON" ]; then
   echo "  FAIL: could not read a fold table out of both files -- the assertion is vacuous"
   echo "    jit-misses.sh: ${#T_MISSES} chars, common.sh: ${#T_COMMON} chars"
 elif [ "$T_MISSES" = "$T_COMMON" ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the two copies of the fold table agree"
+  PASS=$((PASS + 1))
+  echo "  PASS: the two copies of the fold table agree"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the two copies of the fold table have drifted"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the two copies of the fold table have drifted"
   echo "    jit-misses.sh: $T_MISSES"
   echo "    common.sh:     $T_COMMON"
 fi
@@ -387,7 +399,7 @@ ENGINE_BIN=$(mktemp -d)
 ENGINES=""
 ENGINE_SEEN=""
 for cand in awk gawk nawk mawk; do
-  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  cand_path=$(command -v "$cand" 2> /dev/null) || continue
   case " $ENGINE_SEEN " in *" $cand_path "*) continue ;; esac
   ENGINE_SEEN="$ENGINE_SEEN $cand_path"
   mkdir -p "$ENGINE_BIN/$cand"
@@ -402,8 +414,9 @@ done
 pick_utf8_locale() {
   local c
   for c in en_US.UTF-8 C.UTF-8 en_US.utf8 C.utf8; do
-    if [ "$(LC_ALL="$c" locale charmap 2>/dev/null)" = "UTF-8" ]; then
-      printf '%s' "$c"; return 0
+    if [ "$(LC_ALL="$c" locale charmap 2> /dev/null)" = "UTF-8" ]; then
+      printf '%s' "$c"
+      return 0
     fi
   done
   printf '%s' "${LC_ALL:-${LANG:-C}}"
@@ -416,7 +429,7 @@ UTF8_LOCALE="$(pick_utf8_locale)"
 # tell the fix from its absence. Said out loud rather than gone quietly green, on the
 # pattern section A of tests/test-hook-tmpfile.sh already uses for symbolic links.
 UTF8_LOCALE_REAL=no
-if [ "$(LC_ALL="$UTF8_LOCALE" locale charmap 2>/dev/null)" = "UTF-8" ]; then UTF8_LOCALE_REAL=yes; fi
+if [ "$(LC_ALL="$UTF8_LOCALE" locale charmap 2> /dev/null)" = "UTF-8" ]; then UTF8_LOCALE_REAL=yes; fi
 if [ "$UTF8_LOCALE_REAL" != yes ]; then
   echo "  SKIP-NOTE: no UTF-8 locale on this machine ($UTF8_LOCALE). The malformed-byte"
   echo "             assertions below run under a byte locale, where the defect does not"
@@ -436,7 +449,7 @@ echo "caller locale for the byte-split assertion: $UTF8_LOCALE"
 
 # An accented prompt is the fixture that broke the prompt hook itself under one-true-awk.
 ACCENT="$TMP/accent.log"
-cat > "$ACCENT" <<'LOG'
+cat > "$ACCENT" << 'LOG'
 [10:00:01.001] pre-prompt 9ms | (none) [shown:1] << comment marche la facturation détaillée
 [10:00:02.001] pre-prompt 9ms | (none) [shown:1] << la facturation est cassée
 [10:00:03.001] pre-prompt 9ms | (none) [shown:1] << /some-command
@@ -520,9 +533,11 @@ rm -rf "$ENGINE_BIN"
 assert_file_has() {
   local desc="$1" path="$2" needle="$3"
   if grep -qF -- "$needle" "$path"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $needle"
     echo "    in file: $path"
   fi
@@ -531,11 +546,13 @@ assert_file_has() {
 assert_file_lacks() {
   local desc="$1" path="$2" needle="$3"
   if grep -qF -- "$needle" "$path"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $needle"
     echo "    in file: $path"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
@@ -567,8 +584,9 @@ printf '[10:00:01.001] pre-tool (Bash) 9ms | (none) [shown:0] << git status\n' >
 #   --log <no records>         the awk END block, shaped == 0
 #   --log <no pre-prompt>      the awk END block, prompts == 0
 for c in "--min:" "--zzz:" "--min:x" "--log:/nonexistent/hooks.log" "--log:$NORECORDS" \
-         "--log:$NOPROMPTS"; do
-  cflag="${c%%:*}"; cval="${c#*:}"
+  "--log:$NOPROMPTS"; do
+  cflag="${c%%:*}"
+  cval="${c#*:}"
   if [ -n "$cval" ]; then set -- "$cflag" "$cval"; else set -- "$cflag"; fi
   bash "$MISSES" "$@" > "$R_OUT" 2> "$R_ERR" && ST=0 || ST=$?
   assert_status "[$cflag ${cval:-<none>}] a refusal still exits 2" "$ST" "2"
@@ -588,10 +606,12 @@ assert_status "an ordinary run still exits 0" "$ST" "0"
 assert_file_has "and its report is on stdout" "$OK_OUT" "jit-misses:"
 assert_file_has "with the finding still in it" "$OK_OUT" "xsd"
 if [ -s "$OK_ERR" ]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: an ordinary run writes nothing to stderr"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: an ordinary run writes nothing to stderr"
   echo "    stderr held: $(head -c 200 "$OK_ERR")"
 else
-  PASS=$((PASS + 1)); echo "  PASS: an ordinary run writes nothing to stderr"
+  PASS=$((PASS + 1))
+  echo "  PASS: an ordinary run writes nothing to stderr"
 fi
 
 # --help is not a refusal. It is what the reader ASKED for, so it keeps stdout -- a fix
@@ -602,9 +622,11 @@ bash "$MISSES" --help > "$H_OUT" 2> "$H_ERR" && ST=0 || ST=$?
 assert_status "--help still exits 0" "$ST" "0"
 assert_file_has "--help is a report the reader asked for, so it keeps stdout" "$H_OUT" "the vocabulary this project keeps not having"
 if [ -s "$H_ERR" ]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: --help writes nothing to stderr"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: --help writes nothing to stderr"
 else
-  PASS=$((PASS + 1)); echo "  PASS: --help writes nothing to stderr"
+  PASS=$((PASS + 1))
+  echo "  PASS: --help writes nothing to stderr"
 fi
 
 echo ""

@@ -104,7 +104,7 @@ PT_FP=""
   IFS= read -r PT_TOOL
   IFS= read -r PT_SESSION
   PT_FP="$(cat)"
-} <<<"$PT_PARSED"
+} <<< "$PT_PARSED"
 
 # #301: `hooks/hooks.json`'s PostToolUse matcher used to be Write|Edit only, so a tree
 # that routes every edit through Bash instead -- a `mode: block` tools rule refusing
@@ -116,8 +116,11 @@ PT_FP=""
 # own branch, below, decides whether a command LOOKS like a write into the tree,
 # because unlike Write/Edit it carries no `file_path` this hook can canonicalise.
 case "$PT_TOOL" in
-  Write|Edit|Bash) ;;
-  *) echo '{}'; exit 0 ;;
+  Write | Edit | Bash) ;;
+  *)
+    echo '{}'
+    exit 0
+    ;;
 esac
 
 if [ -z "$PT_FP" ] || [ -z "$PT_SESSION" ] || [ -z "$JIT_STATE_DIR" ]; then
@@ -164,7 +167,10 @@ if [ "$PT_TOOL" = "Bash" ]; then
   # practice and untested here rather than measured as reachable.
   case "$PT_FP" in
     *"/.claude/jit-context/"*) ;;
-    *) echo '{}'; exit 0 ;;
+    *)
+      echo '{}'
+      exit 0
+      ;;
   esac
   # Explore self-review on #301 (live-reproduced, both fixed here):
   #
@@ -194,8 +200,7 @@ if [ "$PT_TOOL" = "Bash" ]; then
   # mention this tree, so the one extra fork is bounded to that narrow subset, not
   # paid by every Bash call in the session.
   if LC_ALL=C printf '%s' "$PT_FP" | grep -Eq \
-    '(^|[;&|])[[:space:]]*(sed|perl)([[:space:]][^;&|]*)?[[:space:]](-[a-z]*i|--in-place)[^;&|]*|(^|[;&|])[[:space:]]*tee([[:space:]]|$)|(^|[;&|])[[:space:]]*supertool[[:space:]]+.(edit|paste|git-commit):'
-  then
+    '(^|[;&|])[[:space:]]*(sed|perl)([[:space:]][^;&|]*)?[[:space:]](-[a-z]*i|--in-place)[^;&|]*|(^|[;&|])[[:space:]]*tee([[:space:]]|$)|(^|[;&|])[[:space:]]*supertool[[:space:]]+.(edit|paste|git-commit):'; then
     :
   elif printf '%s' "$PT_FP" | grep -qF '>'; then
     :
@@ -205,11 +210,11 @@ if [ "$PT_TOOL" = "Bash" ]; then
   fi
   EDIT_MARK="$JIT_STATE_DIR/edited-$PT_SESSION.txt"
   if [ ! -L "$EDIT_MARK" ]; then
-    : 2>/dev/null > "$EDIT_MARK"
+    : 2> /dev/null > "$EDIT_MARK"
   else
     EDIT_DECLINED_MARK="$JIT_STATE_DIR/edited-declined-$PT_SESSION.txt"
     if [ ! -L "$EDIT_DECLINED_MARK" ]; then
-      : 2>/dev/null > "$EDIT_DECLINED_MARK"
+      : 2> /dev/null > "$EDIT_DECLINED_MARK"
     fi
   fi
   echo '{}'
@@ -224,7 +229,10 @@ fi
 # Bash the Win32 file API underneath treats it as a separator, so a dot-dot spelled with
 # backslashes traverses there while reading as an ordinary character to this pattern.
 case "$PT_FP" in
-  *..*|*\\*) echo '{}'; exit 0 ;;
+  *..* | *\\*)
+    echo '{}'
+    exit 0
+    ;;
 esac
 
 # #286: canonicalisation used to run ONLY on the branch below, reached when the cheap
@@ -249,7 +257,10 @@ esac
 # longer skip it.
 case "$PT_FP" in
   *"/.claude/jit-context/"*) ;;
-  *) echo '{}'; exit 0 ;;
+  *)
+    echo '{}'
+    exit 0
+    ;;
 esac
 
 # jit_pt_canon_dir(): prints $1's physical location on disk today, resolving
@@ -269,7 +280,7 @@ jit_pt_canon_dir() {
     [ -n "$head" ] || head="/"
   done
   if [ -d "$head" ]; then
-    phys="$(CDPATH='' cd -P "$head" 2>/dev/null && pwd -P)"
+    phys="$(CDPATH='' cd -P "$head" 2> /dev/null && pwd -P)"
     [ -n "$phys" ] && head="$phys"
   fi
   if [ -z "$tail" ]; then
@@ -292,8 +303,14 @@ case "$PT_FP_ABS" in
   *) PT_FP_ABS="$PWD/$PT_FP_ABS" ;;
 esac
 case "$PT_FP_ABS" in
-  */) PT_FP_DIR="${PT_FP_ABS%/}"; PT_FP_BASE="" ;;
-  *)  PT_FP_DIR="${PT_FP_ABS%/*}"; PT_FP_BASE="${PT_FP_ABS##*/}" ;;
+  */)
+    PT_FP_DIR="${PT_FP_ABS%/}"
+    PT_FP_BASE=""
+    ;;
+  *)
+    PT_FP_DIR="${PT_FP_ABS%/*}"
+    PT_FP_BASE="${PT_FP_ABS##*/}"
+    ;;
 esac
 [ -n "$PT_FP_DIR" ] || PT_FP_DIR="/"
 PT_FP_DIR_CANON="$(jit_pt_canon_dir "$PT_FP_DIR")"
@@ -305,7 +322,10 @@ fi
 
 case "$PT_FP_CANON" in
   "$JIT_BASE_CANON"/*) ;;
-  *) echo '{}'; exit 0 ;;
+  *)
+    echo '{}'
+    exit 0
+    ;;
 esac
 
 # `[ -L ]` before the write, the same guard jit_shown_apply() applies to the `shown`
@@ -317,7 +337,7 @@ esac
 # comment on jit_shown_apply() in common.sh).
 EDIT_MARK="$JIT_STATE_DIR/edited-$PT_SESSION.txt"
 if [ ! -L "$EDIT_MARK" ]; then
-  : 2>/dev/null > "$EDIT_MARK"
+  : 2> /dev/null > "$EDIT_MARK"
 else
   # #285: the guard above tripped -- a symlink sits at the marker's own name -- so the
   # write above never happened, and stop-hook.sh reading that absence would read it as
@@ -329,7 +349,7 @@ else
   # target as EDIT_MARK itself.
   EDIT_DECLINED_MARK="$JIT_STATE_DIR/edited-declined-$PT_SESSION.txt"
   if [ ! -L "$EDIT_DECLINED_MARK" ]; then
-    : 2>/dev/null > "$EDIT_DECLINED_MARK"
+    : 2> /dev/null > "$EDIT_DECLINED_MARK"
   fi
 fi
 

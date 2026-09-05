@@ -18,10 +18,12 @@ FAIL=0
 
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: $(echo "$output" | cut -c1-400)"
   fi
@@ -29,21 +31,25 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: $(echo "$output" | cut -c1-400)"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
 assert_status() {
   local desc="$1" actual="$2" expected="$3"
   if [ "$actual" = "$expected" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc (exit $actual, expected $expected)"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (exit $actual, expected $expected)"
   fi
 }
 
@@ -69,7 +75,10 @@ LOG="$TMP/hooks.log"
   printf '[10:00:04.000] pre-prompt 1ms | (none) [shown:0] << preprod deploy is still broken\n'
   printf '[10:00:05.000] pre-prompt 1ms | (none) [shown:0] << can we automate preprod deploy\n'
 } > "$LOG"
-[ -s "$LOG" ] || { echo "  FAIL: harness guard -- fixture log is empty"; exit 1; }
+[ -s "$LOG" ] || {
+  echo "  FAIL: harness guard -- fixture log is empty"
+  exit 1
+}
 
 echo ""
 echo "=== unbounded (no --tail): sees the old miss, matches today's behaviour ==="
@@ -122,12 +131,12 @@ echo "=== an unbounded run never depends on tail or cat -- it never pipes (#248 
 # reporting the real finding.
 FAKEBIN="$TMP/fakebin"
 mkdir -p "$FAKEBIN"
-cat > "$FAKEBIN/tail" <<'FAKE'
+cat > "$FAKEBIN/tail" << 'FAKE'
 #!/bin/sh
 echo "fake tail: refuses to run" >&2
 exit 111
 FAKE
-cat > "$FAKEBIN/cat" <<'FAKE'
+cat > "$FAKEBIN/cat" << 'FAKE'
 #!/bin/sh
 echo "fake cat: refuses to run" >&2
 exit 111

@@ -68,16 +68,19 @@ if [ ! -t 0 ]; then
       print jit_session_key(raw, fs, fe, n)
       print (jit_stop_hook_active(raw, fs, fe, n) ? "true" : "false")
     }
-  ' 2>/dev/null)"
+  ' 2> /dev/null)"
   _jit_awk_rc=$?
   if [ "$_jit_awk_rc" -eq 0 ]; then
     # Two `read`s, not two `sed -n Np` forks over a string this shell is already
     # holding. The here-string supplies the trailing newline both reads need, and a
     # second line that is missing leaves STOP_HOOK_ACTIVE empty -- which the case below
     # already renders as "unknown", exactly as an empty `sed -n 2p` did.
-    { IFS= read -r SESSION_ID; IFS= read -r STOP_HOOK_ACTIVE; } <<<"$_jit_parsed"
+    {
+      IFS= read -r SESSION_ID
+      IFS= read -r STOP_HOOK_ACTIVE
+    } <<< "$_jit_parsed"
     case "$STOP_HOOK_ACTIVE" in
-      true|false) ;;
+      true | false) ;;
       *) STOP_HOOK_ACTIVE="unknown" ;;
     esac
   else
@@ -192,8 +195,8 @@ for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
   [ -f "$_jit_mf" ] && [ ! -L "$_jit_mf" ] || continue
   while IFS= read -r _jit_name || [ -n "$_jit_name" ]; do
     case "$_jit_name" in
-      ''|*/*|*\\*) continue ;;
-      jit-refused-*|jit-no-subject) continue ;;
+      '' | */* | *\\*) continue ;;
+      jit-refused-* | jit-no-subject) continue ;;
     esac
     _jit_is_tool=0
     case "$_jit_name" in
@@ -205,7 +208,7 @@ for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
         # otherwise-empty or slash-carrying remainder is not a name either, and must
         # not be treated as one just because the known prefix matched.
         case "$_jit_name" in
-          ''|*/*|*\\*) continue ;;
+          '' | */* | *\\*) continue ;;
         esac
         ;;
     esac
@@ -322,7 +325,7 @@ while IFS= read -r _jit_mname; do
   case "$JIT_NL$JIT_MANUAL_NAMES$JIT_NL" in
     *"$JIT_NL$_jit_mname$JIT_NL"*) JIT_MANUAL_FIRED_N=$((JIT_MANUAL_FIRED_N + 1)) ;;
   esac
-done <<EOF_MANUAL_CHECK
+done << EOF_MANUAL_CHECK
 $JIT_FIRED
 EOF_MANUAL_CHECK
 unset _jit_mname
@@ -428,7 +431,7 @@ while IFS= read -r _jit_name; do
   if [ "$JIT_I" -le 200 ]; then
     JIT_NAMES="$JIT_NAMES${JIT_NAMES:+, }$_jit_shown"
   fi
-done <<EOF_FIRED
+done << EOF_FIRED
 $JIT_FIRED
 EOF_FIRED
 unset _jit_name _jit_age _jit_shown

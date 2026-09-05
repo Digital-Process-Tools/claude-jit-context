@@ -29,10 +29,12 @@ FAIL=0
 # jit-drive: assert_not_contains not_contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:-<EMPTY STDOUT>}"
   fi
@@ -40,12 +42,14 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should NOT contain: $unexpected"
     echo "    got: ${output:-<EMPTY STDOUT>}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
@@ -61,8 +65,8 @@ new_project() {
   local p="$TMP/$1"
   rm -rf "$p"
   mkdir -p "$p/.claude/jit-context/paths/00-manual" \
-           "$p/.claude/jit-context/tools/00-manual" \
-           "$p/.claude/jit-context/vocabulary/00-manual"
+    "$p/.claude/jit-context/tools/00-manual" \
+    "$p/.claude/jit-context/vocabulary/00-manual"
   printf '%s' "$p"
 }
 
@@ -112,8 +116,8 @@ probe_symlinks() {
   rm -rf "$d" || return 1
   mkdir -p "$d/target-dir" || return 1
   printf 'probe\n' > "$d/target-file" || return 1
-  ln -sf "$d/target-file" "$d/link-file" 2>/dev/null
-  ln -sfn "$d/target-dir" "$d/link-dir" 2>/dev/null
+  ln -sf "$d/target-file" "$d/link-file" 2> /dev/null
+  ln -sfn "$d/target-dir" "$d/link-dir" 2> /dev/null
   # Written after BOTH links exist. A real link sees it. A copy cannot.
   printf 'late\n' > "$d/target-dir/late.txt" || return 1
   [ -L "$d/link-file" ] || return 1
@@ -275,7 +279,8 @@ echo "=== S3c: an ANCESTOR of the layer is a symlink out of the tree ==="
 # above its own base -- so it is driven here rather than reasoned about.
 
 P="$TMP/s3c-jit"
-rm -rf "$P"; mkdir -p "$P/.claude"
+rm -rf "$P"
+mkdir -p "$P/.claude"
 EVILDIR="$TMP/evil-jitroot/tools/00-manual"
 mkdir -p "$EVILDIR"
 printf '%s\n' "$CANARY" > "$EVILDIR/entry.md"
@@ -286,7 +291,8 @@ assert_not_contains "linked jit-context root does not leak its contents" "$OUT" 
 assert_contains "linked jit-context root is named in context" "$OUT" "could not be evaluated"
 
 P="$TMP/s3c-claude"
-rm -rf "$P"; mkdir -p "$P"
+rm -rf "$P"
+mkdir -p "$P"
 EVILDIR="$TMP/evil-claude/jit-context/tools/00-manual"
 mkdir -p "$EVILDIR"
 printf '%s\n' "$CANARY" > "$EVILDIR/entry.md"
@@ -325,7 +331,8 @@ echo "=== S3d: config.env is a symlink out of the tree ==="
 # is off by default and turns on the 01-paths.tsv vocabulary pass, so "the entry fires" and
 # "the entry stays silent" are the two directions of "was that file honoured".
 s3d_project() {
-  local p; p="$(new_project "$1")"
+  local p
+  p="$(new_project "$1")"
   local d="$p/.claude/jit-context/vocabulary/00-manual"
   printf 'vocab-by-path body\n' > "$d/good.md"
   printf 'sectarget/\tgood.md\n' > "$d/01-paths.tsv"
@@ -504,9 +511,11 @@ assert_contains "s3f: an unvouchable block rule refuses the call rather than per
 assert_contains "s3f: and it refuses the tree rather than running unguarded" "$OUT" "too many symbolic links"
 assert_not_contains "s3f: a rule in a tree nobody can vouch for does not deliver its body" "$OUT" "block body here"
 if [ "$RC" -eq 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: s3f: the hook still exits 0"
+  PASS=$((PASS + 1))
+  echo "  PASS: s3f: the hook still exits 0"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: s3f: the hook exited $RC, expected 0"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: s3f: the hook exited $RC, expected 0"
 fi
 
 # The other two hooks reach common.sh the same way, so they fail the same way.
@@ -535,9 +544,11 @@ RC=$?
 assert_contains "s3f: the linter refuses the tree too" "$OUT" "too many symbolic links"
 assert_not_contains "s3f: and does not print Argument list too long" "$OUT" "Argument list too long"
 if [ "$RC" -eq 1 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: s3f: the linter exits 1"
+  PASS=$((PASS + 1))
+  echo "  PASS: s3f: the linter exits 1"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: s3f: the linter exited $RC, expected 1"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: s3f: the linter exited $RC, expected 1"
 fi
 
 echo ""
@@ -564,9 +575,11 @@ assert_not_contains "dry-run: the traversal wording is not printed for a link" "
 assert_contains "dry-run: the honest row beside it still lints ok" "$OUT" "good.md"
 assert_not_contains "dry-run: the target is never read into the report" "$OUT" "$CANARY"
 if [ "$RC" -eq 1 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: dry-run exits 1 on a refused row"
+  PASS=$((PASS + 1))
+  echo "  PASS: dry-run exits 1 on a refused row"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: dry-run exited $RC, expected 1"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: dry-run exited $RC, expected 1"
 fi
 
 P="$(new_project dryrun-dir)"
@@ -596,9 +609,11 @@ assert_contains "dry-run: and the reason names the dot" "$OUT" "begins with a do
 assert_not_contains "dry-run: the dot-named target is never read into the report" "$OUT" "$CANARY"
 assert_contains "dry-run: the honest row beside it still lints ok" "$OUT" "good.md"
 if [ "$RC" -eq 1 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: dry-run exits 1 on the dot-named row"
+  PASS=$((PASS + 1))
+  echo "  PASS: dry-run exits 1 on the dot-named row"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: dry-run exited $RC on the dot-named row, expected 1"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: dry-run exited $RC on the dot-named row, expected 1"
 fi
 
 # Negative control: a clean tree must lint clean, or the linter is refusing everything.
@@ -610,9 +625,11 @@ OUT="$(bash "$SCRIPTS/jit-dry-run.sh" --base "$P/.claude/jit-context" --tool Bas
 RC=$?
 assert_not_contains "dry-run: a clean tree refuses nothing" "$OUT" "REFUSED"
 if [ "$RC" -eq 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: dry-run exits 0 on a clean tree"
+  PASS=$((PASS + 1))
+  echo "  PASS: dry-run exits 0 on a clean tree"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: dry-run on a clean tree exited $RC, expected 0"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: dry-run on a clean tree exited $RC, expected 0"
 fi
 
 echo ""
@@ -622,9 +639,11 @@ P="$TMP/no-such-project"
 OUT="$(run_hook pre-tool-hook.sh "$P" "$TOOL_PAYLOAD")"
 RC=$?
 if [ "$RC" -eq 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: missing tree exits 0"
+  PASS=$((PASS + 1))
+  echo "  PASS: missing tree exits 0"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: missing tree exited $RC"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: missing tree exited $RC"
 fi
 assert_not_contains "missing tree injects nothing" "$OUT" "could not be evaluated"
 

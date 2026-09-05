@@ -24,18 +24,22 @@ FAIL=0
 assert_rc0() {
   local desc="$1" rc="$2"
   if [ "$rc" -eq 0 ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc (exit $rc)"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (exit $rc)"
   fi
 }
 
 assert_file() {
   local desc="$1" path="$2"
   if [ -f "$path" ]; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    this path should exist and be a regular file: $path"
   fi
 }
@@ -43,19 +47,23 @@ assert_file() {
 assert_no_file() {
   local desc="$1" path="$2"
   if [ -e "$path" ]; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    this path should not exist: $path"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -qF -- "$expected" <<<"$output"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+  if grep -qF -- "$expected" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    expected to contain: $expected"
     echo "    got: ${output:-<EMPTY>}"
   fi
@@ -63,12 +71,14 @@ assert_contains() {
 
 assert_not_contains() {
   local desc="$1" output="$2" unexpected="$3"
-  if grep -qF -- "$unexpected" <<<"$output"; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+  if grep -qF -- "$unexpected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    should not contain: $unexpected"
     echo "    got: ${output:-<EMPTY>}"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   fi
 }
 
@@ -90,25 +100,26 @@ state_of() { printf '%s' "$1/.claude/jit-context/.discovery/state"; }
 # to cover.
 run_post_tool_no_project_dir() {
   local p="$1" sid="$2" tool="$3" fp="$4"
-  ( cd "$p" && env -u CLAUDE_PROJECT_DIR bash -c '
+  (cd "$p" && env -u CLAUDE_PROJECT_DIR bash -c '
       printf '"'"'{"session_id":"%s","tool_name":"%s","tool_input":{"file_path":"%s"}}'"'"' \
         "'"$sid"'" "'"$tool"'" "'"$fp"'" | bash "'"$SCRIPTS"'/post-tool-hook.sh"
-    ' ) 2>&1
+    ') 2>&1
 }
 
 run_stop_no_project_dir() {
   local p="$1" sid="$2"
-  ( cd "$p" && env -u CLAUDE_PROJECT_DIR bash -c '
+  (cd "$p" && env -u CLAUDE_PROJECT_DIR bash -c '
       printf '"'"'{"session_id":"%s","hook_event_name":"Stop","stop_hook_active":false}'"'"' "'"$sid"'" \
         | bash "'"$SCRIPTS"'/stop-hook.sh"
-    ' ) 2>&1
+    ') 2>&1
 }
 
 echo "=== A: CLAUDE_PROJECT_DIR unset, an edit UNDER the tree still drops a marker ==="
 
 P="$(new_project a)"
 FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
-OUT="$(run_post_tool_no_project_dir "$P" "sess-a" "Edit" "$FP")"; RC=$?
+OUT="$(run_post_tool_no_project_dir "$P" "sess-a" "Edit" "$FP")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_file "an edit marker is written even with CLAUDE_PROJECT_DIR unset" \
   "$(state_of "$P")/edited-sess-a.txt"
@@ -120,7 +131,8 @@ echo "=== B: CLAUDE_PROJECT_DIR unset, an edit OUTSIDE the tree still marks noth
 
 P="$(new_project b)"
 FP="$P/src/app.php"
-OUT="$(run_post_tool_no_project_dir "$P" "sess-b" "Edit" "$FP")"; RC=$?
+OUT="$(run_post_tool_no_project_dir "$P" "sess-b" "Edit" "$FP")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_no_file "no marker was written for a file outside the tree" \
   "$(state_of "$P")/edited-sess-b.txt"
@@ -135,8 +147,9 @@ P="$(new_project c)"
 mkdir -p "$(state_of "$P")"
 printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-c.txt"
 FP="$P/.claude/jit-context/vocabulary/00-manual/bridge.md"
-run_post_tool_no_project_dir "$P" "sess-c" "Edit" "$FP" >/dev/null
-OUT="$(run_stop_no_project_dir "$P" "sess-c")"; RC=$?
+run_post_tool_no_project_dir "$P" "sess-c" "Edit" "$FP" > /dev/null
+OUT="$(run_stop_no_project_dir "$P" "sess-c")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_not_contains "stop-hook does not falsely claim nothing was updated" "$OUT" "none updated"
 
@@ -157,7 +170,8 @@ mkdir -p "$(state_of "$P")"
 # tests/test-stop-hook.sh gives every one of its own message-asserting sections.
 printf 'JIT_CONTEXT_STOP_REPORT=1\n' > "$P/.claude/jit-context/config.env"
 printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-d.txt"
-OUT="$(run_stop_no_project_dir "$P" "sess-d")"; RC=$?
+OUT="$(run_stop_no_project_dir "$P" "sess-d")"
+RC=$?
 assert_rc0 "the hook exits 0" "$RC"
 assert_contains "stop-hook still reports the honest 'none updated' when nothing was" "$OUT" "none updated"
 

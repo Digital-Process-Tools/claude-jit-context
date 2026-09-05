@@ -22,7 +22,7 @@
 jit_path_dir() {
   case "$2" in
     */*) printf -v "$1" '%s' "${2%/*}" ;;
-    *)   printf -v "$1" '%s' "." ;;
+    *) printf -v "$1" '%s' "." ;;
   esac
 }
 
@@ -57,8 +57,11 @@ _ms() {
       f="${e##*[.,]}000000"
       f="${f:0:6}"
       case "$s$f" in
-        ''|*[!0-9]*) ;;
-        *) printf '%s\n' "$(( s * 1000 + 10#$f / 1000 ))"; return ;;
+        '' | *[!0-9]*) ;;
+        *)
+          printf '%s\n' "$((s * 1000 + 10#$f / 1000))"
+          return
+          ;;
       esac
       ;;
   esac
@@ -112,13 +115,13 @@ JIT_HOST_REFUSAL_STATE="refusal-not-established"
 # case is spelled out rather than left to coincide.
 case "${BASH_SOURCE[0]}" in
   */*) _jit_host_sh="${BASH_SOURCE[0]%/*}/host.sh" ;;
-  *)   _jit_host_sh="./host.sh" ;;
+  *) _jit_host_sh="./host.sh" ;;
 esac
 if [ -r "$_jit_host_sh" ]; then
   # shellcheck disable=SC1090
-  source "$_jit_host_sh" 2>/dev/null && \
-    JIT_HOST="$(jit_host_detect 2>/dev/null)" && \
-    JIT_HOST_REFUSAL_STATE="$(jit_host_refusal_state "$JIT_HOST" 2>/dev/null)"
+  source "$_jit_host_sh" 2> /dev/null \
+    && JIT_HOST="$(jit_host_detect 2> /dev/null)" \
+    && JIT_HOST_REFUSAL_STATE="$(jit_host_refusal_state "$JIT_HOST" 2> /dev/null)"
   [ -n "$JIT_HOST" ] || JIT_HOST="unknown"
   [ -n "$JIT_HOST_REFUSAL_STATE" ] || JIT_HOST_REFUSAL_STATE="refusal-not-established"
 fi
@@ -460,7 +463,7 @@ if [ ! -d "$JIT_BASE" ]; then JIT_LOG_DISABLED=1; fi
 if [ "$JIT_LOG_DISABLED" = 0 ]; then
   # `[ -d ]` first, for the reason the state mkdir has one: mkdir is a fork, this file runs
   # before every hook, and after the first call of the session the directory is always there.
-  [ -d "$LOG_DIR" ] || mkdir -p "$LOG_DIR" 2>/dev/null
+  [ -d "$LOG_DIR" ] || mkdir -p "$LOG_DIR" 2> /dev/null
   # Checked after the mkdir as well: hooks.log may be a dangling link, which `mkdir -p`
   # on its parent neither creates nor disturbs.
   if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
@@ -473,7 +476,7 @@ jit_log_write() {
     # nothing, because the redirection that fails is applied before the one that would have
     # hidden it. A log directory removed after common.sh created it printed straight into
     # the session.
-    printf '%s\n' "$1" 2>/dev/null >> "$LOG_FILE"
+    printf '%s\n' "$1" 2> /dev/null >> "$LOG_FILE"
   fi
 }
 
@@ -529,9 +532,9 @@ unset _jit_p
 # hooks and asserts `git status` is still clean.
 if [ -n "$JIT_STATE_DIR" ] && [ -d "$JIT_BASE" ] && [ ! -d "$JIT_STATE_DIR" ]; then
   if [ -d "$JIT_BASE/.discovery" ]; then
-    if [ -w "$JIT_BASE/.discovery" ]; then mkdir -p "$JIT_STATE_DIR" 2>/dev/null; fi
+    if [ -w "$JIT_BASE/.discovery" ]; then mkdir -p "$JIT_STATE_DIR" 2> /dev/null; fi
   elif [ -w "$JIT_BASE" ]; then
-    mkdir -p "$JIT_STATE_DIR" 2>/dev/null
+    mkdir -p "$JIT_STATE_DIR" 2> /dev/null
   fi
 fi
 if [ ! -d "$JIT_STATE_DIR" ] || [ ! -w "$JIT_STATE_DIR" ]; then JIT_STATE_DIR=""; fi
@@ -636,7 +639,10 @@ jit_marks_read() {
   JIT_MARKS_IN=()
   JIT_MARKS_OK=0
   while IFS= read -r line; do
-    if [ "$line" = "$JIT_MARK_END" ]; then JIT_MARKS_OK=1; return 0; fi
+    if [ "$line" = "$JIT_MARK_END" ]; then
+      JIT_MARKS_OK=1
+      return 0
+    fi
     JIT_MARKS_IN[${#JIT_MARKS_IN[@]}]="$line"
   done
   return 0
@@ -675,7 +681,7 @@ jit_shown_apply() {
     # stderr is still the session -- which printed "No such file or directory" into the
     # stranger's terminal, the exact loudness this whole change is about, out of the line
     # written to prevent it. Driven: it is what section C of the suite caught.
-    printf '%s\n' "$k" 2>/dev/null >> "$f"
+    printf '%s\n' "$k" 2> /dev/null >> "$f"
   done
   return 0
 }
@@ -717,7 +723,7 @@ jit_tmp_open() {
   local d
   d="${TMPDIR:-/tmp}"
   d="${d%/}"
-  JIT_TMP="$(mktemp "$d/claude-jit-XXXXXXXX" 2>/dev/null)" || JIT_TMP=""
+  JIT_TMP="$(mktemp "$d/claude-jit-XXXXXXXX" 2> /dev/null)" || JIT_TMP=""
   [ -n "$JIT_TMP" ] || return 0
   # Single-quoted on purpose: expanded when the trap fires, so it names the file this
   # process created and no other.
@@ -737,7 +743,7 @@ jit_tmp_open() {
 # so a status test alone would put "%(%H:%M:%S)T" into the log and call it a timestamp.
 # It runs once at source time, not per call, and forks nothing either way.
 _jit_printf_time=0
-if printf -v _jit_probe '%(%H:%M:%S)T' -1 2>/dev/null; then
+if printf -v _jit_probe '%(%H:%M:%S)T' -1 2> /dev/null; then
   case "$_jit_probe" in
     [0-9][0-9]:[0-9][0-9]:[0-9][0-9]) _jit_printf_time=1 ;;
   esac
@@ -753,10 +759,10 @@ _ts() {
         f="${e##*[.,]}000000"
         f="${f:0:6}"
         case "$s$f" in
-          ''|*[!0-9]*) ;;
+          '' | *[!0-9]*) ;;
           *)
             printf -v out '%(%H:%M:%S)T' "$s"
-            printf '%s.%03d\n' "$out" "$(( 10#$f / 1000 ))"
+            printf '%s.%03d\n' "$out" "$((10#$f / 1000))"
             return
             ;;
         esac
@@ -832,7 +838,7 @@ jit_load_config() {
     line="${line%$'\r'}"
     while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
     case "$line" in
-      ''|'#'*) continue ;;
+      '' | '#'*) continue ;;
       # `export KEY=VALUE` was valid while this file was sourced, so it stays valid.
       # The export itself is a no-op now: the hooks read these as shell variables.
       export[[:space:]]*)
@@ -843,8 +849,15 @@ jit_load_config() {
 
     reason=""
     case "$line" in
-      *=*) key="${line%%=*}"; value="${line#*=}" ;;
-      *)   key=""; value=""; reason="not a KEY=VALUE assignment" ;;
+      *=*)
+        key="${line%%=*}"
+        value="${line#*=}"
+        ;;
+      *)
+        key=""
+        value=""
+        reason="not a KEY=VALUE assignment"
+        ;;
     esac
     if [ -z "$reason" ] && ! [[ "$key" =~ ^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$ ]]; then
       reason="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
@@ -862,8 +875,8 @@ jit_load_config() {
     #
     # Nothing inside a value is expanded: a $, a backtick or a $(...) is a literal now.
     case "$value" in
-      '"'*|"'"*)
-        q="${value%"${value#?}"}"        # the opening quote, " or '
+      '"'* | "'"*)
+        q="${value%"${value#?}"}" # the opening quote, " or '
         rest="${value#?}"
         case "$rest" in
           *"$q"*)
@@ -873,7 +886,7 @@ jit_load_config() {
               # Anything after the closing quote that is not a comment is ambiguous, so it
               # is refused rather than guessed at. Guessing is how a value goes quietly
               # wrong, which is the one outcome this whole function is written to avoid.
-              ''|'#'*) value="${rest%%"$q"*}" ;;
+              '' | '#'*) value="${rest%%"$q"*}" ;;
               *) reason="trailing text after the closing quote" ;;
             esac
             ;;
@@ -907,7 +920,7 @@ jit_load_config() {
     # through to the expensive side.
     if [ "$key" = JIT_CONTEXT_INJECT ]; then
       case "$value" in
-        summary|full) ;;
+        summary | full) ;;
         *)
           jit_config_refuse "$lineno" "not an injection mode (the modes are summary and full)"
           continue
@@ -921,7 +934,7 @@ jit_load_config() {
     # unimplemented mode above rather than falling through.
     if [ "$key" = JIT_CONTEXT_STOP_REPORT ]; then
       case "$value" in
-        0|1) ;;
+        0 | 1) ;;
         *)
           jit_config_refuse "$lineno" "not a stop-report toggle (0 or 1)"
           continue
@@ -1010,7 +1023,7 @@ JIT_INJECT="${JIT_CONTEXT_INJECT:-full}"
 # It falls back to `full`, which is the SAFE direction for a fallback: a project whose
 # setting could not be honoured keeps what it had rather than quietly losing it.
 case "$JIT_INJECT" in
-  summary|full) ;;
+  summary | full) ;;
   *) JIT_INJECT=full ;;
 esac
 
@@ -1028,7 +1041,7 @@ esac
 # already gives its own clamp just above.
 JIT_STOP_REPORT="${JIT_CONTEXT_STOP_REPORT:-0}"
 case "$JIT_STOP_REPORT" in
-  0|1) ;;
+  0 | 1) ;;
   *) JIT_STOP_REPORT=0 ;;
 esac
 
@@ -1142,7 +1155,7 @@ JIT_AWK_FRONTMATTER='
 
 # Every requested field of one entry, in one process. VAR receives a memo string, one
 # `<field><TAB><value>` record per line; read it with jit_fm_get(), which forks nothing.
-jit_frontmatter_many() {   # VAR, entry file, field...
+jit_frontmatter_many() { # VAR, entry file, field...
   # A positional slice rather than a two-step positional discard. The other spelling makes
   # tests/test-arg-flag-values.sh classify this file as a flag parser whose argument loop
   # it cannot read, and report it as a rotted parser -- it is right to flag that shape in a
@@ -1162,7 +1175,7 @@ jit_frontmatter_many() {   # VAR, entry file, field...
 # returned 1). No caller checks either function's exit status today -- every call site
 # in jit-dry-run.sh tests the OUTPUT variable with `[ -n "$var" ]` instead -- so a
 # nonzero miss bought nothing and was one `set -e` away from being a landmine.
-jit_fm_get() {   # VAR, memo, field
+jit_fm_get() { # VAR, memo, field
   local _key="$JIT_FM_NL$3	" _rest
   case "$2" in
     *"$_key"*)
@@ -1254,7 +1267,7 @@ jit_macro_word() {
     c="${w:i:1}"
     case "$c" in
       [a-z0-9_/]) out="$out$c" ;;
-      *)          out="${out}[$c]" ;;
+      *) out="${out}[$c]" ;;
     esac
   done
   printf '%s' "$out"
@@ -1276,12 +1289,19 @@ jit_expand_match() {
   local body name args reason="" out word first=1
 
   case "$raw" in '~'*) body="${raw#\~}" ;; *) body="$raw" ;; esac
-  case "$body" in '@'*) ;; *) printf '%s' "$raw"; return 0 ;; esac
+  case "$body" in '@'*) ;; *)
+    printf '%s' "$raw"
+    return 0
+    ;;
+  esac
 
   name="${body#@}"
   args=""
   case "$name" in
-    *[[:space:]]*) args="${name#*[[:space:]]}"; name="${name%%[[:space:]]*}" ;;
+    *[[:space:]]*)
+      args="${name#*[[:space:]]}"
+      name="${name%%[[:space:]]*}"
+      ;;
   esac
   while [ "$args" != "${args#[[:space:]]}" ]; do args="${args#[[:space:]]}"; done
   while [ "$args" != "${args%[[:space:]]}" ]; do args="${args%[[:space:]]}"; done
@@ -1316,7 +1336,7 @@ jit_expand_match() {
     first=0
   done
   case "$name" in
-    invocation)            out="$out$JIT_MACRO_END" ;;
+    invocation) out="$out$JIT_MACRO_END" ;;
     invocation-quoted-arg) out="${out}[[:space:]]+${JIT_MACRO_OPT}['\"]" ;;
   esac
 
@@ -2717,7 +2737,7 @@ _log_hook() {
     # instead, the count omits the partial item the back-up just discarded -- so the line
     # would under-report by up to one entry name while reading as exact. That is the defect
     # class this cap exists to avoid, reintroduced by the line meant to avoid it.
-    dropped=$(( ${#matches} - ${#head} ))
+    dropped=$((${#matches} - ${#head}))
     matches="${head}[+$dropped bytes not listed here, and the item before this marker may be a fragment; this line is capped at ${JIT_LOG_MATCHES_MAX} bytes -- scripts/jit-dry-run.sh prints the whole tree]"
   fi
   jit_log_write "[$(_ts)] $hook ${ms}ms | $matches${tail:+ $tail}"
@@ -2879,9 +2899,10 @@ jit_scan_layers() {
 
     # jit_report_name()s set, inlined. See above for why it is not called.
     case "$name" in
-      ''|[!A-Za-z0-9]*|*[!A-Za-z0-9._-]*)
+      '' | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
         jit_layer_refuse "$dim" "layer directory $seen was not read: the directory name is not a plain name"
-        continue ;;
+        continue
+        ;;
     esac
     if [ "${#name}" -gt 64 ]; then
       jit_layer_refuse "$dim" "layer directory $seen was not read: the directory name is longer than 64 bytes"
@@ -2985,7 +3006,7 @@ jit_scan_entry_ages() {
   # to digits only -- an override that is not a plain number falls back to the default
   # rather than being handed to arithmetic below.
   local window="${JIT_CONTEXT_CHECKOUT_WINDOW_S:-${DYNAMIC_RULES_CHECKOUT_WINDOW_S:-5}}"
-  case "$window" in ''|*[!0-9]*) window=5 ;; esac
+  case "$window" in '' | *[!0-9]*) window=5 ;; esac
   for layer in $JIT_LAYERS; do
     case "$layer" in
       *00-manual*) ;;
@@ -3026,7 +3047,7 @@ jit_scan_entry_ages() {
         print "$e\t$days\t$mtime\n";
       }
       closedir $h;
-    ' "$d" 2>/dev/null)"
+    ' "$d" 2> /dev/null)"
     [ -n "$out" ] || continue
 
     # First pass: the mtime spread across every file this run just read, so a checkout
@@ -3041,7 +3062,7 @@ jit_scan_entry_ages() {
       n=$((n + 1))
       if [ -z "$emin" ] || [ "$epoch" -lt "$emin" ]; then emin="$epoch"; fi
       if [ -z "$emax" ] || [ "$epoch" -gt "$emax" ]; then emax="$epoch"; fi
-    done <<EOF_SPREAD
+    done << EOF_SPREAD
 $out
 EOF_SPREAD
 
@@ -3071,7 +3092,7 @@ EOF_SPREAD
         continue
       fi
       JIT_ENTRY_AGES="$JIT_ENTRY_AGES${JIT_ENTRY_AGES:+$JIT_NL}$layer/$line"
-    done <<EOF_AGES
+    done << EOF_AGES
 $out
 EOF_AGES
   done
@@ -3083,9 +3104,15 @@ jit_report_name() {
   # a BYTE range. `local` restores the caller locale on return.
   local LC_ALL=C
   case "$1" in
-    ''|[!A-Za-z0-9]*|*[!A-Za-z0-9._-]*) printf '%s' "$JIT_NAME_WITHHELD"; return 0 ;;
+    '' | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
+      printf '%s' "$JIT_NAME_WITHHELD"
+      return 0
+      ;;
   esac
-  [ "${#1}" -gt 64 ] && { printf '%s' "$JIT_NAME_WITHHELD"; return 0; }
+  [ "${#1}" -gt 64 ] && {
+    printf '%s' "$JIT_NAME_WITHHELD"
+    return 0
+  }
   printf '%s' "$1"
 }
 
@@ -3126,12 +3153,24 @@ jit_report_keyword() {
   local LC_ALL=C s="$1" flat rest n=1
   flat="${s// /-}"
   case "$flat" in
-    ''|[!a-z0-9]*|*[!a-z0-9-]*) printf '%s' "$JIT_KEYWORD_WITHHELD"; return 0 ;;
+    '' | [!a-z0-9]* | *[!a-z0-9-]*)
+      printf '%s' "$JIT_KEYWORD_WITHHELD"
+      return 0
+      ;;
   esac
-  [ "${#s}" -gt 40 ] && { printf '%s' "$JIT_KEYWORD_WITHHELD"; return 0; }
+  [ "${#s}" -gt 40 ] && {
+    printf '%s' "$JIT_KEYWORD_WITHHELD"
+    return 0
+  }
   rest="$s"
-  while [ "$rest" != "${rest#* }" ]; do rest="${rest#* }"; n=$((n + 1)); done
-  [ "$n" -gt 4 ] && { printf '%s' "$JIT_KEYWORD_WITHHELD"; return 0; }
+  while [ "$rest" != "${rest#* }" ]; do
+    rest="${rest#* }"
+    n=$((n + 1))
+  done
+  [ "$n" -gt 4 ] && {
+    printf '%s' "$JIT_KEYWORD_WITHHELD"
+    return 0
+  }
   printf '%s' "$s"
 }
 
@@ -3206,7 +3245,7 @@ jit_missing_requires() {
       [ -z "$bin" ] && continue
       case "$seen" in *" $bin "*) continue ;; esac
       seen="$seen$bin "
-      command -v -- "$bin" >/dev/null 2>&1 && continue
+      command -v -- "$bin" > /dev/null 2>&1 && continue
       missing="$missing$bin "
     done < <(LC_ALL=C awk -F "$(printf '\t')" '{ print (NF >= 7) ? $7 : "" }' "$tsv")
   done

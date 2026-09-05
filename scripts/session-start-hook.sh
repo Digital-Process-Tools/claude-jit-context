@@ -69,7 +69,7 @@ if [ ! -t 0 ]; then
       k = jit_session_key(raw, fs, fe, n)
       if (k != "") print k
     }
-  ' 2>/dev/null)"
+  ' 2> /dev/null)"
 fi
 
 if [ -n "$JIT_STATE_DIR" ]; then
@@ -82,8 +82,8 @@ if [ -n "$JIT_STATE_DIR" ]; then
   # already spent.
   if [ -n "$SESSION_ID" ]; then
     rm -f "$JIT_STATE_DIR/vocab-shown-$SESSION_ID.txt" \
-          "$JIT_STATE_DIR/path-shown-$SESSION_ID.txt" \
-          "$JIT_STATE_DIR/edited-$SESSION_ID.txt" 2>/dev/null
+      "$JIT_STATE_DIR/path-shown-$SESSION_ID.txt" \
+      "$JIT_STATE_DIR/edited-$SESSION_ID.txt" 2> /dev/null
     # A directory at one of those two names is what makes one-true-awk raise a fatal i/o
     # error on the marker READ, which the hooks cannot test for and cannot afford to sweep
     # for (see common.sh). It is O(1) here, once per session, before any hook runs. `rmdir`
@@ -91,8 +91,8 @@ if [ -n "$JIT_STATE_DIR" ]; then
     # name matched. git cannot commit an empty directory, so a directory that survives this
     # was made locally -- and is left alone rather than removed by a hook.
     rmdir "$JIT_STATE_DIR/vocab-shown-$SESSION_ID.txt" \
-          "$JIT_STATE_DIR/path-shown-$SESSION_ID.txt" \
-          "$JIT_STATE_DIR/edited-$SESSION_ID.txt" 2>/dev/null
+      "$JIT_STATE_DIR/path-shown-$SESSION_ID.txt" \
+      "$JIT_STATE_DIR/edited-$SESSION_ID.txt" 2> /dev/null
   fi
   # Markers die with the tree, which bounds the leak but does not bound a long-lived
   # checkout: one pair per session, forever. So they age out here -- in a directory this
@@ -110,7 +110,7 @@ if [ -n "$JIT_STATE_DIR" ]; then
       unlink $f if -M $f > 7;
     }
     closedir $h;
-  ' "$JIT_STATE_DIR" 2>/dev/null
+  ' "$JIT_STATE_DIR" 2> /dev/null
 fi
 
 # #233 part 3: jit-misses.sh already reads every prompt this project has logged and
@@ -201,7 +201,7 @@ else
   # records but none from pre-prompt -- means jit-misses.sh tried and could not, and that
   # is the case #247 is about: it says so instead of reading as "nothing recurs".
   case "$JIT_SKIP_REASON" in
-    "no such file"*|"the file is empty"*) JIT_SKIP_REASON="" ;;
+    "no such file"* | "the file is empty"*) JIT_SKIP_REASON="" ;;
   esac
   if [ -n "$JIT_SKIP_REASON" ]; then
     # The reason is prose jit-misses.sh chose, not a token restricted to [a-z0-9-] like

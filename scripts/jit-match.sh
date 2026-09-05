@@ -115,20 +115,43 @@ need_value() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --base)    [ $# -ge 2 ] || need_value "$1"; BASE="$2"; shift 2 ;;
-    --text)    [ $# -ge 2 ] || need_value "$1"; TEXT="$2"; TEXT_SET=1; shift 2 ;;
-    --format)  [ $# -ge 2 ] || need_value "$1"; FORMAT="$2"; shift 2 ;;
-    --limit)   [ $# -ge 2 ] || need_value "$1"; LIMIT="$2"; shift 2 ;;
-    --summary) SUMMARY=1; shift ;;
-    -h|--help) usage 0 ;;
-    *) echo "jit-match: SKIPPED -- unknown argument: $1" >&2; usage 2 ;;
+    --base)
+      [ $# -ge 2 ] || need_value "$1"
+      BASE="$2"
+      shift 2
+      ;;
+    --text)
+      [ $# -ge 2 ] || need_value "$1"
+      TEXT="$2"
+      TEXT_SET=1
+      shift 2
+      ;;
+    --format)
+      [ $# -ge 2 ] || need_value "$1"
+      FORMAT="$2"
+      shift 2
+      ;;
+    --limit)
+      [ $# -ge 2 ] || need_value "$1"
+      LIMIT="$2"
+      shift 2
+      ;;
+    --summary)
+      SUMMARY=1
+      shift
+      ;;
+    -h | --help) usage 0 ;;
+    *)
+      echo "jit-match: SKIPPED -- unknown argument: $1" >&2
+      usage 2
+      ;;
   esac
 done
 
 BASE="${BASE%/}"
 
 case "$FORMAT" in
-  text|json) : ;;
+  text | json) : ;;
   *)
     echo "jit-match: SKIPPED -- --format must be text or json, got: $FORMAT" >&2
     echo "  Nothing was checked." >&2
@@ -137,7 +160,7 @@ case "$FORMAT" in
 esac
 
 case "$LIMIT" in
-  ''|*[!0-9]*)
+  '' | *[!0-9]*)
     echo "jit-match: SKIPPED -- --limit must be a non-negative integer, got: $LIMIT" >&2
     echo "  Nothing was checked." >&2
     exit 2
@@ -222,14 +245,14 @@ fi
 # Third state, own variable: "found a violation", "checked and clean" and "could not
 # check" must not collapse to two.
 HOOK_STDERR_CHECKED=0
-ERRF="$(mktemp "${TMPDIR:-/tmp}/claude-jit-match-XXXXXXXX" 2>/dev/null)" || ERRF=""
+ERRF="$(mktemp "${TMPDIR:-/tmp}/claude-jit-match-XXXXXXXX" 2> /dev/null)" || ERRF=""
 if [ -n "$ERRF" ]; then
-  HOOK_OUT="$(printf '%s' "$PAYLOAD" | env "${HOOK_ENV[@]}" bash "$SCRIPT_DIR/pre-prompt-hook.sh" 2>"$ERRF")"
-  HOOK_STDERR="$(cat "$ERRF" 2>/dev/null)"
+  HOOK_OUT="$(printf '%s' "$PAYLOAD" | env "${HOOK_ENV[@]}" bash "$SCRIPT_DIR/pre-prompt-hook.sh" 2> "$ERRF")"
+  HOOK_STDERR="$(cat "$ERRF" 2> /dev/null)"
   HOOK_STDERR_CHECKED=1
   rm -f "$ERRF"
 else
-  HOOK_OUT="$(printf '%s' "$PAYLOAD" | env "${HOOK_ENV[@]}" bash "$SCRIPT_DIR/pre-prompt-hook.sh" 2>/dev/null)"
+  HOOK_OUT="$(printf '%s' "$PAYLOAD" | env "${HOOK_ENV[@]}" bash "$SCRIPT_DIR/pre-prompt-hook.sh" 2> /dev/null)"
   HOOK_STDERR=""
 fi
 
@@ -244,10 +267,11 @@ fi
 # Everything this awk has to say goes to stdout, prefixed on ONE line: `JIT-MATCH-STATUS`
 # carrying 0 or 1, last, so bash can pull it back out and use it for the exit code without
 # a second channel to keep in sync with the report above it.
-RESULT="$(printf '%s' "$HOOK_OUT" | LC_ALL=C awk \
-  -v format="$FORMAT" -v limit="$LIMIT" \
-  -v vocab_layers="$VOCAB_LAYERS" -v vocab_base="$BASE/vocabulary" \
-  "$JIT_AWK_JSON$JIT_AWK_ENTRY$JIT_AWK_BLOCKS"'
+RESULT="$(
+  printf '%s' "$HOOK_OUT" | LC_ALL=C awk \
+    -v format="$FORMAT" -v limit="$LIMIT" \
+    -v vocab_layers="$VOCAB_LAYERS" -v vocab_base="$BASE/vocabulary" \
+    "$JIT_AWK_JSON$JIT_AWK_ENTRY$JIT_AWK_BLOCKS"'
 function emit_json_str(s) {
   gsub(/\\/, "\\\\", s)
   gsub(/"/, "\\\"", s)

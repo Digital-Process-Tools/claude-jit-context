@@ -37,10 +37,19 @@ PROMPT_HOOK="$REPO/scripts/pre-prompt-hook.sh"
 PASS=0
 FAIL=0
 
-ok()  { PASS=$((PASS + 1)); echo "  PASS: $1"; }
-bad() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; shift; [ $# -eq 0 ] || echo "    $*"; return 0; }
+ok() {
+  PASS=$((PASS + 1))
+  echo "  PASS: $1"
+}
+bad() {
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: $1"
+  shift
+  [ $# -eq 0 ] || echo "    $*"
+  return 0
+}
 
-TMP="$(mktemp -d 2>/dev/null)" || TMP=""
+TMP="$(mktemp -d 2> /dev/null)" || TMP=""
 if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
   echo "  SKIPPED: mktemp -d produced no directory, so no scratch project can be built here."
   echo "           Nothing in this file was tested."
@@ -79,9 +88,9 @@ for dim in paths tools vocabulary; do
     ok "$dim/00-manual/00-index.tsv was built and is not empty"
   else
     bad "$dim/00-manual/00-index.tsv was built and is not empty" \
-        "the shipped $dim/ entries index to nothing -- copied into a project they are inert," \
-        "and every assertion below would be vacuous. Stopping."
-    ls -R "$BASE" 2>/dev/null
+      "the shipped $dim/ entries index to nothing -- copied into a project they are inert," \
+      "and every assertion below would be vacuous. Stopping."
+    ls -R "$BASE" 2> /dev/null
     exit 1
   fi
 done
@@ -114,12 +123,12 @@ OUT="$TMP/hook-out.txt"
 
 drive_tool() {
   printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" > "$TMP/payload.json"
-  CLAUDE_PROJECT_DIR="$PROJ" bash "$TOOL_HOOK" < "$TMP/payload.json" > "$OUT" 2>/dev/null
+  CLAUDE_PROJECT_DIR="$PROJ" bash "$TOOL_HOOK" < "$TMP/payload.json" > "$OUT" 2> /dev/null
 }
 
 drive_path() {
   printf '{"tool_name":"Read","tool_input":{"file_path":"%s"}}' "$1" > "$TMP/payload.json"
-  CLAUDE_PROJECT_DIR="$PROJ" bash "$PATH_HOOK" < "$TMP/payload.json" > "$OUT" 2>/dev/null
+  CLAUDE_PROJECT_DIR="$PROJ" bash "$PATH_HOOK" < "$TMP/payload.json" > "$OUT" 2> /dev/null
 }
 
 # The same call with the module-path channel switched on. That channel is opt-in
@@ -129,12 +138,12 @@ drive_path() {
 drive_path_vocab() {
   printf '{"tool_name":"Read","tool_input":{"file_path":"%s"}}' "$1" > "$TMP/payload.json"
   CLAUDE_PROJECT_DIR="$PROJ" JIT_CONTEXT_VOCAB_PATHS=1 \
-    bash "$PATH_HOOK" < "$TMP/payload.json" > "$OUT" 2>/dev/null
+    bash "$PATH_HOOK" < "$TMP/payload.json" > "$OUT" 2> /dev/null
 }
 
 drive_prompt() {
   printf '{"prompt":"%s"}' "$1" > "$TMP/payload.json"
-  CLAUDE_PROJECT_DIR="$PROJ" bash "$PROMPT_HOOK" < "$TMP/payload.json" > "$OUT" 2>/dev/null
+  CLAUDE_PROJECT_DIR="$PROJ" bash "$PROMPT_HOOK" < "$TMP/payload.json" > "$OUT" 2> /dev/null
 }
 
 excerpt() { tr -d '\n' < "$OUT" | cut -c1-220; }
@@ -191,7 +200,8 @@ drive_tool "git push origin main"
 if ! grep -qF "git-push.example.md" "$OUT"; then
   echo "  FAIL: the tool hook fires nothing for 'git push origin main' in the copied tree."
   echo "        Every tool assertion below would be vacuous. Stopping."
-  cat "$OUT"; exit 1
+  cat "$OUT"
+  exit 1
 fi
 ok "the tool hook fires the shipped tools example"
 
@@ -199,7 +209,8 @@ drive_path "$PROJ/src/Billing/Total.php"
 if ! grep -qF "php-coding.example.md" "$OUT"; then
   echo "  FAIL: the path hook fires nothing for a .php file in the copied tree."
   echo "        Every path assertion below would be vacuous. Stopping."
-  cat "$OUT"; exit 1
+  cat "$OUT"
+  exit 1
 fi
 ok "the path hook fires the shipped paths example"
 
@@ -207,7 +218,8 @@ drive_prompt "how are invoice totals computed"
 if ! grep -qF "billing.example.md" "$OUT"; then
   echo "  FAIL: the prompt hook fires nothing for the vocabulary example's own subject."
   echo "        Every vocabulary assertion below would be vacuous. Stopping."
-  cat "$OUT"; exit 1
+  cat "$OUT"
+  exit 1
 fi
 ok "the prompt hook fires the shipped vocabulary example"
 
@@ -215,34 +227,40 @@ ok "the prompt hook fires the shipped vocabulary example"
 echo ""
 echo "=== git-push.example.md fires on the invocation, not on the words ==="
 RULE_PUSH="git-push.example.md"
-drive_tool "git push origin main";    expect_out_has   "the command it targets"       "$RULE_PUSH"
-drive_tool "cd /tmp && git push";     expect_out_has   "after a chain operator"       "$RULE_PUSH"
-drive_tool "git -C /tmp push";        expect_out_has   "with an option between"       "$RULE_PUSH"
+drive_tool "git push origin main"
+expect_out_has "the command it targets" "$RULE_PUSH"
+drive_tool "cd /tmp && git push"
+expect_out_has "after a chain operator" "$RULE_PUSH"
+drive_tool "git -C /tmp push"
+expect_out_has "with an option between" "$RULE_PUSH"
 # The three near-misses. `git push` as a bare substring fired on the first two, and this is
 # the headline tools example -- the shape people copy for their own block rules.
-drive_tool "git pushd /tmp";          expect_out_lacks "a longer command word"        "$RULE_PUSH"
-drive_tool "echo git push";           expect_out_lacks "the words inside an argument" "$RULE_PUSH"
-drive_tool "git stash push";          expect_out_lacks "a different subcommand"       "$RULE_PUSH"
+drive_tool "git pushd /tmp"
+expect_out_lacks "a longer command word" "$RULE_PUSH"
+drive_tool "echo git push"
+expect_out_lacks "the words inside an argument" "$RULE_PUSH"
+drive_tool "git stash push"
+expect_out_lacks "a different subcommand" "$RULE_PUSH"
 
 # --- tools: require, reachable (#94) ------------------------------------------
 echo ""
 echo "=== phpunit.example.md requires the flag, on a command someone would type ==="
 drive_tool "bin/phpunit tests/Unit"
-expect_blocked     "a local run without the flag is refused"       "--no-coverage"
+expect_blocked "a local run without the flag is refused" "--no-coverage"
 drive_tool "bin/phpunit --no-coverage tests/Unit"
 expect_not_blocked "the same run with the flag is allowed"
 # Paired with the block above: same command, one flag apart, and the reason is the entry
 # body rather than a bare refusal.
-expect_out_has     "and the reminder still arrives"                "phpunit.example.md"
+expect_out_has "and the reminder still arrives" "phpunit.example.md"
 # The two spellings almost everyone actually types. An anchor that anchors on a command
 # WORD misses both, and an entry that silently stops covering the command it is named
 # after is the same silence as a rule that was never indexed.
 drive_tool "./bin/phpunit --no-coverage tests/Unit"
-expect_out_has     "a relative path spelling still matches"        "phpunit.example.md"
+expect_out_has "a relative path spelling still matches" "phpunit.example.md"
 drive_tool "vendor/bin/phpunit --no-coverage tests/Unit"
-expect_out_has     "and a vendored one"                            "phpunit.example.md"
+expect_out_has "and a vendored one" "phpunit.example.md"
 drive_tool "cd api && bin/phpunit tests/Unit"
-expect_blocked     "after a chain operator, still refused"         "--no-coverage"
+expect_blocked "after a chain operator, still refused" "--no-coverage"
 # The other direction, and the one that was live until this change: `match: bin/phpunit`
 # was a bare substring, so every command merely NAMING the file inherited the require and
 # came back BLOCKED. Refusing `cat` on a log file is the #76 shape, in the entry this
@@ -261,7 +279,7 @@ echo "=== the forbid example refuses a command someone would type ==="
 # with a require on the same flag family can only ever speak on a self-contradictory
 # command (#94). The mechanism is demonstrated where it is reachable instead.
 drive_tool "git commit --no-verify -m fix"
-expect_blocked     "the forbidden flag is refused"                 "--no-verify"
+expect_blocked "the forbidden flag is refused" "--no-verify"
 drive_tool "git commit -m fix"
 expect_not_blocked "the same commit without it is allowed"
 drive_tool "echo git commit --no-verify"
@@ -271,9 +289,12 @@ expect_not_blocked "and the words inside an argument are not a commit"
 echo ""
 echo "=== php-coding.example.md fires on a PHP file, and only on one ==="
 RULE_PHP="php-coding.example.md"
-drive_path "$PROJ/src/Billing/Total.php"; expect_out_has   "a php file"         "$RULE_PHP"
-drive_path "$PROJ/notes.phpx";            expect_out_lacks "a lookalike suffix" "$RULE_PHP"
-drive_path "$PROJ/README.md";             expect_out_lacks "a markdown file"    "$RULE_PHP"
+drive_path "$PROJ/src/Billing/Total.php"
+expect_out_has "a php file" "$RULE_PHP"
+drive_path "$PROJ/notes.phpx"
+expect_out_lacks "a lookalike suffix" "$RULE_PHP"
+drive_path "$PROJ/README.md"
+expect_out_lacks "a markdown file" "$RULE_PHP"
 
 # --- the module-path channel ---------------------------------------------------
 echo ""
@@ -283,43 +304,48 @@ echo "=== the ## Modules channel maps a vocabulary entry onto a path ==="
 # untestable here and asked for it to be named as a skip. It is testable: the shipped
 # billing example carries a `## Modules` section, so copying examples/ into a scratch
 # project is exactly the fixture that was missing. Nothing here is skipped.
-if grep -q "billing.example.md" "$BASE/vocabulary/00-manual/01-paths.tsv" 2>/dev/null; then
+if grep -q "billing.example.md" "$BASE/vocabulary/00-manual/01-paths.tsv" 2> /dev/null; then
   ok "the Modules section produced a row in 01-paths.tsv"
 else
   bad "the Modules section produced a row in 01-paths.tsv" \
-      "got: $(cat "$BASE/vocabulary/00-manual/01-paths.tsv" 2>&1)"
+    "got: $(cat "$BASE/vocabulary/00-manual/01-paths.tsv" 2>&1)"
 fi
 RULE_BILL="billing.example.md"
 drive_path_vocab "$PROJ/src/Billing/Total.php"
-expect_out_has   "touching a file in the module injects the entry" "$RULE_BILL"
+expect_out_has "touching a file in the module injects the entry" "$RULE_BILL"
 drive_path_vocab "$PROJ/src/Shipping/Label.php"
-expect_out_lacks "a file in another module does not"               "$RULE_BILL"
+expect_out_lacks "a file in another module does not" "$RULE_BILL"
 # Positive control for the silence directly above: the same call fires the paths rule, so
 # the miss is about the module and not about the hook seeing nothing.
-expect_out_has   "control -- that same file still fires the php rule" "$RULE_PHP"
+expect_out_has "control -- that same file still fires the php rule" "$RULE_PHP"
 # And the gate itself, in the other direction. Without this the section above is a test of
 # one env var rather than of the channel: a hook that injected the module entry
 # unconditionally would satisfy every assertion above and would have changed the default
 # behaviour of every installed copy.
 drive_path "$PROJ/src/Billing/Total.php"
-expect_out_lacks "the channel stays off by default"                "$RULE_BILL"
-expect_out_has   "control -- the default run still fires the php rule" "$RULE_PHP"
+expect_out_lacks "the channel stays off by default" "$RULE_BILL"
+expect_out_has "control -- the default run still fires the php rule" "$RULE_PHP"
 
 # --- vocabulary keywords (#94) -------------------------------------------------
 echo ""
 echo "=== billing.example.md keys on product nouns, not on ordinary English ==="
-drive_prompt "how are invoice totals computed";      expect_out_has   "its own subject"     "$RULE_BILL"
-drive_prompt "what vat rate applies here";           expect_out_has   "a product noun"      "$RULE_BILL"
+drive_prompt "how are invoice totals computed"
+expect_out_has "its own subject" "$RULE_BILL"
+drive_prompt "what vat rate applies here"
+expect_out_has "a product noun" "$RULE_BILL"
 drive_prompt "why is amount_vat_out silently discarded"
-expect_out_has   "the getter the entry is actually about"                 "$RULE_BILL"
+expect_out_has "the getter the entry is actually about" "$RULE_BILL"
 # The tax this entry used to levy. `total` and `amount` are ordinary English, and the
 # vocabulary dimension loads the whole file on a match -- so an unrelated sentence in an
 # unrelated session paid for it. writing-rules.md, the entry jit-init.sh seeds into every
 # new project from templates/, warns new users about exactly this -- and the sample they
 # were told to copy from did it anyway.
-drive_prompt "give me the total number of tests";    expect_out_lacks "an unrelated total"  "$RULE_BILL"
-drive_prompt "what amount of memory does this need"; expect_out_lacks "an unrelated amount" "$RULE_BILL"
-drive_prompt "deploy the app";                       expect_out_lacks "an unrelated prompt" "$RULE_BILL"
+drive_prompt "give me the total number of tests"
+expect_out_lacks "an unrelated total" "$RULE_BILL"
+drive_prompt "what amount of memory does this need"
+expect_out_lacks "an unrelated amount" "$RULE_BILL"
+drive_prompt "deploy the app"
+expect_out_lacks "an unrelated prompt" "$RULE_BILL"
 
 echo ""
 echo "  $PASS passed, $FAIL failed"

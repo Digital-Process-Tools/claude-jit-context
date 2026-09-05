@@ -39,13 +39,13 @@ touch "$PATHS_DIR/30-crosscutting/00-index.tsv"
 
 # --- Helpers ---
 run_hook() {
-  echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2>/dev/null
+  echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2> /dev/null
 }
 
 # jit-drive: assert_contains contains capture
 assert_contains() {
   local desc="$1" output="$2" expected="$3"
-  if grep -q -- "$expected" <<<"$output"; then
+  if grep -q -- "$expected" <<< "$output"; then
     PASS=$((PASS + 1))
     echo "  PASS: $desc"
   else
@@ -263,13 +263,15 @@ echo ""
 echo "=== Bash: a directory token fires, and quietly ==="
 ERRFILE=$(mktemp)
 OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"grep -r getAmount src/Billing/Components"}}' \
-  | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2>"$ERRFILE")
+  | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2> "$ERRFILE")
 RC=$?
 assert_contains "a directory candidate fires the component rule" "$OUT" "component pattern"
 if [ ! -s "$ERRFILE" ] && [ "$RC" = 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: a directory token writes nothing to stderr and exits 0"
+  PASS=$((PASS + 1))
+  echo "  PASS: a directory token writes nothing to stderr and exits 0"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: a directory token wrote to stderr or exited non-zero"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: a directory token wrote to stderr or exited non-zero"
   echo "    rc=$RC stderr: $(head -c 200 "$ERRFILE")"
 fi
 rm -f "$ERRFILE"
@@ -287,11 +289,11 @@ INSIDE_ARG="src/Billing/Module.class.php"
 # neither half can be satisfied by the other.
 assert_confined() {
   local desc="$1" output="$2" forbidden="$3"
-  if ! grep -q "php coding rules" <<<"$output"; then
+  if ! grep -q "php coding rules" <<< "$output"; then
     FAIL=$((FAIL + 1))
     echo "  FAIL: $desc -- the in-project control did not fire, so the check was vacuous"
     echo "    got: ${output:0:200}"
-  elif grep -q "$forbidden" <<<"$output"; then
+  elif grep -q "$forbidden" <<< "$output"; then
     FAIL=$((FAIL + 1))
     echo "  FAIL: $desc -- a rule fired for a file outside the project"
   else
@@ -353,9 +355,9 @@ assert_contains "control: a real directory candidate fires" "$OUT" "component pa
 # why the gate is -f and not -e. Skipped where mkfifo is unavailable (Git Bash).
 echo ""
 echo "=== Bash: a fifo candidate neither fires nor blocks ==="
-if mkfifo "$TEST_DIR/Pipe.class.php" 2>/dev/null; then
+if mkfifo "$TEST_DIR/Pipe.class.php" 2> /dev/null; then
   OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"cat Pipe.class.php"}}' \
-    | CLAUDE_PROJECT_DIR="$TEST_DIR" perl -e 'alarm 15; exec("bash", $ARGV[0]) or exit 1' "$HOOK" 2>/dev/null) || true
+    | CLAUDE_PROJECT_DIR="$TEST_DIR" perl -e 'alarm 15; exec("bash", $ARGV[0]) or exit 1' "$HOOK" 2> /dev/null) || true
   assert_empty "a fifo is not a path candidate" "$OUT"
   rm -f "$TEST_DIR/Pipe.class.php"
 else
@@ -371,13 +373,15 @@ echo ""
 echo "=== Bash: no scratch file means no candidates, and no noise ==="
 ERRFILE=$(mktemp)
 OUT=$(echo '{"tool_name":"Bash","tool_input":{"command":"cat src/Billing/Module.class.php"}}' \
-  | TMPDIR="$TEST_DIR/no-such-tmpdir" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2>"$ERRFILE")
+  | TMPDIR="$TEST_DIR/no-such-tmpdir" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2> "$ERRFILE")
 RC=$?
 assert_empty "an unavailable TMPDIR degrades to no candidates" "$OUT"
 if [ ! -s "$ERRFILE" ] && [ "$RC" = 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: and it degrades quietly, exit 0"
+  PASS=$((PASS + 1))
+  echo "  PASS: and it degrades quietly, exit 0"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: rc=$RC stderr: $(head -c 200 "$ERRFILE")"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: rc=$RC stderr: $(head -c 200 "$ERRFILE")"
 fi
 rm -f "$ERRFILE"
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cat src/Billing/Module.class.php"}}')
@@ -389,10 +393,12 @@ assert_contains "control: the same command with a usable TMPDIR fires" "$OUT" "p
 echo ""
 echo "=== Write: a path named in the BODY is not a candidate ==="
 OUT=$(run_hook '{"tool_name":"Write","tool_input":{"file_path":"/project/notes.txt","content":"see src/Billing/Module.class.php for the rules"}}')
-if grep -q "php coding rules" <<<"$OUT"; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: a Write body was reassembled into a path candidate"
+if grep -q "php coding rules" <<< "$OUT"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: a Write body was reassembled into a path candidate"
 else
-  PASS=$((PASS + 1)); echo "  PASS: a Write body is not a path candidate"
+  PASS=$((PASS + 1))
+  echo "  PASS: a Write body is not a path candidate"
 fi
 OUT=$(run_hook '{"tool_name":"Write","tool_input":{"file_path":"/project/src/Billing/Module.class.php","content":"body"}}')
 assert_contains "control: the same Write with a php file_path does fire" "$OUT" "php coding rules"
@@ -438,7 +444,7 @@ ENGINE_BIN=$(mktemp -d)
 ENGINES=""
 ENGINE_SEEN=""
 for cand in awk gawk nawk mawk; do
-  cand_path=$(command -v "$cand" 2>/dev/null) || continue
+  cand_path=$(command -v "$cand" 2> /dev/null) || continue
   case " $ENGINE_SEEN " in *" $cand_path "*) continue ;; esac
   ENGINE_SEEN="$ENGINE_SEEN $cand_path"
   mkdir -p "$ENGINE_BIN/$cand"
@@ -448,7 +454,7 @@ for cand in awk gawk nawk mawk; do
 done
 
 run_hook_engine() {
-  echo "$2" | PATH="$ENGINE_BIN/$1:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2>/dev/null
+  echo "$2" | PATH="$ENGINE_BIN/$1:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2> /dev/null
 }
 
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string; a strict parser is entitled
@@ -461,16 +467,19 @@ run_hook_engine() {
 assert_no_raw_controls() {
   local desc="$1" eng="$2" payload="$3" out
   out=$(mktemp)
-  echo "$payload" | PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" > "$out" 2>/dev/null
+  echo "$payload" | PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" > "$out" 2> /dev/null
   if ! LC_ALL=C perl -0777 -ne 'exit(/additionalContext|"reason"/ ? 0 : 1)' "$out"; then
     # A hook that injected nothing trivially carries no control byte. Without this leg the
     # assertion passes for the wrong reason -- which is the defect class this repo keeps
     # finding in its own product.
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc -- nothing was injected, so the check was vacuous"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc -- nothing was injected, so the check was vacuous"
   elif LC_ALL=C perl -0777 -ne 's/\n\z//; exit(/[\x00-\x1f]/ ? 1 : 0)' "$out"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
     echo "    raw control byte in: $(LC_ALL=C perl -0777 -pe 's/([\x00-\x1f])/sprintf("<%02X>",ord($1))/ge; $_ = substr($_, 0, 200)' "$out")"
   fi
   rm -f "$out"
@@ -502,8 +511,9 @@ printf 'control \001 and \014 and \037 here\nnul \000 tail\n' > "$PATHS_DIR/00-m
 pick_utf8_locale() {
   local c
   for c in en_US.UTF-8 C.UTF-8 en_US.utf8 C.utf8; do
-    if [ "$(LC_ALL="$c" locale charmap 2>/dev/null)" = "UTF-8" ]; then
-      printf '%s' "$c"; return 0
+    if [ "$(LC_ALL="$c" locale charmap 2> /dev/null)" = "UTF-8" ]; then
+      printf '%s' "$c"
+      return 0
     fi
   done
   # No `locale` command, or no UTF-8 locale installed (Git Bash is the case in mind).
@@ -517,7 +527,7 @@ UTF8_LOCALE="$(pick_utf8_locale)"
 # tell the fix from its absence. Said out loud rather than gone quietly green, on the
 # pattern section A of tests/test-hook-tmpfile.sh already uses for symbolic links.
 UTF8_LOCALE_REAL=no
-if [ "$(LC_ALL="$UTF8_LOCALE" locale charmap 2>/dev/null)" = "UTF-8" ]; then UTF8_LOCALE_REAL=yes; fi
+if [ "$(LC_ALL="$UTF8_LOCALE" locale charmap 2> /dev/null)" = "UTF-8" ]; then UTF8_LOCALE_REAL=yes; fi
 if [ "$UTF8_LOCALE_REAL" != yes ]; then
   echo "  SKIP-NOTE: no UTF-8 locale on this machine ($UTF8_LOCALE). The malformed-byte"
   echo "             assertions below run under a byte locale, where the defect does not"
@@ -539,26 +549,31 @@ echo "caller locale for the malformed-byte assertions: $UTF8_LOCALE"
 
 run_hook_engine_utf8() {
   printf '%s\n' "$2" | LC_ALL="$UTF8_LOCALE" PATH="$ENGINE_BIN/$1:$PATH" \
-    CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2>/dev/null
+    CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2> /dev/null
 }
 
 assert_survives_malformed() {
   local desc="$1" eng="$2" payload="$3" needle="$4" out err
-  out=$(mktemp); err=$(mktemp)
+  out=$(mktemp)
+  err=$(mktemp)
   printf '%s\n' "$payload" | LC_ALL="$UTF8_LOCALE" PATH="$ENGINE_BIN/$eng:$PATH" \
     CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" > "$out" 2> "$err"
   if LC_ALL=C grep -qF -- "$needle" "$out"; then
-    PASS=$((PASS + 1)); echo "  PASS: $desc -- the rule still fired"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc -- the rule still fired"
   else
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc -- the rule did NOT fire"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc -- the rule did NOT fire"
     echo "    stdout: $(LC_ALL=C tr -c '[:print:]' '?' < "$out")"
     echo "    stderr: $(LC_ALL=C tr -c '[:print:]' '?' < "$err")"
   fi
   if [ -s "$err" ]; then
-    FAIL=$((FAIL + 1)); echo "  FAIL: $desc -- the hook wrote into the session stderr"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc -- the hook wrote into the session stderr"
     echo "    stderr: $(LC_ALL=C tr -c '[:print:]' '?' < "$err")"
   else
-    PASS=$((PASS + 1)); echo "  PASS: $desc -- nothing reached stderr"
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc -- nothing reached stderr"
   fi
   rm -f "$out" "$err"
 }

@@ -37,7 +37,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PASS=0
 FAIL=0
 
-TMP="$(mktemp -d 2>/dev/null)" || TMP=""
+TMP="$(mktemp -d 2> /dev/null)" || TMP=""
 if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
   echo "  SKIPPED: mktemp -d produced no directory, so no fixture can be built here."
   exit 2
@@ -77,39 +77,49 @@ build_project "$FBASE"
 printf 'trickykw\ttricky.md\n' > "$FBASE/vocabulary/00-manual/$IDXNAME"
 printf 'trickykw appears here, ordinary entry, nothing adversarial in it\n' > "$FBASE/vocabulary/00-manual/tricky.md"
 
-OUT=$(bash "$FORCED/jit-match.sh" --base "$FBASE" --text "trickykw appears here" 2>/dev/null)
+OUT=$(bash "$FORCED/jit-match.sh" --base "$FBASE" --text "trickykw appears here" 2> /dev/null)
 ST=$?
 if [ "$ST" != 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: jit-match.sh moves off exit 0 when the manifest fails to verify (exit $ST)"
+  PASS=$((PASS + 1))
+  echo "  PASS: jit-match.sh moves off exit 0 when the manifest fails to verify (exit $ST)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: jit-match.sh stayed at exit 0 with a forced manifest failure"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: jit-match.sh stayed at exit 0 with a forced manifest failure"
 fi
-if grep -qF "the block manifest could not be evaluated" <<<"$OUT"; then
-  PASS=$((PASS + 1)); echo "  PASS: jit-match.sh names the degrade as a notice"
+if grep -qF "the block manifest could not be evaluated" <<< "$OUT"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: jit-match.sh names the degrade as a notice"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: jit-match.sh did not name the degrade"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: jit-match.sh did not name the degrade"
   echo "    got: $(printf '%s' "$OUT" | tr '\n' '|' | cut -c1-400)"
 fi
-if grep -qF "trickykw appears here" <<<"$OUT"; then
-  PASS=$((PASS + 1)); echo "  PASS: the genuine entry text still rides along (never fails hard)"
+if grep -qF "trickykw appears here" <<< "$OUT"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: the genuine entry text still rides along (never fails hard)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the entry text was lost, not merely degraded"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the entry text was lost, not merely degraded"
 fi
 
 # =====================================================================================
 echo ""
 echo "=== the SAME entry, unpatched scripts: the control, proving the assertions above are not vacuous ==="
-OUT=$(bash "$REPO/scripts/jit-match.sh" --base "$FBASE" --text "trickykw appears here" 2>/dev/null)
+OUT=$(bash "$REPO/scripts/jit-match.sh" --base "$FBASE" --text "trickykw appears here" 2> /dev/null)
 ST=$?
 if [ "$ST" = 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the real, unpatched jit-match.sh exits 0 on the same fixture"
+  PASS=$((PASS + 1))
+  echo "  PASS: the real, unpatched jit-match.sh exits 0 on the same fixture"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the real jit-match.sh did not exit 0 (exit $ST) -- the fixture itself is broken"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the real jit-match.sh did not exit 0 (exit $ST) -- the fixture itself is broken"
 fi
-if grep -qF "the block manifest could not be evaluated" <<<"$OUT"; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: the unpatched hook reports a desync on a genuine entry -- the control is not clean"
+if grep -qF "the block manifest could not be evaluated" <<< "$OUT"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the unpatched hook reports a desync on a genuine entry -- the control is not clean"
 else
-  PASS=$((PASS + 1)); echo "  PASS: the unpatched hook reports no desync on a genuine entry"
+  PASS=$((PASS + 1))
+  echo "  PASS: the unpatched hook reports no desync on a genuine entry"
 fi
 
 # =====================================================================================
@@ -118,14 +128,18 @@ echo "=== a genuine entry, forced manifest failure: jit-dry-run.sh prints a NOTE
 OUT=$(CLAUDE_PROJECT_DIR="$FPROJ" bash "$FORCED/jit-dry-run.sh" --base "$FBASE" --prompt "trickykw appears here" 2>&1)
 ST=$?
 if [ "$ST" != 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: jit-dry-run.sh moves off exit 0 when the manifest fails to verify (exit $ST)"
+  PASS=$((PASS + 1))
+  echo "  PASS: jit-dry-run.sh moves off exit 0 when the manifest fails to verify (exit $ST)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: jit-dry-run.sh stayed at exit 0 with a forced manifest failure"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: jit-dry-run.sh stayed at exit 0 with a forced manifest failure"
 fi
-if grep -qF "the block manifest failed to verify" <<<"$OUT"; then
-  PASS=$((PASS + 1)); echo "  PASS: jit-dry-run.sh prints a NOTE naming the degrade"
+if grep -qF "the block manifest failed to verify" <<< "$OUT"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: jit-dry-run.sh prints a NOTE naming the degrade"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: jit-dry-run.sh did not print the NOTE"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: jit-dry-run.sh did not print the NOTE"
   echo "    got: $(printf '%s' "$OUT" | tr '\n' '|' | cut -c1-400)"
 fi
 
@@ -135,14 +149,18 @@ echo "=== the SAME entry, unpatched scripts: the control for jit-dry-run.sh ==="
 OUT=$(CLAUDE_PROJECT_DIR="$FPROJ" bash "$REPO/scripts/jit-dry-run.sh" --base "$FBASE" --prompt "trickykw appears here" 2>&1)
 ST=$?
 if [ "$ST" = 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: the real, unpatched jit-dry-run.sh exits 0 on the same fixture"
+  PASS=$((PASS + 1))
+  echo "  PASS: the real, unpatched jit-dry-run.sh exits 0 on the same fixture"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the real jit-dry-run.sh did not exit 0 (exit $ST) -- the fixture itself is broken"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the real jit-dry-run.sh did not exit 0 (exit $ST) -- the fixture itself is broken"
 fi
-if grep -qF "the block manifest failed to verify" <<<"$OUT"; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: the unpatched hook reports a desync on a genuine entry -- the control is not clean"
+if grep -qF "the block manifest failed to verify" <<< "$OUT"; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the unpatched hook reports a desync on a genuine entry -- the control is not clean"
 else
-  PASS=$((PASS + 1)); echo "  PASS: the unpatched hook reports no desync on a genuine entry"
+  PASS=$((PASS + 1))
+  echo "  PASS: the unpatched hook reports no desync on a genuine entry"
 fi
 
 # =====================================================================================
@@ -166,15 +184,19 @@ printf 'real vocabulary content matched by path\n' > "$PBASE/vocabulary/00-manua
 OUT=$(JIT_CONTEXT_VOCAB_PATHS=1 CLAUDE_PROJECT_DIR="$PPROJ" bash "$REPO/scripts/jit-dry-run.sh" --base "$PBASE" --file "config.secret.txt" 2>&1)
 ST=$?
 if [ "$ST" = 0 ]; then
-  PASS=$((PASS + 1)); echo "  PASS: a real path-matched vocabulary entry still exits 0 (manifest verifies as of #230)"
+  PASS=$((PASS + 1))
+  echo "  PASS: a real path-matched vocabulary entry still exits 0 (manifest verifies as of #230)"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: a real path-matched vocabulary entry moved off exit 0 (exit $ST) -- its manifest is not verifying"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: a real path-matched vocabulary entry moved off exit 0 (exit $ST) -- its manifest is not verifying"
   echo "    got: $(printf '%s' "$OUT" | tr '\n' '|' | cut -c1-400)"
 fi
-if grep -qF "real-path-vocab.md" <<<"$OUT"; then
-  PASS=$((PASS + 1)); echo "  PASS: the path-matched entry is still named"
+if grep -qF "real-path-vocab.md" <<< "$OUT"; then
+  PASS=$((PASS + 1))
+  echo "  PASS: the path-matched entry is still named"
 else
-  FAIL=$((FAIL + 1)); echo "  FAIL: the path-matched entry was not named"
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the path-matched entry was not named"
 fi
 
 # =====================================================================================
