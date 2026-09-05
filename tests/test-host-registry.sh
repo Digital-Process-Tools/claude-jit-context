@@ -9,10 +9,12 @@
 # claude-code's contract is the exact defect #252 opens with: a forbid: rule
 # reading as enforced on a host nobody watched refuse anything.
 #
-# Also guarded here: the drift between JIT_AWK_ENVELOPE (scripts/common.sh) and
-# the JSON shapes the hooks still hand-roll with their own printf. That
-# fragment is not wired into any hook yet -- see its own header comment -- so
-# nothing else would notice the two drifting apart.
+# Also guarded here: the drift between JIT_AWK_ENVELOPE (scripts/common.sh) and the
+# JSON shapes its consumers build. pre-tool-hook.sh, pre-prompt-hook.sh and
+# pre-path-hook.sh call jit_envelope_inject()/jit_envelope_block() now (#362);
+# session-start-hook.sh and stop-hook.sh are plain bash and still hand-roll the same
+# skeleton with their own printf, deliberately -- see JIT_AWK_ENVELOPE's own header
+# comment in common.sh for why no bash-side equivalent was added.
 #
 # Usage: bash tests/test-host-registry.sh
 #
@@ -21,7 +23,8 @@
 # checks two candidate literal substrings against a whole SOURCE FILE (a hook or
 # common.sh itself), not a captured hook payload -- the drift guard this suite exists
 # for is about the plugin's own source text, which is outside what path-arg/capture
-# describe.
+# describe. assert_calls (#362) is the same shape one needle narrower: a single
+# literal (a call site, not hook output) against the same kind of source file.
 
 set -uo pipefail
 
@@ -135,20 +138,15 @@ assert_eq "a real Claude Code signature, sourced through common.sh" "claude-code
   "$(export_probe env CLAUDE_CODE_ENTRYPOINT=cli)"
 
 echo ""
-echo "=== drift guard: JIT_AWK_ENVELOPE matches the shape the hooks still hand-roll (#252) ==="
-# JIT_AWK_ENVELOPE is infrastructure, not yet wired into any hook (see its own
-# comment in common.sh) -- so nothing calls both sides of a real comparison
-# yet. This compares the literal, fixed JSON text around each shape's one
-# interpolated field, which survives a variable rename on either side and
-# still catches a key rename, a re-ordering, or the two quietly diverging
-# while nothing wires them together to notice.
-# Two spellings of the same skeleton: pre-tool-hook.sh, pre-prompt-hook.sh and
-# pre-path-hook.sh build their printf format inside a DOUBLE-quoted shell
-# string, so a literal JSON quote is written as a backslash-quote pair --
-# session-start-hook.sh builds the same shape inside a SINGLE-quoted printf
-# format, where a literal JSON quote needs no shell escaping at all. Either
-# spelling counts: this guard is about the JSON shape drifting, not about
-# which shell quoting a hook happens to use.
+echo "=== drift guard: JIT_AWK_ENVELOPE, its awk callers, and the bash holdouts (#252, #362) ==="
+# Before #362 this compared literal JSON text on both sides, because nothing called
+# JIT_AWK_ENVELOPE and a text/text comparison was the only guard available. Now three
+# of the five hand-rolling hooks CALL the builder instead of spelling its JSON out --
+# so the guard for those three has to be "this file invokes jit_envelope_*", and the
+# literal-text form would pass on a hook that quietly went back to hand-rolling a
+# byte-identical but re-derived skeleton, which is exactly the drift this suite exists
+# to catch. The two remaining hooks are plain bash and still hand-roll the literal
+# text (deliberately -- see common.sh), so the ORIGINAL form still applies to them.
 assert_literal_in() {
   local desc="$1" needle_escaped="$2" needle_plain="$3" file="$4" found=0
   grep -qF -- "$needle_escaped" "$file" 2> /dev/null && found=1
@@ -164,12 +162,22 @@ assert_literal_in() {
     echo "    $needle_plain"
   fi
 }
-
+assert_calls() {
+  local desc="$1" needle="$2" file="$3"
+  if grep -qF -- "$needle" "$file" 2> /dev/null; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
+    echo "    expected to find in $file: $needle"
+  fi
+}
 BLOCK_SKELETON_ESC='{\"decision\":\"block\",\"reason\":\"'
 BLOCK_SKELETON_PLAIN='{"decision":"block","reason":"'
 assert_literal_in "common.sh envelope carries the block skeleton" "$BLOCK_SKELETON_ESC" "$BLOCK_SKELETON_PLAIN" "$COMMON_SH"
-assert_literal_in "pre-tool-hook.sh still hand-rolls the identical block skeleton" \
-  "$BLOCK_SKELETON_ESC" "$BLOCK_SKELETON_PLAIN" "$REPO/scripts/pre-tool-hook.sh"
+assert_calls "pre-tool-hook.sh calls the shared block builder, not its own literal" \
+  "jit_envelope_block(" "$REPO/scripts/pre-tool-hook.sh"
 
 INJECT_HEAD_ESC='{\"hookSpecificOutput\":{\"hookEventName\":\"'
 INJECT_HEAD_PLAIN='{"hookSpecificOutput":{"hookEventName":"'
@@ -177,12 +185,38 @@ INJECT_TAIL_ESC='\",\"additionalContext\":\"'
 INJECT_TAIL_PLAIN='","additionalContext":"'
 assert_literal_in "common.sh envelope carries the inject head" "$INJECT_HEAD_ESC" "$INJECT_HEAD_PLAIN" "$COMMON_SH"
 assert_literal_in "common.sh envelope carries the inject tail" "$INJECT_TAIL_ESC" "$INJECT_TAIL_PLAIN" "$COMMON_SH"
-for hook in pre-tool-hook.sh pre-prompt-hook.sh pre-path-hook.sh session-start-hook.sh; do
+for hook in pre-tool-hook.sh pre-prompt-hook.sh pre-path-hook.sh; do
+  assert_calls "$hook calls the shared inject builder, not its own literal" \
+    "jit_envelope_inject(" "$REPO/scripts/$hook"
+done
+for hook in session-start-hook.sh stop-hook.sh; do
   assert_literal_in "$hook still hand-rolls the identical inject head" \
     "$INJECT_HEAD_ESC" "$INJECT_HEAD_PLAIN" "$REPO/scripts/$hook"
   assert_literal_in "$hook still hand-rolls the identical inject tail" \
     "$INJECT_TAIL_ESC" "$INJECT_TAIL_PLAIN" "$REPO/scripts/$hook"
 done
+assert_literal_absent() {
+  local desc="$1" needle_escaped="$2" needle_plain="$3" file="$4" found=0
+  grep -qF -- "$needle_escaped" "$file" 2> /dev/null && found=1
+  grep -qF -- "$needle_plain" "$file" 2> /dev/null && found=1
+  if [ "$found" = 0 ]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
+    echo "    did not expect to find, escaped or plain, in $file:"
+    echo "    $needle_escaped"
+    echo "    $needle_plain"
+  fi
+}
+
+for hook in pre-tool-hook.sh pre-prompt-hook.sh pre-path-hook.sh; do
+  assert_literal_absent "$hook carries no hand-rolled inject head alongside the builder call" \
+    "$INJECT_HEAD_ESC" "$INJECT_HEAD_PLAIN" "$REPO/scripts/$hook"
+done
+assert_literal_absent "pre-tool-hook.sh carries no hand-rolled block skeleton alongside the builder call" \
+  "$BLOCK_SKELETON_ESC" "$BLOCK_SKELETON_PLAIN" "$REPO/scripts/pre-tool-hook.sh"
 
 echo ""
 echo "=== #289: the codex row, after #288's live observation ==="

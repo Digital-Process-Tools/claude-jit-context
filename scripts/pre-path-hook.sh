@@ -64,7 +64,7 @@ JIT_CAND_BEGIN='--jit-candidates--'
 # channel and prints NOTHING, because whether they are real files is a question awk must not
 # ask (a getline probe on a directory is a fatal i/o error on one-true-awk, which is the awk
 # macOS ships). bash answers it with builtins and runs the program again over the survivors.
-JIT_PATH_PROG=$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_BLK_BUILD'
+JIT_PATH_PROG=$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -574,7 +574,7 @@ END {
   # searching it for "\n---\n", a separator an entry body can forge.
   if ((matched = jit_blk_join()) != "") {
     matched = jit_json_escape(matched)
-    printf "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"%s\"}}", matched
+    printf "%s", jit_envelope_inject("PreToolUse", matched)
   } else {
     print "{}"
   }

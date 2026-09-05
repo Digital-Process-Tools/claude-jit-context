@@ -3263,13 +3263,23 @@ jit_missing_requires() {
 # not escape, and calling one on unescaped text produces invalid JSON exactly the way
 # calling printf on it today would.
 #
-# This is infrastructure, not yet wiring: no hook in this repository calls these
-# functions today (rewriting pre-tool-hook.sh's, pre-prompt-hook.sh's and
-# pre-path-hook.sh's own printf sites to call them is a follow-up, tracked
-# separately from #252 -- those three files are outside this change's own claimed
-# lane). What is here is "one place that builds the envelope" existing at all, with
-# the exact wire shape those three sites already emit, so adopting it is a like-for-
-# like swap rather than a behaviour change when it happens.
+# Adopted (#362) at pre-tool-hook.sh's own block/inject sites, and at
+# pre-prompt-hook.sh's and pre-path-hook.sh's inject sites -- all four call
+# jit_envelope_inject()/jit_envelope_block() rather than hand-rolling the printf, and
+# each one was pinned before the swap by a test asserting on the CURRENT bytes, so the
+# swap is provably like-for-like rather than merely believed to be. The bare `print
+# "{}"` sites in those same three files were left alone: "{}" carries nothing this
+# builder can get wrong, so rewriting it would be motion without a defect to fix.
+#
+# session-start-hook.sh (3 sites) and stop-hook.sh (5 sites) are plain bash, not awk,
+# and this string cannot be called from a bash printf directly. Deliberately NOT given
+# a bash-side equivalent here: none of those eight sites ever emits a `decision` --
+# jit_envelope_block() is the one function above with a security consequence when
+# skipped, and it has no bash-side counterpart to skip, because Stop and SessionStart
+# never block. A parallel bash implementation of the SAME wire shape would be a second
+# answer to the question this comment block already warns drifts from the first one
+# invisibly -- the reason jit_row_id()/jit_log_name() live in exactly one place lower
+# in this file. Left as eight hand-rolled `printf`s, named here rather than silently.
 #
 # Every function below builds the Claude Code shape -- the only OBSERVED row in
 # the scripts/host.sh registry. A future second host with its own OBSERVED envelope
