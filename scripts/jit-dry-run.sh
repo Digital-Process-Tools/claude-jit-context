@@ -762,7 +762,10 @@ jit_scan_symlinks "$BASE"
 # Same contract as pat_memo_get(): parameter expansion only, and a miss is what sends
 # check_entry_file() back to its own fork.
 ent_memo_get() {   # VAR, name
-  local _key="$PAT_NL$2	" _rest
+  # idx_prime() writes every record as "<kind><TAB><value><TAB><verdict>" -- "ent" for
+  # this one, exactly like pat_memo_get()'s "why"/"engine" -- so the needle has to open
+  # on "ent<TAB>", not on a bare newline, or it can never match a record at all (#346).
+  local _key="${PAT_NL}ent	$2	" _rest
   case "$ENT_MEMO" in
     *"$_key"*)
       _rest="${ENT_MEMO#*"$_key"}"
@@ -868,7 +871,34 @@ check_index_current() {
       jit_fm_get requires "$fm" requires
       requires="${requires//$'\t'/ }"
       requires="${requires//$'\n'/ }"
+      # (#347) build_tool_tsv() runs every OTHER column through jit_tsv_field() too --
+      # an interior tab, CR or LF folds to a space -- before it ever compares them to
+      # anything. Without the same fold here, a value that rebuild-tsv.sh wrote with a
+      # tab replaced by a space never matches the raw, tab-carrying reconstruction, and
+      # a row that was correctly rebuilt reads as drifted from itself.
+      tool="${tool//$'\t'/ }"; tool="${tool//$'\r'/ }"; tool="${tool//$'\n'/ }"
+      mode="${mode//$'\t'/ }"; mode="${mode//$'\r'/ }"; mode="${mode//$'\n'/ }"
+      require="${require//$'\t'/ }"; require="${require//$'\r'/ }"; require="${require//$'\n'/ }"
+      forbid="${forbid//$'\t'/ }"; forbid="${forbid//$'\r'/ }"; forbid="${forbid//$'\n'/ }"
+      # (#347) build_tool_tsv() also refuses to index a row whose ASSEMBLED mode is not
+      # remind/block/once (JIT_VALID_MODE_RE) -- no row is ever written for it, and none
+      # ever will be until the frontmatter is fixed. Comparing against an index that will
+      # never carry this row reports it STALE forever, with a remedy (rebuild) that can
+      # never clear it -- the same shape this loop already handles two lines up for "no
+      # tool:", applied to the newer refusal.
+      if [ -n "$mode" ] && ! printf '%s' "$mode" | LC_ALL=C grep -Eq "$JIT_VALID_MODE_RE"; then
+        continue
+      fi
     fi
+    # (#347) The fold has to run BEFORE jit_expand_match(), not after: rebuild-tsv.sh
+    # folds tab/CR/LF on the raw value first (jit_tsv_field(), both build_tool_tsv() and
+    # build_path_tsv()) and only then expands an @invocation macro. jit_expand_match()'s
+    # own character-class guard refuses a macro whose ARGS carry a raw tab -- the
+    # unfolded reconstruction would then be REFUSED and returned unexpanded, while
+    # rebuild-tsv.sh's folded value expanded cleanly and wrote the compiled regex to the
+    # index; folding only the after-the-fact result would leave those two forever
+    # disagreeing for a macro whose match: happens to carry one of those bytes.
+    want="${want//$'\t'/ }"; want="${want//$'\r'/ }"; want="${want//$'\n'/ }"
     want="$(jit_expand_match "$want" "$dim" "$label/$name" 2>/dev/null)"
     if [ "$dim" = tools ]; then
       row="$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s' "$tool" "$want" "$name" "${mode:-remind}" "$require" "$forbid" "$requires")"
@@ -1254,8 +1284,13 @@ list_whole() {
     # trailing newline, which is exactly the malformed case this test is looking for, so
     # its status is deliberately not checked -- an unreadable or empty file leaves
     # $_fm_first empty and takes the same branch a wrong first line does.
+    # `2>/dev/null` BEFORE `< "$md"` (#348, the same ordering fix as truncate_index() in
+    # rebuild-tsv.sh and jit_log_write() in common.sh): redirections apply left to right,
+    # so putting the input redirect first sets it up while stderr is still the terminal --
+    # an unreadable file then prints bash's own "Permission denied", carrying the absolute
+    # path, before the 2>/dev/null that follows it could silence anything.
     _fm_first=""
-    IFS= read -r _fm_first < "$md" 2>/dev/null
+    IFS= read -r _fm_first 2>/dev/null < "$md"
     if [ "$_fm_first" != "---" ]; then
       eff=full; pin=1; why="no frontmatter, so there is nothing to summarise"
     elif [ "$inj" = full ]; then
@@ -1313,7 +1348,12 @@ list_whole() {
     if [ "$eff" = full ]; then
       # Arithmetic expansion, not `| tr -d ' '`: some wc implementations pad the count with
       # leading whitespace, and $(( )) discards it for nothing. One fork per entry saved.
-      size=$(( $(wc -c < "$md") ))
+      # `2>/dev/null` BEFORE `< "$md"` (#348, same ordering as the read above): this had
+      # NO suppression at all until now, so an unreadable file leaked bash's own
+      # "Permission denied" here too, in addition to silently yielding size=0 -- the size
+      # was always going to read as 0 on an unreadable file (empty command substitution,
+      # $(( )) on nothing), and that half is unchanged; what this closes is the leak.
+      size=$(( $(wc -c 2>/dev/null < "$md") ))
       WHOLE=$((WHOLE + 1))
       # Capped. This runs against user trees of any size, and a budget that scrolls its own
       # total off the screen is not a budget. The COUNT is never capped -- a report that

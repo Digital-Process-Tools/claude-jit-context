@@ -1186,6 +1186,19 @@ jit_frontmatter() {
   printf '%s\n' "${_out#*	}"
 }
 
+# The only mode: values the hooks give meaning to (docs/writing-entries.md;
+# pre-tool-hook.sh reads "block" and "once" as substrings of this column, everything
+# else defaults to a reminder). Shared between rebuild-tsv.sh, which refuses to index a
+# tools row whose ASSEMBLED mode does not match this, and jit-dry-run.sh's
+# check_index_current(), which has to agree on the same refusal or it reports a
+# correctly-skipped row as merely stale (#347) -- a single copy here is what keeps that
+# agreement from drifting the way it did before #347 was filed.
+# "remind" is accepted even though the hook never tests for it -- it is the field's own
+# documented default spelling and an author may write it explicitly.
+# Consumed by rebuild-tsv.sh and jit-dry-run.sh, which shellcheck cannot see.
+# shellcheck disable=SC2034
+JIT_VALID_MODE_RE='^(remind|block|once)(,(remind|block|once))*$'
+
 # --- Invocation macros -------------------------------------------------------
 # A rule that has to fire on an INVOCATION rather than on a word carries an anchor, and
 # the anchor is the part nobody can verify by reading. Four have been wrong: the \n

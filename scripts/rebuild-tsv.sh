@@ -404,14 +404,11 @@ jit_tsv_field() {
   printf '%s' "$v"
 }
 
-# The only mode: values the hooks give meaning to (docs/writing-entries.md; pre-tool-hook.sh
-# reads "block" and "once" as substrings of this column, everything else defaults to a
-# reminder). Whitelisting the ASSEMBLED value closes the block-flip independently of the
+# Whitelisting the ASSEMBLED value closes the block-flip independently of the
 # tab-stripping above: a column-shift is one route to a forged mode, not necessarily the
 # only one, and this check does not care which route produced an unrecognised value.
-# "remind" is accepted even though the hook never tests for it -- it is the field's own
-# documented default spelling and an author may write it explicitly.
-JIT_VALID_MODE_RE='^(remind|block|once)(,(remind|block|once))*$'
+# JIT_VALID_MODE_RE itself lives in common.sh now, shared with jit-dry-run.sh's
+# check_index_current() (#347) -- see the comment there for why a second copy is the bug.
 
 # --- Tool rules: parse frontmatter from .md files ---
 # Extracts tool, match, mode, require, forbid, requires from YAML frontmatter
