@@ -147,13 +147,8 @@ function jit_re_lit(s,    i, c, out, special) {
   }
   return out
 }
-# #364: RAW canonical tool name(s), space-separated, or RAW unchanged when ALIASES
-# names no mapping for it. ALIASES is the shape scripts/host.sh jit_all_tool_aliases
-# hands back: comma-joined key=v1;v2 pairs, unioned across every host row rather than
-# scoped to one detected host -- see that function and the column-8 comment above
-# JIT_HOST_REGISTRY in host.sh for why. Reimplemented here rather than shelled out to
-# bash: a fork per tool call on the hottest path this plugin has, to reparse a table
-# small enough that the awk version of the same parse is a handful of lines.
+# #364: RAW canon name(s), space-separated, or RAW if ALIASES names none.
+# ALIASES: host.sh jit_all_tool_aliases (comma key=v1;v2 pairs, all hosts unioned).
 function jit_expand_tool_alias(aliases, raw,    n, entries, i, eq, key) {
   if (aliases == "" || raw == "") return raw
   n = split(aliases, entries, ",")
@@ -163,16 +158,7 @@ function jit_expand_tool_alias(aliases, raw,    n, entries, i, eq, key) {
     key = substr(entries[i], 1, eq - 1)
     if (key != raw) continue
     gsub(/;/, " ", entries[i])
-    # Explore self-review on #364: RAW is UNIONED onto the canonical expansion, never
-    # replaced by it. A row written literally as `tool: apply_patch` -- a hand-rolled
-    # workaround someone reaches for before this fix ships, and this very issue thread
-    # considered shipping as the alternation stopgap -- matched and blocked before
-    # this function existed. Returning only the canonical set here would have silently
-    # stopped that same row from firing: the identical silent-failure shape #364
-    # exists to close, reintroduced on the opposite input. Reproduced against a
-    # canonical-only draft of this function: a `tool: apply_patch` row stopped
-    # matching an apply_patch payload.
-    return raw " " substr(entries[i], eq + 1)
+    return raw " " substr(entries[i], eq + 1)  # union, not replace (#364)
   }
   return raw
 }
@@ -255,15 +241,7 @@ END {
   # no rule it could be measured against. Unchanged, and still the only silent exit.
   if (tool_name == "") { print "{}"; exit }
 
-  # #364: the RAW tool_name a host handed us (Codex own "apply_patch", say) is
-  # UNIONED with the CANONICAL set an entry own tool: field is written against
-  # (Edit, Write, ...), space-separated so the match loop below can walk it with a
-  # plain split(). Union, not replace: a row written literally as `tool: apply_patch`
-  # must keep matching too, or the fix reintroduces its own silent-failure shape on
-  # the opposite input (Explore self-review). A host whose own vocabulary already IS
-  # canonical (claude-code, an unknown host) gets its raw tool_name straight back --
-  # jit_expand_tool_alias() is the identity function whenever tool_aliases names no
-  # mapping for it.
+  # #364: raw tool_name unioned with its canonical set (host.sh tool_aliases).
   n_tool_variants = split(jit_expand_tool_alias(tool_aliases, tool_name), tool_variants, " ")
 
   # THE THIRD STATE, #182. `cmd == ""` used to leave here the same way, and that is the
@@ -511,12 +489,7 @@ END {
 
       # tool may name several tools, pipe-separated: `tool: Edit|Write|Read`.
       # Exact-match each alternative — never substring, or `Read` would match `ReadFile`.
-      # #364: matched against every CANONICAL variant the raw tool_name expanded to
-      # (tool_variants, above), not the raw name itself -- a Codex apply_patch payload
-      # expands to "Edit Write" and must fire a row written as `tool: Edit` exactly as
-      # it fires one written `tool: Write`, and a row this host names nothing for
-      # (tool_variants holding the raw name unchanged, the identity case) keeps the
-      # exact single-value match this loop always did.
+      # #364: every tool_variants entry, not just raw tool_name.
       tool_hit = 0
       nt = split(r_tool, talts, "|")
       for (ti = 1; ti <= nt && !tool_hit; ti++) {
