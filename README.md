@@ -2,6 +2,8 @@
 
 ![claude-jit-context — know more, carry less](docs/jit-context.png)
 
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-d97757)](#from-our-marketplace-recommended)
+[![Codex](https://img.shields.io/badge/Codex-plugin-000000)](#codex)
 [![Tests](https://github.com/Digital-Process-Tools/claude-jit-context/actions/workflows/tests.yml/badge.svg)](https://github.com/Digital-Process-Tools/claude-jit-context/actions/workflows/tests.yml)
 [![Shell](https://img.shields.io/badge/bash-3.2%2B-blue)](https://www.gnu.org/software/bash/)
 [![OS](https://img.shields.io/badge/tested%20on-Linux%20%7C%20macOS%20%7C%20Windows-blue)](https://github.com/Digital-Process-Tools/claude-jit-context/actions/workflows/tests.yml)
