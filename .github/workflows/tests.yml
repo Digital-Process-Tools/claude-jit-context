@@ -133,8 +133,20 @@ jobs:
       # runners carry no equivalent always-on scanner. Excluding the checkout and the
       # runner temp directory removes that tax without touching what any suite tests --
       # it changes nothing about correctness, only how fast the disk answers.
+      #
+      # #355: `Add-MpPreference` hit a bare Defender-service outage (0x800106ba) on the
+      # hosted image three times in under three hours, unrelated to any diff, and a
+      # terminating pwsh error on this step skipped "Run hook test suites" entirely --
+      # the leg then reported red exactly as if the suite had failed, reddening the three
+      # pinned gate jobs even though the other two platforms were clean. This is a speed
+      # optimisation, not a correctness check, so it must never be able to fail the leg.
+      # `continue-on-error: true` is scoped to THIS STEP ALONE and must stay that way: on
+      # "Run hook test suites" the identical line would turn a genuinely failing Windows
+      # suite green, which is strictly worse than the flake it would replace. Do not
+      # copy this line down. tests/test-defender-step-scope-355.sh asserts the scope.
       - name: Exclude the checkout and temp dir from Windows Defender scanning
         if: runner.os == 'Windows'
+        continue-on-error: true
         shell: pwsh
         run: |
           Add-MpPreference -ExclusionPath "${{ github.workspace }}"
