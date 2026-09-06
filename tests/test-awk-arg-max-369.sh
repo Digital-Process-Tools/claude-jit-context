@@ -38,6 +38,26 @@
 # push rather than after. -uo pipefail (not -e): a genuinely broken sourcing chain must
 # still let this test report FAIL rather than silently exiting.
 #
+# #371: this test's own byte count PASSED (131052 under 131072) on the exact commit CI
+# still hit real E2BIG on. The gap was this file measuring a Python STR index as a byte
+# count: `open(path, "r", encoding="utf-8", ...).read()` decodes the file, and a decoded
+# str's `len()`/slicing counts CODE POINTS, not bytes. Every accented-letter fold table
+# and em-dash this repo's own prose carries (JIT_AWK_FOLD's Latin-1 table alone: dozens
+# of them, 2 bytes each in the file, 1 python character each) was undercounted by
+# exactly the gap between chars and bytes -- 58 bytes on JIT_AWK_FOLD alone, enough on
+# its own to explain the 20-byte "headroom" this test reported being fake. Re-measured in
+# real bytes, pre-tool-hook.sh's composed program was 131146 bytes: 74 OVER the cap, not
+# 20 under it -- the exact E2BIG CI hit, now reproduced as a plain byte count with no
+# exec() involved. Fixed by encoding every extracted substring back to UTF-8 bytes
+# (errors="surrogateescape", matching the read) before taking its length.
+#
+# #371 also moved pre-tool-hook.sh's composed program off the argv entirely: it is
+# written to a generated tempfile and invoked via `awk -f`, which removes the cap from
+# consideration regardless of the program's size. A hook that has made this move is
+# structurally exempt from the byte-cap check below (detected by the naming convention
+# the fix adopted: VAR="$JIT_AWK_...'...'" later invoked as `awk ... -f "$VAR_FILE"`) --
+# reported as such rather than measured against a cap that no longer bounds it.
+#
 # jit-drive: none -- every check here is a byte-count comparison against a fixed
 # threshold, printed and counted inline; nothing takes captured hook output or a
 # needle, so there is no payload-shaped helper here for test-assertion-helpers.sh
@@ -68,11 +88,12 @@ fi
 
 # Every hook that builds its own awk program this way: a single JIT_AWK_* macro
 # concatenation immediately followed (no space) by a single-quoted literal awk source
-# block, both fed to awk as one shell word. Enumerated, not gathered by grep for the
-# LC_ALL=C awk marker alone -- session-start-hook.sh and stop-hook.sh also match that
-# marker but hand-roll their own small awk one-liners with no macro concatenation and
-# no risk of approaching this cap, and folding them in here would need a second parser
-# for a shape they do not have.
+# block, both fed to awk as one shell word (or, since #371, written whole to a tempfile
+# and fed via `awk -f`). Enumerated, not gathered by grep for the LC_ALL=C awk marker
+# alone -- session-start-hook.sh and stop-hook.sh also match that marker but hand-roll
+# their own small awk one-liners with no macro concatenation and no risk of approaching
+# this cap, and folding them in here would need a second parser for a shape they do not
+# have.
 HOOKS="pre-tool-hook.sh pre-prompt-hook.sh pre-path-hook.sh post-tool-hook.sh"
 
 for hook in $HOOKS; do
@@ -83,13 +104,42 @@ for hook in $HOOKS; do
     continue
   fi
 
-  total=$(
+  result=$(
     SIZE_HOOK="$path" SIZE_SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
 import os
+import re
 
 path = os.environ["SIZE_HOOK"]
 script_dir = os.environ["SIZE_SCRIPT_DIR"]
-text = open(path, "r", encoding="utf-8", errors="surrogateescape").read()
+raw = open(path, "rb").read()
+text = raw.decode("utf-8", errors="surrogateescape")
+
+common_path = os.path.join(script_dir, "scripts", "common.sh")
+common_raw = open(common_path, "rb").read()
+common_text = common_raw.decode("utf-8", errors="surrogateescape")
+
+def byte_len(s):
+    # #371: the file is read and decoded as UTF-8 text so string patterns can be
+    # searched with re; every byte-count taken from a SLICE of that decoded string
+    # must be re-encoded before it is trusted as a byte count, or a multibyte
+    # character (this repo's own accented prose and fold tables carry plenty)
+    # silently reads as one byte short (or more) of what it really costs on argv.
+    return len(s.encode("utf-8", errors="surrogateescape"))
+
+def macro_len(name):
+    # NAME='...' (single-quoted bash literal), the shape every JIT_AWK_* macro in
+    # common.sh takes. Finds the FIRST assignment only -- common.sh assigns each of
+    # these exactly once, which tests/test-awk-locale-pins.sh's own reasoning about
+    # this file already relies on elsewhere.
+    marker = name + "='"
+    i = common_text.find(marker)
+    if i == -1:
+        return None
+    i += len(marker)
+    j = common_text.find("'", i)
+    if j == -1:
+        return None
+    return byte_len(common_text[i:j])
 
 # WHICH macros a hook concatenates is read off the HOOK, not off a list kept here
 # (#299/#367 self-review, found by oss:auditor). This block used to hold a hardcoded
@@ -111,31 +161,26 @@ text = open(path, "r", encoding="utf-8", errors="surrogateescape").read()
 # a hook that matches NEITHER is reported as unmeasurable rather than measured as
 # zero -- the same "a third state must not render as the first" rule this repository
 # applies to its hooks, applied to the test watching them.
-import re
-
-common_path = os.path.join(script_dir, "scripts", "common.sh")
-common_text = open(common_path, "r", encoding="utf-8", errors="surrogateescape").read()
-
-def macro_len(name):
-    # NAME='...' (single-quoted bash literal), the shape every JIT_AWK_* macro in
-    # common.sh takes. Finds the FIRST assignment only -- common.sh assigns each of
-    # these exactly once, which tests/test-awk-locale-pins.sh's own reasoning about
-    # this file already relies on elsewhere.
-    marker = name + "='"
-    i = common_text.find(marker)
-    if i == -1:
-        return None
-    i += len(marker)
-    j = common_text.find("'", i)
-    if j == -1:
-        return None
-    return j - i
-
 run_re = re.compile(r'(?:\$JIT_AWK_[A-Z_]+)+' + chr(34) + '?' + chr(39))
 m = run_re.search(text)
 if m is None:
     print("UNMEASURABLE")
     raise SystemExit(0)
+
+# #371: a hook whose composed program is ASSIGNED to a variable (VAR="$JIT_AWK_...")
+# rather than fed straight to awk positionally may since have moved it off the argv
+# entirely -- written to a tempfile and read via `awk -f "$VAR_FILE"`. Detected by the
+# naming convention that move adopted, not by re-parsing the awk invocation itself:
+# look at what immediately precedes this match for `VAR="` touching the match start,
+# then check whether `-f "$VAR_FILE"` occurs anywhere later in the file.
+prefix = text[max(0, m.start() - 80):m.start()]
+assign_m = re.search(r'([A-Za-z_][A-Za-z0-9_]*)="$', prefix)
+if assign_m is not None:
+    varname = assign_m.group(1)
+    needle = '-f ' + chr(34) + '$' + varname + '_FILE' + chr(34)
+    if needle in text:
+        print("TEMPFILE:" + varname)
+        raise SystemExit(0)
 
 macro_names = re.findall(r'\$(JIT_AWK_[A-Z_]+)', m.group(0))
 macro_total = 0
@@ -153,7 +198,7 @@ j = text.find(chr(39), i)
 if j == -1:
     print("UNMEASURABLE")
     raise SystemExit(0)
-literal_len = j - i
+literal_len = byte_len(text[i:j])
 
 total = macro_total + literal_len
 print(total)
@@ -164,14 +209,31 @@ PYEOF
   )
   rc=$?
 
-  if [ "$rc" -ne 0 ] || [ -z "$total" ] || [ "$total" = "UNMEASURABLE" ]; then
+  if [ "$rc" -ne 0 ] || [ -z "$result" ]; then
     FAIL=$((FAIL + 1))
-    echo "  FAIL: $hook -- could not find its macro-concatenation/literal boundary, so its"
-    echo "        awk program size was NOT measured. This is the silent-zero shape #369's"
-    echo "        own guard fell into once already: fix the extraction above rather than"
-    echo "        letting an unmeasured hook read as a small one."
+    echo "  FAIL: $hook -- the byte-count extraction itself did not run cleanly (rc=$rc)."
     continue
   fi
+
+  case "$result" in
+    UNMEASURABLE)
+      FAIL=$((FAIL + 1))
+      echo "  FAIL: $hook -- could not find its macro-concatenation/literal boundary, so its"
+      echo "        awk program size was NOT measured. This is the silent-zero shape #369's"
+      echo "        own guard fell into once already: fix the extraction above rather than"
+      echo "        letting an unmeasured hook read as a small one."
+      continue
+      ;;
+    TEMPFILE:*)
+      PASS=$((PASS + 1))
+      echo "  PASS: $hook writes its composed awk program (${result#TEMPFILE:}) to a tempfile"
+      echo "        and invokes it with -f -- off the argv entirely, so the ${ARG_STRLEN_CAP}-byte"
+      echo "        Linux per-argument cap does not bound it regardless of size (#371)."
+      continue
+      ;;
+  esac
+
+  total="$result"
 
   if [ "$total" -lt "$ARG_STRLEN_CAP" ]; then
     PASS=$((PASS + 1))
