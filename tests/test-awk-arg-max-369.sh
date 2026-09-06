@@ -270,8 +270,21 @@ for hook in $HOOKS; do
   fi
   # Every remaining reference to the composed program variable, anywhere in the file,
   # must be reached through -f -- never handed to awk as a bare positional word.
-  bare="$(awk '
-    /awk[^\n]*"\$JIT_AWK_PROGRAM"[[:space:]]*$/ && $0 !~ /-f/ { print FILENAME ":" FNR ": " $0 }
+  #
+  # #371 self-review (round 2): the first cut of this check anchored on end-of-line and
+  # a quoted literal, which a rewrite could dodge two ways -- trailing content after the
+  # bare reference on the same line (a redirect, a trailing comment), or the variable
+  # referenced unquoted. Neither shape is hypothetical for a bash script under active
+  # edit, so the check below looks for the variable name ANYWHERE on a line that also
+  # mentions awk, quoted or not, with no "-f" anywhere on that same line -- a boundary
+  # after the name (never followed immediately by another identifier character) keeps
+  # this from also matching JIT_AWK_PROGRAM_FILE or a variable that merely shares this
+  # one's prefix.
+  bare="$(awk -v var="JIT_AWK_PROGRAM" '
+    index($0, "awk") > 0 {
+      re = "\\$" var "([^A-Za-z0-9_]|$)"
+      if ($0 ~ re && $0 !~ /-f/) print FILENAME ":" FNR ": " $0
+    }
   ' "$path")"
   if [ -z "$bare" ]; then
     PASS=$((PASS + 1))

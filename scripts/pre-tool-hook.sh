@@ -1299,12 +1299,12 @@ END {
 # `awk -f` reads the program from disk rather than as a positional argument, and the
 # 131072-byte Linux per-argument cap this hook hit no longer applies to it at all.
 #
-# FAILING TO GET OR WRITE ONE IS NOT AN ERROR: the hook falls back to the old positional
-# form rather than saying nothing, the same "never fail hard" contract jit_tmp_open()
-# documents for $JIT_TMP. That fallback re-exposes the cap this hook is already 74 bytes
-# over on Linux -- accepted, because a hook that occasionally reports E2BIG on a platform
-# whose $TMPDIR is unusable is still better than one that silently exits 0 with nothing
-# to say every single time it cannot get a scratch file.
+# FAILING TO GET OR WRITE ONE IS NOT AN ERROR: the hook falls back to process
+# substitution (below) rather than saying nothing, the same "never fail hard" contract
+# jit_tmp_open() documents for $JIT_TMP. #371 self-review: an EARLIER cut of this fallback
+# used the old positional form here, which re-exposed the cap this hook is already 74
+# bytes over on Linux -- that positional form is gone; see the fallback branch below for
+# why process substitution does not have the same problem.
 JIT_AWK_PROGRAM_FILE=""
 JIT_AWK_PROGRAM_TMPDIR="${TMPDIR:-/tmp}"
 JIT_AWK_PROGRAM_TMPDIR="${JIT_AWK_PROGRAM_TMPDIR%/}"
