@@ -250,4 +250,37 @@ TOTAL=$((PASS + FAIL))
 echo "  $PASS/$TOTAL passed, $FAIL failed"
 echo "========================"
 
+echo ""
+echo "=== D: a hook that moved its program off the argv never falls back onto it (#371) ==="
+# #371 self-review: pre-tool-hook.sh's own EXIT-trap tempfile can fail to be created or
+# written (unwritable/missing $TMPDIR), and the first cut of this fix fell back to the
+# OLD positional form in that case -- which re-triggers the exact E2BIG this fix exists
+# to remove, on the one hook that is already 74 bytes over the cap TODAY. A fallback that
+# still hands the full program to awk as a bare positional argument is not a fallback at
+# all here; it must stay off the argv (a generated tempfile, or -f on a process
+# substitution) in EVERY branch, not just the happy one.
+for hook in $HOOKS; do
+  path="$SCRIPTS/$hook"
+  [ -f "$path" ] || continue
+  # Only hooks that have made the #371 move (VAR="$JIT_AWK_..." later read via -f) are
+  # in scope here -- a hook still on the plain positional form everywhere is #369's own
+  # concern above, not this one.
+  if ! grep -q '\-f "\$JIT_AWK_PROGRAM_FILE"' "$path" 2> /dev/null; then
+    continue
+  fi
+  # Every remaining reference to the composed program variable, anywhere in the file,
+  # must be reached through -f -- never handed to awk as a bare positional word.
+  bare="$(awk '
+    /awk[^\n]*"\$JIT_AWK_PROGRAM"[[:space:]]*$/ && $0 !~ /-f/ { print FILENAME ":" FNR ": " $0 }
+  ' "$path")"
+  if [ -z "$bare" ]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $hook -- every reference to \$JIT_AWK_PROGRAM is reached through -f, in every branch"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $hook -- a fallback still hands the composed program to awk positionally:"
+    echo "$bare"
+  fi
+done
+
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

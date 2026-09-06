@@ -1327,7 +1327,25 @@ fi
 if [ -n "$JIT_AWK_PROGRAM_FILE" ]; then
   LC_ALL=C awk "${JIT_AWK_ARGS[@]}" -f "$JIT_AWK_PROGRAM_FILE"
 else
-  LC_ALL=C awk "${JIT_AWK_ARGS[@]}" "$JIT_AWK_PROGRAM"
+  # #371 self-review (oss:auditor): falling back to the POSITIONAL form here would
+  # re-trigger the exact E2BIG this fix exists to remove -- pre-tool-hook.sh's
+  # composed program is 131146 bytes, 74 over Linux's 131072-byte cap, TODAY, so a
+  # positional awk invocation in this branch crashes on the one platform this whole
+  # fix is about. This branch is not hypothetical: tests/test-hook-tmpfile.sh's own
+  # "unwritable TMPDIR" section (C) exercises exactly this path, because chmod 555
+  # on $TMPDIR makes BOTH mktemp calls above fail together, on every platform that
+  # test runs on -- reproduced locally with `TMPDIR=<chmod 555 dir> bash -x
+  # scripts/pre-tool-hook.sh`.
+  #
+  # Process substitution sidesteps both problems at once: awk's own argv holds only
+  # a /dev/fd path, never the program text, and bash builds that path from a pipe
+  # rather than a file under $TMPDIR, so it needs no writable temp directory at all
+  # (verified: an `awk -f <(...)` call still works with $TMPDIR chmod 555). This is
+  # the fallback of the fallback, not the primary path -- the tempfile route above is
+  # preferred whenever $TMPDIR is healthy, because it is the one every other hook in
+  # this repo already relies on (jit_tmp_open(), #60) and every CI leg already
+  # proves, on all three platforms, today.
+  LC_ALL=C awk "${JIT_AWK_ARGS[@]}" -f <(printf '%s' "$JIT_AWK_PROGRAM")
 fi
 
 # --- Timing + log ---
