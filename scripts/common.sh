@@ -940,9 +940,11 @@ jit_load_config() {
           ;;
       esac
     fi
-    # #300: JIT_CONTEXT_STOP_REPORT gates stop-hook.sh's whole model-facing report --
-    # off by default, per #291/#295 (the audience is a human curating .claude/jit-context/,
-    # not a model mid-session). Only 0 and 1 are implemented; anything else must not
+    # #300: JIT_CONTEXT_STOP_REPORT used to gate stop-hook.sh's model-facing report.
+    # #367 moved that report to systemMessage and put it behind JIT_CONTEXT_STATUS
+    # below, so this setting now gates NOTHING -- it is still parsed and refused here,
+    # unchanged, so a config.env that carries it keeps working rather than being
+    # reported as an unknown key. Only 0 and 1 are implemented; anything else must not
     # silently read as either value, the same reason JIT_CONTEXT_INJECT refuses an
     # unimplemented mode above rather than falling through.
     if [ "$key" = JIT_CONTEXT_STOP_REPORT ]; then
@@ -950,6 +952,21 @@ jit_load_config() {
         0 | 1) ;;
         *)
           jit_config_refuse "$lineno" "not a stop-report toggle (0 or 1)"
+          continue
+          ;;
+      esac
+    fi
+    # #367: JIT_CONTEXT_STATUS gates the HUMAN-facing status lines -- systemMessage, the
+    # field a person actually reads -- a different audience and a different knob from
+    # JIT_CONTEXT_STOP_REPORT above, which gates the now-legacy MODEL-facing report.
+    # Refused the same way and for the same reason: a setting that reads as applied and
+    # silently is not is this repository own defect class, and there is no safe guess
+    # between "one line per fire" and "one line per session" to fall back on.
+    if [ "$key" = JIT_CONTEXT_STATUS ]; then
+      case "$value" in
+        fired | summary | off) ;;
+        *)
+          jit_config_refuse "$lineno" "not a status mode (fired, summary or off)"
           continue
           ;;
       esac
@@ -1040,8 +1057,10 @@ case "$JIT_INJECT" in
   *) JIT_INJECT=full ;;
 esac
 
-# #300: JIT_CONTEXT_STOP_REPORT gates the whole model-facing report stop-hook.sh can
-# emit. Off by default -- the opposite fallback direction from JIT_INJECT above, and
+# #300: JIT_CONTEXT_STOP_REPORT gated the whole model-facing report stop-hook.sh used
+# to emit; #367 retired that report (it moved to systemMessage, gated by
+# JIT_CONTEXT_STATUS below) and nothing reads this variable any more. Kept, parsed and
+# clamped exactly as before so an existing config.env keeps loading. Off by default -- the opposite fallback direction from JIT_INJECT above, and
 # deliberately so: JIT_INJECT defaults to `full` for upgrade safety (a tree that
 # already relies on the whole-body behaviour must not lose it silently), while this
 # setting is brand new, so there is no existing behaviour to preserve by defaulting on.
@@ -1056,6 +1075,19 @@ JIT_STOP_REPORT="${JIT_CONTEXT_STOP_REPORT:-0}"
 case "$JIT_STOP_REPORT" in
   0 | 1) ;;
   *) JIT_STOP_REPORT=0 ;;
+esac
+
+# #367: JIT_CONTEXT_STATUS gates the human-facing systemMessage lines -- default
+# summary, the cheapest thing worth having on an upgrade nobody asked for this: one
+# line at the end of a session, rather than one per injection on a busy turn (the
+# noise budget the issue itself flags as needing design, not assumption). The
+# config.env path above already refuses an unimplemented value by line number; this
+# clamp covers every other way the variable can arrive, the same shape JIT_INJECT and
+# JIT_STOP_REPORT give their own clamp just above.
+JIT_STATUS="${JIT_CONTEXT_STATUS:-summary}"
+case "$JIT_STATUS" in
+  fired | summary | off) ;;
+  *) JIT_STATUS=summary ;;
 esac
 
 # Pipeline log: _log "step" duration_ms "message"  → [HH:MM:SS.mmm] step 42ms | message
@@ -2435,6 +2467,9 @@ function jit_shown_mark(file, key) {
   if (file == "") return
   JIT_MARKS = JIT_MARKS file "\t" key "\n"
 }
+function jit_loc_key(dim, layer, file) {
+  return "loc:" dim ":" layer ":" file
+}
 # Called once, BEFORE the hook writes its log line to the same file. The order is the whole
 # of the #65 fix and it is not cosmetic: the log line ends with a payload-derived field, so
 # anything written after it can be forged with a newline. Marks first, then a sentinel line,
@@ -3313,5 +3348,22 @@ function jit_envelope_block(reason_escaped) {
 }
 function jit_envelope_empty() {
   return "{}"
+}
+'
+# #367: kept OUT of JIT_AWK_ENVELOPE above -- that macro is included in pre-tool-hook.sh
+# too, which sits right at Linux's per-argument exec() cap (#369) and does not use
+# systemMessage (see its own tools-loop comment). Only pre-prompt-hook.sh and
+# pre-path-hook.sh add this one, so pre-tool-hook.sh pays nothing for it.
+# shellcheck disable=SC2034
+JIT_AWK_ENVELOPE_SYSMSG='
+function jit_fmt_bytes(n) {
+  if (n < 1000) return n "b"
+  return sprintf("%.1fk", n / 1000)
+}
+function jit_envelope_inject_sysmsg(event, text_escaped, sysmsg_escaped) {
+  if (text_escaped == "" && sysmsg_escaped == "") return "{}"
+  if (text_escaped == "") return "{\"systemMessage\":\"" sysmsg_escaped "\"}"
+  if (sysmsg_escaped == "") return jit_envelope_inject(event, text_escaped)
+  return "{\"hookSpecificOutput\":{\"hookEventName\":\"" event "\",\"additionalContext\":\"" text_escaped "\"},\"systemMessage\":\"" sysmsg_escaped "\"}"
 }
 '

@@ -64,7 +64,7 @@ JIT_CAND_BEGIN='--jit-candidates--'
 # channel and prints NOTHING, because whether they are real files is a question awk must not
 # ask (a getline probe on a directory is a fatal i/o error on one-true-awk, which is the awk
 # macOS ships). bash answers it with builtins and runs the program again over the survivors.
-JIT_PATH_PROG=$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE'
+JIT_PATH_PROG=$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE$JIT_AWK_ENVELOPE_SYSMSG'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -303,6 +303,7 @@ END {
   sep = ""
   refused = ""
   n_refused = 0
+  sys_msg = ""
 
   # --- Scan path layers ---
   # Enumerated from disk by jit_scan_layers() in common.sh and handed in as a -v value
@@ -348,7 +349,8 @@ END {
         continue
       }
 
-      if (rule_file in shown) continue
+      rlockey = jit_loc_key("paths", layer, rule_file)
+      if (rlockey in shown) continue
 
       # Every path pattern is a regex, so the guard applies to all of them. See
       # common.sh: an undefined escape matches nothing and exits 0, a malformed one
@@ -406,12 +408,16 @@ END {
       }
 
       if (content != "") {
-        shown[rule_file] = 1
-        jit_shown_mark(shown_file, rule_file)
+        shown[rlockey] = 1
+        jit_shown_mark(shown_file, rlockey)
         header = "# JIT Context: " rule_file " (matched: " pattern ")"
         log_matches = log_matches sep layer ":" rule_file "(" pattern ")" jit_inject_tag(ent)
         sep = ", "
-        nblk++; blk[nblk] = header "\n" content
+        blk_body = header "\n" content
+        nblk++; blk[nblk] = blk_body
+        if (status_mode == "fired") {
+          sys_msg = sys_msg (sys_msg != "" ? "\n" : "") "JIT : paths/" layer "/" rule_file " (" jit_fmt_bytes(length(blk_body)) ")"
+        }
       }
     }
     close(index_file)
@@ -460,7 +466,8 @@ END {
           continue
         }
 
-        if (vocab_file in vshown) continue
+        vfkey = jit_loc_key("vocabulary", layer, vocab_file)
+        if (vfkey in vshown) continue
 
         vmatched = 0
         for (pi = 1; pi <= path_count; pi++) {
@@ -483,12 +490,16 @@ END {
         }
 
         if (vcontent != "") {
-          vshown[vocab_file] = 1
-          jit_shown_mark(vocab_shown_file, vocab_file)
+          vshown[vfkey] = 1
+          jit_shown_mark(vocab_shown_file, vfkey)
           vheader = "# Vocabulary: " vocab_file " (matched path: " vpattern ")"
           log_matches = log_matches sep layer ":" vocab_file "(" vpattern ")" jit_inject_tag(vent)
           sep = ", "
-          nblk++; blk[nblk] = vheader "\n" vcontent
+          vblk_body = vheader "\n" vcontent
+          nblk++; blk[nblk] = vblk_body
+          if (status_mode == "fired") {
+            sys_msg = sys_msg (sys_msg != "" ? "\n" : "") "JIT : vocabulary/" layer "/" vocab_file " (" jit_fmt_bytes(length(vblk_body)) ")"
+          }
         }
       }
       close(vindex)
@@ -574,7 +585,7 @@ END {
   # searching it for "\n---\n", a separator an entry body can forge.
   if ((matched = jit_blk_join()) != "") {
     matched = jit_json_escape(matched)
-    printf "%s", jit_envelope_inject("PreToolUse", matched)
+    printf "%s", jit_envelope_inject_sysmsg("PreToolUse", matched, (sys_msg != "") ? jit_json_escape(sys_msg) : "")
   } else {
     print "{}"
   }
@@ -619,6 +630,7 @@ jit_path_awk() {
     -v log_tmp="$JIT_TMP" \
     -v cand_mode="$1" \
     -v cand_begin="$JIT_CAND_BEGIN" \
+    -v status_mode="$JIT_STATUS" \
     "$JIT_PATH_PROG"
 }
 

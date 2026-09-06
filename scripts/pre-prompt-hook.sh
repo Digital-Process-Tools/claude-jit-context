@@ -62,8 +62,9 @@ LC_ALL=C awk \
   -v vocab_base="$JIT_BASE/vocabulary" \
   -v state_dir="$JIT_STATE_DIR" \
   -v inject_default="$JIT_INJECT" \
+  -v status_mode="$JIT_STATUS" \
   -v log_tmp="$JIT_TMP" \
-  "$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE"'
+  "$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE$JIT_AWK_ENVELOPE_SYSMSG"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -225,6 +226,7 @@ END {
   sep = ""
   refused = ""
   n_refused = 0
+  sys_msg = ""
 
   # --- Scan vocab layers ---
   # The list is enumerated from disk by jit_scan_layers() in common.sh and arrives here as
@@ -280,7 +282,8 @@ END {
         }
         continue
       }
-      if (!(vfile in shown) && (index(padded, " " kw " ") > 0 || (stale != "" && index(stale, " " kw " ") > 0))) {
+      lockey = jit_loc_key("vocabulary", layer, vfile)
+      if (!(lockey in shown) && (index(padded, " " kw " ") > 0 || (stale != "" && index(stale, " " kw " ") > 0))) {
         # Named once. Folding the keyword makes two spellings of it collide -- an author
         # who writes `keywords: détail, detail` now gets two identical rows out of
         # rebuild-tsv.sh, and the header read `(matched: detail|detail)`. That list is a
@@ -335,9 +338,10 @@ END {
       }
 
       if (vc != "") {
+        lockey = jit_loc_key("vocabulary", layer, vfile)
         if (!generic_only) {
-          shown[vfile] = 1
-          jit_shown_mark(shown_file, vfile)
+          shown[lockey] = 1
+          jit_shown_mark(shown_file, lockey)
         }
         # #233: age is looked up by "layer/vfile", the same key jit_scan_entry_ages()
         # (common.sh) wrote it under. "" means no age was measured for this file --
@@ -348,7 +352,14 @@ END {
         if (layer ~ /00-manual/) vh = vh "\\n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
         log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent) (generic_only ? ":generic-only" : "")
         sep = ", "
-        nblk++; blk[nblk] = vh "\n" vc
+        blk_body = vh "\n" vc
+        nblk++; blk[nblk] = blk_body
+        # #367: JIT_CONTEXT_STATUS=fired -- one systemMessage line per entry as it
+        # fires, naming the full loc: it fired from (never the bare basename alone --
+        # the exact ambiguity #299 documents) and what it cost in bytes.
+        if (status_mode == "fired") {
+          sys_msg = sys_msg (sys_msg != "" ? "\n" : "") "JIT : vocabulary/" layer "/" vfile " (" jit_fmt_bytes(length(blk_body)) ")"
+        }
       }
     }
   }
@@ -416,9 +427,14 @@ END {
   matched = jit_blk_join()
 
   # --- Output JSON ---
+  # sysmsg_escaped is only ever non-empty here when matched is too: sys_msg is built
+  # exclusively inside "if (vc != \"\")", the same guard that puts something into
+  # blk[] in the first place, so there is no shape where a systemMessage line fires
+  # with nothing in additionalContext to go with it.
+  sysmsg_out = (sys_msg != "") ? jit_json_escape(sys_msg) : ""
   if (matched != "") {
     matched = jit_json_escape(matched)
-    printf "%s", jit_envelope_inject("UserPromptSubmit", matched)
+    printf "%s", jit_envelope_inject_sysmsg("UserPromptSubmit", matched, sysmsg_out)
   } else {
     print "{}"
   }

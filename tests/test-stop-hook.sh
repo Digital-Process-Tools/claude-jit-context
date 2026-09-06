@@ -1,36 +1,24 @@
 #!/bin/bash
-# #244 (part 2 of #233): the Stop hook that reads the injected-vs-edited comparison back.
-# The numerator (what fired) already existed as the `shown` marks; post-tool-hook.sh
-# (#244, same issue) is what makes the denominator (was anything edited) exist at all.
+# #244 (part 2 of #233): the Stop hook that reads back the injected-vs-edited record.
 #
-# THREE STATES, and the issue is explicit that the third must never render as the first:
-# entries fired and none edited (one line, #292); entries fired and some edited
-# (silence -- the healthy case, same posture SessionStart's own "ok" already takes);
-# and COULD NOT TELL whether anything was edited, which must say so rather than pass as
-# clean. This suite drives all three, plus the "nothing fired at all" case, which is a
-# fourth, uncontroversial kind of silence (there is nothing to compare).
+# #367 rewrote the human-facing shape entirely: `systemMessage`, gated by
+# JIT_CONTEXT_STATUS (default `summary`), carrying a TOTAL only -- no names, no
+# ownership split. That is why this file no longer asserts entry NAMES against the
+# hook's stdout ($OUT): the model-facing line does not carry them any more. Names,
+# ages and the Y/N/U ownership split all moved to hooks.log, unconditional and
+# unbounded (past the 200-name cap), which is what most of the assertions below read
+# instead.
 #
-# #292: none of the four rendered states is actionable -- every non-silent message is
-# housekeeping about .claude/jit-context/*.md entry FILES, never an instruction to the
-# model. There is no fifth, actionable state in this machine to hold as a positive
-# control against "reads as inert" -- so the control here is that all three non-silent
-# messages (fired/none-updated, could-not-tell, edit-declined) carry the identical
-# "no action needed" marker verbatim, while remaining textually distinguishable from
-# one another (asserted in sections D and N below, unchanged from #284/#285/#286). If a
-# genuinely actionable state is ever added to this machine, it must NOT carry that
-# marker, and a test asserting so belongs beside these.
+# #299 gave every fired mark a "loc:<dim>:<layer>:<file>" key rather than a bare file
+# name (common.sh: jit_loc_key()), so fixtures below write that format -- a bare mark
+# is a THIRD, deliberate case (section U), simulating a hook from an earlier version
+# firing earlier in the same session, and must render as unknown rather than guessed.
 #
-# #291/#295: the "none updated" state is further split by WHO can act on the fired
-# entries. #244's own reasoning (jit_scan_entry_ages()'s comment) is that only
-# 00-manual has a human author -- a generated or plugin-owned layer has nobody to
-# curate it, and #291 documented a completed subagent waking three times to answer
-# this line as though it were a task addressed to it. #295 measured a real project
-# where every fired entry lived outside 00-manual and the nag fired on nearly every
-# session anyway. So this suite also drives: every fired entry outside 00-manual
-# (silence, section Q); a mix of 00-manual and non-manual (the split is reported,
-# section R); a 00-manual directory that cannot be read (its own could-not-tell state,
-# section S); and the message's own wording says what it is and who it is not for
-# (asserted alongside section A).
+# THREE STATES for the edit question, unchanged by either #367 or #299:
+#   * fired, none edited -- one line (now a total only), #292
+#   * fired, some edited -- silence (section B)
+#   * COULD NOT TELL whether anything was edited -- says so (state dir unknown,
+#     section D; 00-manual unreadable, section T; edit-declined, section N)
 #
 # jit-drive: assert_contains contains capture
 #
@@ -67,6 +55,19 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local desc="$1" output="$2" expected="$3"
+  if grep -qF -- "$expected" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
+    echo "    did not expect to contain: $expected"
+    echo "    got: ${output:-<EMPTY>}"
+  else
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
+  fi
+}
+
 assert_empty_json() {
   local desc="$1" output="$2"
   if [ "$output" = "{}" ]; then
@@ -90,31 +91,25 @@ new_project() {
 }
 
 state_of() { printf '%s' "$1/.claude/jit-context/.discovery/state"; }
+log_of() { printf '%s' "$1/.claude/jit-context/.discovery/logs/hooks.log"; }
 
-# A REAL entry file under a project's 00-manual layer, so a fixture's marker-file name
-# corresponds to a file the new #291/#295 layer check can actually find. Every section
-# below that expects the fired-entries report to render gives each fired name a real
-# 00-manual file this way; a fired name with no matching call here has no file
-# anywhere and is exactly the #295 "plugin-owned, nobody to curate" case.
+# A REAL entry file under a project's 00-manual layer -- #299's `loc:` key already
+# says which layer a mark fired from, but a name-check by hand here still wants a
+# real file to exist so a fixture is not accidentally asserting about a file this
+# repository never created.
 manual_entry() {
   local p="$1" dim="$2" name="$3"
   local dir="$p/.claude/jit-context/$dim/00-manual"
-  # #312: mkdir -p forks a process every call; a directory that already exists
-  # (every call after a loop's first, e.g. section H's 600 and section O's 205)
-  # does not need it re-run. The -d check is a shell builtin, no fork -- same
-  # end state (dir exists, file truncated/created) on every call either way.
   [ -d "$dir" ] || mkdir -p "$dir"
   : > "$dir/$name"
 }
 
-# #300: JIT_CONTEXT_STOP_REPORT is off by default now, so every section below that
-# asserts model-facing MESSAGE CONTENT (as opposed to silence) needs this to reach the
-# behaviour it is actually testing. Written directly rather than through jit_load_config
-# -- this is a fixture, not a parser test; the parser itself is exercised separately
-# (section U).
-enable_stop_report() {
-  local p="$1"
-  printf 'JIT_CONTEXT_STOP_REPORT=1\n' > "$p/.claude/jit-context/config.env"
+# A generated (non-00-manual) entry -- stands in for #295's plugin-owned layer.
+auto_entry() {
+  local p="$1" dim="$2" layer="$3" name="$4"
+  local dir="$p/.claude/jit-context/$dim/$layer"
+  [ -d "$dir" ] || mkdir -p "$dir"
+  : > "$dir/$name"
 }
 
 run_stop() {
@@ -123,40 +118,36 @@ run_stop() {
     | CLAUDE_PROJECT_DIR="$p" bash "$SCRIPTS/stop-hook.sh" 2>&1
 }
 
-echo "=== A: entries fired, nothing edited -- one line, framed as informational (#292/#291) ==="
+echo "=== A: entries fired, nothing edited -- one line, the total only (#292/#367) ==="
 
 P="$(new_project a)"
-enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 manual_entry "$P" vocabulary cache.md
-printf 'bridge.md\ncache.md\n' > "$(state_of "$P")/vocab-shown-sess-a.txt"
+printf 'loc:vocabulary:00-manual:bridge.md\nloc:vocabulary:00-manual:cache.md\n' > "$(state_of "$P")/vocab-shown-sess-a.txt"
 OUT="$(run_stop "$P" "sess-a")"
 RC=$?
 assert_rc0 "the hook exits 0" "$RC"
-assert_contains "the message names the fired entry" "$OUT" "bridge.md"
-assert_contains "and the other one too" "$OUT" "cache.md"
-assert_contains "and says none were updated" "$OUT" "none updated"
-assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
-assert_contains "and says what it concerns (#291)" "$OUT" "entry files"
-assert_contains "and says it is not addressed to the reader (#291)" "$OUT" "not addressed to you"
+assert_contains "the message names the total" "$OUT" "2 entries this session"
+assert_not_contains "and never names a fired entry by name" "$OUT" "bridge.md"
+LOG_A="$(log_of "$P")"
+assert_contains "hooks.log carries the full split" "$(cat "$LOG_A")" "2 entries fired this session, 2 yours, 0 not yours, 0 unknown"
+assert_contains "and names the fired entries there" "$(cat "$LOG_A")" "bridge.md"
 if grep -qF -- '\n' <<< "$OUT"; then
   FAIL=$((FAIL + 1))
-  echo "  FAIL: the fired-entries message still renders as a multi-line list"
+  echo "  FAIL: the systemMessage line is not a single line"
 else
   PASS=$((PASS + 1))
-  echo "  PASS: the fired-entries message collapsed to one line"
+  echo "  PASS: the systemMessage line collapsed to one line"
 fi
 
 echo ""
 echo "=== B: entries fired, something WAS edited this session -- silence ==="
-# The healthy case. This is the pair to A: without it, a hook that always prints the
-# fired-entries line regardless of the edit marker would pass A by construction.
 
 P="$(new_project b)"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
-printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-b.txt"
+printf 'loc:vocabulary:00-manual:bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-b.txt"
 : > "$(state_of "$P")/edited-sess-b.txt"
 OUT="$(run_stop "$P" "sess-b")"
 RC=$?
@@ -175,13 +166,9 @@ assert_empty_json "the hook says nothing -- no injections this session" "$OUT"
 
 echo ""
 echo "=== D: an unwritable tree -- COULD NOT TELL, never silence ==="
-# The state directory degrades to empty on a checkout this process cannot write to
-# (common.sh). Nothing here can tell whether anything fired or was edited, and #244 is
-# explicit that this must not render as the clean case in B/C.
 
 D_SKIPPED=0
 P="$(new_project d)"
-enable_stop_report "$P"
 chmod 555 "$P/.claude/jit-context" 2> /dev/null
 if [ -w "$P/.claude/jit-context" ]; then
   D_SKIPPED=1
@@ -191,8 +178,7 @@ else
   OUT="$(run_stop "$P" "sess-d")"
   RC=$?
   assert_rc0 "the hook exits 0" "$RC"
-  assert_contains "it says it could not tell" "$OUT" "could not tell"
-  assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
+  assert_contains "it says it could not tell what fired" "$OUT" "cannot tell what fired"
   if [ "$OUT" = "{}" ]; then
     FAIL=$((FAIL + 1))
     echo "  FAIL: could-not-tell rendered as silence"
@@ -224,21 +210,20 @@ echo ""
 echo "=== F: sentinel keys in the shown marks are not reported as fired entries ==="
 
 P="$(new_project f)"
-enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
-printf 'bridge.md\njit-refused-vocab\njit-no-subject\n' > "$(state_of "$P")/vocab-shown-sess-f.txt"
+printf 'loc:vocabulary:00-manual:bridge.md\njit-refused-vocab\njit-no-subject\n' > "$(state_of "$P")/vocab-shown-sess-f.txt"
 OUT="$(run_stop "$P" "sess-f")"
 RC=$?
 assert_rc0 "the hook exits 0" "$RC"
-assert_contains "the real entry is named" "$OUT" "bridge.md"
+assert_contains "only the real entry is counted" "$OUT" "1 entry this session"
+LOG_F="$(log_of "$P")"
 SENTINEL_HIT=0
-grep -qF -- "jit-refused-vocab" <<< "$OUT" && SENTINEL_HIT=1
-grep -qF -- "jit-no-subject" <<< "$OUT" && SENTINEL_HIT=1
+grep -qF -- "jit-refused-vocab" "$LOG_F" && SENTINEL_HIT=1
+grep -qF -- "jit-no-subject" "$LOG_F" && SENTINEL_HIT=1
 if [ "$SENTINEL_HIT" = 1 ]; then
   FAIL=$((FAIL + 1))
-  echo "  FAIL: a sentinel key was reported as a fired entry"
-  echo "    got: $OUT"
+  echo "  FAIL: a sentinel key was reported as a fired entry in hooks.log"
 else
   PASS=$((PASS + 1))
   echo "  PASS: no sentinel key was reported as a fired entry"
@@ -248,47 +233,26 @@ echo ""
 echo "=== G: the same entry fired through both marker files is only counted once ==="
 
 P="$(new_project g)"
-enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
-printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-g.txt"
-printf 'bridge.md\n' > "$(state_of "$P")/path-shown-sess-g.txt"
+printf 'loc:vocabulary:00-manual:bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-g.txt"
+printf 'loc:vocabulary:00-manual:bridge.md\n' > "$(state_of "$P")/path-shown-sess-g.txt"
 OUT="$(run_stop "$P" "sess-g")"
 RC=$?
 assert_rc0 "the hook exits 0" "$RC"
-COUNT="$(grep -o 'bridge\.md' <<< "$OUT" | wc -l | tr -d ' ')"
-if [ "$COUNT" = "1" ]; then
-  PASS=$((PASS + 1))
-  echo "  PASS: the entry is listed exactly once"
-else
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: the entry appeared $COUNT times, expected 1"
-  echo "    got: $OUT"
-fi
+assert_contains "the total counts it once, not twice" "$OUT" "1 entry this session"
 
 echo ""
 echo "=== H: the dedup scan is bounded, not quadratic in an untrusted marker file ==="
-# The collection pass re-scans its own accumulator on every line (a plain `case`, no
-# associative array -- bash 3.2 has none); left unbounded that is quadratic in the
-# number of distinct names two marker files can hold. This does not prove the bound
-# fires at exactly the right count -- it proves a marker file bigger than any real
-# session produces still answers, and answers with every name accounted for one way
-# or the other (listed, or named in the overflow line). Every one of the 600 is also
-# given a real 00-manual file, since this section is about the bound, not about the
-# #291/#295 layer split -- sections Q/R below cover that split on their own, smaller
-# fixtures.
 
 P="$(new_project h)"
-enable_stop_report "$P"
-# #312: state_of runs via $( ), a subshell fork on every call -- hoisted once
-# outside the 600-iteration loop below instead of re-forked on each pass.
 H_STATE_DIR="$(state_of "$P")"
 mkdir -p "$H_STATE_DIR"
 JIT_HI=600
 _jit_seq=1
 : > "$H_STATE_DIR/vocab-shown-sess-h.txt"
 while [ "$_jit_seq" -le "$JIT_HI" ]; do
-  printf 'entry-%s.md\n' "$_jit_seq" >> "$H_STATE_DIR/vocab-shown-sess-h.txt"
+  printf 'loc:vocabulary:00-manual:entry-%s.md\n' "$_jit_seq" >> "$H_STATE_DIR/vocab-shown-sess-h.txt"
   manual_entry "$P" vocabulary "entry-$_jit_seq.md"
   _jit_seq=$((_jit_seq + 1))
 done
@@ -296,69 +260,40 @@ unset H_STATE_DIR
 OUT="$(run_stop "$P" "sess-h")"
 RC=$?
 assert_rc0 "the hook exits 0 on 600 distinct fired entries" "$RC"
-assert_contains "the reported total accounts for all 600" "$OUT" "$JIT_HI entries injected"
-assert_contains "the overflow past the cap is named, not silently dropped" "$OUT" "more past this hook's own"
-# Explore self-review finding: 100 of the 600 fired names sit past JIT_FIRED_MAX (500)
-# and are never individually checked against 00-manual, so even though every one of
-# the 600 genuinely has a real 00-manual file, the reported count must not claim
-# certainty it does not have -- "at least 500", never a flat "500", and the mixed
-# wording (never the flat "none updated" sentence, which would claim the overflow
-# names could not possibly be the reader's own).
-assert_contains "the overflow forces the split wording, not the flat 'none updated' claim" "$OUT" "of them yours and not updated"
-assert_contains "the checked-manual count is hedged as a floor, not an exact claim" "$OUT" "at least 500 of them yours"
-if grep -qF -- ": $JIT_HI entries injected this session, none updated" <<< "$OUT"; then
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: an overflowed session rendered the flat all-yours sentence"
-else
-  PASS=$((PASS + 1))
-  echo "  PASS: an overflowed session did not render the flat all-yours sentence"
-fi
+assert_contains "the reported total accounts for all 600" "$OUT" "$JIT_HI entries this session"
+LOG_H="$(log_of "$P")"
+assert_contains "hooks.log names the overflow past the cap, not silently dropped" "$(cat "$LOG_H")" "more past this hook's own"
 
 echo ""
 echo "=== I: stop_hook_active=true -- a re-entry caused by this hook's own output, never re-report ==="
-# #279: the harness re-invokes Stop when a previous Stop's own additionalContext blocked
-# the turn from ending, and sets stop_hook_active=true on that re-entry. Section A is this
-# case's positive control on the same code path: the same fired-entries fixture, with
-# stop_hook_active=false, must still produce the fired-entries line. Without that pairing
-# this assertion would pass for free if the hook simply exited early on a malformed payload.
 
 P="$(new_project i)"
 mkdir -p "$(state_of "$P")"
-printf 'bridge.md\ncache.md\n' > "$(state_of "$P")/vocab-shown-sess-i.txt"
+printf 'loc:vocabulary:00-manual:bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-i.txt"
 OUT="$(run_stop "$P" "sess-i" "true")"
 RC=$?
 assert_rc0 "the hook exits 0" "$RC"
-assert_empty_json "stop_hook_active=true means no additionalContext, even though entries fired" "$OUT"
+assert_empty_json "stop_hook_active=true means no systemMessage, even though entries fired" "$OUT"
 
 echo ""
 echo "=== J: stop_hook_active is missing from the payload entirely -- treated as false ==="
-# A distinct code path from I/A explicit false: jit_stop_hook_active() falls off its own
-# scan loop and returns 0 via the final fallthrough, never matching the key at all. An
-# older harness, or a hand-run reproduction, can omit the field outright.
 
 P="$(new_project j)"
-enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
-printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-j.txt"
+printf 'loc:vocabulary:00-manual:bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-j.txt"
 OUT="$(printf '{"session_id":"sess-j","hook_event_name":"Stop"}' \
   | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" 2>&1)"
 RC=$?
 assert_rc0 "the hook exits 0" "$RC"
-assert_contains "a payload with no stop_hook_active key at all still reports" "$OUT" "bridge.md"
+assert_contains "a payload with no stop_hook_active key at all still reports" "$OUT" "1 entry this session"
 
 echo ""
 echo "=== K: an escaped quote earlier in the payload must not desync the field scan ==="
-# jit_json_fields() merges raw[] segments across an escaped quote, so its LOGICAL field
-# count (n) can sit below the PHYSICAL raw[] position stop_hook_active own value lives
-# at. A bound check written against n instead of the physical array would refuse a
-# genuinely in-range raw[] read and misreport a real true as false here -- silently
-# reopening #279 for exactly the sessions whose cwd or transcript_path contains a
-# literal double quote.
 
 P="$(new_project k)"
 mkdir -p "$(state_of "$P")"
-printf 'bridge.md\ncache.md\n' > "$(state_of "$P")/vocab-shown-sess-k.txt"
+printf 'loc:vocabulary:00-manual:bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-k.txt"
 OUT="$(printf '{"session_id":"sess-k","cwd":"C:\\quo\\"te","stop_hook_active":true}' \
   | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" 2>&1)"
 RC=$?
@@ -367,17 +302,10 @@ assert_empty_json "an escaped quote ahead of stop_hook_active does not hide a re
 
 echo ""
 echo "=== L: awk cannot run at all -- unknown, not false, taking the safe (true-like) silent branch (#284) ==="
-# The parsed STOP_HOOK_ACTIVE variable is empty when the awk parse cannot run at all
-# (stub awk, a broken interpreter). Reading that empty string identically to a parsed
-# "false" falls through to the "could not tell" branch further down, which EMITS
-# additionalContext -- exactly the output that blocks a turn from ending and reopens
-# #279's re-entry loop, in the one state where the hook is least able to notice. A
-# third value, distinct from both true and false, must take the SAME silent early
-# return "true" does.
 
 P="$(new_project l)"
 mkdir -p "$(state_of "$P")"
-printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-l.txt"
+printf 'loc:vocabulary:00-manual:bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-l.txt"
 FAKE_AWK_DIR="$TMP/fake-awk-l"
 mkdir -p "$FAKE_AWK_DIR"
 cat > "$FAKE_AWK_DIR/awk" << 'FAKE_AWK'
@@ -389,43 +317,31 @@ OUT="$(printf '{"session_id":"sess-l","stop_hook_active":true}' \
   | PATH="$FAKE_AWK_DIR:$PATH" CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" 2>&1)"
 RC=$?
 assert_rc0 "the hook exits 0" "$RC"
-assert_empty_json "an unusable awk renders as silence, never as the could-not-tell additionalContext" "$OUT"
+assert_empty_json "an unusable awk renders as silence, never as the could-not-tell systemMessage" "$OUT"
 
 echo ""
 echo "=== M: a fired session with a REAL awk and stop_hook_active=false is the positive control for L ==="
-# Without this pairing, L would pass for free if the fix simply silenced this hook
-# whenever anything at all goes wrong -- section A already proves the ordinary awk
-# path still reports; this repeats that proof with the SAME fixture shape as L (a
-# single fired entry) so a reader can compare the two runs directly.
 
 P="$(new_project m)"
-enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
-printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-m.txt"
+printf 'loc:vocabulary:00-manual:bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-m.txt"
 OUT="$(run_stop "$P" "sess-m")"
 RC=$?
 assert_rc0 "the hook exits 0" "$RC"
-assert_contains "a real awk on the same fixture shape still reports the fired entry" "$OUT" "bridge.md"
+assert_contains "a real awk on the same fixture shape still reports the fired entry" "$OUT" "1 entry this session"
 
 echo ""
 echo "=== N: a symlink-refused edit marker (#285) renders as its own fourth state, distinct from B and D ==="
-# post-tool-hook.sh drops a distinguishable declined-marker when its own symlink guard
-# trips on the edit marker's write. This must render differently from B (nothing was
-# edited at all) and from D (the state directory itself could not be trusted) -- a
-# reader must be able to tell "an edit happened but its evidence was refused" apart
-# from both.
 
 P="$(new_project n)"
-enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
-printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-n.txt"
+printf 'loc:vocabulary:00-manual:bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-n.txt"
 : > "$(state_of "$P")/edited-declined-sess-n.txt"
 OUT="$(run_stop "$P" "sess-n")"
 RC=$?
 assert_rc0 "the hook exits 0" "$RC"
-assert_contains "it says an edit could not be confirmed" "$OUT" "could not be confirmed"
-assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
+assert_contains "it says an edit could not be confirmed" "$OUT" "may not have been recorded"
 if [ "$OUT" = "{}" ]; then
   FAIL=$((FAIL + 1))
   echo "  FAIL: the declined-marker state rendered as silence"
@@ -433,45 +349,23 @@ else
   PASS=$((PASS + 1))
   echo "  PASS: the declined-marker state did not render as silence"
 fi
-if grep -qF -- "none updated" <<< "$OUT"; then
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: the declined-marker state rendered identically to case B (none updated)"
-else
-  PASS=$((PASS + 1))
-  echo "  PASS: the declined-marker state text differs from case B"
-fi
-if grep -qF -- "could not tell whether any entry fired" <<< "$OUT"; then
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: the declined-marker state rendered identically to case D (state dir unknown)"
-else
-  PASS=$((PASS + 1))
-  echo "  PASS: the declined-marker state text differs from case D"
-fi
+assert_not_contains "the declined-marker state text differs from case D" "$OUT" "could not tell what fired"
 
 echo ""
-echo "=== O: past the 200-name cap -- the cap bounds the model line only, never hooks.log ==="
-# #292's own review round (self-review) caught two regressions the first pass of this
-# change introduced: an off-by-one that dropped the 200th fired entry's name from the
-# model-facing line while still logging it (so the "N more" tail undercounted by one),
-# and the SAME 200-entry cap silently truncating hooks.log too -- contradicting the
-# model line's own "see hooks.log" pointer, since hooks.log never had the rest either.
-# 205 fired entries: the model line must name exactly entries 1-200 and say "5 more";
-# hooks.log must carry all 205, entry 200 and entry 205 both included. Every one of the
-# 205 gets a real 00-manual file for the same reason section H does.
+echo "=== O: past the 200-name cap -- the cap bounds hooks.log's model-facing twin, not hooks.log itself ==="
+# #292's own review caught the 200-cap silently truncating hooks.log too -- 205 fired
+# entries: hooks.log must carry all 205, entry 200 and entry 205 both included, and the
+# systemMessage total must be the true 205, not capped at 200 (the cap in this design
+# only ever bounded the now-removed per-name list, never the total itself).
 
 P="$(new_project o)"
-enable_stop_report "$P"
-# #312: state_of runs via $( ), a subshell fork on every call -- hoisted once
-# outside the 205-iteration loop below instead of re-forked on each pass.
 O_STATE_DIR="$(state_of "$P")"
 mkdir -p "$O_STATE_DIR"
 : > "$O_STATE_DIR/vocab-shown-sess-o.txt"
 _jit_o=1
 while [ "$_jit_o" -le 205 ]; do
-  # printf -v is a shell builtin (no fork), unlike the $( ) command
-  # substitution this replaced -- same formatted name, no subshell per iteration.
   printf -v _jit_o_name 'entry-%03d.md' "$_jit_o"
-  printf '%s\n' "$_jit_o_name" >> "$O_STATE_DIR/vocab-shown-sess-o.txt"
+  printf 'loc:vocabulary:00-manual:%s\n' "$_jit_o_name" >> "$O_STATE_DIR/vocab-shown-sess-o.txt"
   manual_entry "$P" vocabulary "$_jit_o_name"
   _jit_o=$((_jit_o + 1))
 done
@@ -479,19 +373,11 @@ unset _jit_o _jit_o_name O_STATE_DIR
 OUT="$(run_stop "$P" "sess-o")"
 RC=$?
 assert_rc0 "the hook exits 0" "$RC"
-assert_contains "the model line names entry 200 (the cap boundary itself)" "$OUT" "entry-200.md"
-assert_contains "the model line's overflow tail accounts for exactly the other 5" "$OUT" "and 5 more"
-if grep -qF -- "entry-201.md" <<< "$OUT"; then
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: the model line named an entry past the 200 cap"
-else
-  PASS=$((PASS + 1))
-  echo "  PASS: the model line names nothing past the 200 cap"
-fi
-LOG="$P/.claude/jit-context/.discovery/logs/hooks.log"
-if [ -f "$LOG" ]; then
-  assert_contains "hooks.log carries entry 200" "$(cat "$LOG")" "entry-200.md"
-  assert_contains "hooks.log carries entry 205 too -- the model-line cap does not truncate the log" "$(cat "$LOG")" "entry-205.md"
+assert_contains "the systemMessage total is the true 205, not capped at 200" "$OUT" "205 entries this session"
+LOG_O="$(log_of "$P")"
+if [ -f "$LOG_O" ]; then
+  assert_contains "hooks.log carries entry 200" "$(cat "$LOG_O")" "entry-200.md"
+  assert_contains "hooks.log carries entry 205 too -- the 200-cap does not truncate the log" "$(cat "$LOG_O")" "entry-205.md"
 else
   FAIL=$((FAIL + 1))
   echo "  FAIL: hooks.log was not written at all for a fired session"
@@ -499,33 +385,6 @@ fi
 
 echo ""
 echo "=== P: awk engine matrix -- a raw NUL ahead of stop_hook_active desyncs a NUL-truncating awk (#287) ==="
-# Measured in the 0.7.1 gate-3 audit across the three awks on that machine: a raw NUL
-# byte placed in cwd, ahead of the "stop_hook_active" key, is read correctly by an awk
-# that carries an embedded NUL through getline (gawk, mawk on that machine) but truncates
-# the accumulated input record under one-true-awk, so jit_json_fields() never reaches the
-# key at all -- it reads as ABSENT, which jit_stop_hook_active()'s own fallthrough
-# renders as false, not as unknown. The real stop_hook_active:true is lost and this
-# session's fired entries are reported: the exact re-entry shape #279/#284 exist to
-# prevent.
-#
-# Filed informational rather than a misreport at weight: RFC 8259 forbids a raw NUL
-# inside a JSON string and the real harness never emits one -- it escapes the byte
-# instead -- so this input is not reachable through the real producer. Still worth
-# pinning: the macos-latest CI leg's plain `awk` truncates, and nothing before this
-# asserted the divergence, so a change that made the input reachable would not be caught.
-#
-# WHICH engine truncates is a property of the BINARY, not of the PATH name it answers to
-# on a given platform -- Debian/Ubuntu's default `/usr/bin/awk` is mawk (NUL-transparent),
-# not one-true-awk, and Git Bash on Windows ships only a gawk-backed `awk` with no
-# separate gawk/nawk/mawk binary at all. A first draft of this section keyed the expected
-# assertion off the candidate NAME (`awk` => expect truncation, `gawk`/`mawk` => expect
-# transparency) and would have asserted the wrong thing, loudly, on both of those --
-# self-review (an Explore reviewer and oss:auditor, run in parallel against the committed
-# diff) caught it before this shipped. Classified by a tiny probe instead:
-# `length($0)` on a 3-byte NUL-carrying record is 1 if the read truncated at the NUL, 3
-# if the engine carried it through -- this needs no shell variable to hold the raw byte,
-# only the printed digit, so it is exempt from the very $( ) truncation this file's own
-# convention warns about.
 ENGINE_BIN=$(mktemp -d)
 ENGINES=""
 ENGINE_SEEN=""
@@ -543,29 +402,16 @@ if [ -z "$ENGINES" ]; then
   echo "  SKIP-NOTE: no awk/gawk/nawk/mawk found on PATH -- this section could not run"
 else
   P="$(new_project p)"
-  enable_stop_report "$P"
   mkdir -p "$(state_of "$P")"
-  # #291/#295 (rebase note): stop-hook.sh now only renders the fired-entries report
-  # when at least one fired name is backed by a real 00-manual file -- otherwise it
-  # is the new "nothing to curate" silence, which would swallow this section's own
-  # leaking-case assertion below before it ever reaches the awk-truncation code path
-  # this section exists to pin. bridge.md needs a real file for the same reason every
-  # other report-expecting section in this file does.
   manual_entry "$P" vocabulary bridge.md
-  printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-p.txt"
+  printf 'loc:vocabulary:00-manual:bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-p.txt"
 
-  # Written straight to a file with printf's own octal escape, never through a shell
-  # variable or a $( ) capture -- bash truncates a variable at an embedded NUL the same
-  # way this hook's own captures would (paths/00-manual/tests.md), which would make the
-  # byte disappear before any engine ever saw it.
   NUL_PAYLOAD="$TMP/nul-payload-p.json"
   printf '{"session_id":"sess-p","cwd":"/x\000y","stop_hook_active":true}' > "$NUL_PAYLOAD"
 
   P_SAW_TRUNCATING=0
   P_SAW_TRANSPARENT=0
   for eng in $ENGINES; do
-    # The classifying probe: 3 bytes in, and only the DIGIT crosses back through $( ),
-    # never the NUL itself.
     P_LEN="$(printf 'a\000b' | PATH="$ENGINE_BIN/$eng:$PATH" awk '{print length($0)}' 2> /dev/null)"
     OUT="$(PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/stop-hook.sh" < "$NUL_PAYLOAD" 2>&1)"
     RC=$?
@@ -573,7 +419,7 @@ else
     case "$P_LEN" in
       1)
         P_SAW_TRUNCATING=1
-        assert_contains "[$eng, measured NUL-truncating] a NUL ahead of the key hides the real stop_hook_active:true and the fired report leaks through (#287)" "$OUT" "bridge.md"
+        assert_contains "[$eng, measured NUL-truncating] a NUL ahead of the key hides the real stop_hook_active:true and the fired report leaks through (#287)" "$OUT" "1 entry this session"
         ;;
       3)
         P_SAW_TRANSPARENT=1
@@ -596,288 +442,215 @@ rm -rf "$ENGINE_BIN"
 unset ENGINE_BIN ENGINES ENGINE_SEEN cand cand_path NUL_PAYLOAD
 
 echo ""
-echo "=== Q: every fired entry is outside 00-manual -- silence, there is nobody to curate it (#295) ==="
-# #295's measured corpus: a real project where every one of 8 indexed entries came
-# from a plugin-owned layer and the project had no 00-manual layer at all. There is no
-# file here this reader owns or could edit, so this is the SAME "nothing to compare"
-# case section C already stays silent for -- not the "fired and none updated" case,
-# because updating is not something the reader of this message can do.
+echo "=== Q: #299 -- a loc: mark outside 00-manual is 'not yours', a bare mark is 'unknown', never guessed either way ==="
+# The fixture #299 itself asks for: one loc:-keyed 00-manual mark (yours), one
+# loc:-keyed mark in a different layer (not yours), and one bare mark -- as an older
+# hook, earlier in the same session, would have written (unknown) -- asserted
+# together in ONE hooks.log message so a two-state result (which is exactly the shape
+# of the original bug) cannot pass this test by accident.
 
 P="$(new_project q)"
 mkdir -p "$(state_of "$P")"
-# "auto-entry.md" fires but is never created under 00-manual anywhere -- it stands in
-# for #295's plugin-owned layer (e.g. 01-oss), where the file exists but not there.
-printf 'auto-entry.md\n' > "$(state_of "$P")/vocab-shown-sess-q.txt"
+manual_entry "$P" vocabulary bridge.md
+auto_entry "$P" vocabulary 30-crosscutting auto-entry.md
+printf 'loc:vocabulary:00-manual:bridge.md\nloc:vocabulary:30-crosscutting:auto-entry.md\nold-style.md\n' \
+  > "$(state_of "$P")/vocab-shown-sess-q.txt"
 OUT="$(run_stop "$P" "sess-q")"
 RC=$?
 assert_rc0 "the hook exits 0" "$RC"
-assert_empty_json "the hook says nothing -- nothing fired is the reader's to curate" "$OUT"
+assert_contains "the total counts all three" "$OUT" "3 entries this session"
+LOG_Q="$(log_of "$P")"
+assert_contains "hooks.log states all three counts in one message" "$(cat "$LOG_Q")" "1 yours, 1 not yours, 1 unknown"
+assert_contains "and names the yours entry" "$(cat "$LOG_Q")" "bridge.md"
+assert_contains "and names the not-yours entry with its layer" "$(cat "$LOG_Q")" "auto-entry.md [30-crosscutting]"
+assert_contains "and names the unknown (bare) entry as such" "$(cat "$LOG_Q")" "old-style.md [unknown: marker from an older hook this session]"
 
 echo ""
-echo "=== R: a mixed session -- some 00-manual, some not -- reports the split, not a flat count (#295) ==="
-# #295's own suggested wording: "3 entries injected, 1 of them yours and not updated".
-# The number has to name something the reader can act on -- the flat "2 entries
-# injected... none updated" from before this fix would ask the reader to curate a file
-# (auto-entry.md) that is not theirs to edit.
+echo "=== R: #299 -- rector.md: two entries sharing a basename across LAYERS of one dimension are not collapsed ==="
+# The exact shape #299 measured live: a generated vocabulary/10-auto entry and a
+# hand-written vocabulary/00-manual entry share one file name. Both must be counted
+# (the cross-file/cross-layer dedup #299 asks to verify), and hooks.log must be able
+# to tell them apart.
 
 P="$(new_project r)"
-enable_stop_report "$P"
 mkdir -p "$(state_of "$P")"
-manual_entry "$P" vocabulary bridge.md
-printf 'bridge.md\nauto-entry.md\n' > "$(state_of "$P")/vocab-shown-sess-r.txt"
+manual_entry "$P" vocabulary rector.md
+auto_entry "$P" vocabulary 10-auto rector.md
+printf 'loc:vocabulary:00-manual:rector.md\nloc:vocabulary:10-auto:rector.md\n' > "$(state_of "$P")/vocab-shown-sess-r.txt"
 OUT="$(run_stop "$P" "sess-r")"
 RC=$?
 assert_rc0 "the hook exits 0" "$RC"
-assert_contains "the total names both fired entries" "$OUT" "2 entries injected"
-assert_contains "the split names exactly the one the reader owns" "$OUT" "1 of them yours and not updated"
-assert_contains "the owned entry is still named in the fired list" "$OUT" "bridge.md"
-assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
-assert_contains "and says it is not addressed to the reader (#291)" "$OUT" "not addressed to you"
-if grep -qF -- ": 2 entries injected this session, none updated" <<< "$OUT"; then
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: a mixed session rendered as the flat all-yours sentence"
-else
-  PASS=$((PASS + 1))
-  echo "  PASS: a mixed session did not render as the flat all-yours sentence"
-fi
+assert_contains "both same-named entries are counted -- not collapsed into one" "$OUT" "2 entries this session"
+LOG_R="$(log_of "$P")"
+assert_contains "hooks.log carries one as yours" "$(cat "$LOG_R")" "1 yours, 1 not yours, 0 unknown"
 
 echo ""
-echo "=== S: a 00-manual directory that cannot be READ -- COULD NOT TELL, never silence ==="
-# Self-review (oss:auditor) on this same change (#291/#295) caught this: the membership
-# scan added above globs each dimension's 00-manual directory, and a directory that
-# exists but cannot be opened (permissions, not absence) makes that glob return nothing
-# -- silently, with no distinguishable signal. That is byte-identical to a 00-manual
-# layer that genuinely holds nothing manual, so a session where the fired entry MIGHT be
-# the reader's own, but this run could not tell, was rendering as the Q/R silent case
-# above. #244's own three-states rule already refuses exactly this shape for the state
-# directory (section D); this fixture forces the same refusal for the 00-manual layer
-# the new scan reads.
+echo "=== S: #299 -- a fired tools entry is tagged, and rendered by its real name (#297) ==="
 
-S_SKIPPED=0
 P="$(new_project s)"
-enable_stop_report "$P"
+mkdir -p "$(state_of "$P")"
+manual_entry "$P" tools how-work-lands.md
+manual_entry "$P" vocabulary bridge.md
+printf 'loc:vocabulary:00-manual:bridge.md\nloc:tools:00-manual:how-work-lands.md\n' > "$(state_of "$P")/vocab-shown-sess-s.txt"
+OUT="$(run_stop "$P" "sess-s")"
+RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_contains "the total counts both" "$OUT" "2 entries this session"
+LOG_S="$(log_of "$P")"
+assert_contains "the tools entry's real name is in hooks.log" "$(cat "$LOG_S")" "how-work-lands.md"
+assert_contains "and tagged with its dimension (#297 direction 2)" "$(cat "$LOG_S")" "how-work-lands.md (tools)"
+assert_not_contains "no withheld placeholder for a well-formed tools entry" "$(cat "$LOG_S")" '<withheld'
+
+echo ""
+echo "=== S2: #299 -- a malformed loc: mark degrades to unknown, never to a confident 'yours' ==="
+# Self-review finding on the first cut of this change: only the NAME component was
+# validated, so "loc::00-manual:foo.md" -- an empty dimension, which no writer here
+# produces but a hand-edited or truncated marker can -- was classified as the reader's
+# own with full confidence, off a layer field nothing had vouched for. Both halves the
+# classification is read off are checked now, and anything else is UNKNOWN. The
+# positive control is the well-formed mark beside it: without that pair, "nothing was
+# reported as yours" would also be true of a hook that classified nothing at all.
+
+P="$(new_project s2)"
+mkdir -p "$(state_of "$P")"
+manual_entry "$P" vocabulary bridge.md
+printf 'loc:vocabulary:00-manual:bridge.md\nloc::00-manual:forged.md\nloc:vocabulary::alsoforged.md\n' \
+  > "$(state_of "$P")/vocab-shown-sess-s2.txt"
+OUT="$(run_stop "$P" "sess-s2")"
+RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_contains "all three are counted" "$OUT" "3 entries this session"
+assert_contains "and the two malformed ones are hedged, not claimed" "$OUT" "2 of unknown origin"
+LOG_S2="$(log_of "$P")"
+assert_contains "hooks.log claims exactly the one well-formed mark as yours" "$(cat "$LOG_S2")" "1 yours, 0 not yours, 2 unknown"
+assert_contains "the well-formed entry is still named (positive control)" "$(cat "$LOG_S2")" "bridge.md"
+
+echo ""
+echo "=== S3: #299/#297 -- a legacy rule: mark from a pre-#299 hook keeps its real name ==="
+# The mixed-version window this change creates: a hook from before #299 fired earlier
+# in the same session and wrote #297's "rule:<file>" key. Dropping #297's own strip
+# put the literal "rule:adv.md" -- colon included -- through jit_report_name(), which
+# refuses that byte, so every such mark rendered as "<withheld: not a plain name>":
+# #297's exact defect, reintroduced for the transitional case. The prefix says `tools`
+# and says nothing about a layer, so the dimension is kept and the class stays unknown.
+
+P="$(new_project s3)"
+mkdir -p "$(state_of "$P")"
+manual_entry "$P" tools legacy-rule.md
+printf 'rule:legacy-rule.md\n' > "$(state_of "$P")/vocab-shown-sess-s3.txt"
+OUT="$(run_stop "$P" "sess-s3")"
+RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_contains "it is counted" "$OUT" "1 entry this session"
+assert_contains "and hedged, because a rule: key carries no layer" "$OUT" "1 of unknown origin"
+LOG_S3="$(log_of "$P")"
+assert_contains "hooks.log prints its real name, not the withheld placeholder" "$(cat "$LOG_S3")" "legacy-rule.md"
+assert_contains "tagged with the dimension the prefix does establish" "$(cat "$LOG_S3")" "legacy-rule.md (tools)"
+assert_not_contains "and never renders as withheld (#297's own defect shape)" "$(cat "$LOG_S3")" "<withheld"
+
+echo ""
+echo "=== T: an unreadable 00-manual directory no longer destroys an answer the marks already carry ==="
+# This section used to assert the OPPOSITE, and asserting it is how the regression got
+# in: before #299, globbing 00-manual was the only way to answer "is this fired name
+# the reader's own", so a directory that existed and could not be opened genuinely made
+# the answer unknowable. A `loc:` mark answers that by itself now -- the layer is IN
+# the mark -- so the old scan decided nothing and cost plenty: any one unreadable
+# 00-manual directory, in any dimension, even one holding nothing that fired, replaced
+# a fully known Y/N/U split with "cannot tell" and returned before hooks.log was
+# written at all. A reviewer on this change caught the test encoding that as intended.
+#
+# What must hold instead: the classification is unchanged by the directory mode, and
+# hooks.log still gets its line.
+
+T_SKIPPED=0
+P="$(new_project t)"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary blocked.md
-printf 'blocked.md\n' > "$(state_of "$P")/vocab-shown-sess-s.txt"
+printf 'loc:vocabulary:00-manual:blocked.md\n' > "$(state_of "$P")/vocab-shown-sess-t.txt"
 chmod 000 "$P/.claude/jit-context/vocabulary/00-manual" 2> /dev/null
 if [ -r "$P/.claude/jit-context/vocabulary/00-manual" ]; then
-  S_SKIPPED=1
+  T_SKIPPED=1
   echo "  SKIP-NOTE: chmod did not remove read permission here (running as root, or a"
-  echo "             filesystem without POSIX modes). Section S tested nothing."
+  echo "             filesystem without POSIX modes). Section T tested nothing."
 else
-  OUT="$(run_stop "$P" "sess-s")"
+  OUT="$(run_stop "$P" "sess-t")"
   RC=$?
   assert_rc0 "the hook exits 0" "$RC"
-  assert_contains "it says it could not tell" "$OUT" "could not tell"
-  assert_contains "and frames itself as informational, not an instruction" "$OUT" "no action needed"
-  if [ "$OUT" = "{}" ]; then
-    FAIL=$((FAIL + 1))
-    echo "  FAIL: an unreadable 00-manual directory rendered as silence"
+  assert_contains "the entry is still counted" "$OUT" "1 entry this session"
+  assert_not_contains "and nothing is hedged -- the mark said which layer it fired from" "$OUT" "unknown origin"
+  LOG_T="$(log_of "$P")"
+  if [ -f "$LOG_T" ]; then
+    assert_contains "hooks.log still carries the split an unreadable directory used to swallow" "$(cat "$LOG_T")" "1 yours, 0 not yours, 0 unknown"
   else
-    PASS=$((PASS + 1))
-    echo "  PASS: an unreadable 00-manual directory did not render as silence"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: hooks.log was not written at all -- the old early-return is still there"
   fi
 fi
 chmod 755 "$P/.claude/jit-context/vocabulary/00-manual" 2> /dev/null
 
 echo ""
-echo "=== T: #300 -- default (no config.env at all) is OFF: the none-updated shape emits {}, hooks.log still gets the line ==="
-# The exact fixture from section A, its own positive control for this state, minus
-# enable_stop_report -- proving the SAME fired/none-updated session that produces a
-# message with the flag on produces {} with no config.env at all, which is the
-# documented default. hooks.log must still carry the line: #300 is explicit that the
-# signal moves to the reader who wants it, it is not deleted.
-
-P="$(new_project t)"
-mkdir -p "$(state_of "$P")"
-manual_entry "$P" vocabulary bridge.md
-manual_entry "$P" vocabulary cache.md
-printf 'bridge.md\ncache.md\n' > "$(state_of "$P")/vocab-shown-sess-t.txt"
-OUT="$(run_stop "$P" "sess-t")"
-RC=$?
-assert_rc0 "the hook exits 0" "$RC"
-assert_empty_json "no config.env at all -- the report is silent by default" "$OUT"
-LOG_T="$P/.claude/jit-context/.discovery/logs/hooks.log"
-if [ -f "$LOG_T" ]; then
-  assert_contains "hooks.log still gets the fired-entries line with the report off" "$(cat "$LOG_T")" "none updated"
-  assert_contains "and still names the fired entries" "$(cat "$LOG_T")" "bridge.md"
-else
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: hooks.log was not written even though the report is only silenced, not disabled"
-fi
-
-echo ""
-echo "=== U: #300 -- JIT_CONTEXT_STOP_REPORT=0 explicit is the same OFF state as absent ==="
-# The same fixture again, this time with config.env explicitly writing 0 rather than
-# omitting the file -- proving the explicit off value takes the identical branch as
-# no config.env at all (section T), not some other silent-but-different path.
+echo "=== U: JIT_CONTEXT_STATUS=off -- every shape above is silent, hooks.log is unaffected ==="
 
 P="$(new_project u)"
-printf 'JIT_CONTEXT_STOP_REPORT=0\n' > "$P/.claude/jit-context/config.env"
+printf 'JIT_CONTEXT_STATUS=off\n' > "$P/.claude/jit-context/config.env"
 mkdir -p "$(state_of "$P")"
 manual_entry "$P" vocabulary bridge.md
 manual_entry "$P" vocabulary cache.md
-printf 'bridge.md\ncache.md\n' > "$(state_of "$P")/vocab-shown-sess-u.txt"
+printf 'loc:vocabulary:00-manual:bridge.md\nloc:vocabulary:00-manual:cache.md\n' > "$(state_of "$P")/vocab-shown-sess-u.txt"
 OUT="$(run_stop "$P" "sess-u")"
 RC=$?
 assert_rc0 "the hook exits 0" "$RC"
-assert_empty_json "JIT_CONTEXT_STOP_REPORT=0 -- the report stays silent" "$OUT"
-LOG_U="$P/.claude/jit-context/.discovery/logs/hooks.log"
+assert_empty_json "JIT_CONTEXT_STATUS=off -- the systemMessage is silent" "$OUT"
+LOG_U="$(log_of "$P")"
 if [ -f "$LOG_U" ]; then
-  assert_contains "hooks.log still gets the fired-entries line with =0" "$(cat "$LOG_U")" "none updated"
+  assert_contains "hooks.log still gets the fired-entries line with the status off" "$(cat "$LOG_U")" "yours"
+  assert_contains "and still names the fired entries" "$(cat "$LOG_U")" "bridge.md"
 else
   FAIL=$((FAIL + 1))
-  echo "  FAIL: hooks.log was not written with JIT_CONTEXT_STOP_REPORT=0"
+  echo "  FAIL: hooks.log was not written even though systemMessage is only silenced, not disabled"
 fi
 
 echo ""
-echo "=== V: #300 -- the state-dir-unknown could-not-tell shape is silent by default too (twin of D) ==="
-# Section D's own fixture, minus enable_stop_report: proving the report-off gate
-# reaches the could-not-tell branches too, not only the ordinary fired/none-updated
-# one -- #300 is explicit that all five shapes are gated, not just the headline one.
+echo "=== V: JIT_CONTEXT_STATUS=fired -- Stop's own line is the same total as summary, no per-name list ==="
 
-V_SKIPPED=0
 P="$(new_project v)"
-chmod 555 "$P/.claude/jit-context" 2> /dev/null
-if [ -w "$P/.claude/jit-context" ]; then
-  V_SKIPPED=1
-  echo "  SKIP-NOTE: chmod did not remove write permission here (running as root, or a"
-  echo "             filesystem without POSIX modes). Section V tested nothing."
-else
-  OUT="$(run_stop "$P" "sess-v")"
-  RC=$?
-  assert_rc0 "the hook exits 0" "$RC"
-  assert_empty_json "the state-dir-unknown shape is silent with the report off" "$OUT"
-fi
-chmod 755 "$P/.claude/jit-context" 2> /dev/null
+printf 'JIT_CONTEXT_STATUS=fired\n' > "$P/.claude/jit-context/config.env"
+mkdir -p "$(state_of "$P")"
+manual_entry "$P" vocabulary bridge.md
+printf 'loc:vocabulary:00-manual:bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-v.txt"
+OUT="$(run_stop "$P" "sess-v")"
+RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_contains "fired mode still gives Stop just the total" "$OUT" "1 entry this session"
+assert_not_contains "never a per-entry name on the Stop line itself" "$OUT" "bridge.md"
 
 echo ""
-echo "=== W: #300 -- the edit-declined shape is silent by default too (twin of N) ==="
+echo "=== W: an unparseable JIT_CONTEXT_STATUS value is refused, not silently read as any mode ==="
 
 P="$(new_project w)"
+printf 'JIT_CONTEXT_STATUS=chatty\n' > "$P/.claude/jit-context/config.env"
 mkdir -p "$(state_of "$P")"
-printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-w.txt"
-: > "$(state_of "$P")/edited-declined-sess-w.txt"
+manual_entry "$P" vocabulary bridge.md
+printf 'loc:vocabulary:00-manual:bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-w.txt"
 OUT="$(run_stop "$P" "sess-w")"
 RC=$?
 assert_rc0 "the hook exits 0" "$RC"
-assert_empty_json "the edit-declined shape is silent with the report off" "$OUT"
-
-echo ""
-echo "=== X: #300 -- the mixed (some-yours) shape is silent by default too, hooks.log still carries the split (twin of R) ==="
-
-P="$(new_project x)"
-mkdir -p "$(state_of "$P")"
-manual_entry "$P" vocabulary bridge.md
-printf 'bridge.md\nauto-entry.md\n' > "$(state_of "$P")/vocab-shown-sess-x.txt"
-OUT="$(run_stop "$P" "sess-x")"
-RC=$?
-assert_rc0 "the hook exits 0" "$RC"
-assert_empty_json "the mixed shape is silent with the report off" "$OUT"
-LOG_X="$P/.claude/jit-context/.discovery/logs/hooks.log"
-if [ -f "$LOG_X" ]; then
-  assert_contains "hooks.log still carries the split with the report off" "$(cat "$LOG_X")" "of them yours and not updated"
-else
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: hooks.log was not written for a mixed session with the report off"
-fi
-
-echo ""
-echo "=== Y: #300 -- the 00-manual-unreadable could-not-tell shape is silent by default too (twin of S) ==="
-
-Y_SKIPPED=0
-P="$(new_project y)"
-mkdir -p "$(state_of "$P")"
-manual_entry "$P" vocabulary blocked.md
-printf 'blocked.md\n' > "$(state_of "$P")/vocab-shown-sess-y.txt"
-chmod 000 "$P/.claude/jit-context/vocabulary/00-manual" 2> /dev/null
-if [ -r "$P/.claude/jit-context/vocabulary/00-manual" ]; then
-  Y_SKIPPED=1
-  echo "  SKIP-NOTE: chmod did not remove read permission here (running as root, or a"
-  echo "             filesystem without POSIX modes). Section Y tested nothing."
-else
-  OUT="$(run_stop "$P" "sess-y")"
-  RC=$?
-  assert_rc0 "the hook exits 0" "$RC"
-  assert_empty_json "the 00-manual-unreadable shape is silent with the report off" "$OUT"
-fi
-chmod 755 "$P/.claude/jit-context/vocabulary/00-manual" 2> /dev/null
-
-echo ""
-echo "=== Z: #300 -- an unparseable JIT_CONTEXT_STOP_REPORT value is refused, not silently read as on ==="
-# jit_load_config() (common.sh) already refuses an unimplemented value by line number
-# for JIT_CONTEXT_INJECT; JIT_CONTEXT_STOP_REPORT follows the same idiom. A value of
-# "yes" must be refused and logged, and the setting must fall back to the safe (off)
-# default -- never silently treated as 1.
-
-P="$(new_project z)"
-printf 'JIT_CONTEXT_STOP_REPORT=yes\n' > "$P/.claude/jit-context/config.env"
-mkdir -p "$(state_of "$P")"
-manual_entry "$P" vocabulary bridge.md
-printf 'bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-z.txt"
-OUT="$(run_stop "$P" "sess-z")"
-RC=$?
-assert_rc0 "the hook exits 0" "$RC"
-assert_empty_json "an unparseable value falls back to off, never silently on" "$OUT"
-LOG_Z="$P/.claude/jit-context/.discovery/logs/hooks.log"
-if [ -f "$LOG_Z" ]; then
-  assert_contains "the refusal is logged by line number, the existing config.env channel" "$(cat "$LOG_Z")" "line 1"
-  assert_contains "and names what was refused" "$(cat "$LOG_Z")" "stop-report toggle"
+assert_contains "an unparseable value falls back to summary, not to off or fired" "$OUT" "1 entry this session"
+LOG_W="$(log_of "$P")"
+if [ -f "$LOG_W" ]; then
+  assert_contains "the refusal is logged by line number, the existing config.env channel" "$(cat "$LOG_W")" "line 1"
+  assert_contains "and names what was refused" "$(cat "$LOG_W")" "status mode"
 else
   FAIL=$((FAIL + 1))
   echo "  FAIL: hooks.log was not written at all for the refused-config session"
 fi
 
 echo ""
-echo "=== AA: a fired 'tools' entry no longer renders <withheld: not a plain name> (#297) ==="
-# pre-tool-hook.sh marks a fired 'tools' (once-mode) rule with key = "rule:" r_file --
-# the marker line in the vocab-shown file is "rule:how-work-lands.md", not the bare
-# name. Before the fix: the collection loop keeps the "rule:" prefix (it matches none
-# of the sentinel/slash/backslash exclusions), and jit_report_name() then refuses the
-# ":" byte outright, so every single 'tools' entry renders as
-# "<withheld: not a plain name>" -- unconditionally, on every session that ever fires
-# one. This section is the positive control: a real 'tools' 00-manual file, marked the
-# way pre-tool-hook.sh actually marks it, must print its own name, tagged with the
-# dimension it fired from (direction 2 of #297 -- strictly more useful than the bare
-# name a vocabulary entry gets, since a reader curating entries wants to know which
-# dimension they are looking at).
-
-P="$(new_project aa)"
-enable_stop_report "$P"
-mkdir -p "$(state_of "$P")"
-manual_entry "$P" tools how-work-lands.md
-manual_entry "$P" vocabulary bridge.md
-printf 'bridge.md\nrule:how-work-lands.md\n' > "$(state_of "$P")/vocab-shown-sess-aa.txt"
-OUT="$(run_stop "$P" "sess-aa")"
-RC=$?
-assert_rc0 "the hook exits 0" "$RC"
-assert_contains "the tools entry's real name is printed" "$OUT" "how-work-lands.md"
-assert_contains "and tagged with its dimension (#297 direction 2)" "$OUT" "how-work-lands.md (tools)"
-assert_contains "the vocabulary entry keeps rendering as before" "$OUT" "bridge.md"
-if grep -qF -- '<withheld' <<< "$OUT"; then
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: a well-formed tools entry still renders as withheld"
-else
-  PASS=$((PASS + 1))
-  echo "  PASS: no withheld placeholder for a well-formed tools entry"
-fi
-
-echo ""
 echo "=========================================="
-SKIP_TOTAL=$((D_SKIPPED + S_SKIPPED + V_SKIPPED + Y_SKIPPED))
+SKIP_TOTAL=$((D_SKIPPED + T_SKIPPED))
 if [ "$SKIP_TOTAL" -eq 0 ]; then
   echo "Results: $PASS passed, $FAIL failed"
 else
-  # The same third state this whole file exists to test for, one level up: a section
-  # that could not run must not render as a suite that ran clean. `run-all.sh` already
-  # gives exit 2 its own bucket -- "SKIPPED suites (could not build their fixtures
-  # here)" -- distinct from a run of all-green suites, the same convention
-  # test-session-markers.sh/test-marker-degradation.sh/test-hook-tmpfile.sh/
-  # test-log-containment.sh already use for a chmod that could not bite (root, or a
-  # filesystem without POSIX modes). Followed here rather than invented: D_SKIPPED
-  # existed with nothing reading it, which is the identical defect class section D is
-  # itself about, one layer up. S_SKIPPED is the same guard for the same reason, one
-  # section down.
   echo "Results: $PASS passed, $FAIL failed, $SKIP_TOTAL section(s) SKIPPED"
 fi
 echo "=========================================="

@@ -248,14 +248,20 @@ fi
 # "the log is getting big" are two different facts and neither should swallow the
 # other. The size note can also be the ONLY thing worth saying -- a log past threshold
 # with no recurring words and a readable log -- so it gets a branch of its own too.
-if [ -n "$JIT_RECUR" ]; then
+# #367: these three were the model-facing additionalContext -- moved to systemMessage,
+# the field a human actually reads (issue #367's own probe measured SessionStart as
+# delivering it). Gated on JIT_CONTEXT_STATUS (common.sh, JIT_STATUS): off means off,
+# same as every other human-facing line this issue touches.
+if [ "$JIT_STATUS" = "off" ]; then
+  echo '{}'
+elif [ -n "$JIT_RECUR" ]; then
   JIT_EXTRA=""
   [ -n "$JIT_SIZE_NOTE" ] && JIT_EXTRA=" -- also, $JIT_SIZE_NOTE"
-  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"recurring misses (last %s line(s) of the log, raw counts, not filtered for ordinary words -- judge before adding a vocabulary entry): %s%s"}}\n' "$JIT_MISSES_TAIL" "$JIT_RECUR" "$JIT_EXTRA"
+  printf '{"systemMessage":"JIT : recurring misses (last %s line(s) of the log, raw counts, not filtered for ordinary words -- judge before adding a vocabulary entry): %s%s"}\n' "$JIT_MISSES_TAIL" "$JIT_RECUR" "$JIT_EXTRA"
 elif [ -n "$JIT_SKIP_REASON" ]; then
-  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"recurring misses: could not be evaluated (%s)"}}\n' "$JIT_SKIP_REASON"
+  printf '{"systemMessage":"JIT : recurring misses: could not be evaluated (%s)"}\n' "$JIT_SKIP_REASON"
 elif [ -n "$JIT_SIZE_NOTE" ]; then
-  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$JIT_SIZE_NOTE"
+  printf '{"systemMessage":"JIT : %s"}\n' "$JIT_SIZE_NOTE"
 else
   echo '{}'
 fi

@@ -77,19 +77,31 @@ JIT_MISSING_REQUIRES="$(jit_missing_requires "$JIT_BASE/tools" "$JIT_TOOL_LAYERS
 
 # `awk` reads stdin itself; the `cat` in front of it was one fork per invocation, on the
 # hottest path this plugin has, buying nothing.
-LC_ALL=C awk \
-  -v tool_layers="$JIT_TOOL_LAYERS" \
-  -v tool_aliases="$JIT_TOOL_ALIASES" \
-  -v vocab_layers="$JIT_VOCAB_LAYERS" \
-  -v tools_base="$JIT_BASE/tools" \
-  -v vocab_base="$JIT_BASE/vocabulary" \
-  -v state_dir="$JIT_STATE_DIR" \
-  -v inject_default="$JIT_INJECT" \
-  -v home="$HOME" \
-  -v project="${CLAUDE_PROJECT_DIR:-.}" \
-  -v log_tmp="$JIT_TMP" \
-  -v missing_bins="$JIT_MISSING_REQUIRES" \
-  "$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE"'
+#
+# #371: the composed program text below crossed Linux's per-argument exec() cap
+# (MAX_ARG_STRLEN, 131072 bytes -- see tests/test-awk-arg-max-369.sh) when passed to awk
+# positionally, on this hook alone -- CI's own E2BIG on every awk engine, not a
+# hypothesis: 131146 real bytes, 74 over. Building the args into an array and the
+# program into a variable here, then writing that variable to a tempfile below and
+# invoking `awk -f`, removes the cap from consideration entirely -- a file on disk has
+# no such limit, and no future macro or comment growth can reopen this. If the tempfile
+# cannot be created or written (unwritable/missing $TMPDIR, disk full) the invocation
+# below falls back to the positional form -- worse only in that it re-exposes the cap
+# this hook already hit, never a silent hook failure over a tempfile we could not get.
+JIT_AWK_ARGS=(
+  -v tool_layers="$JIT_TOOL_LAYERS"
+  -v tool_aliases="$JIT_TOOL_ALIASES"
+  -v vocab_layers="$JIT_VOCAB_LAYERS"
+  -v tools_base="$JIT_BASE/tools"
+  -v vocab_base="$JIT_BASE/vocabulary"
+  -v state_dir="$JIT_STATE_DIR"
+  -v inject_default="$JIT_INJECT"
+  -v home="$HOME"
+  -v project="${CLAUDE_PROJECT_DIR:-.}"
+  -v log_tmp="$JIT_TMP"
+  -v missing_bins="$JIT_MISSING_REQUIRES"
+)
+JIT_AWK_PROGRAM="$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -589,7 +601,7 @@ END {
       key = ""
       hushed = 0
       if (index(r_modes, "once") > 0) {
-        key = "rule:" r_file
+        key = jit_loc_key("tools", tool_layer, r_file)
         # `held` as well as `shown`: an advisory rule delivered earlier in THIS scan is not in
         # `shown` yet -- its mark waits on the block decision below (#112) -- and without this
         # a second row naming the same file would inject it twice in one call.
@@ -1060,7 +1072,8 @@ END {
           }
           continue
         }
-        if (!(vfile in shown) && (index(padded, " " kw " ") > 0 || (stale != "" && index(stale, " " kw " ") > 0))) {
+        vlk = jit_loc_key("vocabulary", layer, vfile)
+        if (!(vlk in shown) && (index(padded, " " kw " ") > 0 || (stale != "" && index(stale, " " kw " ") > 0))) {
           # Named once -- see the same guard in pre-prompt-hook.sh. Folding the keyword
           # makes two spellings of it collide, and the header read `(matched: x|x)`.
           if (vfile in vmatch) {
@@ -1105,9 +1118,10 @@ END {
             wsep = ", "
             continue
           }
+          vlk = jit_loc_key("vocabulary", layer, vfile)
           if (!generic_only) {
-            shown[vfile] = 1
-            jit_shown_mark(shown_file, vfile)
+            shown[vlk] = 1
+            jit_shown_mark(shown_file, vlk)
           }
           # #233: same lookup and same "" fallback as pre-prompt-hook.sh -- see the
           # comment there.
@@ -1278,6 +1292,61 @@ END {
   }
 }
 '
+
+# #371: JIT_AWK_PROGRAM is a plain bash string until this point -- never an argv element.
+# Written to a tempfile named after it (JIT_AWK_PROGRAM_FILE) with the same O_EXCL/
+# unpredictable-name/EXIT-trap idiom jit_tmp_open() already uses in common.sh (#60), so
+# `awk -f` reads the program from disk rather than as a positional argument, and the
+# 131072-byte Linux per-argument cap this hook hit no longer applies to it at all.
+#
+# FAILING TO GET OR WRITE ONE IS NOT AN ERROR: the hook falls back to process
+# substitution (below) rather than saying nothing, the same "never fail hard" contract
+# jit_tmp_open() documents for $JIT_TMP. #371 self-review: an EARLIER cut of this fallback
+# used the old positional form here, which re-exposed the cap this hook is already 74
+# bytes over on Linux -- that positional form is gone; see the fallback branch below for
+# why process substitution does not have the same problem.
+JIT_AWK_PROGRAM_FILE=""
+JIT_AWK_PROGRAM_TMPDIR="${TMPDIR:-/tmp}"
+JIT_AWK_PROGRAM_TMPDIR="${JIT_AWK_PROGRAM_TMPDIR%/}"
+JIT_AWK_PROGRAM_FILE="$(mktemp "$JIT_AWK_PROGRAM_TMPDIR/claude-jit-awk-XXXXXXXX" 2> /dev/null)" || JIT_AWK_PROGRAM_FILE=""
+if [ -n "$JIT_AWK_PROGRAM_FILE" ]; then
+  if printf '%s' "$JIT_AWK_PROGRAM" > "$JIT_AWK_PROGRAM_FILE" 2> /dev/null; then
+    # Single-quoted on purpose, same reason as jit_tmp_open()'s own trap: expanded when
+    # the trap fires, so it names the files THIS process created and no others. This
+    # REPLACES (rather than adds to) the trap jit_tmp_open() set earlier -- bash keeps
+    # only one EXIT handler per process, so this one names both files it must still
+    # remove; $JIT_TMP is unaffected by anything above and still removed here.
+    # shellcheck disable=SC2064
+    trap 'rm -f "$JIT_TMP" "$JIT_AWK_PROGRAM_FILE"' EXIT
+  else
+    rm -f "$JIT_AWK_PROGRAM_FILE"
+    JIT_AWK_PROGRAM_FILE=""
+  fi
+fi
+
+if [ -n "$JIT_AWK_PROGRAM_FILE" ]; then
+  LC_ALL=C awk "${JIT_AWK_ARGS[@]}" -f "$JIT_AWK_PROGRAM_FILE"
+else
+  # #371 self-review (oss:auditor): falling back to the POSITIONAL form here would
+  # re-trigger the exact E2BIG this fix exists to remove -- pre-tool-hook.sh's
+  # composed program is 131146 bytes, 74 over Linux's 131072-byte cap, TODAY, so a
+  # positional awk invocation in this branch crashes on the one platform this whole
+  # fix is about. This branch is not hypothetical: tests/test-hook-tmpfile.sh's own
+  # "unwritable TMPDIR" section (C) exercises exactly this path, because chmod 555
+  # on $TMPDIR makes BOTH mktemp calls above fail together, on every platform that
+  # test runs on -- reproduced locally with `TMPDIR=<chmod 555 dir> bash -x
+  # scripts/pre-tool-hook.sh`.
+  #
+  # Process substitution sidesteps both problems at once: awk's own argv holds only
+  # a /dev/fd path, never the program text, and bash builds that path from a pipe
+  # rather than a file under $TMPDIR, so it needs no writable temp directory at all
+  # (verified: an `awk -f <(...)` call still works with $TMPDIR chmod 555). This is
+  # the fallback of the fallback, not the primary path -- the tempfile route above is
+  # preferred whenever $TMPDIR is healthy, because it is the one every other hook in
+  # this repo already relies on (jit_tmp_open(), #60) and every CI leg already
+  # proves, on all three platforms, today.
+  LC_ALL=C awk "${JIT_AWK_ARGS[@]}" -f <(printf '%s' "$JIT_AWK_PROGRAM")
+fi
 
 # --- Timing + log ---
 T_END=$(_ms)

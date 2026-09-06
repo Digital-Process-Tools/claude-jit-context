@@ -38,6 +38,26 @@
 # push rather than after. -uo pipefail (not -e): a genuinely broken sourcing chain must
 # still let this test report FAIL rather than silently exiting.
 #
+# #371: this test's own byte count PASSED (131052 under 131072) on the exact commit CI
+# still hit real E2BIG on. The gap was this file measuring a Python STR index as a byte
+# count: `open(path, "r", encoding="utf-8", ...).read()` decodes the file, and a decoded
+# str's `len()`/slicing counts CODE POINTS, not bytes. Every accented-letter fold table
+# and em-dash this repo's own prose carries (JIT_AWK_FOLD's Latin-1 table alone: dozens
+# of them, 2 bytes each in the file, 1 python character each) was undercounted by
+# exactly the gap between chars and bytes -- 58 bytes on JIT_AWK_FOLD alone, enough on
+# its own to explain the 20-byte "headroom" this test reported being fake. Re-measured in
+# real bytes, pre-tool-hook.sh's composed program was 131146 bytes: 74 OVER the cap, not
+# 20 under it -- the exact E2BIG CI hit, now reproduced as a plain byte count with no
+# exec() involved. Fixed by encoding every extracted substring back to UTF-8 bytes
+# (errors="surrogateescape", matching the read) before taking its length.
+#
+# #371 also moved pre-tool-hook.sh's composed program off the argv entirely: it is
+# written to a generated tempfile and invoked via `awk -f`, which removes the cap from
+# consideration regardless of the program's size. A hook that has made this move is
+# structurally exempt from the byte-cap check below (detected by the naming convention
+# the fix adopted: VAR="$JIT_AWK_...'...'" later invoked as `awk ... -f "$VAR_FILE"`) --
+# reported as such rather than measured against a cap that no longer bounds it.
+#
 # jit-drive: none -- every check here is a byte-count comparison against a fixed
 # threshold, printed and counted inline; nothing takes captured hook output or a
 # needle, so there is no payload-shaped helper here for test-assertion-helpers.sh
@@ -68,11 +88,12 @@ fi
 
 # Every hook that builds its own awk program this way: a single JIT_AWK_* macro
 # concatenation immediately followed (no space) by a single-quoted literal awk source
-# block, both fed to awk as one shell word. Enumerated, not gathered by grep for the
-# LC_ALL=C awk marker alone -- session-start-hook.sh and stop-hook.sh also match that
-# marker but hand-roll their own small awk one-liners with no macro concatenation and
-# no risk of approaching this cap, and folding them in here would need a second parser
-# for a shape they do not have.
+# block, both fed to awk as one shell word (or, since #371, written whole to a tempfile
+# and fed via `awk -f`). Enumerated, not gathered by grep for the LC_ALL=C awk marker
+# alone -- session-start-hook.sh and stop-hook.sh also match that marker but hand-roll
+# their own small awk one-liners with no macro concatenation and no risk of approaching
+# this cap, and folding them in here would need a second parser for a shape they do not
+# have.
 HOOKS="pre-tool-hook.sh pre-prompt-hook.sh pre-path-hook.sh post-tool-hook.sh"
 
 for hook in $HOOKS; do
@@ -83,28 +104,27 @@ for hook in $HOOKS; do
     continue
   fi
 
-  total=$(
+  result=$(
     SIZE_HOOK="$path" SIZE_SCRIPT_DIR="$SCRIPT_DIR" python3 << 'PYEOF'
 import os
+import re
 
 path = os.environ["SIZE_HOOK"]
 script_dir = os.environ["SIZE_SCRIPT_DIR"]
-text = open(path, "r", encoding="utf-8", errors="surrogateescape").read()
-
-# Every macro this repo's hooks concatenate, in the order common.sh defines them.
-# Reading common.sh's OWN source for these -- not re-deriving the awk text by any
-# other means -- is deliberate: a macro this test does not know about growing later
-# must silently pass ONE bad check (that macro is measured as zero bytes here) rather
-# than the whole test refusing to run, matching this repo's own "never fail hard,
-# degrade to a named third state" posture one file over. Missing macros are counted
-# as a warning line rather than a silent zero.
-macro_names = [
-    "JIT_AWK_GUARD", "JIT_AWK_ENTRY", "JIT_AWK_INJECT", "JIT_AWK_JSON",
-    "JIT_AWK_FOLD", "JIT_AWK_BLK_BUILD", "JIT_AWK_ENVELOPE",
-]
+raw = open(path, "rb").read()
+text = raw.decode("utf-8", errors="surrogateescape")
 
 common_path = os.path.join(script_dir, "scripts", "common.sh")
-common_text = open(common_path, "r", encoding="utf-8", errors="surrogateescape").read()
+common_raw = open(common_path, "rb").read()
+common_text = common_raw.decode("utf-8", errors="surrogateescape")
+
+def byte_len(s):
+    # #371: the file is read and decoded as UTF-8 text so string patterns can be
+    # searched with re; every byte-count taken from a SLICE of that decoded string
+    # must be re-encoded before it is trusted as a byte count, or a multibyte
+    # character (this repo's own accented prose and fold tables carry plenty)
+    # silently reads as one byte short (or more) of what it really costs on argv.
+    return len(s.encode("utf-8", errors="surrogateescape"))
 
 def macro_len(name):
     # NAME='...' (single-quoted bash literal), the shape every JIT_AWK_* macro in
@@ -119,8 +139,50 @@ def macro_len(name):
     j = common_text.find("'", i)
     if j == -1:
         return None
-    return j - i
+    return byte_len(common_text[i:j])
 
+# WHICH macros a hook concatenates is read off the HOOK, not off a list kept here
+# (#299/#367 self-review, found by oss:auditor). This block used to hold a hardcoded
+# seven-name list plus a hardcoded boundary marker, "$JIT_AWK_ENVELOPE" followed by a
+# double quote and a single quote -- and both halves went silently blind the moment a
+# hook stopped matching them. `pre-prompt-hook.sh` gained an eighth macro
+# ($JIT_AWK_ENVELOPE_SYSMSG) at the END of its concatenation, so the marker no longer
+# occurred in the file at all and `literal_len` fell back to its silent 0: the test
+# went on printing a confident, passing, WRONG byte count (57782 against a real 79675)
+# that could never grow again, for exactly the hook whose growth it exists to watch.
+# `pre-path-hook.sh` had been blind the same way since before that change, because its
+# concatenation is a bare VAR=$JIT_AWK_...' assignment with no double quote for the
+# marker to anchor on -- nobody noticed, because a silent zero reads exactly like a
+# small literal.
+#
+# So the shape is matched instead: one or more adjacent $JIT_AWK_<NAME> references,
+# optionally wrapped in double quotes, immediately followed by the single quote that
+# opens the literal awk source. That covers both shapes this repo actually writes, and
+# a hook that matches NEITHER is reported as unmeasurable rather than measured as
+# zero -- the same "a third state must not render as the first" rule this repository
+# applies to its hooks, applied to the test watching them.
+run_re = re.compile(r'(?:\$JIT_AWK_[A-Z_]+)+' + chr(34) + '?' + chr(39))
+m = run_re.search(text)
+if m is None:
+    print("UNMEASURABLE")
+    raise SystemExit(0)
+
+# #371: a hook whose composed program is ASSIGNED to a variable (VAR="$JIT_AWK_...")
+# rather than fed straight to awk positionally may since have moved it off the argv
+# entirely -- written to a tempfile and read via `awk -f "$VAR_FILE"`. Detected by the
+# naming convention that move adopted, not by re-parsing the awk invocation itself:
+# look at what immediately precedes this match for `VAR="` touching the match start,
+# then check whether `-f "$VAR_FILE"` occurs anywhere later in the file.
+prefix = text[max(0, m.start() - 80):m.start()]
+assign_m = re.search(r'([A-Za-z_][A-Za-z0-9_]*)="$', prefix)
+if assign_m is not None:
+    varname = assign_m.group(1)
+    needle = '-f ' + chr(34) + '$' + varname + '_FILE' + chr(34)
+    if needle in text:
+        print("TEMPFILE:" + varname)
+        raise SystemExit(0)
+
+macro_names = re.findall(r'\$(JIT_AWK_[A-Z_]+)', m.group(0))
 macro_total = 0
 missing = []
 for name in macro_names:
@@ -130,20 +192,13 @@ for name in macro_names:
     else:
         macro_total += n
 
-# The literal awk program text embedded directly in the hook file, after the macro
-# concatenation. Every one of these four hooks builds its command as
-# LC_ALL=C awk ... -v ... "$JIT_AWK_..."'<literal source>', so the boundary is the
-# LAST macro variable name immediately followed by a double quote then a single quote
-# (closing the double-quoted expansion, opening the single-quoted literal), and the
-# literal ends at the next unescaped single quote.
-start_marker = "$JIT_AWK_ENVELOPE" + chr(34) + chr(39)
-i = text.find(start_marker)
-literal_len = 0
-if i != -1:
-    i += len(start_marker)
-    j = text.find(chr(39), i)
-    if j != -1:
-        literal_len = j - i
+# The literal awk source runs from the single quote this match ends on to the next one.
+i = m.end()
+j = text.find(chr(39), i)
+if j == -1:
+    print("UNMEASURABLE")
+    raise SystemExit(0)
+literal_len = byte_len(text[i:j])
 
 total = macro_total + literal_len
 print(total)
@@ -154,11 +209,31 @@ PYEOF
   )
   rc=$?
 
-  if [ "$rc" -ne 0 ] || [ -z "$total" ]; then
+  if [ "$rc" -ne 0 ] || [ -z "$result" ]; then
     FAIL=$((FAIL + 1))
-    echo "  FAIL: $hook -- could not measure the awk program size at all"
+    echo "  FAIL: $hook -- the byte-count extraction itself did not run cleanly (rc=$rc)."
     continue
   fi
+
+  case "$result" in
+    UNMEASURABLE)
+      FAIL=$((FAIL + 1))
+      echo "  FAIL: $hook -- could not find its macro-concatenation/literal boundary, so its"
+      echo "        awk program size was NOT measured. This is the silent-zero shape #369's"
+      echo "        own guard fell into once already: fix the extraction above rather than"
+      echo "        letting an unmeasured hook read as a small one."
+      continue
+      ;;
+    TEMPFILE:*)
+      PASS=$((PASS + 1))
+      echo "  PASS: $hook writes its composed awk program (${result#TEMPFILE:}) to a tempfile"
+      echo "        and invokes it with -f -- off the argv entirely, so the ${ARG_STRLEN_CAP}-byte"
+      echo "        Linux per-argument cap does not bound it regardless of size (#371)."
+      continue
+      ;;
+  esac
+
+  total="$result"
 
   if [ "$total" -lt "$ARG_STRLEN_CAP" ]; then
     PASS=$((PASS + 1))
@@ -174,5 +249,51 @@ echo "========================"
 TOTAL=$((PASS + FAIL))
 echo "  $PASS/$TOTAL passed, $FAIL failed"
 echo "========================"
+
+echo ""
+echo "=== D: a hook that moved its program off the argv never falls back onto it (#371) ==="
+# #371 self-review: pre-tool-hook.sh's own EXIT-trap tempfile can fail to be created or
+# written (unwritable/missing $TMPDIR), and the first cut of this fix fell back to the
+# OLD positional form in that case -- which re-triggers the exact E2BIG this fix exists
+# to remove, on the one hook that is already 74 bytes over the cap TODAY. A fallback that
+# still hands the full program to awk as a bare positional argument is not a fallback at
+# all here; it must stay off the argv (a generated tempfile, or -f on a process
+# substitution) in EVERY branch, not just the happy one.
+for hook in $HOOKS; do
+  path="$SCRIPTS/$hook"
+  [ -f "$path" ] || continue
+  # Only hooks that have made the #371 move (VAR="$JIT_AWK_..." later read via -f) are
+  # in scope here -- a hook still on the plain positional form everywhere is #369's own
+  # concern above, not this one.
+  if ! grep -q '\-f "\$JIT_AWK_PROGRAM_FILE"' "$path" 2> /dev/null; then
+    continue
+  fi
+  # Every remaining reference to the composed program variable, anywhere in the file,
+  # must be reached through -f -- never handed to awk as a bare positional word.
+  #
+  # #371 self-review (round 2): the first cut of this check anchored on end-of-line and
+  # a quoted literal, which a rewrite could dodge two ways -- trailing content after the
+  # bare reference on the same line (a redirect, a trailing comment), or the variable
+  # referenced unquoted. Neither shape is hypothetical for a bash script under active
+  # edit, so the check below looks for the variable name ANYWHERE on a line that also
+  # mentions awk, quoted or not, with no "-f" anywhere on that same line -- a boundary
+  # after the name (never followed immediately by another identifier character) keeps
+  # this from also matching JIT_AWK_PROGRAM_FILE or a variable that merely shares this
+  # one's prefix.
+  bare="$(awk -v var="JIT_AWK_PROGRAM" '
+    index($0, "awk") > 0 {
+      re = "\\$" var "([^A-Za-z0-9_]|$)"
+      if ($0 ~ re && $0 !~ /-f/) print FILENAME ":" FNR ": " $0
+    }
+  ' "$path")"
+  if [ -z "$bare" ]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $hook -- every reference to \$JIT_AWK_PROGRAM is reached through -f, in every branch"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $hook -- a fallback still hands the composed program to awk positionally:"
+    echo "$bare"
+  fi
+done
 
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1
