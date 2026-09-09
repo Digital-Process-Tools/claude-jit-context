@@ -183,13 +183,16 @@ END {
   # where /[a-z0-9]/ did not. Measured: the two agree byte for byte anyway, because the
   # whitespace collapse below absorbs the extra separator. Kept because the next person to
   # reach for index() on a single character should not have to re-derive that.
-  # #377: a pasted URL is scheme-anchored ("https://" or "http://") followed by any
-  # run of non-whitespace. Masked to a single space BEFORE the CamelCase split and the
-  # flatten below, so its path/query segments never become free-floating vocabulary
-  # tokens -- a paste of "https://docs.dp.tools/sync/" must not fire a generic `sync`
-  # entry that has nothing to do with the page. `message` itself (and the `msg` log
-  # copy above) is untouched; only the copy the vocabulary subject is built from is
-  # masked, so the hook log still shows what the user actually typed.
+  # #377: a pasted URL is scheme-anchored ("https://" or "http://", either case --
+  # a phone keyboard or a chat client that auto-capitalises the first letter of a
+  # paste produces "Https://", and a case-sensitive scheme match let that variant
+  # through untouched, self-review caught it) followed by a run of non-whitespace.
+  # Masked to a single space BEFORE the CamelCase split and the flatten below, so its
+  # path/query segments never become free-floating vocabulary tokens -- a paste of
+  # "https://docs.dp.tools/sync/" must not fire a generic `sync` entry that has
+  # nothing to do with the page. `message` itself (and the `msg` log copy above) is
+  # untouched; only the copy the vocabulary subject is built from is masked, so the
+  # hook log still shows what the user actually typed.
   #
   # Scheme-anchored only, not "any host.tld/path"-shaped run: the issue that opens this
   # (#377) says the wider extraction is an open question needing paste-frequency data
@@ -197,8 +200,18 @@ END {
   # legitimate prose that merely contains a dot and a slash -- a version number, a
   # relative file path mentioned in a sentence. A scheme is the one unambiguous signal
   # available without that measurement.
+  #
+  # The run stops at a comma or semicolon as well as at whitespace: there is no space
+  # between a URL and the word after it in "see https://x.com/y,billing next" (a common
+  # paste shape -- an auto-linked chat message, a URL glued to a list separator), and
+  # without this the greedy [^ \t\n]+ run swallowed "billing" into the masked span along
+  # with the URL, dropping a genuine keyword match nobody asked to lose (self-review
+  # caught it too). A URL whose own path or query string genuinely contains a comma or
+  # semicolon is masked only up to that character -- rare in practice, and the residue
+  # left behind is itself non-alnum, so the flatten below turns it into a harmless space
+  # rather than a stray token.
   urlmasked = message
-  gsub(/https?:\/\/[^ \t\n]+/, " ", urlmasked)
+  gsub(/[hH][tT][tT][pP][sS]?:\/\/[^ \t\n,;]+/, " ", urlmasked)
 
   cc = ""
   for (i = 1; i <= length(urlmasked); i++) {

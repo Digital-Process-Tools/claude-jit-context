@@ -183,6 +183,19 @@ echo "=== A dotted vocab keyword no longer matches a URL it used to match ==="
 OUT=$(run_hook '{"prompt":"https://docs.example.com/page.html can go online"}')
 assert_not_contains "URL no longer feeds the domain-shaped vocab keyword" "$OUT" "site with url context"
 
+echo ""
+echo "=== A capitalised scheme is masked too (self-review finding) ==="
+OUT=$(run_hook '{"prompt":"Https://docs.dp.tools/pipeline/sync is broken"}')
+assert_not_contains "Https:// (capital scheme) still suppresses the URL noise" "$OUT" "pipeline context"
+OUT=$(run_hook '{"prompt":"HTTP://docs.dp.tools/pipeline/sync is broken"}')
+assert_not_contains "HTTP:// (all-caps scheme) still suppresses the URL noise" "$OUT" "pipeline context"
+
+echo ""
+echo "=== A URL glued to the next word by punctuation does not swallow it (self-review finding) ==="
+OUT=$(run_hook '{"prompt":"see https://docs.dp.tools/pipeline/sync,billing question"}')
+assert_not_contains "the URL noise is still suppressed" "$OUT" "pipeline context"
+assert_contains "the glued-on word after the comma still fires" "$OUT" "billing context"
+
 # =============================================
 # SECTION 5: Multi-layer matching
 # =============================================
