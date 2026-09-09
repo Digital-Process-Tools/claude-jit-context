@@ -11,6 +11,10 @@
 # indexed rather than silently vanishing.
 #
 # Usage: bash tests/test-rebuild-blacklist-regex-379.sh
+#
+# jit-drive: none -- every check here runs rebuild-tsv.sh against a synthetic project
+# directory and greps its own stdout/index file directly; none goes through a shared
+# assert_*-shaped helper
 
 set -uo pipefail
 

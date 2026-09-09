@@ -13,6 +13,9 @@
 # multiple times per keyword regardless of file count.
 #
 # Usage: bash tests/test-rebuild-fork-count-379.sh
+#
+# jit-drive: none -- every helper here runs rebuild-tsv.sh through a PATH shim and
+# counts forks by name; none takes hook/script output as an assert_*-shaped argument
 
 set -uo pipefail
 
