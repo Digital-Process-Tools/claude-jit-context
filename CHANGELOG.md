@@ -7,6 +7,256 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-10
+
+### Changed
+
+- **The scaffold-vs-rebuild-tsv trap was curated and declined** (#352). `/oss:scaffold --apply` deletes `vocabulary/01-oss/01-paths.tsv` and writes a two-column `00-index.tsv` where `scripts/rebuild-tsv.sh` writes three, so every apply leaves the tree in a state CI rejects unless a rebuild follows it. No rule was written here: it would have said "now remember to run the other command", which is the friction written down rather than a fix. Filed upstream as `Digital-Process-Tools/claude-oss#1042`, where `scaffold.py` already classifies that file as another writer's and deletes it anyway, and where the dependency on this plugin means the index need not be guessed at all.
+
+  The decision is recorded in a new `tools/00-manual/00-README.md`, which `rebuild-tsv.sh` skips by name, so a later lane hitting the same trap finds a decision rather than an absence.
+
+- `.supertool.json` now declares two formatters: `shfmt` over `*.sh` and `prettier` over
+  `*.{json,yml,yaml}`. shfmt's style lives in `.editorconfig` rather than on the command line,
+  so the formatter, an editor and any CI leg all read the same answer -- a formatting flag makes
+  shfmt ignore that file, which is why the command carries none. Markdown is excluded from
+  prettier in `.prettierignore`: the tables in `CLAUDE.md`, the README and every jit-context
+  entry are aligned by hand and prettier reflows them (#357).
+- The tracked JSON and YAML is prettier-formatted, 41 lines across four files (#357).
+
+- Every shell file under `scripts/` and `tests/` is shfmt-formatted, to the style in
+  `.editorconfig`, declared in #357. No behaviour changes: 86 files, and the whole suite plus
+  `shellcheck -S warning` is green on the result. It is one commit so `git blame` takes the
+  hit once rather than a few hundred lines at a time inside unrelated pull requests (#359).
+
+- **Adopted `JIT_AWK_ENVELOPE` at its four awk call sites** (#362). `common.sh`
+  defined `jit_envelope_inject()`/`jit_envelope_block()`/`jit_envelope_empty()` with
+  no caller; `pre-tool-hook.sh` (its inject site and its block site -- two sites in
+  that one file, one more than #362's own count named), `pre-prompt-hook.sh` and
+  `pre-path-hook.sh` now call the shared builder instead of hand-rolling the
+  identical `printf`. The wire bytes are unchanged: each swap is pinned by
+  `tests/test-host-registry.sh`'s drift guard, which now asserts the awk hooks
+  *call* the builder rather than comparing hand-rolled literal text against it.
+  `session-start-hook.sh` (3 sites) and `stop-hook.sh` (5 sites) are plain bash, not
+  awk, and are deliberately left hand-rolling their own `printf` -- `JIT_AWK_ENVELOPE`
+  is an awk function string with no bash-side equivalent, none of those eight sites
+  ever emits a `decision` (the one shape with a real security consequence when
+  skipped), and a duplicate bash implementation of the same wire shape would be a
+  second answer to a question this file already warns drifts from the first one
+  invisibly.
+
+- **jit-context's status lines moved from the model to the human** (#367,
+  measured in #368). `stop-hook.sh`, `session-start-hook.sh`, `pre-tool-hook.sh`
+  and `pre-path-hook.sh` used to write their housekeeping sentences ("N entries
+  injected this session...", "recurring misses...") into
+  `hookSpecificOutput.additionalContext` -- the one field addressed to the model,
+  which every one of those sentences already said, out loud, it was not for. That
+  cost model context, blocked a turn from ending, and (Stop specifically)
+  triggered its own re-invocation loop (#279). Measured against real Claude Code
+  sessions rather than assumed: `SessionStart`, `UserPromptSubmit` and `Stop` all
+  deliver `systemMessage` to the human (#367's own probe), and `PreToolUse` does
+  too, on both an allowed and a refused call (#368) -- so `pre-prompt-hook.sh` and
+  `pre-path-hook.sh` now also announce a fired entry as it fires, when asked to
+  (see the toggle below). `pre-tool-hook.sh` deliberately does NOT, even though
+  #368 proves its event would carry the line: that hook's assembled awk program
+  sits 20 bytes under Linux's per-argument `exec()` cap (#369) after this change,
+  and the feature does not fit. A `tools` rule firing therefore announces nothing
+  per-fire; it is still counted in the session total at Stop and named in full in
+  `hooks.log`. (#371 later moved that program off the argv entirely, onto a tempfile
+  read via `awk -f` -- the cap this bullet describes no longer bounds it, though the
+  status-line feature is still withheld here; whether to add it now is a separate
+  decision this fragment does not make.) `stop-hook.sh`'s own line dropped the per-entry
+  ownership split entirely: it is a running total only, since a per-fire line
+  already said which entry fired and from where.
+- **New: `JIT_CONTEXT_STATUS` in `config.env`** -- `fired | summary | off`,
+  default `summary`. `fired` prints one `systemMessage` line per entry as it
+  fires, plus the session total at Stop; `summary` prints the Stop total alone
+  (one line per session, the safe default for an existing install); `off` is
+  silent on both. An unrecognised value is refused and named in `hooks.log`, the
+  same way an unrecognised `JIT_CONTEXT_INJECT` already is. Entry TEXT itself is
+  unaffected either way -- it stays in `additionalContext`, unconditionally; this
+  toggle only ever governs the status lines about it. `hooks.log` is written in
+  full regardless of this setting, for whoever curates `.claude/jit-context/` by
+  hand.
+
+- **Refreshed the `oss`-owned `.oss/assemble_changelog.py` and `.oss/statusline.py`, and the `01-oss` rule layer with them** (#372). `/oss:doctor` under `oss` 0.25.0 reported both as `would change what it does` -- 1327 differing lines in the assembler and 473 in the statusline, measured against the plugin's own copies with CRLF folded to LF. This repository hand-maintains neither, so a refresh is the delivery mechanism rather than a change made here. `.oss/README.md` and `.github/workflows/oss-changelog.yml` came back byte-identical and did not move.
+
+  One rule body actually changed: `tools/01-oss/pr-create-gate.md` now names `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lane_setup.py" <N> --release`, which releases the lane record and the GitHub assignee together, where it previously named `gh issue edit <N> --remove-assignee @me` and left the lane record behind.
+
+- **Refreshed the `oss`-owned `.oss/statusline.py` and the `01-oss` rule layer under `oss` 0.29.1** (#375). `/oss:doctor` reported the statusline as `would change what it does` and `.oss/README.md` as prose-only. This repository hand-maintains neither, so a `/oss:scaffold --apply` re-run is the delivery mechanism rather than a change made here. `.oss/assemble_changelog.py` and `.github/workflows/oss-changelog.yml` came back byte-identical and did not move.
+
+  Three behaviours arrive with it. `_safe_which` resolves `argv[0]` on the real `PATH` before `subprocess.run` sees it, so a same-named `git.exe` or `gh.cmd` at the root of the repository being reported on cannot win over a real `PATH` entry on Windows. `_gh_unlabelled_issue_counts` reads label names as one JSON array per line rather than a comma-joined `L:` prefix, because a label name may legally contain a comma and the old split could count an issue as lane-placed when no triage sweep had placed it there. And `labels.lane_other` is now folded into the lane set, so a correctly lane-other-tagged issue no longer counts toward `issues_no_lane`.
+
+  One new rule ships in the layer: `tools/01-oss/tree-snapshot-compare.md`, firing on `~tree_snapshot`.
+
+### Fixed
+
+- **A fired entry's ownership was sometimes reported wrong** (#299). The
+  `vocab-shown`/`path-shown` marker files backed all three jit-context dimensions
+  with a bare entry file name, so `stop-hook.sh`'s "is this entry the reader's own"
+  check -- a union of every dimension's `00-manual` file names -- misreported a
+  plugin-owned or generated entry as the reader's own whenever an UNRELATED
+  `00-manual` file of the identical name happened to exist in a different
+  dimension, or (measured live, `rector.md`) in a different LAYER of the SAME
+  dimension. Fixed with a `loc:<dimension>:<layer>:<file>` marker key
+  (`common.sh`: `jit_loc_key()`), written by every marker writer
+  (`pre-tool-hook.sh`, `pre-path-hook.sh`, `pre-prompt-hook.sh`) and read by
+  `stop-hook.sh`, which now classifies every fired entry into one of three states
+  -- yours, not yours, or unknown -- rather than guessing between the first two
+  when a mark predates this fix (a mixed-version session, mid-upgrade, still
+  possible for one session). `#297`'s own `rule:<file>` composed key (`tools`
+  dimension only, no layer) is folded into this wider format rather than kept
+  beside it, for the same reason: leaving it as-is would have carried the exact
+  ownership bug forward for every `tools` entry. `jit_age_for()`'s age lookup is
+  scoped by dimension too, closing the same pre-existing ambiguity one function
+  over.
+
+- **jit-dry-run.sh's entry-file memo now actually hits, and its staleness check agrees
+  with rebuild-tsv.sh's own normalisation** (#346, #347, #348). Three findings from the
+  v0.8.0 release audit, all in `scripts/jit-dry-run.sh`:
+
+  `ent_memo_get()` built its lookup needle without the `kind` field `idx_prime()` writes
+  every record with (`<kind><TAB><name><TAB><verdict>`), so every lookup missed and
+  `check_entry_file()` fell back to its own per-row awk fork on every call — the #307
+  entry-file batching was indexed and primed but never actually read back. Not a
+  correctness bug, since the fallback is the original code path with the same verdict,
+  but it defeated the whole point of the batch (#346).
+
+  `check_index_current()` reconstructed the expected TSV row by hand but applied neither
+  of the two normalisations `rebuild-tsv.sh` (#333) makes when it writes that row: the
+  tab/CR/LF-to-space fold on every column, and the mode whitelist that skips indexing a
+  tools entry entirely when its assembled `mode:` is not `remind`/`block`/`once`. Without
+  those, an entry with an invalid mode — which `rebuild-tsv.sh` correctly and permanently
+  declines to index — read as STALE forever, with a "run rebuild-tsv.sh" remedy that could
+  never clear it; and an entry whose frontmatter carried a literal tab in a value read as
+  STALE even immediately after a clean rebuild. `JIT_VALID_MODE_RE` moved to `common.sh`
+  so both scripts read the same one (#347).
+
+  `list_whole()`'s `IFS= read -r _fm_first < "$md" 2>/dev/null` put the input redirect
+  before the `2>/dev/null` meant to silence it — redirections apply left to right, so an
+  unreadable entry file printed bash's own `Permission denied`, carrying the absolute
+  path, to real stderr before the suppression ever took effect, despite the adjacent
+  comment's claim that it did. The neighbouring `size=$(( $(wc -c < "$md") ))` had the
+  same ordering problem and no suppression at all. Both now put `2>/dev/null` first, the
+  same fix `truncate_index()` in `rebuild-tsv.sh` and `jit_log_write()` in `common.sh`
+  already carry (#348).
+
+- **The README's Hosts section no longer says Codex is UNKNOWN** (#350). It had read that Claude Code was the only host this plugin has been watched run under, and that Codex stays `UNKNOWN` until someone sees a `PreToolUse` block fire there. #288 saw exactly that, on codex-cli 0.150.1, and set the registry row to `OBSERVED` with a `claude-decision-block` refusal envelope — three sections earlier in the same file, the install section already documented the same run. The registry was right the whole time; only the prose describing it was stale.
+
+  The badge row now names both supported hosts, which it did not before.
+
+- **The Windows Defender exclusion step can no longer red the whole `hooks` leg on its own** (#355). It ran `Add-MpPreference` under `shell: pwsh` with no non-fatal handling, so a bare Defender-service outage on the hosted image (`0x800106ba`, unrelated to any diff) hit three times in under three hours -- PR #351 shard 2/4, `main` shard 1/4, and probably PR #341 shard 3/4 -- and each time it terminated the step before "Run hook test suites" ever ran, reddening all three pinned gate jobs even though Ubuntu and macOS were clean.
+
+  The exclusion step now carries `continue-on-error: true`, scoped to that step alone -- it is a speed optimisation, not a correctness check, so it must never be able to fail the leg. "Run hook test suites" keeps no `continue-on-error` and no weakened `if:`, and remains the sole source of the leg's result. `tests/test-defender-step-scope-355.sh` asserts the scope stays split this way.
+
+- `tests/test-arg-flag-values.sh` reads a valued flag out of a case arm whose label and
+  `shift 2` are on different lines, which is the shape a shell formatter produces. It also
+  stops taking any line holding a `)` as the arm label: a line inside an arm can carry its
+  own, from an array append or a command substitution, and reading that as the label drops
+  the flag whose arm it sits in while every other assertion in the suite still passes
+  (#359).
+
+- **pre-tool-hook.sh's log tail, and its vocabulary-path matching, silently lost every
+  slash under a host that never sets `CLAUDE_PROJECT_DIR`** (#361). Under Codex, an
+  unset `CLAUDE_PROJECT_DIR` fell back to the awk `-v project="."` shape, and the
+  hook's own `gsub(project "/", "", tt)` then treated that fallback as an ERE, where
+  `"."` matches ANY character -- so the pattern deleted one arbitrary byte plus the
+  `/` after it at every slash in the string it was meant to only strip a path prefix
+  from, not just at the start. `src/pipeline/config.yml` became
+  `srpipelinconfig.yml`: a real vocabulary keyword ("pipeline") silently stopped
+  matching, and the same corruption reached the `hooks.log` tail that
+  `jit-misses.sh` reads back. Fixed by escaping regex metacharacters in `home` and
+  `project` (a new `jit_re_lit()`) before either reaches a dynamically-built `gsub`
+  pattern, so a literal-prefix strip stays literal regardless of what the host does
+  or does not set. Self-review for #362 found the sibling case on the same two
+  lines: `home` carries no fallback the way `project` does, so an unset or
+  explicitly-empty `$HOME` made `jit_re_lit(home)` correctly return `""` and an
+  unguarded `gsub("" "/", "", tt)` then stripped every slash in `tt` the same way --
+  `src/pipeline/config.yml` becoming `srcpipelineconfig.yml`. Guarded with
+  `if (home != "")` before that `gsub`; `project` needs no equivalent guard, since
+  bash's own `${CLAUDE_PROJECT_DIR:-.}` fallback can never leave it empty.
+
+- **A Codex `Edit`/`Write` block rule never fired, on any file, ever** (#364). Codex's
+  own `tool_name` for a file edit is `apply_patch`, not `Edit` or `Write` -- every
+  block rule this plugin ships or a user writes (`tool: Edit|Write`) could never match
+  it, so the call proceeded, nothing errored, nothing warned. Live-reproduced against
+  codex-cli 0.153.2: a prompt asking Codex to hand-edit `00-index.tsv` through its own
+  file-editing tool went through, where the identical `Bash` route (`sed -i`) was
+  already refused. Fixed with a `tool_aliases` column on `scripts/host.sh`'s
+  `JIT_HOST_REGISTRY` (`codex` maps `apply_patch` to BOTH `Edit` and `Write`, the
+  over-refusing direction, since Codex carries no way to tell an edit-in-place from a
+  fresh file apart) and a `jit_expand_tool_alias()` step in `pre-tool-hook.sh` that
+  normalises the raw `tool_name` onto the canonical set an entry's `tool:` field is
+  written against, before the row loop's exact-match test ever runs. No entry, example
+  or template ever learns the word `apply_patch` -- an alternation stopgap
+  (`tool: Edit|Write|apply_patch`) was considered and refused, because it would need
+  repeating in every block rule ever written, in files this project does not control,
+  and degrades silently again the day a fourth host uses a fifth name. The lookup is
+  deliberately host-agnostic (every row's column unioned, not gated behind which host
+  `jit_host_detect()` thinks this process is): that detection is already documented as
+  best-effort and non-load-bearing, and a genuine Codex hook launched from inside a
+  Claude Code shell misdetects as `claude-code` -- gating the fix on a correct
+  detection would have reproduced the same silent gap on exactly the path most likely
+  to hit it.
+
+- **`post-tool-hook.sh`'s edit marker was never written for a Codex file edit** (#365),
+  the identical root cause as #364 one hook over. The marker feeds `stop-hook.sh`'s
+  "was anything under this tree edited this session" signal; its own internal gate
+  (`case "$PT_TOOL" in Write | Edit | Bash)`) could never match Codex's `apply_patch`,
+  so a real in-tree Codex edit left no `edited-<session>.txt` and the Stop hook read
+  the permanent absence as the positive claim "none updated" -- the same shape #301
+  already fixed for a Bash-routed edit, recurring one tool name over. Fixed by
+  expanding the raw `tool_name` through `jit_canonical_tool()` (the bash-side sibling
+  of `pre-tool-hook.sh`'s own `#364` fix, added to `scripts/host.sh`) before that case
+  runs, so `apply_patch` is treated as both `Edit` and `Write` here too.
+  `hooks/hooks.codex.json`'s own `PostToolUse` matcher (`Write|Edit|Bash`) was left
+  unchanged rather than widened to include `apply_patch`: this repo's own
+  `tests/test-host-registry.sh` (#328) asserts that matcher string stays identical to
+  `hooks.json`'s, on purpose, so the two manifests cannot drift the way they did
+  before #301 -- and the evidence recorded on #365 itself (`pre-path-hook.sh`'s own
+  matcher, which also does not name `apply_patch`, fired on a live Codex `apply_patch`
+  call anyway) argues the manifest matcher was never the gate; the internal `case`
+  above was.
+
+- **`pre-tool-hook.sh` hit a real Linux `Argument list too long` in CI** (#371),
+  moments after `tests/test-awk-arg-max-369.sh` (#369) had reported 20 bytes of
+  headroom under the cap on the same commit. The static check was measuring Python
+  STRING length on a UTF-8-decoded file -- code points, not bytes -- and this hook's
+  composed program carries plenty of 2-byte characters (`JIT_AWK_FOLD`'s Latin-1 fold
+  table alone, plus this repo's own accented prose in its comments): the real byte
+  count was 131146, 74 bytes OVER Linux's 131072-byte `MAX_ARG_STRLEN`, not 20 under
+  it. `tests/test-awk-arg-max-369.sh` now re-encodes every extracted substring to UTF-8
+  bytes before comparing it against the cap, which reproduces the real E2BIG as a
+  plain byte count with no `exec()` involved.
+- **Fixed by moving `pre-tool-hook.sh`'s composed awk program off the argv entirely**
+  (#371). It is written to a generated tempfile (`mktemp`, the same O_EXCL/
+  unpredictable-name/EXIT-trap idiom `jit_tmp_open()` already uses for `$JIT_TMP`) and
+  read via `awk -f`, so the per-argument cap no longer bounds it regardless of size --
+  removing the countdown rather than buying back a few bytes of margin. `pre-prompt-hook.sh`,
+  `pre-path-hook.sh` and `post-tool-hook.sh` carry the same positional-argv pattern but
+  use only 58%, 64% and 7% of the cap respectively -- 42%, 36% and 93% of headroom
+  still free (measured in real bytes) -- left alone here, since that margin is not a
+  countdown at this distance and widening this fix to all four hooks would have been a
+  considerably larger, unrequested diff on a hot path that must never fail hard.
+- **Self-review found the first fallback still crashed** (#371, `oss:auditor`). Failing
+  to create or write the tempfile fell back to the old positional form, which
+  re-exposes the exact E2BIG this fix removes -- and that branch is not hypothetical:
+  `tests/test-hook-tmpfile.sh`'s own "unwritable TMPDIR" section already drives it,
+  because a `chmod 555` on `$TMPDIR` makes every `mktemp` call in the hook fail
+  together. Fixed by falling back to process substitution (`awk -f <(printf '%s'
+  "$JIT_AWK_PROGRAM")`) instead of the positional form: awk's own argv then holds only
+  a `/dev/fd` path, never the program text, and bash builds that path from a pipe
+  rather than a file under `$TMPDIR`, so the fallback needs no writable temp directory
+  and never touches the argv cap either. Verified locally on macOS against the same
+  `chmod 555` scenario: the hook still injects, with nothing on stderr. Not yet run
+  through CI, so the same claim for Linux and Windows (git-bash/MSYS2) is reasoned
+  from the mechanism -- `awk -f` opening a process-substitution path is a different
+  code path from this repo's other `<(...)` uses, which all redirect a builtin's own
+  stdin rather than hand a path to a second program -- not observed.
+
+- **`.oss/statusline.py` resolves `supertool` on `PATH` before running it in `_run_channel_health`** (#380). Every other subprocess in that file already went through `_safe_which`; this one call site opted out of `_run` for sound exit-code reasons -- the four non-zero `channel:health` states have to survive, and `_run` folds them all into one `None` -- and silently took the argv[0] resolution with it. On Windows a bare `argv[0]` with no directory component lets `CreateProcess` search the calling process's own current directory first, so a `supertool.exe` or `supertool.cmd` committed to the root of a branch under review would run instead of the real one, on the reviewer's machine, the moment their status line refreshed. Found by the v0.9.0 release audit and ranked `executes`, which stopped the tag until it was fixed.
+
+  `.oss/` is vendored from the `oss` plugin and replaced wholesale by `/oss:scaffold --apply`, so this patch is carried only until the durable fix ships upstream (Digital-Process-Tools/claude-oss#1399). `tests/test-statusline-safe-which-380.sh` is not scaffold-owned and drives the real function rather than grepping for the call, so a scaffold run that reintroduces the bare `argv[0]` goes red instead of passing quietly.
+
 ## [0.8.0] - 2026-09-05
 
 ### Added
@@ -3290,7 +3540,8 @@ and publishes it.
 
 Initial internal version: tool and path rules, configured through `config.json`.
 
-[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.9.0
 [0.8.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.8.0
 [0.7.2]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.7.2
 [0.7.1]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.7.1
