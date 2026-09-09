@@ -514,6 +514,33 @@ done
 # Override per project with DYNAMIC_RULES_KEYWORD_BLACKLIST (an extended regex).
 VOCAB_KEYWORD_BLACKLIST="${JIT_CONTEXT_KEYWORD_BLACKLIST:-${DYNAMIC_RULES_KEYWORD_BLACKLIST:-^(extension|detection|count|output|input|name|branch|issue|documents|files|file)$}}"
 
+# --- Blacklist regex validity, checked ONCE for the whole run, not once per file/keyword
+# (#379 review finding) ------------------------------------------------------------
+# build_vocab_tsv's per-FILE classify pass (below) evaluates this pattern inside a
+# dynamic `~` match, in ONE awk process covering every keyword of that file. A
+# malformed ERE compiles at the FIRST evaluation and takes the whole awk PROCESS down
+# with it -- demonstrated identical across one-true-awk (macOS), gawk and mawk: an
+# unbalanced `(` aborts with a fatal regex-compile error and produces ZERO output for
+# every keyword in that record, not merely a non-match on the bad pattern. Before the
+# #379 collapse, the same bad pattern only cost a `grep -Eq` exit 2 on ONE keyword,
+# read as "not blacklisted" by the `if grep ...; then` around it -- the blast radius
+# was per-keyword, silent, and safe (nothing got blacklisted that shouldn't have).
+# Checking here, once, keeps that same safe blast radius rather than letting the #379
+# collapse widen a malformed VOCAB_KEYWORD_BLACKLIST (JIT_CONTEXT_KEYWORD_BLACKLIST,
+# project-configurable, arrives with the clone) into silently dropping an entire
+# file's keywords with a misleading "normalised to nothing" reason.
+#
+# A fixed canary string, not real keyword data: an ERE's compile-time validity does
+# not depend on the DATA it is later matched against, only on the pattern text, so one
+# BEGIN-time probe here stands in for every keyword this run will ever test against it.
+VOCAB_KEYWORD_BLACKLIST_OK=1
+if ! VOCAB_KEYWORD_BLACKLIST="$VOCAB_KEYWORD_BLACKLIST" LC_ALL=C awk \
+  'BEGIN { if ("canary" ~ ENVIRON["VOCAB_KEYWORD_BLACKLIST"]) { } }' 2> /dev/null; then
+  echo "FATAL    vocabulary: VOCAB_KEYWORD_BLACKLIST is not a valid extended regular expression -- treating it as matching NOTHING for this whole run (the same safe degrade a malformed pattern already produced per-keyword before #379). Fix JIT_CONTEXT_KEYWORD_BLACKLIST / DYNAMIC_RULES_KEYWORD_BLACKLIST in config.env." >&2
+  jit_rc 2
+  VOCAB_KEYWORD_BLACKLIST_OK=0
+fi
+
 # --- Generic-word classifier (#232) ------------------------------------------
 # Different axis from the blacklist above: the blacklist DROPS a term outright, so the
 # entry never fires on it at all. This classifies a term that DID make it into the
@@ -829,7 +856,8 @@ build_vocab_tsv() {
           ;;
       esac
     done < <(printf '%s\n' "$kw_line" \
-      | VOCAB_KEYWORD_BLACKLIST="$VOCAB_KEYWORD_BLACKLIST" LC_ALL=C awk '
+      | VOCAB_KEYWORD_BLACKLIST="$VOCAB_KEYWORD_BLACKLIST" \
+        VOCAB_KEYWORD_BLACKLIST_OK="$VOCAB_KEYWORD_BLACKLIST_OK" LC_ALL=C awk '
         {
           n = split($0, toks, ",")
           for (i = 1; i <= n; i++) {
@@ -847,7 +875,15 @@ build_vocab_tsv() {
             gsub(/^ +/, "", kw)
             gsub(/ +$/, "", kw)
             if (kw == "") { print "E\t\t\t"; continue }
-            if (kw ~ ENVIRON["VOCAB_KEYWORD_BLACKLIST"]) { print "B\t" kw "\t\t"; continue }
+            # ENVIRON["VOCAB_KEYWORD_BLACKLIST_OK"] gates this: the caller validated
+            # the pattern once, up front (see the VOCAB_KEYWORD_BLACKLIST_OK block
+            # above build_vocab_tsv), specifically so a malformed pattern is never
+            # actually EVALUATED here -- evaluating a bad ERE aborts the whole awk
+            # process, not just this one keyword, which would drop every remaining
+            # keyword of this file with no trace (#379 review finding). "0" reads as
+            # "not blacklisted", the same safe degrade a bad pattern already produced
+            # under the old per-keyword `grep -Eq`.
+            if (ENVIRON["VOCAB_KEYWORD_BLACKLIST_OK"] == "1" && kw ~ ENVIRON["VOCAB_KEYWORD_BLACKLIST"]) { print "B\t" kw "\t\t"; continue }
             # A raw token with an internal capital -- not just a leading one, which is
             # ordinary title-casing -- reads as deliberately cased: an author writing
             # `jsOn` meant the identifier, not the sentence-initial word "json" is not.
@@ -875,6 +911,25 @@ build_vocab_tsv() {
           }
         }
       ')
+    # --- Did the classify pass actually finish? (#379 review finding) ------------------
+    # The blacklist-validity check above removes the one KNOWN way this awk process can
+    # abort mid-file, but this counts rather than trusts: comma-count in $kw_line, done
+    # in pure bash parameter expansion (no fork -- length of the string minus length of
+    # the string with commas stripped, plus one), compared against how many E/B/O lines
+    # the loop above actually consumed. A dead or truncated awk process for ANY other
+    # reason would otherwise leave kw_written+kw_black+kw_empty short of the true token
+    # count and say nothing -- the exact failure #255's own VERDICT_FLAGS count-check
+    # (below, in the deferred generic-word pass) already guards against for a different
+    # awk call in this same function; this is the same check for this one.
+    local kw_line_nocommas="${kw_line//,/}"
+    local kw_tok_count=$((${#kw_line} - ${#kw_line_nocommas} + 1))
+    local kw_seen_count=$((kw_written + kw_black + kw_empty))
+    local kw_classify_broken=0
+    if [ "$kw_seen_count" -ne "$kw_tok_count" ]; then
+      echo "FATAL    $label/${tsv##*/}: $(jit_report_name "$filename") -- the keyword classify pass returned $kw_seen_count verdict(s) for $kw_tok_count comma-separated term(s) in its keywords: line -- it did not finish (a crashed or truncated awk process), and every keyword past what it did return was silently dropped rather than classified." >&2
+      jit_rc 2
+      kw_classify_broken=1
+    fi
     # Hand this file's keywords to the deferred classify pass (#255): remember which
     # slice of ALL_KW is this file's so the fallback below can be recomputed once every
     # row in ALL_KW has a real verdict, in the same file-iteration order as before.
@@ -890,7 +945,13 @@ build_vocab_tsv() {
     # one dropped word out of three is a very different thing from all three.
     # A here-string and not a pipe, so this counter survives the loop -- the same reason
     # JIT_DROPPED is appended to there.
-    if [ "$kw_written" -eq 0 ]; then
+    #
+    # Skipped entirely when the classify pass itself did not finish (above): the three
+    # reasons below are all about what the classifier CONCLUDED about every term, and
+    # a broken pass concluded nothing -- reporting "normalised to nothing" for a keyword
+    # the classifier never actually reached would be exactly the misleading report the
+    # count-check above exists to replace with the truth (#379 review finding).
+    if [ "$kw_classify_broken" -eq 0 ] && [ "$kw_written" -eq 0 ]; then
       if [ "$kw_black" -gt 0 ] && [ "$kw_empty" -gt 0 ]; then
         jit_unindexed "$label" "$filename" \
           "every keywords: term was dropped by the blacklist or normalised to nothing"
