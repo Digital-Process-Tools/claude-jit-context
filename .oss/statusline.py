@@ -2096,9 +2096,26 @@ def _run_channel_health(timeout=30):
     constants) put a documented worst case north of 20s when a lookup is slow
     rather than merely present.
     """
+    #: #380: `argv[0]` is resolved through `_safe_which` above, exactly as
+    #: `_run` does it. Opting out of `_run` here is about its exit-code
+    #: handling and nothing else -- the four non-zero `channel:health` states
+    #: have to survive -- and resolution is orthogonal to that, so it is done
+    #: here rather than inherited. Without it a same-named `supertool.exe` /
+    #: `supertool.cmd` planted at the root of the repository this statusline
+    #: is reporting on wins over a real `PATH` entry on Windows, because a
+    #: bare `argv[0]` with no directory component lets `CreateProcess` search
+    #: the *calling process's* current directory first. `None` on an
+    #: unresolvable binary is already what `_channel_reading` documents for a
+    #: missing `supertool`, so no state that was distinct becomes folded.
+    #: Filed upstream as Digital-Process-Tools/claude-oss#1399 -- this file is
+    #: replaced wholesale by `/oss:scaffold --apply`, so this patch is carried
+    #: only until that fix ships.
+    resolved = _safe_which("supertool")
+    if resolved is None:
+        return None
     try:
         result = subprocess.run(
-            ["supertool", "channel:health"],
+            [resolved, "channel:health"],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=timeout,
