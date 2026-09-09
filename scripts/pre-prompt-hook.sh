@@ -183,10 +183,27 @@ END {
   # where /[a-z0-9]/ did not. Measured: the two agree byte for byte anyway, because the
   # whitespace collapse below absorbs the extra separator. Kept because the next person to
   # reach for index() on a single character should not have to re-derive that.
+  # #377: a pasted URL is scheme-anchored ("https://" or "http://") followed by any
+  # run of non-whitespace. Masked to a single space BEFORE the CamelCase split and the
+  # flatten below, so its path/query segments never become free-floating vocabulary
+  # tokens -- a paste of "https://docs.dp.tools/sync/" must not fire a generic `sync`
+  # entry that has nothing to do with the page. `message` itself (and the `msg` log
+  # copy above) is untouched; only the copy the vocabulary subject is built from is
+  # masked, so the hook log still shows what the user actually typed.
+  #
+  # Scheme-anchored only, not "any host.tld/path"-shaped run: the issue that opens this
+  # (#377) says the wider extraction is an open question needing paste-frequency data
+  # nobody has measured yet, and a bare-host guess here would also start eating
+  # legitimate prose that merely contains a dot and a slash -- a version number, a
+  # relative file path mentioned in a sentence. A scheme is the one unambiguous signal
+  # available without that measurement.
+  urlmasked = message
+  gsub(/https?:\/\/[^ \t\n]+/, " ", urlmasked)
+
   cc = ""
-  for (i = 1; i <= length(message); i++) {
-    c = substr(message, i, 1)
-    p = (i > 1) ? substr(message, i-1, 1) : ""
+  for (i = 1; i <= length(urlmasked); i++) {
+    c = substr(urlmasked, i, 1)
+    p = (i > 1) ? substr(urlmasked, i-1, 1) : ""
     if (c != "" && p != "" && index("ABCDEFGHIJKLMNOPQRSTUVWXYZ", c) > 0 && index("abcdefghijklmnopqrstuvwxyz0123456789", p) > 0) cc = cc " " c
     else cc = cc c
   }

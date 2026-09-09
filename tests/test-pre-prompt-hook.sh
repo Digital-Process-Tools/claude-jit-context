@@ -160,16 +160,28 @@ assert_contains "payments" "$OUT" "payments context"
 assert_contains "pipeline" "$OUT" "pipeline context"
 
 # =============================================
-# SECTION 4: URL matching
+# SECTION 4: URL matching (#377)
 # =============================================
+# A pasted, scheme-anchored URL is masked out of the vocabulary subject entirely
+# before flattening -- its path/query segments must not become free-floating tokens
+# that fire an unrelated entry. Building a distinct url/ dimension so a domain-shaped
+# keyword can still match a URL on purpose is the larger, unmeasured follow-up #377
+# itself asks not to be guessed at; this scoped fix only removes the noise.
 
 echo ""
-# A dotted keyword must be stored pre-normalized ("docs example com"), because the
-# matcher strips dots from the prompt before comparing. rebuild-tsv.sh does this at
-# build time; a hand-written dotted keyword in the TSV would be permanently dead.
-echo "=== Domain keyword inside URL ==="
+echo "=== Generic vocab keyword must NOT fire from inside a pasted URL ==="
+OUT=$(run_hook '{"prompt":"https://docs.dp.tools/pipeline/sync"}')
+assert_not_contains "URL noise: generic keyword suppressed" "$OUT" "pipeline context"
+
+echo ""
+echo "=== Positive control: same keyword in real prose still fires ==="
+OUT=$(run_hook '{"prompt":"please check the pipeline status"}')
+assert_contains "Prose keyword still matches" "$OUT" "pipeline context"
+
+echo ""
+echo "=== A dotted vocab keyword no longer matches a URL it used to match ==="
 OUT=$(run_hook '{"prompt":"https://docs.example.com/page.html can go online"}')
-assert_contains "URL keyword matches" "$OUT" "site with url context"
+assert_not_contains "URL no longer feeds the domain-shaped vocab keyword" "$OUT" "site with url context"
 
 # =============================================
 # SECTION 5: Multi-layer matching
