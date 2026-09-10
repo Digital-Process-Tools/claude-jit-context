@@ -219,22 +219,31 @@ END {
   # word exactly like the comma case above (oss:auditor finding, second self-review
   # pass).
   #
-  # | and a closing ) ] } join the stop set too (second self-review pass, third round):
-  # the same swallowing class recurs for any punctuation a paste glues directly onto a
-  # URL with no space -- a pipe used as a prose separator, a URL wrapped in parens or
-  # brackets in running text or Markdown. All four are safe to exclude outright: none is
-  # a character a bare, unencoded URL legitimately ends on before the next word starts.
+  # | joins the stop set too (second self-review pass, third round): the same
+  # swallowing class recurs for a pipe used as a prose separator glued directly onto a
+  # URL with no space. Safe to exclude outright -- a raw, unencoded pipe is not a legal
+  # URI character at all (RFC 3986; it has to be percent-encoded as %7C), so no bare
+  # pasted URL legitimately contains one.
   #
-  # This is a curated stop-set, not a URL grammar, and it is not exhaustive -- a colon
-  # is deliberately NOT in it, because a colon is legitimate mid-URL (a port number,
-  # `http://x.com:8080/y`) and stopping there would truncate a real URL rather than
-  # trim a glued word, which is a worse failure than the one being fixed. Any other
-  # punctuation not listed here (a colon used as prose glue, an opening bracket, etc.)
-  # can still glue a following word into the mask -- known and accepted for the same
-  # reason the wider `url/` dimension is out of scope above: enumerating every prose
-  # separator by hand is exactly the guess-without-measurement #377 warns against.
+  # A closing ) ] } was tried here too and reverted (third self-review pass): a
+  # Wikipedia-style path segment routinely carries an unescaped parenthesis mid-path
+  # ("/wiki/Foo_(bar)"), and RFC 3986 reserves a bracketed host for a literal IPv6
+  # address ("http://[2001:db8::1]:8080/y") -- excluding those characters stopped the
+  # mask right after the opening bracket/paren and let the rest of a genuine URL path
+  # leak into the vocabulary subject unmasked, the exact defect class #377 exists to
+  # close, and a worse regression than the word-glue bug the exclusion was meant to
+  # fix. Same shape as the colon exclusion below: a character that is legitimately
+  # mid-URL must not be added to this set no matter how often it also shows up as glue.
+  #
+  # This is a curated stop-set, not a URL grammar, and it is not exhaustive -- colon is
+  # deliberately NOT in it either, for the identical reason (a port number,
+  # `http://x.com:8080/y`, is legitimate mid-URL). Any other punctuation not listed here
+  # (colon or a bracket/paren used as prose glue, an opening bracket, etc.) can still
+  # glue a following word into the mask -- known and accepted for the same reason the
+  # wider `url/` dimension is out of scope above: enumerating every prose separator by
+  # hand is exactly the guess-without-measurement #377 warns against.
   urlmasked = message
-  gsub(/[hH][tT][tT][pP][sS]?:\/\/[^ \t\n\r,;|)\]}]+/, " ", urlmasked)
+  gsub(/[hH][tT][tT][pP][sS]?:\/\/[^ \t\n\r,;|]+/, " ", urlmasked)
 
   cc = ""
   for (i = 1; i <= length(urlmasked); i++) {

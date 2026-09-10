@@ -203,18 +203,37 @@ assert_not_contains "the URL noise is still suppressed (bare CR)" "$OUT" "pipeli
 assert_contains "the glued-on word after the bare CR still fires" "$OUT" "billing context"
 
 echo ""
-echo "=== A URL glued to the next word by a pipe or a closing bracket does not swallow it (second self-review pass) ==="
+echo "=== A URL glued to the next word by a pipe does not swallow it (second self-review pass) ==="
 OUT=$(run_hook '{"prompt":"see https://docs.dp.tools/pipeline/sync|billing question"}')
 assert_not_contains "the URL noise is still suppressed (pipe)" "$OUT" "pipeline context"
 assert_contains "the glued-on word after the pipe still fires" "$OUT" "billing context"
-OUT=$(run_hook '{"prompt":"(see https://docs.dp.tools/pipeline/sync)billing question"}')
-assert_not_contains "the URL noise is still suppressed (closing paren)" "$OUT" "pipeline context"
-assert_contains "the glued-on word after the closing paren still fires" "$OUT" "billing context"
 
 echo ""
 echo "=== A port number inside a real URL is still masked, not truncated at the colon ==="
 OUT=$(run_hook '{"prompt":"see https://docs.dp.tools:8080/pipeline/sync for details"}')
 assert_not_contains "port-number URL is masked in full, sync never leaks" "$OUT" "pipeline context"
+
+echo ""
+echo "=== A closing paren/bracket mid-path is NOT in the stop set, on purpose (third self-review pass) ==="
+echo "A Wikipedia-style path segment (unescaped parenthesis mid-path) must still be masked in full --"
+echo "excluding ) from the stop set was tried and reverted because it truncated the mask right after"
+echo "the opening paren and let the rest of the real URL path leak, a worse regression than the"
+echo "word-glue bug the exclusion was meant to fix."
+OUT=$(run_hook '{"prompt":"see https://en.wikipedia.org/wiki/Foo_(bar)/pipeline/sync for details"}')
+assert_not_contains "a parenthesised Wikipedia-style path is masked in full" "$OUT" "pipeline context"
+
+echo ""
+echo "=== An IPv6-literal host is NOT truncated at its closing bracket, on purpose ==="
+OUT=$(run_hook '{"prompt":"see http://[2001:db8::1]:8080/pipeline/sync for details"}')
+assert_not_contains "an IPv6-literal host URL is masked in full" "$OUT" "pipeline context"
+
+echo ""
+echo "=== A mid-URL closing paren immediately followed by an anchor fragment is masked in full (oss:auditor finding, third self-review pass) ==="
+echo "Confirms the fix for the finding above also closes the case a stop-set character truncates"
+echo "the mask and leaks the rest of the SAME URL (an anchor fragment here), not just a separate word."
+OUT=$(run_hook '{"prompt":"see https://en.wikipedia.org/wiki/C_(billing)#pipeline for reference"}')
+assert_not_contains "the paren-then-anchor-fragment URL is masked in full" "$OUT" "billing context"
+assert_not_contains "and its anchor fragment never leaks either" "$OUT" "pipeline context"
 
 # =============================================
 # SECTION 5: Multi-layer matching
