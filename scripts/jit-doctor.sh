@@ -558,11 +558,59 @@ for _dim in tools paths vocabulary; do
     _idx="$_d/00-index.tsv"
     _md_n=0
     _stale=0
+    # #374: a layer's own 00-README.md (or any other doc-only .md) carries no
+    # tool:/match: frontmatter, so rebuild-tsv.sh correctly leaves it out of
+    # 00-index.tsv, and the hooks -- which read that index and nothing else -- can never
+    # load it. It is never eligible to fire, so the two advisory passes below must not
+    # call it "fat" or "never fired": that is an absence THIS TOOL produced (it globs
+    # every *.md, indexed or not) read as an absence in the world, the same class the
+    # tools-dimension log-key fix above this loop exists to end, one class over.
+    #
+    # Read against the index rather than re-parsing each .md's own frontmatter: "the
+    # hooks read 00-index.tsv and nothing else" is already this file's standing test for
+    # eligibility (the comment just above), and the filename column is the one thing
+    # every dimension's row carries, so it needs no per-dimension frontmatter parser.
+    # The filename sits at a different column per dimension -- tools rows are
+    # `tool	match	filename	mode	...`, paths/vocabulary rows are `match	filename` or
+    # `keyword	filename	verdict` -- so the column picked here has to follow that.
+    case "$_dim" in
+      tools) _namecol=3 ;;
+      *) _namecol=2 ;;
+    esac
+    _idx_names=""
+    # An index that EXISTS but cannot be READ (permission denied) is not the same state
+    # as no index at all -- `awk` would fail silently to stderr and leave _idx_names
+    # empty, which reads identically to "this layer has nothing indexed" and would
+    # exclude every genuinely-indexed rule from both advisories below with nothing
+    # naming why. `-r` alongside `-f` is this file's own sibling convention for the
+    # same file (the `[ -f "$d/00-index.tsv" ] && [ -r "$d/00-index.tsv" ]` guard in
+    # scan_short_keywords() further down) -- when it fails, fall back to the pre-#374
+    # behaviour for this layer (every .md is eligible) rather than silently excluding
+    # everything: jit_scan_layers() already surfaces an unreadable index elsewhere in
+    # this same report, as a layer the matcher does not read, so this fallback trades
+    # a possible false "fat"/"never fired" for never a false silence.
+    _idx_readable=1
+    if [ -f "$_idx" ]; then
+      if [ -r "$_idx" ]; then
+        _idx_names="$(LC_ALL=C awk -F'\t' -v c="$_namecol" 'NF >= c { print $c }' "$_idx")"
+      else
+        _idx_readable=0
+      fi
+    fi
     for _md in "$_d"/*.md; do
       [ -f "$_md" ] || continue
       _md_n=$((_md_n + 1))
       [ -f "$_idx" ] && [ "$_md" -nt "$_idx" ] && _stale=1
       _name="${_md##*/}"
+      if [ "$_idx_readable" = 1 ]; then
+        case "$JIT_NL$_idx_names$JIT_NL" in
+          *"$JIT_NL$_name$JIT_NL"*) : ;;
+          # Not a line 00-index.tsv names for this layer -- not a rule, so it is counted
+          # in _md_n above (the dimension's own tally still shows it) and left out of
+          # ENTRY_* below (the two advisory passes never see it).
+          *) continue ;;
+        esac
+      fi
       # THE LOG KEY IS NOT THE DISPLAY LABEL, and the two dimensions spell it differently.
       # pre-path-hook.sh and the vocabulary half of pre-tool-hook.sh write `layer:file.md(`
       # -- but the TOOLS half writes the literal `tool:file.md(` and never the layer name
