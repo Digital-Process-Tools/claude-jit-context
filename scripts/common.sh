@@ -2128,12 +2128,20 @@ function jit_transclude_resolve(spec,   n, parts, dim, layer, file, dir, path, w
 # purpose for an ordinary full-mode fire -- that is pre-existing behaviour this fix does
 # not touch -- but a transcluded file was never the row that matched, so its keywords:
 # line means nothing to the reader it lands in front of.
-function jit_transclude_strip_frontmatter(body,   lines, n, i, out, closed, first) {
+function jit_transclude_strip_frontmatter(body,   lines, n, i, out, closed, first, ln) {
   n = split(body, lines, "\n")
-  if (n == 0 || lines[1] != "---") return body
+  if (n == 0) return body
+  # A CR-stripped COPY for the fence comparison only, never for what is kept -- the same
+  # split jit_entry_load() already makes for the identical "---" test, so a target saved
+  # with CRLF line endings (plausible on Windows before a checkout normalises it) is
+  # still recognised as opening and closing frontmatter, and the CR itself is trimmed
+  # from the comparison, never silently eaten out of a body line this function keeps.
+  ln = lines[1]; sub(/\r$/, "", ln)
+  if (ln != "---") return body
   closed = 0
   for (i = 2; i <= n; i++) {
-    if (lines[i] == "---") { closed = 1; i++; break }
+    ln = lines[i]; sub(/\r$/, "", ln)
+    if (ln == "---") { closed = 1; i++; break }
   }
   if (!closed) return body
   out = ""; first = 1
@@ -2162,7 +2170,7 @@ function jit_expand_transclusions(body, depth,   out, i, n, lines, first) {
 # function must still read as open on the next, since the caller feeds it one body line
 # at a time -- reset once per top-level fire, in jit_inject_text(), the same place the
 # other two shared counters are reset.
-function jit_transclude_expand_line(line, depth,   trimmed, out, i, n, start, endp, spec, path, tent, expanded) {
+function jit_transclude_expand_line(line, depth,   trimmed, out, i, n, start, endp, spec, path, tent, expanded, saved_infence) {
   trimmed = line
   sub(/^[[:space:]]+/, "", trimmed)
   if (trimmed ~ /^```/) { jit_infence = !jit_infence; return line }
@@ -2213,7 +2221,17 @@ function jit_transclude_expand_line(line, depth,   trimmed, out, i, n, start, en
     }
     jit_transclude_total++
     jit_transclude_stack = jit_transclude_stack path "\n"
+    # jit_infence tracks fence-open/closed state ACROSS the whole recursive walk, and an
+    # included file is its own self-contained document: an odd number of fence markers
+    # left open inside IT must never bleed into the lines of whoever included it (review
+    # finding, #378). Saved and forced closed before recursing in, restored to the
+    # caller own state after -- never just reset to 0, because a transclusion that
+    # itself sits INSIDE a fence in the parent (already inert, per the guard above) must
+    # not come back open once this nested call returns.
+    saved_infence = jit_infence
+    jit_infence = 0
     expanded = jit_expand_transclusions(jit_transclude_strip_frontmatter(tent["body"]), depth + 1)
+    jit_infence = saved_infence
     jit_transclude_stack = substr(jit_transclude_stack, 1, length(jit_transclude_stack) - length(path) - 1)
     out = out expanded
   }

@@ -378,7 +378,7 @@ The loss `summary` buys with is real and worth stating: the pull is a soft rule,
 
 ## Writing an entry
 
-Every entry is a markdown file with YAML frontmatter, in `00-manual/`. The frontmatter is the only structured part; the body is free-form and goes into context verbatim, unless the project has opted in to [`summary` mode](#what-a-match-costs).
+Every entry is a markdown file with YAML frontmatter, in `00-manual/`. The frontmatter is the only structured part; the body is free-form and goes into context as written, unless the project has opted in to [`summary` mode](#what-a-match-costs) or the body itself uses [transclusion](#the-three-dimensions) to pull another entry in.
 
 Two fields apply to every dimension:
 

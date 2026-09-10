@@ -250,6 +250,79 @@ OUT=$(run_path "$TEST_DIR/transmany.txt")
 assert_contains "the budget is enforced: at least one leaf is refused as over budget" "$OUT" "transclusion refused: this fire already spliced in"
 assert_contains "and at least one leaf before the cap still arrived" "$OUT" "LEAF-1-MARKER"
 
+# =============================================
+# SECTION 9: an unbalanced fence inside an INCLUDED file must not leak fence state
+# back into the file that included it (review finding, #378)
+# =============================================
+echo ""
+echo "=== SECTION 9: a fence left open by one include does not swallow the next one ==="
+
+printf '%s\n' \
+  "---" \
+  "title: Unbalanced fence leaf" \
+  "description: Its own body opens a fence and never closes it." \
+  "keywords: neverfired7" \
+  "---" \
+  '```' \
+  "UNBALANCED-FENCE-MARKER" > "$P/unbalanced.md"
+
+printf '%s\n' \
+  "---" \
+  "title: Leaf after the unbalanced one" \
+  "description: An ordinary leaf, transcluded after the bad one." \
+  "keywords: neverfired8" \
+  "---" \
+  "LEAF-AFTER-MARKER" > "$P/leafafter.md"
+
+printf '%s\n' \
+  "---" \
+  "title: Fence leak root" \
+  "description: Includes the unbalanced leaf, then a plain leaf." \
+  "keywords: trans9fenceleak" \
+  "---" \
+  "before-marker" \
+  "{{paths/00-manual/unbalanced.md}}" \
+  "mid-marker" \
+  "{{paths/00-manual/leafafter.md}}" \
+  "after-marker" > "$P/fenceleak.md"
+printf '%s\t%s\n' trans9fenceleak fenceleak.md >> "$INDEX"
+
+OUT=$(run_path "$TEST_DIR/trans9fenceleak.txt")
+assert_contains "the unbalanced leaf itself still arrives" "$OUT" "UNBALANCED-FENCE-MARKER"
+assert_contains "the plain text between the two includes survives" "$OUT" "mid-marker"
+assert_contains "the SECOND transclusion still expands, not left as a literal pointer" \
+  "$OUT" "LEAF-AFTER-MARKER"
+assert_not_contains "and its braces do not survive as inert literal text" \
+  "$OUT" "{{paths/00-manual/leafafter.md}}"
+
+# =============================================
+# SECTION 10: a CRLF-saved target still gets its frontmatter stripped (audit finding, #378)
+# =============================================
+echo ""
+echo "=== SECTION 10: CRLF line endings in the target do not defeat the frontmatter strip ==="
+
+printf '%s\r\n' \
+  "---" \
+  "title: CRLF Included" \
+  "description: Has CRLF endings." \
+  "keywords: neverfired9" \
+  "---" \
+  "CRLF-BODY-MARKER" > "$P/crlfinc.md"
+
+printf '%s\n' \
+  "---" \
+  "title: CRLF root" \
+  "description: Transcludes the CRLF target." \
+  "keywords: translacrlf" \
+  "---" \
+  "{{paths/00-manual/crlfinc.md}}" > "$P/crlfroot.md"
+printf '%s\t%s\n' translacrlf crlfroot.md >> "$INDEX"
+
+OUT=$(run_path "$TEST_DIR/translacrlf.txt")
+assert_contains "the CRLF target own body still arrives" "$OUT" "CRLF-BODY-MARKER"
+assert_not_contains "its frontmatter is stripped despite the CRLF line endings" \
+  "$OUT" "neverfired9"
+
 echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))
