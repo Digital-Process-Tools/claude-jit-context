@@ -679,7 +679,7 @@ END {
         rpath = tools_dir "/" r_file
         if (jit_entry_load(rpath, inject_default, keepbody, ent)) {
           body = ent["body"]
-          content = jit_inject_text(ent, ".claude/jit-context/" tool_label "/" r_file)
+          content = jit_inject_text(ent, ".claude/jit-context/" tool_label "/" r_file, rpath)
         }
         why = ent["why"]
       }
@@ -1094,7 +1094,7 @@ END {
         vpath = vocab_base "/" layer "/" vfile
         if (jit_entry_load(vpath, inject_default, 0, vent)) {
           if (generic_only) vent["mode"] = "summary"
-          vc = jit_inject_text(vent, ".claude/jit-context/vocabulary/" layer "/" vfile)
+          vc = jit_inject_text(vent, ".claude/jit-context/vocabulary/" layer "/" vfile, vpath)
         } else if (vent["why"] != "") {
           why = vent["why"]
           n_refused++

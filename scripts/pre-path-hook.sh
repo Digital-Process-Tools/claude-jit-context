@@ -395,7 +395,7 @@ END {
       content = ""
       rpath = paths_base "/" layer "/" rule_file
       if (jit_entry_load(rpath, inject_default, 0, ent)) {
-        content = jit_inject_text(ent, ".claude/jit-context/paths/" layer "/" rule_file)
+        content = jit_inject_text(ent, ".claude/jit-context/paths/" layer "/" rule_file, rpath)
       } else if (ent["why"] != "") {
         why = ent["why"]
         n_refused++
@@ -479,7 +479,7 @@ END {
         vcontent = ""
         vfpath = vocab_base "/" layer "/" vocab_file
         if (jit_entry_load(vfpath, inject_default, 0, vent)) {
-          vcontent = jit_inject_text(vent, ".claude/jit-context/vocabulary/" layer "/" vocab_file)
+          vcontent = jit_inject_text(vent, ".claude/jit-context/vocabulary/" layer "/" vocab_file, vfpath)
         } else if (vent["why"] != "") {
           why = vent["why"]
           n_refused++

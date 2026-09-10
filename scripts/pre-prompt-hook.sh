@@ -389,7 +389,7 @@ END {
         # otherwise choose, precisely because nothing here changed how the entry
         # itself is configured.
         if (generic_only) vent["mode"] = "summary"
-        vc = jit_inject_text(vent, ".claude/jit-context/vocabulary/" layer "/" vfile)
+        vc = jit_inject_text(vent, ".claude/jit-context/vocabulary/" layer "/" vfile, vpath)
       } else if (vent["why"] != "") {
         why = vent["why"]
         n_refused++

@@ -94,6 +94,15 @@ _ms() {
 # old, already-tested degradation rather than reaching for a third fallback nothing
 # here exercises.
 JIT_BASE="${CLAUDE_PROJECT_DIR:-${PWD:-.}}/.claude/jit-context"
+# Exported (#378): {{dimension/layer/file.md}} transclusion resolves its target through
+# ENVIRON["JIT_BASE"] inside the shared awk fragment, the same channel JIT_SYMLINKS below
+# already uses and for the same reason -- a -v value has its escapes PROCESSED, so a
+# checkout path carrying a backslash would arrive mangled and one carrying a newline is a
+# fatal awk error raised before the program runs. Nothing before #378 read this out of
+# ENVIRON, so nothing before #378 needed it exported; every hook here still builds its own
+# OWN getline paths from its own bash-side base variable, never from this one, so
+# exporting it changes nothing any existing row reads.
+export JIT_BASE
 
 # --- Which host is running this hook (#252) ----------------------------------------
 # scripts/host.sh is the registry; this just calls it, and guards the call the way
@@ -2048,6 +2057,168 @@ function jit_clip(s, n,   i) {
   sub(/[ \t\n\v\f\r]+$/, "", s)
   return s " [clipped]"
 }
+# --- Transclusion: {{dimension/layer/file.md}} spliced into a body at fire time (#378) ---
+#
+# Decided FIRE TIME rather than rebuild time -- see paths/00-manual/entries.md for the full
+# writeup. Every other body transform in this file (jit_clip, jit_inject_text itself)
+# already runs per fire and rebuild-tsv.sh never touches what gets INJECTED, only what
+# gets INDEXED, so pulling this into the rebuild would be a second body pipeline rather
+# than a reuse of this one. Fire time also keeps the ergonomic already established: editing
+# a transcluded body needs no rebuild-tsv.sh run to take effect, which is the trap the top
+# of CLAUDE.md already names for frontmatter -- reopening it one layer down for bodies
+# would be a strange trade for a feature whose whole point is to hand a body over directly.
+# The cost that buys is bounded rather than assumed away: a depth cap, a per-fire total cap
+# and cycle detection, all three enforced in the pass that resolves the path, below.
+#
+# Containment is the syntax, not a bolt-on check -- the issue own framing, and the reason
+# the accepted shape is narrow. A spec is split on "/" into EXACTLY three components, each
+# held to the same alphabet a layer directory name is already held to elsewhere in this
+# file (letters, digits, dot, underscore, hyphen -- jit_layers_notice() own wording), with
+# a leading dot refused the way jit_bad_entry_file() already refuses one on an ordinary
+# file-name column. That alphabet has no "/" and cannot spell ".." as a whole component
+# without also failing the explicit equality check below, so there is no character
+# sequence that climbs out of the tree and nothing left for a symlink check to add on top
+# of. jit_bad_entry_file()/jit_entry_why() still run anyway: a transclusion target is
+# refused by EXACTLY the rule an ordinary index row is refused by, not a second rule that
+# could quietly drift from it.
+# BEGIN, not a bare top-level assignment: an awk statement outside any block is a
+# PATTERN with the implicit default action `{ print }` -- so `X = 3` at top level does
+# not just set X, it adds a rule that prints the WHOLE input record, once per line, for
+# every hook invocation from here on. Two bare assignments read as two such rules, which
+# is exactly what made every fire double-print its own raw JSON payload before stdout
+# ever reached the real END block (caught by tests/test-inject-mode.sh and friends,
+# never by tests/test-transclusion-378.sh itself, since that suite only ever asserts
+# what IS in the output rather than what else came before it).
+BEGIN {
+  JIT_TRANSCLUDE_DEPTH_MAX = 3
+  JIT_TRANSCLUDE_TOTAL_MAX = 12
+}
+function jit_transclude_component_ok(s) {
+  if (s == "" || s == "." || s == "..") return 0
+  if (substr(s, 1, 1) == ".") return 0
+  if (s ~ /[^A-Za-z0-9._-]/) return 0
+  return 1
+}
+# Resolves "dimension/layer/file.md" to an absolute path under JIT_BASE, or sets
+# jit_transclude_why and returns "". JIT_BASE arrives through ENVIRON -- exported by
+# common.sh at the top of every hook -- and never through -v: a -v value has its escapes
+# PROCESSED, and a checkout path can carry a backslash, or a newline that would be a fatal
+# awk error raised before the program runs (the same reason JIT_BASE reaches this file
+# that way already, at the top of this file where it is exported).
+function jit_transclude_resolve(spec,   n, parts, dim, layer, file, dir, path, why) {
+  jit_transclude_why = ""
+  n = split(spec, parts, "/")
+  if (n != 3) { jit_transclude_why = "not a dimension/layer/file.md path"; return "" }
+  dim = parts[1]; layer = parts[2]; file = parts[3]
+  if (!jit_transclude_component_ok(dim) || !jit_transclude_component_ok(layer) || !jit_transclude_component_ok(file) || file !~ /\.md$/) {
+    jit_transclude_why = "not a dimension/layer/file.md path"
+    return ""
+  }
+  dir = ENVIRON["JIT_BASE"] "/" dim "/" layer
+  why = jit_bad_entry_file(file, dir)
+  if (why == "") {
+    path = dir "/" file
+    why = jit_entry_why(path)
+  }
+  if (why != "") { jit_transclude_why = why; return "" }
+  return path
+}
+# The transcluded file own --- frontmatter block, stripped before its body is spliced in
+# (#378 judgment call 4). jit_entry_load() below leaves frontmatter INSIDE e["body"] on
+# purpose for an ordinary full-mode fire -- that is pre-existing behaviour this fix does
+# not touch -- but a transcluded file was never the row that matched, so its keywords:
+# line means nothing to the reader it lands in front of.
+function jit_transclude_strip_frontmatter(body,   lines, n, i, out, closed, first) {
+  n = split(body, lines, "\n")
+  if (n == 0 || lines[1] != "---") return body
+  closed = 0
+  for (i = 2; i <= n; i++) {
+    if (lines[i] == "---") { closed = 1; i++; break }
+  }
+  if (!closed) return body
+  out = ""; first = 1
+  for (; i <= n; i++) { out = out (first ? "" : "\n") lines[i]; first = 0 }
+  return out
+}
+# The recursive expander. depth counts transclusions already nested at this point (0 for
+# a fired entry own body); jit_transclude_total and jit_transclude_stack are reset ONCE,
+# by jit_inject_text() before the first call, and shared across the whole recursion for
+# one fire -- that is what makes the total a per-fire cap rather than a per-file one.
+function jit_expand_transclusions(body, depth,   out, i, n, lines, first) {
+  n = split(body, lines, "\n")
+  out = ""; first = 1
+  for (i = 1; i <= n; i++) {
+    out = out (first ? "" : "\n") jit_transclude_expand_line(lines[i], depth)
+    first = 0
+  }
+  return out
+}
+# One line at a time, so a fenced code block can be recognised and left alone regardless
+# of what it quotes. Markdown fences are line-oriented, and every entry that quotes
+# GitHub Actions YAML today (vendored-oss.md, about .github/workflows/oss-changelog.yml)
+# does so inside one -- a "${{ github.sha }}" sitting on its own line inside a fence must
+# never be read as this syntax, whether or not the "$" guard below would also have caught
+# it. jit_infence is a whole-process flag on purpose: a fence opened on one call to this
+# function must still read as open on the next, since the caller feeds it one body line
+# at a time -- reset once per top-level fire, in jit_inject_text(), the same place the
+# other two shared counters are reset.
+function jit_transclude_expand_line(line, depth,   trimmed, out, i, n, start, endp, spec, path, tent, expanded) {
+  trimmed = line
+  sub(/^[[:space:]]+/, "", trimmed)
+  if (trimmed ~ /^```/) { jit_infence = !jit_infence; return line }
+  if (jit_infence) return line
+  if (index(line, "{{") == 0) return line
+  out = ""
+  n = length(line)
+  i = 1
+  while (i <= n) {
+    start = index(substr(line, i), "{{")
+    if (start == 0) { out = out substr(line, i); break }
+    start = i + start - 1
+    out = out substr(line, i, start - i)
+    # A "{{" immediately preceded by "$" is GitHub Actions syntax and is left completely
+    # alone, brace and all -- the guard the issue itself suggests.
+    if (start > 1 && substr(line, start - 1, 1) == "$") {
+      out = out "{{"
+      i = start + 2
+      continue
+    }
+    endp = index(substr(line, start + 2), "}}")
+    if (endp == 0) { out = out substr(line, start); break }
+    endp = start + 2 + endp - 1
+    spec = substr(line, start + 2, endp - (start + 2))
+    gsub(/^[[:space:]]+/, "", spec)
+    gsub(/[[:space:]]+$/, "", spec)
+    i = endp + 2
+    if (jit_transclude_total >= JIT_TRANSCLUDE_TOTAL_MAX) {
+      out = out "{{" spec "}} [jit] transclusion refused: this fire already spliced in " JIT_TRANSCLUDE_TOTAL_MAX " file(s), so this one was left as a pointer"
+      continue
+    }
+    if (depth >= JIT_TRANSCLUDE_DEPTH_MAX) {
+      out = out "{{" spec "}} [jit] transclusion refused: nested " JIT_TRANSCLUDE_DEPTH_MAX " deep already, so this one was left as a pointer"
+      continue
+    }
+    path = jit_transclude_resolve(spec)
+    if (path == "") {
+      out = out "{{" spec "}} [jit] transclusion refused: " jit_transclude_why
+      continue
+    }
+    if (index(jit_transclude_stack, "\n" path "\n") > 0) {
+      out = out "{{" spec "}} [jit] transclusion refused: this would include itself (a cycle)"
+      continue
+    }
+    if (!jit_entry_load(path, "full", 1, tent)) {
+      out = out "{{" spec "}} [jit] transclusion refused: " (tent["why"] != "" ? tent["why"] : "the entry file is empty")
+      continue
+    }
+    jit_transclude_total++
+    jit_transclude_stack = jit_transclude_stack path "\n"
+    expanded = jit_expand_transclusions(jit_transclude_strip_frontmatter(tent["body"]), depth + 1)
+    jit_transclude_stack = substr(jit_transclude_stack, 1, length(jit_transclude_stack) - length(path) - 1)
+    out = out expanded
+  }
+  return out
+}
 # Fills e with title, desc, mode, body and two flags, and returns 1 when the file had
 # anything in it at all. An unreadable or empty entry returns 0 and the caller stays
 # silent, which is what it did before this existed.
@@ -2179,7 +2350,7 @@ function jit_badmode_note(e) {
 # A refusal still never carries it: pre-tool-hook.sh builds a block reason from the body
 # and not from this, and an entry that can refuse reads its body whatever the mode says, so
 # a bad inject: changes nothing there to report.
-function jit_inject_text(e, rel,   out) {
+function jit_inject_text(e, rel, selfpath,   out, tbody) {
   if (e["mode"] == "full") {
     # A file with NO frontmatter is pinned to full (see jit_entry_load() above), and
     # body is then the WHOLE FILE. A file of nothing but blank lines reads back as "\n"
@@ -2210,7 +2381,15 @@ function jit_inject_text(e, rel,   out) {
     # too would report on a file that already behaved correctly, and is not what #170 is
     # about.
     if (e["body"] != "" && e["body"] ~ /^[[:space:]]*$/) return "[jit] The entry file has no text to inject." jit_badmode_note(e)
-    return e["body"] jit_badmode_note(e)
+    # {{dimension/layer/file.md}} transclusion (#378), expanded here rather than at
+    # rebuild time -- see the block above jit_transclude_resolve() for why. Skipped with
+    # one cheap index() when the body carries no "{{" at all, which is every entry that
+    # does not use this syntax -- the common case stays exactly as fast as it was.
+    jit_transclude_total = 0
+    jit_transclude_stack = (selfpath != "" ? "\n" selfpath "\n" : "\n")
+    jit_infence = 0
+    tbody = (index(e["body"], "{{") > 0) ? jit_expand_transclusions(e["body"], 0) : e["body"]
+    return tbody jit_badmode_note(e)
   }
   out = ""
   if (e["title"] != "") out = jit_clip(e["title"], 160)
