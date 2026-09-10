@@ -196,6 +196,12 @@ OUT=$(run_hook '{"prompt":"see https://docs.dp.tools/pipeline/sync,billing quest
 assert_not_contains "the URL noise is still suppressed" "$OUT" "pipeline context"
 assert_contains "the glued-on word after the comma still fires" "$OUT" "billing context"
 
+echo ""
+echo "=== A URL glued to the next word by a bare CR does not swallow it (oss:auditor finding) ==="
+OUT=$(run_hook '{"prompt":"see https://docs.dp.tools/pipeline/sync\rbilling question"}')
+assert_not_contains "the URL noise is still suppressed (bare CR)" "$OUT" "pipeline context"
+assert_contains "the glued-on word after the bare CR still fires" "$OUT" "billing context"
+
 # =============================================
 # SECTION 5: Multi-layer matching
 # =============================================

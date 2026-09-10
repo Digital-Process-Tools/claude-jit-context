@@ -210,8 +210,16 @@ END {
   # semicolon is masked only up to that character -- rare in practice, and the residue
   # left behind is itself non-alnum, so the flatten below turns it into a harmless space
   # rather than a stray token.
+  #
+  # \r joins \t and \n in the stop set for the same reason \n is already there: a bare
+  # CR (not part of a CRLF pair) is a real byte in `message` whenever a JSON payload
+  # spells one out as the escape \r -- jit_unescape() in common.sh decodes it to a
+  # literal CR -- and [^ \t\n]+ alone treated that byte as ordinary URL content, so a
+  # URL glued to the next word by a bare CR instead of a space or comma swallowed the
+  # word exactly like the comma case above (oss:auditor finding, second self-review
+  # pass).
   urlmasked = message
-  gsub(/[hH][tT][tT][pP][sS]?:\/\/[^ \t\n,;]+/, " ", urlmasked)
+  gsub(/[hH][tT][tT][pP][sS]?:\/\/[^ \t\n\r,;]+/, " ", urlmasked)
 
   cc = ""
   for (i = 1; i <= length(urlmasked); i++) {
