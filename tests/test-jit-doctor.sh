@@ -700,6 +700,47 @@ assert_has "control: an indexed rule that never fired is still named" "$OUT" "gu
 # silently disappear from the report altogether -- only the two advisories exempt it.
 assert_has "the README still counts in the layer's own entry tally" "$OUT" "tools/00-manual            2 entr(y/ies)"
 
+# =====================================================================================
+echo ""
+echo "=== #374 follow-up: an unreadable (not merely absent) index falls back rather than silently emptying every advisory ==="
+# jit-doctor.sh:588's own sibling check, ~170 lines below, is `[ -f "$idx" ] && [ -r "$idx" ]`
+# -- this one checked only `-f`. An index that EXISTS but cannot be read (permission denied)
+# made `awk` fail silently to stderr, so `_idx_names` came back empty, and the membership
+# check above then excluded EVERY .md in that layer from both advisories -- indistinguishable
+# from "this layer has nothing indexed", with no defect or advisory of its own naming it.
+# Gated behind a positive control, same idiom as tests/test-awk-locale-pins.sh section E:
+# an account that ignores permission bits (root, some CI images) would pass the assertions
+# below for the wrong reason -- for nothing having been excluded at all.
+UNREADIDX="$TMP/unreadidx/.claude/jit-context"
+mkdir -p "$TMP/unreadidx"
+mk_tree "$UNREADIDX"
+{
+  echo "---"
+  echo "title: A tools rule"
+  echo "description: refuses a push to main"
+  echo "tool: Bash"
+  echo "match: git push"
+  echo "mode: block"
+  echo "---"
+  i=0
+  while [ "$i" -lt 300 ]; do
+    echo "this line exists only to push the entry past the byte threshold."
+    i=$((i + 1))
+  done
+} > "$UNREADIDX/tools/00-manual/guard.md"
+touch -t 202001010000 "$UNREADIDX/tools/00-manual/guard.md"
+touch "$UNREADIDX/tools/00-manual/$IDX"
+chmod 000 "$UNREADIDX/tools/00-manual/$IDX"
+if cat "$UNREADIDX/tools/00-manual/$IDX" > /dev/null 2>&1; then
+  echo "  SKIPPED: this account (root, or a filesystem that ignores the permission bit)" "can still read a chmod 000 file, so this section proves nothing here."
+else
+  ST=0
+  run_doctor --base "$UNREADIDX" || ST=$?
+  assert_has "an unreadable index falls back to reporting the fat entry, not silently dropping it" "$OUT" "guard.md is over"
+  assert_exit "still advisory-only, exit 0" 0 "$ST"
+fi
+chmod 644 "$UNREADIDX/tools/00-manual/$IDX" 2> /dev/null || true
+
 echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))
