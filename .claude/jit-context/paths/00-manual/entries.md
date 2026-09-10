@@ -58,6 +58,78 @@ match: ~@invocation-quoted-arg supertool   # supertool 'x' | head yes, pytest | 
 
 `rebuild-tsv.sh` expands it into the real ERE, so the index still carries a plain awk pattern. A macro it does not know is refused and named, and written through unexpanded so the hook refuses that row too rather than matching nothing. `paths` has no macros — its subject is a file path — and one written there is refused.
 
+## Pull another entry body in: `{{dimension/layer/file.md}}`
+
+A body can transclude another entry body directly (#378), so "full argument:
+`skills/manager/phases/merge.md`" can become the argument itself:
+
+```
+{{vocabulary/00-manual/jit-context.md}}
+```
+
+That is exactly the shape the log line and the status line already print (`JIT :
+vocabulary/00-manual/x.md (4.6k)`) -- copy the line you just watched fire, paste it between
+braces, and there is no new addressing to learn.
+
+**Expanded at fire time, not at rebuild time.** A transcluded body is a body, and every
+other body transform here (`jit_clip()`, `jit_inject_text()` itself) already happens per
+fire -- `rebuild-tsv.sh` never touches what gets injected, only what gets indexed. Fire
+time also keeps the ergonomic this file opens with: editing the *included* file needs no
+`rebuild-tsv.sh` run either, which would be strange to give up for a feature whose whole
+point is handing a body over directly.
+
+**Containment is the syntax, not a check bolted on afterward.** The only shape accepted is
+a bare `dimension/layer/file.md`, split into exactly three components, each restricted to
+letters, digits, dot, underscore and hyphen and refusing a leading dot -- the same alphabet
+a layer directory name is already held to elsewhere in this file. That alphabet cannot
+spell `..` as a whole component, so there is no character sequence that climbs out of the
+tree, and the same containment and symlink guard an ordinary index row is refused by
+(`jit_bad_entry_file()`/`jit_entry_why()`) runs on the resolved target too -- not a second
+rule that could quietly drift from the first. Anything that does not resolve is **refused
+in place, named**, right where the braces were: `{{spec}} [jit] transclusion refused:
+<reason>`, never silently dropped.
+
+**Bounded rather than trusted to behave.** A depth cap of 3 nested transclusions, a per-fire
+total cap of 12 files, and cycle detection (`a` includes `b` includes `a`) all live in the
+same function that resolves the path (`jit_transclude_resolve()`/
+`jit_transclude_expand_line()` in `common.sh`). Crossing either cap reads the same way as an
+unresolvable target: a named refusal in place, never a hang and never a silent truncation.
+
+**`${{ github.sha }}` is never this syntax.** A `{{` immediately preceded by `$` is left
+completely alone, brace and all -- entries that quote GitHub Actions workflow YAML
+(`vendored-oss.md`, about `.github/workflows/oss-changelog.yml`) rely on that. So does any
+` ``` `-fenced code block, regardless of what it quotes or whether it also happens to start
+with `$` -- an entry *showing* the syntax without using it, the way this section does above,
+would otherwise expand itself.
+
+**Frontmatter is stripped from the included file, never from the firing one.** The
+transcluded file's own `---` block is real frontmatter with its own `keywords:` and
+`description:`, and none of that means anything to the reader it lands in front of, so it
+is cut before the body is spliced in. This is unrelated to, and does not change, the
+pre-existing fact that a fired entry's *own* frontmatter is part of what `full` mode injects
+today -- that is a different, older behavior this feature does not touch.
+
+**Firing twice is accepted, not deduplicated.** If `inc.md` also fires on its own in the
+same session, and something else transcludes it too, its body arrives twice: the
+per-session `fired` marker is per entry and has no notion that one body is now nested
+inside another. Teaching the marker to follow the body is a real option; it was left out of
+this change because it would make an entry `fired` (spending its one shot for the session)
+purely as a side effect of someone else quoting it, which is a bigger behavior change than
+the syntax itself.
+
+**Size is not yet transitive.** `rebuild-tsv.sh`'s "what a match costs" report still prices
+an entry off its own raw bytes (`length(e["body"])`), before transclusion is expanded, so a
+2 KB entry that transcludes three files is not reported as the larger number it actually
+costs at fire time. Making that report walk the same expansion `jit_inject_text()` performs
+is a reasonable follow-up; it was left out here to keep this change to the fire-time path
+alone, and worth its own issue.
+
+**A pointer is still sometimes the right answer.** `tools/01-oss/merge-gate.md` points at
+`skills/manager/phases/merge.md` on purpose, because the full argument does not belong in
+every merge -- inlining costs nothing until the day some entry transcludes something 30 KB
+that fires on every file touch. If a fired entry starts reading unexpectedly large, check
+whether it transcludes something before assuming its own body grew.
+
 ## Prove it fires
 
 Rebuilding is not evidence, and neither is the tree you are standing in: `JIT_BASE` resolves against `$CLAUDE_PROJECT_DIR`, so a worktree's rules are inert for a session rooted elsewhere.

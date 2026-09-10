@@ -378,7 +378,7 @@ The loss `summary` buys with is real and worth stating: the pull is a soft rule,
 
 ## Writing an entry
 
-Every entry is a markdown file with YAML frontmatter, in `00-manual/`. The frontmatter is the only structured part; the body is free-form and goes into context verbatim, unless the project has opted in to [`summary` mode](#what-a-match-costs).
+Every entry is a markdown file with YAML frontmatter, in `00-manual/`. The frontmatter is the only structured part; the body is free-form and goes into context as written, unless the project has opted in to [`summary` mode](#what-a-match-costs) or the body itself uses [transclusion](#the-three-dimensions) to pull another entry in.
 
 Two fields apply to every dimension:
 
@@ -403,6 +403,14 @@ the next read.
 ```
 
 That is a vocabulary entry, matched on a keyword in the prompt. A `paths/` entry matches a file path instead, and a `tools/` entry matches — and can refuse — a command. Every field, every mode, invocation anchoring and the awk-vs-PCRE pattern rules are in [`docs/writing-entries.md`](docs/writing-entries.md) and [`docs/patterns.md`](docs/patterns.md).
+
+A body can also pull another entry's body in directly, expanded at fire time:
+
+```
+{{vocabulary/00-manual/jit-context.md}}
+```
+
+A bare `dimension/layer/file.md` in double braces, nothing else — no `..`, no absolute path, no symlink target, and a target that does not resolve is refused right where the braces were rather than dropped silently. `.claude/jit-context/paths/00-manual/entries.md` covers the caps, the `${{ }}`/fenced-code guards, and what it does not (yet) do to `rebuild-tsv.sh`'s size report.
 
 ## Rebuild after every edit
 

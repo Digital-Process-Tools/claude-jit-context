@@ -1590,7 +1590,7 @@ BEGIN {
     # that would actually be injected rather than an estimate of it.
     keep = e["mode"]
     e["mode"] = "summary"
-    sumb[n] = length(jit_inject_text(e, rel))
+    sumb[n] = length(jit_inject_text(e, rel, path))
     e["mode"] = keep
     if (eff[n] == "full") { nfull++; bfull += fullb[n] }
     # An entry with no description: could only be summarised into its own name, so it is
