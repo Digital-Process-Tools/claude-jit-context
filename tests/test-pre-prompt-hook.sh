@@ -202,6 +202,20 @@ OUT=$(run_hook '{"prompt":"see https://docs.dp.tools/pipeline/sync\rbilling ques
 assert_not_contains "the URL noise is still suppressed (bare CR)" "$OUT" "pipeline context"
 assert_contains "the glued-on word after the bare CR still fires" "$OUT" "billing context"
 
+echo ""
+echo "=== A URL glued to the next word by a pipe or a closing bracket does not swallow it (second self-review pass) ==="
+OUT=$(run_hook '{"prompt":"see https://docs.dp.tools/pipeline/sync|billing question"}')
+assert_not_contains "the URL noise is still suppressed (pipe)" "$OUT" "pipeline context"
+assert_contains "the glued-on word after the pipe still fires" "$OUT" "billing context"
+OUT=$(run_hook '{"prompt":"(see https://docs.dp.tools/pipeline/sync)billing question"}')
+assert_not_contains "the URL noise is still suppressed (closing paren)" "$OUT" "pipeline context"
+assert_contains "the glued-on word after the closing paren still fires" "$OUT" "billing context"
+
+echo ""
+echo "=== A port number inside a real URL is still masked, not truncated at the colon ==="
+OUT=$(run_hook '{"prompt":"see https://docs.dp.tools:8080/pipeline/sync for details"}')
+assert_not_contains "port-number URL is masked in full, sync never leaks" "$OUT" "pipeline context"
+
 # =============================================
 # SECTION 5: Multi-layer matching
 # =============================================

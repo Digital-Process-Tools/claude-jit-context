@@ -218,8 +218,23 @@ END {
   # URL glued to the next word by a bare CR instead of a space or comma swallowed the
   # word exactly like the comma case above (oss:auditor finding, second self-review
   # pass).
+  #
+  # | and a closing ) ] } join the stop set too (second self-review pass, third round):
+  # the same swallowing class recurs for any punctuation a paste glues directly onto a
+  # URL with no space -- a pipe used as a prose separator, a URL wrapped in parens or
+  # brackets in running text or Markdown. All four are safe to exclude outright: none is
+  # a character a bare, unencoded URL legitimately ends on before the next word starts.
+  #
+  # This is a curated stop-set, not a URL grammar, and it is not exhaustive -- a colon
+  # is deliberately NOT in it, because a colon is legitimate mid-URL (a port number,
+  # `http://x.com:8080/y`) and stopping there would truncate a real URL rather than
+  # trim a glued word, which is a worse failure than the one being fixed. Any other
+  # punctuation not listed here (a colon used as prose glue, an opening bracket, etc.)
+  # can still glue a following word into the mask -- known and accepted for the same
+  # reason the wider `url/` dimension is out of scope above: enumerating every prose
+  # separator by hand is exactly the guess-without-measurement #377 warns against.
   urlmasked = message
-  gsub(/[hH][tT][tT][pP][sS]?:\/\/[^ \t\n\r,;]+/, " ", urlmasked)
+  gsub(/[hH][tT][tT][pP][sS]?:\/\/[^ \t\n\r,;|)\]}]+/, " ", urlmasked)
 
   cc = ""
   for (i = 1; i <= length(urlmasked); i++) {
