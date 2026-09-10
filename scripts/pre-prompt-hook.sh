@@ -183,10 +183,72 @@ END {
   # where /[a-z0-9]/ did not. Measured: the two agree byte for byte anyway, because the
   # whitespace collapse below absorbs the extra separator. Kept because the next person to
   # reach for index() on a single character should not have to re-derive that.
+  # #377: a pasted URL is scheme-anchored ("https://" or "http://", either case --
+  # a phone keyboard or a chat client that auto-capitalises the first letter of a
+  # paste produces "Https://", and a case-sensitive scheme match let that variant
+  # through untouched, self-review caught it) followed by a run of non-whitespace.
+  # Masked to a single space BEFORE the CamelCase split and the flatten below, so its
+  # path/query segments never become free-floating vocabulary tokens -- a paste of
+  # "https://docs.dp.tools/sync/" must not fire a generic `sync` entry that has
+  # nothing to do with the page. `message` itself (and the `msg` log copy above) is
+  # untouched; only the copy the vocabulary subject is built from is masked, so the
+  # hook log still shows what the user actually typed.
+  #
+  # Scheme-anchored only, not "any host.tld/path"-shaped run: the issue that opens this
+  # (#377) says the wider extraction is an open question needing paste-frequency data
+  # nobody has measured yet, and a bare-host guess here would also start eating
+  # legitimate prose that merely contains a dot and a slash -- a version number, a
+  # relative file path mentioned in a sentence. A scheme is the one unambiguous signal
+  # available without that measurement.
+  #
+  # The run stops at a comma or semicolon as well as at whitespace: there is no space
+  # between a URL and the word after it in "see https://x.com/y,billing next" (a common
+  # paste shape -- an auto-linked chat message, a URL glued to a list separator), and
+  # without this the greedy [^ \t\n]+ run swallowed "billing" into the masked span along
+  # with the URL, dropping a genuine keyword match nobody asked to lose (self-review
+  # caught it too). A URL whose own path or query string genuinely contains a comma or
+  # semicolon is masked only up to that character -- rare in practice, and the residue
+  # left behind is itself non-alnum, so the flatten below turns it into a harmless space
+  # rather than a stray token.
+  #
+  # \r joins \t and \n in the stop set for the same reason \n is already there: a bare
+  # CR (not part of a CRLF pair) is a real byte in `message` whenever a JSON payload
+  # spells one out as the escape \r -- jit_unescape() in common.sh decodes it to a
+  # literal CR -- and [^ \t\n]+ alone treated that byte as ordinary URL content, so a
+  # URL glued to the next word by a bare CR instead of a space or comma swallowed the
+  # word exactly like the comma case above (oss:auditor finding, second self-review
+  # pass).
+  #
+  # | joins the stop set too (second self-review pass, third round): the same
+  # swallowing class recurs for a pipe used as a prose separator glued directly onto a
+  # URL with no space. Safe to exclude outright -- a raw, unencoded pipe is not a legal
+  # URI character at all (RFC 3986; it has to be percent-encoded as %7C), so no bare
+  # pasted URL legitimately contains one.
+  #
+  # A closing ) ] } was tried here too and reverted (third self-review pass): a
+  # Wikipedia-style path segment routinely carries an unescaped parenthesis mid-path
+  # ("/wiki/Foo_(bar)"), and RFC 3986 reserves a bracketed host for a literal IPv6
+  # address ("http://[2001:db8::1]:8080/y") -- excluding those characters stopped the
+  # mask right after the opening bracket/paren and let the rest of a genuine URL path
+  # leak into the vocabulary subject unmasked, the exact defect class #377 exists to
+  # close, and a worse regression than the word-glue bug the exclusion was meant to
+  # fix. Same shape as the colon exclusion below: a character that is legitimately
+  # mid-URL must not be added to this set no matter how often it also shows up as glue.
+  #
+  # This is a curated stop-set, not a URL grammar, and it is not exhaustive -- colon is
+  # deliberately NOT in it either, for the identical reason (a port number,
+  # `http://x.com:8080/y`, is legitimate mid-URL). Any other punctuation not listed here
+  # (colon or a bracket/paren used as prose glue, an opening bracket, etc.) can still
+  # glue a following word into the mask -- known and accepted for the same reason the
+  # wider `url/` dimension is out of scope above: enumerating every prose separator by
+  # hand is exactly the guess-without-measurement #377 warns against.
+  urlmasked = message
+  gsub(/[hH][tT][tT][pP][sS]?:\/\/[^ \t\n\r,;|]+/, " ", urlmasked)
+
   cc = ""
-  for (i = 1; i <= length(message); i++) {
-    c = substr(message, i, 1)
-    p = (i > 1) ? substr(message, i-1, 1) : ""
+  for (i = 1; i <= length(urlmasked); i++) {
+    c = substr(urlmasked, i, 1)
+    p = (i > 1) ? substr(urlmasked, i-1, 1) : ""
     if (c != "" && p != "" && index("ABCDEFGHIJKLMNOPQRSTUVWXYZ", c) > 0 && index("abcdefghijklmnopqrstuvwxyz0123456789", p) > 0) cc = cc " " c
     else cc = cc c
   }

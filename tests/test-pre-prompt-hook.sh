@@ -160,16 +160,80 @@ assert_contains "payments" "$OUT" "payments context"
 assert_contains "pipeline" "$OUT" "pipeline context"
 
 # =============================================
-# SECTION 4: URL matching
+# SECTION 4: URL matching (#377)
 # =============================================
+# A pasted, scheme-anchored URL is masked out of the vocabulary subject entirely
+# before flattening -- its path/query segments must not become free-floating tokens
+# that fire an unrelated entry. Building a distinct url/ dimension so a domain-shaped
+# keyword can still match a URL on purpose is the larger, unmeasured follow-up #377
+# itself asks not to be guessed at; this scoped fix only removes the noise.
 
 echo ""
-# A dotted keyword must be stored pre-normalized ("docs example com"), because the
-# matcher strips dots from the prompt before comparing. rebuild-tsv.sh does this at
-# build time; a hand-written dotted keyword in the TSV would be permanently dead.
-echo "=== Domain keyword inside URL ==="
+echo "=== Generic vocab keyword must NOT fire from inside a pasted URL ==="
+OUT=$(run_hook '{"prompt":"https://docs.dp.tools/pipeline/sync"}')
+assert_not_contains "URL noise: generic keyword suppressed" "$OUT" "pipeline context"
+
+echo ""
+echo "=== Positive control: same keyword in real prose still fires ==="
+OUT=$(run_hook '{"prompt":"please check the pipeline status"}')
+assert_contains "Prose keyword still matches" "$OUT" "pipeline context"
+
+echo ""
+echo "=== A dotted vocab keyword no longer matches a URL it used to match ==="
 OUT=$(run_hook '{"prompt":"https://docs.example.com/page.html can go online"}')
-assert_contains "URL keyword matches" "$OUT" "site with url context"
+assert_not_contains "URL no longer feeds the domain-shaped vocab keyword" "$OUT" "site with url context"
+
+echo ""
+echo "=== A capitalised scheme is masked too (self-review finding) ==="
+OUT=$(run_hook '{"prompt":"Https://docs.dp.tools/pipeline/sync is broken"}')
+assert_not_contains "Https:// (capital scheme) still suppresses the URL noise" "$OUT" "pipeline context"
+OUT=$(run_hook '{"prompt":"HTTP://docs.dp.tools/pipeline/sync is broken"}')
+assert_not_contains "HTTP:// (all-caps scheme) still suppresses the URL noise" "$OUT" "pipeline context"
+
+echo ""
+echo "=== A URL glued to the next word by punctuation does not swallow it (self-review finding) ==="
+OUT=$(run_hook '{"prompt":"see https://docs.dp.tools/pipeline/sync,billing question"}')
+assert_not_contains "the URL noise is still suppressed" "$OUT" "pipeline context"
+assert_contains "the glued-on word after the comma still fires" "$OUT" "billing context"
+
+echo ""
+echo "=== A URL glued to the next word by a bare CR does not swallow it (oss:auditor finding) ==="
+OUT=$(run_hook '{"prompt":"see https://docs.dp.tools/pipeline/sync\rbilling question"}')
+assert_not_contains "the URL noise is still suppressed (bare CR)" "$OUT" "pipeline context"
+assert_contains "the glued-on word after the bare CR still fires" "$OUT" "billing context"
+
+echo ""
+echo "=== A URL glued to the next word by a pipe does not swallow it (second self-review pass) ==="
+OUT=$(run_hook '{"prompt":"see https://docs.dp.tools/pipeline/sync|billing question"}')
+assert_not_contains "the URL noise is still suppressed (pipe)" "$OUT" "pipeline context"
+assert_contains "the glued-on word after the pipe still fires" "$OUT" "billing context"
+
+echo ""
+echo "=== A port number inside a real URL is still masked, not truncated at the colon ==="
+OUT=$(run_hook '{"prompt":"see https://docs.dp.tools:8080/pipeline/sync for details"}')
+assert_not_contains "port-number URL is masked in full, sync never leaks" "$OUT" "pipeline context"
+
+echo ""
+echo "=== A closing paren/bracket mid-path is NOT in the stop set, on purpose (third self-review pass) ==="
+echo "A Wikipedia-style path segment (unescaped parenthesis mid-path) must still be masked in full --"
+echo "excluding ) from the stop set was tried and reverted because it truncated the mask right after"
+echo "the opening paren and let the rest of the real URL path leak, a worse regression than the"
+echo "word-glue bug the exclusion was meant to fix."
+OUT=$(run_hook '{"prompt":"see https://en.wikipedia.org/wiki/Foo_(bar)/pipeline/sync for details"}')
+assert_not_contains "a parenthesised Wikipedia-style path is masked in full" "$OUT" "pipeline context"
+
+echo ""
+echo "=== An IPv6-literal host is NOT truncated at its closing bracket, on purpose ==="
+OUT=$(run_hook '{"prompt":"see http://[2001:db8::1]:8080/pipeline/sync for details"}')
+assert_not_contains "an IPv6-literal host URL is masked in full" "$OUT" "pipeline context"
+
+echo ""
+echo "=== A mid-URL closing paren immediately followed by an anchor fragment is masked in full (oss:auditor finding, third self-review pass) ==="
+echo "Confirms the fix for the finding above also closes the case a stop-set character truncates"
+echo "the mask and leaks the rest of the SAME URL (an anchor fragment here), not just a separate word."
+OUT=$(run_hook '{"prompt":"see https://en.wikipedia.org/wiki/C_(billing)#pipeline for reference"}')
+assert_not_contains "the paren-then-anchor-fragment URL is masked in full" "$OUT" "billing context"
+assert_not_contains "and its anchor fragment never leaks either" "$OUT" "pipeline context"
 
 # =============================================
 # SECTION 5: Multi-layer matching
