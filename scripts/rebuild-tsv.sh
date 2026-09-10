@@ -514,6 +514,33 @@ done
 # Override per project with DYNAMIC_RULES_KEYWORD_BLACKLIST (an extended regex).
 VOCAB_KEYWORD_BLACKLIST="${JIT_CONTEXT_KEYWORD_BLACKLIST:-${DYNAMIC_RULES_KEYWORD_BLACKLIST:-^(extension|detection|count|output|input|name|branch|issue|documents|files|file)$}}"
 
+# --- Blacklist regex validity, checked ONCE for the whole run, not once per file/keyword
+# (#379 review finding) ------------------------------------------------------------
+# build_vocab_tsv's per-FILE classify pass (below) evaluates this pattern inside a
+# dynamic `~` match, in ONE awk process covering every keyword of that file. A
+# malformed ERE compiles at the FIRST evaluation and takes the whole awk PROCESS down
+# with it -- demonstrated identical across one-true-awk (macOS), gawk and mawk: an
+# unbalanced `(` aborts with a fatal regex-compile error and produces ZERO output for
+# every keyword in that record, not merely a non-match on the bad pattern. Before the
+# #379 collapse, the same bad pattern only cost a `grep -Eq` exit 2 on ONE keyword,
+# read as "not blacklisted" by the `if grep ...; then` around it -- the blast radius
+# was per-keyword, silent, and safe (nothing got blacklisted that shouldn't have).
+# Checking here, once, keeps that same safe blast radius rather than letting the #379
+# collapse widen a malformed VOCAB_KEYWORD_BLACKLIST (JIT_CONTEXT_KEYWORD_BLACKLIST,
+# project-configurable, arrives with the clone) into silently dropping an entire
+# file's keywords with a misleading "normalised to nothing" reason.
+#
+# A fixed canary string, not real keyword data: an ERE's compile-time validity does
+# not depend on the DATA it is later matched against, only on the pattern text, so one
+# BEGIN-time probe here stands in for every keyword this run will ever test against it.
+VOCAB_KEYWORD_BLACKLIST_OK=1
+if ! VOCAB_KEYWORD_BLACKLIST="$VOCAB_KEYWORD_BLACKLIST" LC_ALL=C awk \
+  'BEGIN { if ("canary" ~ ENVIRON["VOCAB_KEYWORD_BLACKLIST"]) { } }' 2> /dev/null; then
+  echo "FATAL    vocabulary: VOCAB_KEYWORD_BLACKLIST is not a valid extended regular expression -- treating it as matching NOTHING for this whole run (the same safe degrade a malformed pattern already produced per-keyword before #379). Fix JIT_CONTEXT_KEYWORD_BLACKLIST / DYNAMIC_RULES_KEYWORD_BLACKLIST in config.env." >&2
+  jit_rc 2
+  VOCAB_KEYWORD_BLACKLIST_OK=0
+fi
+
 # --- Generic-word classifier (#232) ------------------------------------------
 # Different axis from the blacklist above: the blacklist DROPS a term outright, so the
 # entry never fires on it at all. This classifies a term that DID make it into the
@@ -750,112 +777,159 @@ build_vocab_tsv() {
     # rather than whatever each one's default decoding of the awk PROGRAM SOURCE does.
     kw_line=$(printf '%s\n' "$kw_line" | LC_ALL=C awk "$JIT_AWK_FOLD"'{ print jit_fold_latin1($0) }')
 
-    # Split on ", " and write each keyword → filename.
+    # Split on ", " and classify every keyword -- in ONE awk process for the whole file,
+    # not one fork per keyword (#379). The original shape here was a `while read` loop
+    # that forked sed once (trim), tr+sed once (normalise) and grep once (blacklist) PER
+    # KEYWORD, plus a conditional grep+tr pair for the identifier-collision check -- on a
+    # 195-entry, ~7000-keyword tree that is tens of thousands of forks, measured (#379) at
+    # 68% of a 1m50s rebuild. #255 already moved the generic-word classify to one pass per
+    # DIRECTORY; this does the same for the split/trim/normalise/blacklist/id-collision
+    # steps, one pass per FILE (bounded by file count, never by keyword count).
     #
-    # A here-string, never `... | while`: the body appends to JIT_DROPPED, and a pipeline's
-    # last stage is a subshell whose variables die at the closing `done`. A dropped keyword
-    # would then be discarded by the very code written to stop discarding it silently.
-    # Three counters, not one. "No row from a keywords: line" has two causes and they are
-    # two different fixes: a term the blacklist matched sends the author to
-    # JIT_CONTEXT_KEYWORD_BLACKLIST, a term that normalised to nothing sends them to the
-    # frontmatter. Reporting one reason for both would name a pattern that never saw the
-    # word -- a confident wrong answer, which is worse here than no report at all.
-    local kw_split kw_written=0 kw_black=0 kw_empty=0
-    # Buffered rather than appended straight to $tsv (as every other counter here is a
-    # plain integer): the all-generic fallback below (#232, the half PR #250 left owed)
-    # cannot decide until every keyword on THIS entry has been classified, so the row for
-    # keyword 1 cannot be written before keyword 3 is seen. A bash array survives past the
-    # loop because this is a here-string, not a pipe -- the same reason JIT_DROPPED does.
+    # `VOCAB_KEYWORD_BLACKLIST` is handed to awk through the ENVIRON array, on the
+    # awk invocation's own command line as an environment-variable assignment, never
+    # through `-v`: `-v var=value` re-interprets C-style backslash escapes in `value`
+    # (POSIX awk(1)), and this variable is project-configurable
+    # (`JIT_CONTEXT_KEYWORD_BLACKLIST` in config.env, arriving with the clone) -- a
+    # backslash in someone's regex would read differently through `-v` than it does
+    # through the plain `grep -Eq "$VOCAB_KEYWORD_BLACKLIST"` this replaces. An
+    # environment value is not escape-processed, so the bytes awk sees are exactly the
+    # bytes bash held. `JIT_KEYWORD_WITHHELD` is already exported by common.sh for the
+    # same ENVIRON reason (#113, #131).
+    #
+    # `LC_ALL=C` on the one awk call, matching every other byte-level pass in this file
+    # (#195). The old blacklist `grep -Eq` was NOT pinned (only the id-collision grep
+    # was) -- an inconsistency this collapse removes rather than preserves: nothing in
+    # the default or documented blacklist syntax depends on locale-sensitive matching,
+    # and pinning it is the same invariant every other keyword-byte comparison here
+    # already holds.
+    #
+    # Protocol: one output line per comma-split token, tab-separated --
+    #   E                                   normalised to nothing
+    #   B<TAB>kw                            blacklisted; kw is the normalised spelling
+    #   O<TAB>kw<TAB>idflag<TAB>rawdisp     kept; idflag is 1/0, rawdisp only set on 1
+    # Every field awk can emit is drawn from a character class that excludes tab (the
+    # normalised keyword is [a-z0-9 -]*, and rawdisp is only populated when the RAW
+    # token matched `^[A-Za-z][a-z0-9]+[A-Z][A-Za-z0-9]*$`, itself tab-free, or is the
+    # tab-free withheld placeholder), so a tab is always a field separator here and
+    # never data -- `read -r` with `IFS=$'\t'` cannot misparse a row.
+    #
+    # A `<()` process substitution, never `$(...)`: the loop below still needs to
+    # append to JIT_DROPPED/JIT_IDCOLLISION and increment counters that must survive
+    # past the loop, and a `| while` pipeline's last stage is a subshell whose
+    # variables die at the closing `done` -- the same reason the old here-string was a
+    # here-string rather than a pipe.
+    local kw_written=0 kw_black=0 kw_empty=0
     local kw_rows=()
-    # `LC_ALL=C` (#195): kw_line still carries any byte the fold above did not know, and
-    # under the caller's own locale a bare `tr` refuses an invalid multibyte sequence
-    # outright rather than splitting around it -- the same failure the per-keyword tr/sed
-    # below was pinned against.
-    kw_split=$(printf '%s\n' "$kw_line" | LC_ALL=C tr ',' '\n')
-    while IFS= read -r kw; do
-      # The pre-normalisation spelling, trimmed the same way the normaliser trims --
-      # kept only for the identifier-collision check below, which needs to compare a
-      # case-FOLD of the raw token against the fully-normalised one. Everything else in
-      # this loop keeps using $kw exactly as it always has.
-      kw_raw=$(printf '%s' "$kw" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-      # Normalize IDENTICALLY to the matcher (pre-prompt-hook.sh): lowercase, then
-      # map any char outside [a-z0-9 -] to a space, collapse, trim. A keyword authored
-      # with dots/slashes ("docs.dp.tools", "security/dast") would otherwise be DEAD —
-      # the matcher strips those from the prompt, so a dotted keyword can never match.
-      #
-      # `LC_ALL=C` on both (#195, found while driving section B of its own test): the
-      # matcher does this same fold INSIDE one LC_ALL=C awk pipeline, but this half used
-      # bare `tr`/`sed`, which read the caller's locale rather than pinning their own. A
-      # keywords: line surviving the (now-pinned) extraction awk with an invalid byte
-      # still carried it into these two -- and under a UTF-8 locale, BSD `tr` refuses an
-      # invalid multibyte sequence outright ("Illegal byte sequence", nonzero exit),
-      # which this capture never checked either, so the keyword silently became "no
-      # keywords: normalised to nothing" for a reason that had nothing to do with the
-      # normaliser. `LC_ALL=C` makes both read bytes, matching the awk half's own fix.
-      kw=$(echo "$kw" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sed 's/[^a-z0-9 -]/ /g; s/  */ /g; s/^ *//; s/ *$//')
-      if [ -z "$kw" ]; then
-        kw_empty=$((kw_empty + 1))
-        continue
-      fi
-      # Skip overly generic single words — they collide with op flags and path tokens.
-      # Skipped, and now SAID: the row is not written, so the entry never fires on this
-      # word, and the only place that can be reported is here (#95).
-      if printf '%s\n' "$kw" | grep -Eq "$VOCAB_KEYWORD_BLACKLIST"; then
-        JIT_DROPPED="$JIT_DROPPED    [$label] $(jit_report_name "$filename"): \"$(jit_report_keyword "$kw")\"
+    local _kw_status _kw_val _kw_idflag _kw_rawdisp
+    while IFS=$'\t' read -r _kw_status _kw_val _kw_idflag _kw_rawdisp; do
+      case "$_kw_status" in
+        E)
+          kw_empty=$((kw_empty + 1))
+          ;;
+        B)
+          # Skip overly generic single words — they collide with op flags and path
+          # tokens. Skipped, and now SAID: the row is not written, so the entry never
+          # fires on this word, and the only place that can be reported is here (#95).
+          JIT_DROPPED="$JIT_DROPPED    [$label] $(jit_report_name "$filename"): \"$(jit_report_keyword "$_kw_val")\"
 "
-        kw_black=$((kw_black + 1))
-        continue
-      fi
-      # --- Identifier-collision check (#232's "separate bug") -------------------
-      # A raw token with an internal capital -- not just a leading one, which is
-      # ordinary title-casing -- reads as deliberately cased: an author writing
-      # `jsOn` meant the identifier, not the sentence-initial word "json" is not.
-      # Flagged only when normalising did NOTHING but fold that case away (no
-      # digit/punctuation was stripped, no multi-word split happened) and the
-      # collapsed spelling is short enough that it plausibly reads as an ordinary
-      # word to a later author -- `SiProjectModule` collapsing to
-      # `siprojectmodule` is still obviously an identifier and is not reported;
-      # `jsOn` collapsing to `json` is not, and #232 is explicit that a
-      # dictionary lookup cannot tell the two apart (`json` is not a dictionary
-      # word either) -- so this is a length heuristic, not a wordlist lookup, and
-      # is documented here as exactly that rather than as a completed
-      # dictionary-backed classifier.
-      #
-      # `[a-z0-9]+`, not `[a-z0-9]*` (review finding): a `*` let a raw token of
-      # nothing but capitals -- `API`, `HTML`, `URL` -- through, because zero
-      # lowercase/digit characters between the leading letter and the next
-      # capital is a valid empty match. An all-caps acronym is not an
-      # accidentally-cased identifier; #232 is explicit that the shape being
-      # named is `jsOn`-like casing, which always has a lowercase run on BOTH
-      # sides of the embedded capital. `+` requires that run to be non-empty.
-      if printf '%s\n' "$kw_raw" | LC_ALL=C grep -Eq '^[A-Za-z][a-z0-9]+[A-Z][A-Za-z0-9]*$'; then
-        kw_raw_lc=$(printf '%s' "$kw_raw" | LC_ALL=C tr '[:upper:]' '[:lower:]')
-        if [ "$kw_raw_lc" = "$kw" ] && [ "${#kw}" -le 6 ]; then
-          # jit_report_keyword() withholds ANY byte outside [a-z0-9-] (review
-          # finding): it exists for the NORMALISED spelling every other caller in
-          # this file hands it, which is always already-lowercased, and it
-          # withheld $kw_raw outright for the one uppercase letter this whole
-          # check exists to find -- the report never actually showed the raw
-          # identifier it claims to name. $kw_raw is safe to print as-is here
-          # and nowhere else in this file: it just matched the ERE two lines
-          # above, which admits nothing but [A-Za-z0-9], so there is no
-          # character left to withhold it for. Only its LENGTH still needs a
-          # bound, since the regex has no upper one.
-          if [ "${#kw_raw}" -le 40 ]; then kw_raw_disp="$kw_raw"; else kw_raw_disp="$JIT_KEYWORD_WITHHELD"; fi
-          JIT_IDCOLLISION="$JIT_IDCOLLISION    [$label] $(jit_report_name "$filename"): \"$kw_raw_disp\" normalises to the ordinary-looking word \"$(jit_report_keyword "$kw")\"
+          kw_black=$((kw_black + 1))
+          ;;
+        O)
+          # --- Identifier-collision check (#232's "separate bug"), computed inside the
+          # awk pass below but reported here, in bash, so the report text is built by
+          # the same jit_report_name()/jit_report_keyword() every other report in this
+          # file goes through.
+          if [ "$_kw_idflag" = "1" ]; then
+            JIT_IDCOLLISION="$JIT_IDCOLLISION    [$label] $(jit_report_name "$filename"): \"$_kw_rawdisp\" normalises to the ordinary-looking word \"$(jit_report_keyword "$_kw_val")\"
 "
-          JIT_IDCOLLISION_N=$((JIT_IDCOLLISION_N + 1))
-        fi
-      fi
-      # --- Generic-word candidate (#232 classifies it; #255 defers the classify) -----
-      # The verdict itself ("generic"/empty, third TSV column) is no longer decided
-      # here, per keyword -- $kw just joins ALL_KW, and the whole directory's candidates
-      # are classified in ONE awk process after this file loop ends (below). Never
-      # consulted at prompt time either way -- this is still the only place the
-      # wordlist is read.
-      kw_rows+=("$kw")
-      kw_written=$((kw_written + 1))
-    done <<< "$kw_split"
+            JIT_IDCOLLISION_N=$((JIT_IDCOLLISION_N + 1))
+          fi
+          # --- Generic-word candidate (#232 classifies it; #255 defers the classify) -
+          # The verdict itself ("generic"/empty, third TSV column) is no longer decided
+          # here, per keyword -- $_kw_val just joins kw_rows, and the whole directory's
+          # candidates are classified in ONE awk process after this file loop ends
+          # (below, unchanged by this collapse). Never consulted at prompt time either
+          # way -- this is still the only place the wordlist is read.
+          kw_rows+=("$_kw_val")
+          kw_written=$((kw_written + 1))
+          ;;
+      esac
+    done < <(printf '%s\n' "$kw_line" \
+      | VOCAB_KEYWORD_BLACKLIST="$VOCAB_KEYWORD_BLACKLIST" \
+        VOCAB_KEYWORD_BLACKLIST_OK="$VOCAB_KEYWORD_BLACKLIST_OK" LC_ALL=C awk '
+        {
+          n = split($0, toks, ",")
+          for (i = 1; i <= n; i++) {
+            raw = toks[i]
+            gsub(/^[[:space:]]+/, "", raw)
+            gsub(/[[:space:]]+$/, "", raw)
+            # Normalize IDENTICALLY to the matcher (pre-prompt-hook.sh): lowercase, then
+            # map any char outside [a-z0-9 -] to a space, collapse, trim. A keyword
+            # authored with dots/slashes ("docs.dp.tools", "security/dast") would
+            # otherwise be DEAD -- the matcher strips those from the prompt, so a dotted
+            # keyword can never match.
+            kw = tolower(toks[i])
+            gsub(/[^a-z0-9 -]/, " ", kw)
+            gsub(/ +/, " ", kw)
+            gsub(/^ +/, "", kw)
+            gsub(/ +$/, "", kw)
+            if (kw == "") { print "E\t\t\t"; continue }
+            # ENVIRON["VOCAB_KEYWORD_BLACKLIST_OK"] gates this: the caller validated
+            # the pattern once, up front (see the VOCAB_KEYWORD_BLACKLIST_OK block
+            # above build_vocab_tsv), specifically so a malformed pattern is never
+            # actually EVALUATED here -- evaluating a bad ERE aborts the whole awk
+            # process, not just this one keyword, which would drop every remaining
+            # keyword of this file with no trace (#379 review finding). "0" reads as
+            # "not blacklisted", the same safe degrade a bad pattern already produced
+            # under the old per-keyword `grep -Eq`.
+            if (ENVIRON["VOCAB_KEYWORD_BLACKLIST_OK"] == "1" && kw ~ ENVIRON["VOCAB_KEYWORD_BLACKLIST"]) { print "B\t" kw "\t\t"; continue }
+            # A raw token with an internal capital -- not just a leading one, which is
+            # ordinary title-casing -- reads as deliberately cased: an author writing
+            # `jsOn` meant the identifier, not the sentence-initial word "json" is not.
+            # Flagged only when normalising did NOTHING but fold that case away (no
+            # digit/punctuation was stripped, no multi-word split happened) and the
+            # collapsed spelling is short enough that it plausibly reads as an ordinary
+            # word to a later author (#232). `[a-z0-9]+`, not `[a-z0-9]*`: a `*` would
+            # let a raw token of nothing but capitals (`API`, `HTML`, `URL`) through,
+            # since zero lowercase/digit characters between the leading letter and the
+            # next capital is a valid empty match -- an all-caps acronym is not an
+            # accidentally-cased identifier.
+            idflag = 0
+            rawdisp = ""
+            if (raw ~ /^[A-Za-z][a-z0-9]+[A-Z][A-Za-z0-9]*$/) {
+              rawlc = tolower(raw)
+              if (rawlc == kw && length(kw) <= 6) {
+                idflag = 1
+                # $raw just matched the ERE above, which admits nothing but
+                # [A-Za-z0-9], so there is no character left to withhold it for -- only
+                # its LENGTH still needs a bound, since the regex has no upper one.
+                rawdisp = (length(raw) <= 40) ? raw : ENVIRON["JIT_KEYWORD_WITHHELD"]
+              }
+            }
+            print "O\t" kw "\t" idflag "\t" rawdisp
+          }
+        }
+      ')
+    # --- Did the classify pass actually finish? (#379 review finding) ------------------
+    # The blacklist-validity check above removes the one KNOWN way this awk process can
+    # abort mid-file, but this counts rather than trusts: comma-count in $kw_line, done
+    # in pure bash parameter expansion (no fork -- length of the string minus length of
+    # the string with commas stripped, plus one), compared against how many E/B/O lines
+    # the loop above actually consumed. A dead or truncated awk process for ANY other
+    # reason would otherwise leave kw_written+kw_black+kw_empty short of the true token
+    # count and say nothing -- the exact failure #255's own VERDICT_FLAGS count-check
+    # (below, in the deferred generic-word pass) already guards against for a different
+    # awk call in this same function; this is the same check for this one.
+    local kw_line_nocommas="${kw_line//,/}"
+    local kw_tok_count=$((${#kw_line} - ${#kw_line_nocommas} + 1))
+    local kw_seen_count=$((kw_written + kw_black + kw_empty))
+    local kw_classify_broken=0
+    if [ "$kw_seen_count" -ne "$kw_tok_count" ]; then
+      echo "FATAL    $label/${tsv##*/}: $(jit_report_name "$filename") -- the keyword classify pass returned $kw_seen_count verdict(s) for $kw_tok_count comma-separated term(s) in its keywords: line -- it did not finish (a crashed or truncated awk process), and every keyword past what it did return was silently dropped rather than classified." >&2
+      jit_rc 2
+      kw_classify_broken=1
+    fi
     # Hand this file's keywords to the deferred classify pass (#255): remember which
     # slice of ALL_KW is this file's so the fallback below can be recomputed once every
     # row in ALL_KW has a real verdict, in the same file-iteration order as before.
@@ -871,7 +945,13 @@ build_vocab_tsv() {
     # one dropped word out of three is a very different thing from all three.
     # A here-string and not a pipe, so this counter survives the loop -- the same reason
     # JIT_DROPPED is appended to there.
-    if [ "$kw_written" -eq 0 ]; then
+    #
+    # Skipped entirely when the classify pass itself did not finish (above): the three
+    # reasons below are all about what the classifier CONCLUDED about every term, and
+    # a broken pass concluded nothing -- reporting "normalised to nothing" for a keyword
+    # the classifier never actually reached would be exactly the misleading report the
+    # count-check above exists to replace with the truth (#379 review finding).
+    if [ "$kw_classify_broken" -eq 0 ] && [ "$kw_written" -eq 0 ]; then
       if [ "$kw_black" -gt 0 ] && [ "$kw_empty" -gt 0 ]; then
         jit_unindexed "$label" "$filename" \
           "every keywords: term was dropped by the blacklist or normalised to nothing"
