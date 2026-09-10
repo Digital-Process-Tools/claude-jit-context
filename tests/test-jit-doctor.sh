@@ -703,7 +703,7 @@ assert_has "the README still counts in the layer's own entry tally" "$OUT" "tool
 # =====================================================================================
 echo ""
 echo "=== #374 follow-up: an unreadable (not merely absent) index falls back rather than silently emptying every advisory ==="
-# jit-doctor.sh:588's own sibling check, ~170 lines below, is `[ -f "$idx" ] && [ -r "$idx" ]`
+# The sibling check further down this file, in scan_short_keywords(), is `[ -f "$idx" ] && [ -r "$idx" ]`
 # -- this one checked only `-f`. An index that EXISTS but cannot be read (permission denied)
 # made `awk` fail silently to stderr, so `_idx_names` came back empty, and the membership
 # check above then excluded EVERY .md in that layer from both advisories -- indistinguishable
