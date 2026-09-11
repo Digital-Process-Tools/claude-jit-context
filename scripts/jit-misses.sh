@@ -246,7 +246,10 @@ if [ "$GENERIC_WORDS_SET" -eq 0 ]; then
   elif [ "${DYNAMIC_RULES_GENERIC_WORDS+set}" = "set" ]; then
     GENERIC_WORDS="$DYNAMIC_RULES_GENERIC_WORDS"
   else
-    GENERIC_WORDS="$(cd "$(dirname "$0")" && pwd)/../data/generic-words.txt"
+    # No dirname fork -- session-start-hook.sh runs this on every session and
+    # tests/test-fork-count.sh counts the hook's whole process tree, this child included.
+    case "$0" in */*) _JIT_MISSES_DIR="${0%/*}" ;; *) _JIT_MISSES_DIR="." ;; esac
+    GENERIC_WORDS="$_JIT_MISSES_DIR/../data/generic-words.txt"
   fi
 fi
 GENERIC_STATE=ok
