@@ -79,14 +79,30 @@ mkdir -p "$LOGDIR"
 } > "$LOGDIR/hooks.log"
 OUT=$(run_start)
 assert_valid_json_shape "still valid JSON-object shaped output" "$OUT"
-assert_contains "names the recurring miss" "$OUT" "recurring misses"
+assert_contains "names the recurring miss" "$OUT" "you use these words a lot"
 assert_contains "carries the actual repeated token" "$OUT" "preprod"
 assert_contains "carries the actual count" "$OUT" "x3"
-# #246: the automatic path lists raw token counts, unfiltered for ordinary English words
-# -- entries.md tells an author the opposite of what a bare "recurring misses: X" reads
-# as recommending, so the injected sentence has to say plainly that these are not vetted
-# vocabulary candidates.
-assert_contains "#246 says these are unfiltered, not vetted candidates" "$OUT" "not filtered for ordinary words"
+# #386: one report, two actions a person can take, and nothing else -- no window, no
+# issue number, no flag. #246's "not filtered for ordinary words" caveat is gone because
+# jit-misses.sh now filters them itself (data/generic-words.txt); `deploy` is in that
+# list and must not be offered, `preprod` is not and must.
+assert_contains "names the skill that writes the entry" "$OUT" "/claude-jit-context:vocabulary"
+assert_contains "and the setting that turns the line off" "$OUT" "JIT_CONTEXT_MISSES=off"
+assert_not_contains "#386 no issue number in a line a person reads" "$OUT" "#2"
+assert_not_contains "#386 no window either" "$OUT" "line(s) of the log"
+assert_not_contains "#386 an ordinary word is filtered, not offered" "$OUT" "\"deploy\""
+assert_not_contains "#386 no caveat asking the reader to filter" "$OUT" "not filtered"
+
+echo ""
+echo "=== JIT_CONTEXT_MISSES=off in config.env: the line is silent, the hook still runs (#386) ==="
+printf 'JIT_CONTEXT_MISSES=off\n' > "$PROJ/.claude/jit-context/config.env"
+OUT_OFF=$(run_start)
+assert_valid_json_shape "still valid JSON-object shaped output" "$OUT_OFF"
+assert_not_contains "no recurring-misses line when turned off" "$OUT_OFF" "preprod"
+printf 'JIT_CONTEXT_MISSES=sometimes\n' > "$PROJ/.claude/jit-context/config.env"
+OUT_BAD=$(run_start)
+assert_contains "an unimplemented value is refused, not read as off" "$OUT_BAD" "preprod"
+rm -f "$PROJ/.claude/jit-context/config.env"
 
 echo ""
 echo "=== the same project, but with only ONE-OFF misses: no recurring-misses line (control) ==="
@@ -96,7 +112,7 @@ mkdir -p "$LOGDIR2"
 printf '[10:00:00.000] pre-prompt 1ms | (none) [shown:0] << totally unique one-off question here\n' > "$LOGDIR2/hooks.log"
 OUT2=$(CLAUDE_PROJECT_DIR="$PROJ2" bash "$HOOK" < /dev/null 2> /dev/null)
 assert_valid_json_shape "still valid JSON-object shaped output" "$OUT2"
-assert_not_contains "no recurring misses reported when nothing recurs" "$OUT2" "recurring misses"
+assert_not_contains "no recurring misses reported when nothing recurs" "$OUT2" "you use these words"
 
 echo ""
 echo "=== no log at all yet: the hook still never fails hard, and this stays quiet (#247) ==="

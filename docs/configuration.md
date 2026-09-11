@@ -43,6 +43,12 @@ DYNAMIC_RULES_VOCAB_PATHS=0
 # whether a copy of it also reaches the model's own context. Only 0 and 1 are
 # implemented — anything else is refused, the same as an unknown JIT_CONTEXT_INJECT.
 JIT_CONTEXT_STOP_REPORT=0
+
+# The SessionStart line naming the words this project keeps typing with no entry
+# behind them ("JIT : you use these words a lot and no entry matches them: ...").
+# `off` silences that one line and nothing else; JIT_CONTEXT_STATUS=off silences
+# every human-facing line. Only on and off are implemented (#386).
+JIT_CONTEXT_MISSES=on
 ```
 
 **This file is read, not executed.** One `KEY=VALUE` per line; `#` comments and blank lines are ignored, surrounding quotes are stripped, and a leading `export` is accepted. Nothing inside a value is expanded — a `$`, a backtick or a `$(…)` is a literal character.

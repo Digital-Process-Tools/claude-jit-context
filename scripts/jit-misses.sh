@@ -38,6 +38,17 @@ TAIL=""
 # way the header always names the log's current byte size, so the report is legible
 # about growth even when the read itself was not bounded.
 SIZE_THRESHOLD=10000000
+# #386: the same wordlist rebuild-tsv.sh consults to mark a keyword generic (#232). This
+# tool used to hand a person "click", "ready" and "update" as candidate entries and then
+# ask them to judge which were ordinary words -- with the list that answers that sitting
+# one directory over. Precedence mirrors rebuild-tsv.sh (#265/#270): the flag wins, then
+# JIT_CONTEXT_GENERIC_WORDS if SET (even to empty -- an explicit opt-out), then
+# DYNAMIC_RULES_GENERIC_WORDS the same way, then the bundled default. Read once per run,
+# 0.07s for 103,843 lines on the maintainer's machine; this is tooling, not a hook, so a
+# dictionary is inside its contract (tooling.md), and session-start-hook.sh pays it once
+# per session, not per prompt.
+GENERIC_WORDS_SET=0
+GENERIC_WORDS=""
 
 usage() {
   cat << 'EOF'
@@ -55,13 +66,20 @@ jit-misses.sh -- the vocabulary this project keeps not having
                      full log (#248).
   --size-threshold N   bytes. When the log is at or past this size, the header names it
                      as a size worth attention. Default 10000000 (10MB, see #248).
+  --generic-words PATH   a one-word-per-line list; a token in it is an ordinary word
+                     and never a candidate (#386). Default data/generic-words.txt, the
+                     list rebuild-tsv.sh already uses; JIT_CONTEXT_GENERIC_WORDS or
+                     DYNAMIC_RULES_GENERIC_WORDS override it when set, even to empty.
+                     An empty PATH turns the filter off; a PATH that cannot be read is
+                     named in the header rather than silently not filtering.
   --help       this text.
 
 What counts as the same miss
 
   Two prompts are the SAME MISS when they share a content word -- a token of three or
-  more characters that is not a stopword -- after the same lowercase-and-strip
-  normalisation the prompt hook applies to a prompt before it looks a keyword up.
+  more characters that is not a stopword and not in the generic wordlist -- after the
+  same lowercase-and-strip normalisation the prompt hook applies to a prompt before it
+  looks a keyword up.
 
   So "xsd validation" and "validate the xsd" are one miss, on "xsd". "validation" and
   "validate" are NOT, because nothing here stems: no similarity metric, no threshold to
@@ -145,6 +163,12 @@ while [ $# -gt 0 ]; do
       SIZE_THRESHOLD="$2"
       shift 2
       ;;
+    --generic-words)
+      [ $# -ge 2 ] || need_value "$1"
+      GENERIC_WORDS="$2"
+      GENERIC_WORDS_SET=1
+      shift 2
+      ;;
     --help | -h)
       usage
       exit 0
@@ -210,6 +234,33 @@ skip() {
 # wrong, and the header omits the figure rather than printing a lie.
 LOGBYTES="$(wc -c < "$LOG" 2> /dev/null | tr -d '[:space:]')"
 case "$LOGBYTES" in "" | *[!0-9]*) LOGBYTES="" ;; esac
+
+# #386: three states for the wordlist, and the awk pass prints whichever held --
+# `ok` (a path awk will read), `off` (opted out, nothing filtered, said so) and
+# `missing` (named, and nothing filtered -- NOT the same line as `ok`, because a report
+# that filtered and one that could not must never read alike). `${VAR+set}` is presence,
+# not emptiness, for the reason rebuild-tsv.sh gives at GENERIC_WORDS_EXPLICIT (#270).
+if [ "$GENERIC_WORDS_SET" -eq 0 ]; then
+  if [ "${JIT_CONTEXT_GENERIC_WORDS+set}" = "set" ]; then
+    GENERIC_WORDS="$JIT_CONTEXT_GENERIC_WORDS"
+  elif [ "${DYNAMIC_RULES_GENERIC_WORDS+set}" = "set" ]; then
+    GENERIC_WORDS="$DYNAMIC_RULES_GENERIC_WORDS"
+  else
+    GENERIC_WORDS="$(cd "$(dirname "$0")" && pwd)/../data/generic-words.txt"
+  fi
+fi
+GENERIC_STATE=ok
+if [ -z "$GENERIC_WORDS" ]; then
+  GENERIC_STATE=off
+elif [ ! -f "$GENERIC_WORDS" ] || [ ! -r "$GENERIC_WORDS" ]; then
+  GENERIC_STATE=missing
+fi
+# awk reads the list as a first input file, told apart from the log by FILENAME rather
+# than FNR==NR -- an empty list would otherwise make the log's own first file "the
+# list". A list in the `missing`/`off` state is simply not passed, so FILENAME never
+# matches and the branch is dead by construction rather than by a flag.
+GENERIC_ARG=""
+[ "$GENERIC_STATE" = ok ] && GENERIC_ARG="$GENERIC_WORDS"
 
 # LC_ALL=C, for the same reason the three hooks pin it (#68) and one that is specific to
 # this tool: the file it reads is one THE HOOKS WROTE, and they truncate the prompt copy at
@@ -284,6 +335,14 @@ BEGIN {
         "one two three four five six seven eight nine ten", sw, " ")
   for (i in sw) stop[sw[i]] = 1
 
+}
+
+# #386: the generic wordlist, one lowercase token per line, "#" lines and blanks
+# ignored -- the same read rebuild-tsv.sh does. Keyed on FILENAME, never FNR==NR.
+genfile != "" && FILENAME == genfile {
+  if ($0 == "" || substr($0, 1, 1) == "#") next
+  generic[$0] = 1
+  next
 }
 
 # A byte-identical copy of jit_fold_latin1() and its table from common.sh, which this
@@ -404,6 +463,7 @@ function jit_fold_latin1(s,   i, p, out) {
     if (length(t) < 3) continue
     if (t ~ /^[0-9-]+$/) continue
     if (t in stop) continue
+    if (t in generic) { setaside_generic++; continue }
     if (t in seen) continue
     seen[t] = 1
     cnt[t]++
@@ -443,7 +503,7 @@ END {
   printf "\n"
   if (bounded) printf "  bounded read -- last %d line(s) requested (--tail %d)\n", tailn, tailn
   if (logbytes != "" && threshold != "" && (logbytes + 0) >= (threshold + 0))
-    printf "  the log has reached %s bytes, at or past the %s byte watch threshold (#248) -- reads may be getting slower; consider --tail or rotating\n", logbytes, threshold
+    printf "  the log has reached %s bytes, at or past the %s byte watch threshold -- reads may be getting slower; consider --tail or rotating\n", logbytes, threshold
   printf "  %d line(s) read, %d prompt record(s), %d with no vocabulary match", lines, prompts, misses
   if (aside > 0) printf ", %d set aside (slash command or harness block)", aside
   if (headless > 0) printf ", %d with no message", headless
@@ -452,6 +512,12 @@ END {
   # explanation for a miss that produced nothing should not have to read the source.
   if (urls > 0) printf ", %d link(s) stripped", urls
   printf "\n"
+  # #386: which of the three wordlist states held, always, so a person can tell a
+  # filtered report from one that could not filter. Counted as occurrences set aside,
+  # the same unit `set aside` above already uses.
+  if (genstate == "ok") printf "  %d generic word(s) set aside (%s)\n", setaside_generic, genfile
+  else if (genstate == "off") printf "  generic words not filtered (--generic-words \"\")\n"
+  else printf "  generic words NOT filtered -- the list cannot be read: %s\n", genname
 
   # Rank: count desc, then token asc, so two runs over the same log print the same order.
   nk = 0
@@ -488,9 +554,12 @@ END {
 }
 '
 if [ -n "$TAIL" ]; then
-  _JIT_MISSES_OUT=$(LC_ALL=C tail -n "$TAIL" -- "$LOG" | LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" -v bounded=1 -v tailn="$TAIL" -v logbytes="$LOGBYTES" -v threshold="$SIZE_THRESHOLD" "$JIT_MISSES_AWK_PROG")
+  # `-` is stdin. FILENAME is "-" (gawk) or "" (one-true-awk) there, and neither is ever
+  # the list's path, so the FILENAME branch stays exact. ${GENERIC_ARG:+"$GENERIC_ARG"}
+  # contributes no argument at all when the list is off or missing.
+  _JIT_MISSES_OUT=$(LC_ALL=C tail -n "$TAIL" -- "$LOG" | LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" -v bounded=1 -v tailn="$TAIL" -v logbytes="$LOGBYTES" -v threshold="$SIZE_THRESHOLD" -v genfile="$GENERIC_ARG" -v genstate="$GENERIC_STATE" -v genname="$GENERIC_WORDS" "$JIT_MISSES_AWK_PROG" ${GENERIC_ARG:+"$GENERIC_ARG"} -)
 else
-  _JIT_MISSES_OUT=$(LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" -v bounded=0 -v tailn=0 -v logbytes="$LOGBYTES" -v threshold="$SIZE_THRESHOLD" "$JIT_MISSES_AWK_PROG" "$LOG")
+  _JIT_MISSES_OUT=$(LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" -v bounded=0 -v tailn=0 -v logbytes="$LOGBYTES" -v threshold="$SIZE_THRESHOLD" -v genfile="$GENERIC_ARG" -v genstate="$GENERIC_STATE" -v genname="$GENERIC_WORDS" "$JIT_MISSES_AWK_PROG" ${GENERIC_ARG:+"$GENERIC_ARG"} "$LOG")
 fi
 _JIT_MISSES_RC=$?
 
