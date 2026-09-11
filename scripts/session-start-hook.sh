@@ -233,35 +233,42 @@ if [ -n "$JIT_SIZE_NOTE" ]; then
   JIT_SIZE_NOTE="$(printf '%s' "$JIT_SIZE_NOTE" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
 fi
 
-# raw counts, unfiltered for ordinary English words: #246. entries.md tells an author
-# the opposite of what a bare "recurring misses: X" reads as recommending -- "repo",
-# "context" and "index" are ordinary words that also happen to be project nouns in a
-# project about vocabulary indexing, and jit-misses.sh has no way to tell those apart
-# from a genuine gap (see #232, open on that same discrimination problem). Saying so
-# plainly here does not solve which of these are worth an entry; it stops the sentence
-# from reading as a recommendation on its own.
-#
-# #248: every branch below that has something to say also says WHICH WINDOW it covers
-# -- "last JIT_MISSES_TAIL line(s) of the log" -- so a finding built over a bounded read
-# never reads as a finding over the log's whole history, and a size-watch note appends
-# to whichever branch fired rather than replacing it, because "these words recur" and
-# "the log is getting big" are two different facts and neither should swallow the
-# other. The size note can also be the ONLY thing worth saying -- a log past threshold
-# with no recurring words and a readable log -- so it gets a branch of its own too.
-# #367: these three were the model-facing additionalContext -- moved to systemMessage,
-# the field a human actually reads (issue #367's own probe measured SessionStart as
-# delivering it). Gated on JIT_CONTEXT_STATUS (common.sh, JIT_STATUS): off means off,
-# same as every other human-facing line this issue touches.
+# #386: one report, one action, nothing else. The line before this read "recurring
+# misses (last 5000 line(s) of the log, raw counts, not filtered for ordinary words --
+# judge before adding a vocabulary entry): ... -- also, 10134016 bytes, at or past the
+# 10000000 byte watch threshold (#248) -- reads may be getting slower; consider --tail
+# or rotating", and the maintainer read it and asked what any of it was for. The window
+# (#248), the unfiltered caveat (#246) and the issue numbers were all true and all
+# addressed to the wrong reader: a person at the start of a session wants to know what
+# was found and what to do about it. The caveat is gone because jit-misses.sh now
+# filters ordinary words itself (data/generic-words.txt, same list rebuild-tsv.sh
+# uses); the window is still bounded, and still named in jit-misses.sh's own report
+# for anyone who runs it by hand. Two facts can still both be true -- words recur AND
+# the log is large -- and each keeps its own line, joined by \n, rather than one
+# swallowing the other. JIT_CONTEXT_MISSES=off silences the words line alone, and the
+# line says so, because a person who wants it gone should not have to read the README.
+# JIT_CONTEXT_STATUS=off (#367) still silences everything human-facing, as before.
 if [ "$JIT_STATUS" = "off" ]; then
   echo '{}'
-elif [ -n "$JIT_RECUR" ]; then
-  JIT_EXTRA=""
-  [ -n "$JIT_SIZE_NOTE" ] && JIT_EXTRA=" -- also, $JIT_SIZE_NOTE"
-  printf '{"systemMessage":"JIT : recurring misses (last %s line(s) of the log, raw counts, not filtered for ordinary words -- judge before adding a vocabulary entry): %s%s"}\n' "$JIT_MISSES_TAIL" "$JIT_RECUR" "$JIT_EXTRA"
-elif [ -n "$JIT_SKIP_REASON" ]; then
-  printf '{"systemMessage":"JIT : recurring misses: could not be evaluated (%s)"}\n' "$JIT_SKIP_REASON"
-elif [ -n "$JIT_SIZE_NOTE" ]; then
-  printf '{"systemMessage":"JIT : %s"}\n' "$JIT_SIZE_NOTE"
 else
-  echo '{}'
+  JIT_LINES=""
+  if [ -n "$JIT_RECUR" ] && [ "$JIT_MISSES" != "off" ]; then
+    JIT_LINES="JIT : you use these words a lot and no entry matches them: $JIT_RECUR. Write one with /claude-jit-context:vocabulary <word>, or turn this off with JIT_CONTEXT_MISSES=off in .claude/jit-context/config.env"
+  elif [ -n "$JIT_SKIP_REASON" ] && [ "$JIT_MISSES" != "off" ]; then
+    JIT_LINES="JIT : recurring words could not be evaluated ($JIT_SKIP_REASON)"
+  fi
+  if [ -n "$JIT_SIZE_NOTE" ]; then
+    # JIT_SIZE_NOTE is "<bytes> bytes, at or past ..." -- the number is all a person
+    # needs, in megabytes, one decimal. LOG_FILE is common.sh's own path to the same
+    # file jit-misses.sh just read, so the action names the file to act on. The bytes
+    # were already JSON-escaped above; the path is escaped here for the same reason.
+    JIT_MB="$(printf '%s' "$JIT_SIZE_NOTE" | LC_ALL=C awk '{ printf "%.1f", $1 / 1000000 }')"
+    JIT_LOG_ESC="$(printf '%s' "$LOG_FILE" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
+    JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. Delete or rotate it: $JIT_LOG_ESC"
+  fi
+  if [ -n "$JIT_LINES" ]; then
+    printf '{"systemMessage":"%s"}\n' "$JIT_LINES"
+  else
+    echo '{}'
+  fi
 fi

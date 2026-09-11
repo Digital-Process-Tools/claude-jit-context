@@ -84,7 +84,9 @@ mkdir -p "$LOGDIR"
 OUT=$(CLAUDE_PROJECT_DIR="$PROJ" bash "$HOOK" < /dev/null 2> /dev/null)
 assert_valid_json_shape "still valid JSON-object shaped output" "$OUT"
 assert_contains "still names the recurring miss (unchanged behaviour, small log)" "$OUT" "preprod"
-assert_contains "says WHICH window the findings came from (#248)" "$OUT" "line(s) of the log"
+# #386: the window is still bounded (section B below proves the bounded-read line is
+# parsed), but a person is no longer told about it -- the line carries the finding only.
+assert_not_contains "the window is not in the line a person reads (#386)" "$OUT" "line(s) of the log"
 
 echo ""
 echo "=== section B: a STUBBED jit-misses.sh drives the size-watch wiring itself ==="
@@ -112,9 +114,12 @@ PROJ2="$TMP/proj2"
 mkdir -p "$PROJ2/.claude/jit-context"
 OUT2=$(CLAUDE_PROJECT_DIR="$PROJ2" bash "$STUBDIR/session-start-hook.sh" < /dev/null 2> /dev/null)
 assert_valid_json_shape "still valid JSON-object shaped output against the stub" "$OUT2"
-assert_contains "threads the size-watch note through when nothing else fired" "$OUT2" "watch threshold"
-assert_contains "carries the log's own reported byte size" "$OUT2" "999999999 bytes"
-assert_not_contains "an 'ok, nothing recurs' stub does not fabricate a recurring-misses line" "$OUT2" "recurring misses ("
+assert_contains "threads the size-watch note through when nothing else fired" "$OUT2" "hooks.log is"
+assert_contains "in megabytes a person can read, not bytes (#386)" "$OUT2" "1000.0 MB"
+assert_contains "and names the one action (#386)" "$OUT2" "Delete or rotate it: "
+assert_not_contains "#386 no issue number" "$OUT2" "#248"
+assert_not_contains "#386 no flag a person is not going to type" "$OUT2" "--tail"
+assert_not_contains "an 'ok, nothing recurs' stub does not fabricate a recurring-misses line" "$OUT2" "you use these words"
 
 echo ""
 echo "=== section B control: the same stub, but under threshold -- no size note ==="
@@ -129,7 +134,7 @@ STUB
 chmod +x "$STUBDIR/jit-misses.sh"
 OUT3=$(CLAUDE_PROJECT_DIR="$PROJ2" bash "$STUBDIR/session-start-hook.sh" < /dev/null 2> /dev/null)
 assert_valid_json_shape "still valid JSON-object shaped output, under threshold" "$OUT3"
-assert_not_contains "no size note when jit-misses.sh printed none (control)" "$OUT3" "watch threshold"
+assert_not_contains "no size note when jit-misses.sh printed none (control)" "$OUT3" "hooks.log is"
 
 echo ""
 echo "== Results: $PASS passed, $FAIL failed =="

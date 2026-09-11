@@ -88,6 +88,14 @@ assert_status() {
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
+# #386: every fixture below this line predates the generic-word filter and keys its
+# tokens on ordinary English words -- `billing`, `compare`, `zebra` -- on purpose,
+# because they test the tokeniser, the URL strip and the 80-byte cut, not the filter.
+# The filter is opted out for the suite and switched back on, explicitly, in the #386
+# section alone. Set-to-empty is the documented opt-out (#270), so this also pins that
+# the tool honours it.
+export JIT_CONTEXT_GENERIC_WORDS=""
+
 # A missing script makes every "must not appear" assertion below pass on the error
 # message, which is the vacuous green this suite exists to refuse.
 if [ ! -f "$MISSES" ]; then
@@ -256,6 +264,81 @@ OUT=$(bash "$MISSES" --log "$MULTI" --min 1 2>&1) && ST=0 || ST=$?
 assert_status "two links in each of two prompts, exit 0" "$ST" "0"
 assert_contains "counts links, not records" "$OUT" "4 link(s) stripped"
 assert_token_row "and the word around them still counts once each" "$OUT" "compare"
+
+
+# --- #386: an ordinary word is not a candidate entry -------------------------
+# `click`, `ready` and `update` recurred on the maintainer's own log and were handed to
+# a human with a note saying "judge these yourself". data/generic-words.txt is the list
+# rebuild-tsv.sh already consults for exactly that judgement (#232); this tool now reads
+# it too. Positive control first: the specific word on the same log still gets its row,
+# so the absence below is a filter and not a tokeniser that returned nothing.
+GEN="$TMP/generic.log"
+cat > "$GEN" << 'LOG'
+[10:00:01.001] pre-prompt 9ms | (none) [shown:1] << update the xsd schema
+[10:00:02.001] pre-prompt 9ms | (none) [shown:1] << update the xsd again
+[10:00:03.001] pre-prompt 9ms | (none) [shown:1] << click ready
+[10:00:04.001] pre-prompt 9ms | (none) [shown:1] << click ready now
+LOG
+GENLIST="$SCRIPT_DIR/data/generic-words.txt"
+if [ ! -s "$GENLIST" ]; then
+  echo "  FAIL: harness guard -- $GENLIST is missing, the generic-word assertions below are vacuous"
+  exit 1
+fi
+for w in update click ready; do
+  if ! grep -qx "$w" "$GENLIST"; then
+    echo "  FAIL: harness guard -- '$w' is not in $GENLIST, the fixture no longer tests the filter"
+    exit 1
+  fi
+done
+if grep -qx "xsd" "$GENLIST"; then
+  echo "  FAIL: harness guard -- 'xsd' is in $GENLIST, the positive control is gone"
+  exit 1
+fi
+
+echo ""
+echo "=== #386: a recurring word that is in data/generic-words.txt is not a candidate ==="
+# The suite-wide opt-out above is lifted here, and the bundled default must resolve on
+# its own -- a suite that only ever named the list by flag would never notice the
+# default path rotting.
+OUT=$(env -u JIT_CONTEXT_GENERIC_WORDS bash "$MISSES" --log "$GEN" 2>&1) && ST=0 || ST=$?
+assert_status "exit 0 -- findings" "$ST" "0"
+assert_token_row "the specific word still gets its row (positive control)" "$OUT" "xsd"
+assert_no_token_row "an ordinary verb does not" "$OUT" "update"
+assert_no_token_row "nor an ordinary noun" "$OUT" "click"
+assert_no_token_row "nor an ordinary adjective" "$OUT" "ready"
+assert_contains "and the header says how many it set aside" "$OUT" "generic word(s) set aside"
+
+# Every candidate generic: `ok`, the same answer as nothing recurring, not a row.
+GENONLY="$TMP/generic-only.log"
+cat > "$GENONLY" << 'LOG'
+[10:00:01.001] pre-prompt 9ms | (none) [shown:1] << click ready
+[10:00:02.001] pre-prompt 9ms | (none) [shown:1] << click ready now
+LOG
+OUT=$(bash "$MISSES" --log "$GENONLY" --generic-words "$GENLIST" 2>&1) && ST=0 || ST=$?
+assert_status "only generic words recurring: exit 0" "$ST" "0"
+assert_contains "and it is ok, not a finding" "$OUT" "ok -- no token is shared"
+assert_no_token_row "no row for the generic word" "$OUT" "click"
+
+# The list opted out (--generic-words ""), the old behaviour: the generic word recurs.
+OUT=$(bash "$MISSES" --log "$GEN" --generic-words "" 2>&1) && ST=0 || ST=$?
+assert_status "opted out of the list: exit 0" "$ST" "0"
+assert_token_row "with no list, the ordinary verb is a row again" "$OUT" "update"
+assert_contains "and the header says the list was not consulted" "$OUT" "generic words not filtered"
+
+# The list named but unreadable: the report says so, never silently unfiltered. That is
+# the three-outcomes rule -- "filtered" and "could not filter" must not print the same.
+OUT=$(bash "$MISSES" --log "$GEN" --generic-words "$TMP/no-such-list.txt" 2>&1) && ST=0 || ST=$?
+assert_status "a missing list is still a readable log: exit 0" "$ST" "0"
+assert_contains "the header names the missing list" "$OUT" "generic words NOT filtered"
+assert_contains "with its path" "$OUT" "no-such-list.txt"
+assert_token_row "and the ordinary verb is reported, because nothing could set it aside" "$OUT" "update"
+
+# The env var rebuild-tsv.sh honours (#265/#270) is honoured here the same way: set,
+# even to empty, wins over the bundled default.
+OUT=$(JIT_CONTEXT_GENERIC_WORDS="" bash "$MISSES" --log "$GEN" 2>&1) && ST=0 || ST=$?
+assert_token_row "JIT_CONTEXT_GENERIC_WORDS set to empty opts out" "$OUT" "update"
+OUT=$(JIT_CONTEXT_GENERIC_WORDS="$TMP/no-such-list.txt" bash "$MISSES" --log "$GEN" 2>&1) && ST=0 || ST=$?
+assert_contains "JIT_CONTEXT_GENERIC_WORDS pointing at nothing is named" "$OUT" "no-such-list.txt"
 
 # --- the 80-character cut, and whether it landed inside the link -------------
 # The hook logs substr(msg, 1, 80), so a record can end mid-word, and the last token is

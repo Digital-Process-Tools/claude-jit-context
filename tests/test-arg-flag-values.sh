@@ -307,6 +307,7 @@ positive_argv() {
         --top) printf '%s\n%s\n%s\n%s\n' "--log" "$LOGFILE" "--top" "5" ;;
         --tail) printf '%s\n%s\n%s\n%s\n' "--log" "$LOGFILE" "--tail" "1" ;;
         --size-threshold) printf '%s\n%s\n%s\n%s\n' "--log" "$LOGFILE" "--size-threshold" "1000000" ;;
+        --generic-words) printf '%s\n%s\n%s\n%s\n' "--log" "$LOGFILE" "--generic-words" "$REPO/data/generic-words.txt" ;;
       esac
       ;;
     jit-doctor.sh)

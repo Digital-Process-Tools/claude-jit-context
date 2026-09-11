@@ -61,6 +61,10 @@ if [ ! -f "$MISSES" ]; then
   exit 1
 fi
 
+# #386: `legacy` is an ordinary English word and the filter would set it aside; this
+# fixture is about the window, not the filter, so the list is opted out for the file.
+export JIT_CONTEXT_GENERIC_WORDS=""
+
 # --- Fixture: an old miss ("legacy") only near the top of the log, and a different
 # recurring miss ("preprod") only in the last 3 lines. --tail 3 must see "preprod" and
 # must NOT see "legacy" -- the harness guard for this whole file, on the same shape the

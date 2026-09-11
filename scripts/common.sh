@@ -980,6 +980,20 @@ jit_load_config() {
           ;;
       esac
     fi
+    # #386: JIT_CONTEXT_MISSES gates the one SessionStart line that names the words a
+    # project keeps typing with no entry behind them -- the line itself offers this as
+    # the way to make it stop, so it has to exist, and it is narrower than
+    # JIT_CONTEXT_STATUS=off on purpose: a person tired of that one line has not asked
+    # to lose the Stop summary. Refused on any other value, same reason as above.
+    if [ "$key" = JIT_CONTEXT_MISSES ]; then
+      case "$value" in
+        on | off) ;;
+        *)
+          jit_config_refuse "$lineno" "not a misses toggle (on or off)"
+          continue
+          ;;
+      esac
+    fi
     printf -v "$key" '%s' "$value"
   done < "$file"
 }
@@ -1097,6 +1111,14 @@ JIT_STATUS="${JIT_CONTEXT_STATUS:-summary}"
 case "$JIT_STATUS" in
   fired | summary | off) ;;
   *) JIT_STATUS=summary ;;
+esac
+
+# #386: the SessionStart recurring-words line, on its own switch (see the config.env
+# parser above for why it is not folded into JIT_CONTEXT_STATUS). Same clamp shape.
+JIT_MISSES="${JIT_CONTEXT_MISSES:-on}"
+case "$JIT_MISSES" in
+  on | off) ;;
+  *) JIT_MISSES=on ;;
 esac
 
 # Pipeline log: _log "step" duration_ms "message"  → [HH:MM:SS.mmm] step 42ms | message
