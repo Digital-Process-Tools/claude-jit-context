@@ -37,5 +37,7 @@ one. Never read its `session key:` line as a certainty stronger than the line it
 **The word or pattern that matched each entry is read back out of `hooks.log`**, not out of
 the marker files -- the marker files were never asked to carry it, and it is a best-effort
 correlation for the same reason the session key is: `hooks.log` carries no session id
-column either. A blank `matched=` is not evidence the entry did not fire; it is evidence
-this correlation could not find the line.
+column either. It searches for `<layer>:<file>(` as one unit, not the file name alone, so
+it cannot be fooled by an unrelated entry from a DIFFERENT layer that happens to share a
+file name -- but it still has no session id to anchor on, so a blank `matched=` is not
+evidence the entry did not fire; it is evidence this correlation could not find the line.

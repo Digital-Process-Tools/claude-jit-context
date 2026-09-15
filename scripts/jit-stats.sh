@@ -121,7 +121,14 @@ bytes_for() {
   needle="$JIT_NL$key$(printf '\t')"
   case "$JIT_NL$BYTES_RAW$JIT_NL" in
     *"$needle"*)
-      rest="${BYTES_RAW#*"$key"$(printf '\t')}"
+      # #389 self-review: stripped through the SAME NL-anchored needle the
+      # existence check above just proved is present, never through the bare
+      # "<key><TAB>" text alone -- an unanchored strip can land inside an
+      # unrelated, earlier line whose own longer key happens to end with this
+      # key's text immediately before a tab, and silently return that line's
+      # byte count instead (see scripts/stop-hook.sh's identical fix).
+      rest="${JIT_NL}${BYTES_RAW}${JIT_NL}"
+      rest="${rest#*"$needle"}"
       rest="${rest%%$JIT_NL*}"
       case "$rest" in
         '' | *[!0-9]*) printf '' ;;
@@ -138,15 +145,26 @@ bytes_for() {
 # out of the log's "layer:file(pattern)" token; best-effort for the same reason the
 # session key above is -- hooks.log carries no session id column either.
 match_for() {
-  local dim="$1" file="$2" line
+  # #389 self-review: a bare ":$file(" needle matched anywhere the byte text
+  # occurred, including mid-token inside an UNRELATED layer's own entry name
+  # (a crafted or coincidentally-similar earlier token on the same log line).
+  # hooks.log's own token shape is "<layer>:<file>(<pattern>)" (see log_matches
+  # in pre-prompt-hook.sh/pre-path-hook.sh/pre-tool-hook.sh) -- searching on
+  # "<layer>:<file>(" instead of the bare file name is the same anchoring fix
+  # bytes_for() above already applies, narrowed to the identity this hook
+  # actually has in hand at the call site (dim, layer AND file, not file alone).
+  local dim="$1" layer="$2" file="$3" needle line
   [ -f "$LOG_FILE" ] && [ ! -L "$LOG_FILE" ] || {
     printf ''
     return 0
   }
+  [ -n "$layer" ] || {
+    printf ''
+    return 0
+  }
+  needle="$layer:$file("
   case "$dim" in
-    paths) line="$(LC_ALL=C grep -F ":$file(" "$LOG_FILE" 2> /dev/null | tail -1)" ;;
-    vocabulary) line="$(LC_ALL=C grep -F ":$file(" "$LOG_FILE" 2> /dev/null | tail -1)" ;;
-    tools) line="$(LC_ALL=C grep -F ":$file(" "$LOG_FILE" 2> /dev/null | tail -1)" ;;
+    paths | vocabulary | tools) line="$(LC_ALL=C grep -F -- "$needle" "$LOG_FILE" 2> /dev/null | tail -1)" ;;
     *)
       printf ''
       return 0
@@ -156,7 +174,7 @@ match_for() {
     printf ''
     return 0
   }
-  line="${line#*":$file("}"
+  line="${line#*"$needle"}"
   case "$line" in
     *')'*) printf '%s' "${line%%)*}" ;;
     *) printf '' ;;
@@ -196,7 +214,7 @@ for MF in "$VOCAB_FILE" "$PATH_FILE"; do
     esac
     N_SHOWN=$((N_SHOWN + 1))
     B="$(bytes_for "$LN")"
-    M="$(match_for "$DIM" "$NAME")"
+    M="$(match_for "$DIM" "$LAYER" "$NAME")"
     printf '%s\n' "$(jit_report_name "$NAME")  dim=${DIM:-unknown} layer=${LAYER:-unknown} bytes=${B:-unknown} matched=${M:-unknown}"
   done < "$MF"
 done

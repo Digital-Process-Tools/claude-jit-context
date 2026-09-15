@@ -533,7 +533,16 @@ if [ "$JIT_SIZE_KNOWN" = 1 ]; then
     _jit_needle="$JIT_NL$_jit_rawkey$(printf '\t')"
     case "$JIT_NL$JIT_BYTES_RAW$JIT_NL" in
       *"$_jit_needle"*)
-        _jit_brest="${JIT_BYTES_RAW#*"$_jit_rawkey"$(printf '\t')}"
+        # Self-review finding: this used to strip through the first RAW occurrence
+        # of "<rawkey><TAB>" anywhere in the whole blob -- unanchored, unlike the
+        # existence check just above -- so a key that is a trailing substring of an
+        # EARLIER, unrelated line's own longer key (immediately before that line's
+        # own tab) silently borrowed that line's byte count instead of failing. The
+        # extraction now strips through the SAME NL-anchored needle the existence
+        # check just proved is present, so it can only ever land on a real line
+        # start, never mid-line inside another key's text.
+        _jit_brest="${JIT_NL}${JIT_BYTES_RAW}${JIT_NL}"
+        _jit_brest="${_jit_brest#*"$_jit_needle"}"
         _jit_brest="${_jit_brest%%$JIT_NL*}"
         case "$_jit_brest" in
           '' | *[!0-9]*)

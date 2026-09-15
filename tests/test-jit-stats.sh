@@ -106,6 +106,41 @@ OUT="$(bash "$SCRIPTS/jit-stats.sh" --nope 2>&1)"
 RC=$?
 [ "$RC" -eq 2 ] && ok "exit 2 on an unknown flag" || bad "expected exit 2, got $RC"
 
+
+echo "=== F: #389 self-review finding -- bytes_for() must not borrow an unrelated line's byte count ==="
+
+P="$(new_project f)"
+STATE="$(dirname "$(dirname "$0")")/proj-f-state-unused"
+mkdir -p "$P/.claude/jit-context/.discovery/state"
+printf 'loc:paths:00-manual:md\n' > "$P/.claude/jit-context/.discovery/state/path-shown-sess-f.txt"
+printf 'loc:paths:00-manual:x-loc:paths:00-manual:md\t999\nloc:paths:00-manual:md\t5\n' \
+  > "$P/.claude/jit-context/.discovery/state/bytes-shown-sess-f.txt"
+OUT="$(CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/jit-stats.sh" 2>&1)"
+assert_contains "the entry's own 5-byte record is reported" "$OUT" "bytes=5"
+if grep -qF "bytes=999" <<< "$OUT"; then
+  bad "the unrelated, longer line's 999-byte count must never be borrowed" "got: $OUT"
+else
+  ok "999 is never attributed to this entry"
+fi
+
+echo "=== G: #389 self-review finding -- match_for() must not borrow a pattern from an unrelated log token ==="
+
+P="$(new_project g)"
+mkdir -p "$P/.claude/jit-context/.discovery/state" "$P/.claude/jit-context/.discovery/logs"
+printf 'loc:vocabulary:00-manual:md\n' > "$P/.claude/jit-context/.discovery/state/vocab-shown-sess-g.txt"
+# A crafted earlier token, "xtra:md(", shares the file's own ":md(" suffix but
+# belongs to a DIFFERENT layer ("xtra") and a different word entirely --
+# match_for() must not attribute XTRA-PATTERN to the real "00-manual:md" entry
+# further down the same line.
+printf '[12:00:00.000] pre-prompt (na) 1ms | xtra:md(XTRA-PATTERN), 00-manual:md(REAL-PATTERN)\n' \
+  > "$P/.claude/jit-context/.discovery/logs/hooks.log"
+OUT="$(CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/jit-stats.sh" 2>&1)"
+assert_contains "the entry's OWN layer-qualified token is what gets reported" "$OUT" "matched=REAL-PATTERN"
+if grep -qF "matched=XTRA-PATTERN" <<< "$OUT"; then
+  bad "an unrelated layer's token must never be borrowed" "got: $OUT"
+else
+  ok "XTRA-PATTERN is never attributed to this entry"
+fi
 echo ""
 echo "=========================================="
 echo "Results: $PASS passed, $FAIL failed"
