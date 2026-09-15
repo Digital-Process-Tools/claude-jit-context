@@ -155,6 +155,13 @@ fi
 
 VOCAB_FILE="$JIT_STATE_DIR/vocab-shown-$SESSION_ID.txt"
 PATH_FILE="$JIT_STATE_DIR/path-shown-$SESSION_ID.txt"
+# #389: the third marker file, built by the same jit_shown_path(dir, "bytes", k) the
+# other two already use -- no second naming convention. One line per DELIVERED
+# block, written by the same call site as the entry's own jit_shown_mark() (never a
+# refusal or a no-subject sentinel, which never had a body to measure), "<raw fired
+# key><TAB><byte count>". Read below, once the fired set itself is known, because the
+# byte sum is only ever reported against that exact deduped identity -- never its own.
+BYTES_FILE="$JIT_STATE_DIR/bytes-shown-$SESSION_ID.txt"
 EDIT_MARK="$JIT_STATE_DIR/edited-$SESSION_ID.txt"
 # #285: post-tool-hook.sh drops THIS marker, and only this one, on the branch where
 # its own symlink guard refused to write EDIT_MARK -- an edit really happened, but its
@@ -203,6 +210,12 @@ JIT_FIRED_NAME=()
 JIT_FIRED_DIM=()
 JIT_FIRED_LAYER=()
 JIT_FIRED_CLASS=() # Y (00-manual, known), N (another layer, known), U (bare, unknown)
+# #389: the RAW mark itself, same identity as JIT_FIRED_KEYS' own dedup string --
+# the exact text a delivery hook passed to jit_shown_mark() and therefore the exact
+# text BYTES_FILE keys its own "<key><TAB><bytes>" lines on. Kept per-entry, not
+# re-derived from JIT_FIRED_KEYS, because that string is NL-joined and this is read
+# back by exact value, not by position.
+JIT_FIRED_RAWKEY=()
 for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
   [ -f "$_jit_mf" ] && [ ! -L "$_jit_mf" ] || continue
   while IFS= read -r _jit_line || [ -n "$_jit_line" ]; do
@@ -297,6 +310,7 @@ for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
     JIT_FIRED_DIM[$JIT_FIRED_N]="$_jit_dim"
     JIT_FIRED_LAYER[$JIT_FIRED_N]="$_jit_layer"
     JIT_FIRED_CLASS[$JIT_FIRED_N]="$_jit_class"
+    JIT_FIRED_RAWKEY[$JIT_FIRED_N]="$_jit_line"
     JIT_FIRED_N=$((JIT_FIRED_N + 1))
   done < "$_jit_mf"
 done
@@ -472,6 +486,90 @@ fi
 jit_log_write "$(printf '[%s] stop: %s entries fired this session, %s yours, %s not yours, %s unknown, not updated. %s' \
   "$(_ts)" "$JIT_TOTAL" "$JIT_YOURS_N" "$JIT_NOT_YOURS_N" "$JIT_UNKNOWN_N" "$JIT_LOG_LIST")"
 
+# #389: the byte total -- summed against the EXACT SAME deduped identity JIT_TOTAL
+# itself already committed to (JIT_FIRED_RAWKEY, one slot per accepted JIT_FIRED_KEYS
+# entry), never the raw line count of BYTES_FILE. A fired entry with no matching byte
+# record -- an older hook's mark from earlier in this same session, a truncated write,
+# a marker past the read cap below -- withholds the WHOLE size rather than reporting a
+# sum that quietly excludes it: a wrong number here is worse than none (see the issue
+# body, and the developer brief that carried it into this change).
+JIT_SIZE_KNOWN=1
+JIT_BYTES_TOTAL=0
+JIT_BYTES_MAX=2000
+if [ "$JIT_FIRED_OVERFLOW" -gt 0 ]; then
+  # Entries past JIT_FIRED_MAX were never individually identified, so their bytes
+  # cannot be either -- the same reasoning JIT_FIRED_OVERFLOW already applies to
+  # ownership above, carried to the size question.
+  JIT_SIZE_KNOWN=0
+fi
+JIT_BYTES_RAW=""
+if [ "$JIT_SIZE_KNOWN" = 1 ] && [ -f "$BYTES_FILE" ] && [ ! -L "$BYTES_FILE" ]; then
+  JIT_BYTES_SEEN=0
+  while IFS= read -r _jit_bline || [ -n "$_jit_bline" ]; do
+    [ -n "$_jit_bline" ] || continue
+    JIT_BYTES_SEEN=$((JIT_BYTES_SEEN + 1))
+    if [ "$JIT_BYTES_SEEN" -gt "$JIT_BYTES_MAX" ]; then
+      # The same untrusted-file-chooses-the-cost shape JIT_FIRED_MAX guards above:
+      # past this cap the scan cannot promise it saw every line, so the size is
+      # withheld rather than guessed from a partial read.
+      JIT_SIZE_KNOWN=0
+      break
+    fi
+    JIT_BYTES_RAW="$JIT_BYTES_RAW${JIT_BYTES_RAW:+$JIT_NL}$_jit_bline"
+  done < "$BYTES_FILE"
+  unset _jit_bline
+else
+  # No file, or a link sitting at its name (the same posture jit_shown_apply() and
+  # the fired-marks read above already take toward a marker path that is not a
+  # plain file): unknown, never zero.
+  JIT_SIZE_KNOWN=0
+fi
+
+if [ "$JIT_SIZE_KNOWN" = 1 ]; then
+  JIT_BI=0
+  while [ "$JIT_BI" -lt "$JIT_FIRED_N" ]; do
+    _jit_rawkey="${JIT_FIRED_RAWKEY[$JIT_BI]}"
+    JIT_BI=$((JIT_BI + 1))
+    _jit_needle="$JIT_NL$_jit_rawkey$(printf '\t')"
+    case "$JIT_NL$JIT_BYTES_RAW$JIT_NL" in
+      *"$_jit_needle"*)
+        _jit_brest="${JIT_BYTES_RAW#*"$_jit_rawkey"$(printf '\t')}"
+        _jit_brest="${_jit_brest%%$JIT_NL*}"
+        case "$_jit_brest" in
+          '' | *[!0-9]*)
+            # A byte field that is not a plain non-negative integer -- a hand-edited
+            # marker, a truncated write -- is exactly the shape jit_bad_bytes()
+            # elsewhere in this codebase already treats as unusable rather than as 0.
+            JIT_SIZE_KNOWN=0
+            break
+            ;;
+          *) JIT_BYTES_TOTAL=$((JIT_BYTES_TOTAL + _jit_brest)) ;;
+        esac
+        ;;
+      *)
+        # This fired entry has no byte record at all.
+        JIT_SIZE_KNOWN=0
+        break
+        ;;
+    esac
+  done
+  unset _jit_rawkey _jit_needle _jit_brest
+fi
+unset JIT_BI
+
+# jit_fmt_bytes lives in JIT_AWK_ENVELOPE_SYSMSG (common.sh), deliberately kept out of
+# pre-tool-hook.sh's own awk program (#369, its own per-argument execve cap) -- Stop
+# runs once per session, not once per tool call, so that budget does not apply here
+# and this is where the shared formatter is affordable. -v, not string concatenation:
+# JIT_BYTES_TOTAL is this hook's own arithmetic sum, never untrusted text, but there is
+# no reason to build an awk source string out of it when ENVIRON/-v already exists for
+# exactly this.
+JIT_SIZE_FMT=""
+if [ "$JIT_SIZE_KNOWN" = 1 ]; then
+  JIT_SIZE_FMT="$(LC_ALL=C awk -v n="$JIT_BYTES_TOTAL" "$JIT_AWK_ENVELOPE_SYSMSG"'BEGIN { print jit_fmt_bytes(n + 0) }' 2> /dev/null)"
+  case "$JIT_SIZE_FMT" in '') JIT_SIZE_KNOWN=0 ;; esac
+fi
+
 # #367: the human-facing line is the total alone -- JIT_CONTEXT_STATUS=fired and
 # =summary render it identically here, because "fired" already said one line per entry
 # AS IT FIRED, in the hook that fired it; Stop only ever adds the running total.
@@ -482,13 +580,29 @@ jit_log_write "$(printf '[%s] stop: %s entries fired this session, %s yours, %s 
 # wrote it -- is counted but NOT claimed as anyone's, and the line says so rather than
 # rounding it into the confident part of the count. Silent when there is nothing to
 # hedge, which is every ordinary session.
+#
+# #389: the size, when known, and the pointer to /jit:stats, always -- the count alone
+# was the whole of the human-facing report before this issue and answered none of the
+# three questions a reader actually has (which ones, on what word, what did it cost).
+# /jit:stats is where the detail #367 removed from this line went back to; the copy is
+# decided by the issue itself, not written fresh here.
 if [ "$JIT_STATUS" != "off" ]; then
   if [ "$JIT_TOTAL" = 1 ]; then JIT_NOUN=entry; else JIT_NOUN=entries; fi
-  if [ "$JIT_UNKNOWN_N" -gt 0 ]; then
-    printf '{"systemMessage":"JIT : %s %s this session (%s of unknown origin -- cannot tell if those are yours)"}\n' \
-      "$JIT_TOTAL" "$JIT_NOUN" "$JIT_UNKNOWN_N"
+  if [ "$JIT_SIZE_KNOWN" = 1 ]; then
+    if [ "$JIT_UNKNOWN_N" -gt 0 ]; then
+      printf '{"systemMessage":"JIT : %s %s, %s this session (%s of unknown origin -- cannot tell if those are yours) + /jit:stats for more info"}\n' \
+        "$JIT_TOTAL" "$JIT_NOUN" "$JIT_SIZE_FMT" "$JIT_UNKNOWN_N"
+    else
+      printf '{"systemMessage":"JIT : %s %s, %s this session + /jit:stats for more info"}\n' \
+        "$JIT_TOTAL" "$JIT_NOUN" "$JIT_SIZE_FMT"
+    fi
   else
-    printf '{"systemMessage":"JIT : %s %s this session"}\n' "$JIT_TOTAL" "$JIT_NOUN"
+    if [ "$JIT_UNKNOWN_N" -gt 0 ]; then
+      printf '{"systemMessage":"JIT : %s %s this session (%s of unknown origin -- cannot tell if those are yours) + /jit:stats for more info"}\n' \
+        "$JIT_TOTAL" "$JIT_NOUN" "$JIT_UNKNOWN_N"
+    else
+      printf '{"systemMessage":"JIT : %s %s this session + /jit:stats for more info"}\n' "$JIT_TOTAL" "$JIT_NOUN"
+    fi
   fi
 else
   echo '{}'

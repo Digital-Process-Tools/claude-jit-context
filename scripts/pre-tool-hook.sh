@@ -183,6 +183,9 @@ END {
   # hold one, and the key is empty when the payload names no session. Either way this is ""
   # and the shown set lives and dies with this process. See common.sh.
   shown_file = jit_shown_file(state_dir, "vocab", raw, fs, fe, n)
+  # #389: shares the byte marker file the SAME way shown_file above shares the vocab
+  # one across every dimension this hook touches -- one naming convention.
+  bytes_shown_file = jit_shown_file(state_dir, "bytes", raw, fs, fe, n)
   for (i = 2; i + 2 <= n; i += 2) {
     # Only a field that is ONE raw piece can be a key this hook wants — every key below is
     # quote-free — and only the matching value is ever materialised or decoded. That is
@@ -832,6 +835,9 @@ END {
         log_adv = log_adv asep "tool:" r_logname "(" r_match ")" jit_inject_tag(ent)
         asep = ", "
         if (key != "") { held[key] = 1; hold_n++ }
+        # #389: the byte cost for THIS held advisory is only known once adv_header
+        # and content are both settled a few lines down -- held_bytes[] carries it to
+        # the commit loop below, the same deferral held[] itself already needs (#112).
 
         # The SECOND header, and the reason there are two (#146). `header` above is the
         # refusal header and is deliberately unbounded: #141 asked for a bound there and was
@@ -920,6 +926,7 @@ END {
         # as the concat was -- a `break` above discards the whole scan on a block decision,
         # and nblk/blk[] are discarded right along with it, never read past that point.
         nblk++; blk[nblk] = adv_header "\n" content
+        if (key != "") held_bytes[key] = length(adv_header "\n" content)
       }
     }
     close(tools_tsv)
@@ -936,7 +943,15 @@ END {
   # injection that happened (#78); this is that rule applied to the one branch that
   # discards its own output.
   if (hold_n > 0 && blocked == "") {
-    for (hk in held) { shown[hk] = 1; jit_shown_mark(shown_file, hk) }
+    for (hk in held) {
+      shown[hk] = 1
+      jit_shown_mark(shown_file, hk)
+      # #389: only when held_bytes actually carries this key -- a `break` earlier in
+      # the row loop can end the scan before the length was ever measured for a row
+      # this same call still held from an EARLIER layer, and a missing byte record
+      # is exactly what the Stop hooks own dedup already treats as unknown, never as 0.
+      if (hk in held_bytes) jit_shown_mark(bytes_shown_file, hk "\t" held_bytes[hk])
+    }
   }
   if (log_adv != "") {
     if (blocked == "") { log_matches = log_matches sep log_adv; sep = ", " }
@@ -1131,6 +1146,9 @@ END {
           log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent) (generic_only ? ":generic-only" : "")
           sep = ", "
           nblk++; blk[nblk] = vh "\n" vc
+          # #389: a byte record beside the mark above, same vlk -- skipped on the same
+          # generic_only guard the prompt hooks own copy of this pass already uses.
+          if (!generic_only) jit_shown_mark(bytes_shown_file, vlk "\t" length(vh "\n" vc))
         }
       }
     }

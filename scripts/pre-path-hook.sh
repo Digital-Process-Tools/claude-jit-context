@@ -202,6 +202,10 @@ END {
   # The vocabulary one is deliberately the SAME file the prompt hook writes.
   shown_file = jit_shown_file(state_dir, "path", raw, fs, fe, n)
   vocab_shown_file = jit_shown_file(state_dir, "vocab", raw, fs, fe, n)
+  # #389: one bytes marker file for BOTH passes below, the same file the vocab pass
+  # in pre-prompt-hook.sh writes to when a session shares its shown_file with it --
+  # one naming convention, not two.
+  bytes_shown_file = jit_shown_file(state_dir, "bytes", raw, fs, fe, n)
   cmd = ""
   for (i = 2; i + 2 <= n; i += 2) {
     # A key this hook wants is quote-free, so a field spanning several raw pieces is not
@@ -223,6 +227,7 @@ END {
     path_count = jit_cand_load(all_paths)
     shown_file = jit_shown_path(state_dir, "path", ENVIRON["JIT_SESSION_KEY"])
     vocab_shown_file = jit_shown_path(state_dir, "vocab", ENVIRON["JIT_SESSION_KEY"])
+    bytes_shown_file = jit_shown_path(state_dir, "bytes", ENVIRON["JIT_SESSION_KEY"])
   } else if (file_path != "") {
     path_count = 1; all_paths[1] = file_path
   # \n joins the class for the same reason ; and | are in it: a decoded multi-line
@@ -415,6 +420,8 @@ END {
         sep = ", "
         blk_body = header "\n" content
         nblk++; blk[nblk] = blk_body
+        # #389: a byte record beside the mark just above, same rlockey.
+        jit_shown_mark(bytes_shown_file, rlockey "\t" length(blk_body))
         if (status_mode == "fired") {
           sys_msg = sys_msg (sys_msg != "" ? "\n" : "") "JIT : paths/" layer "/" rule_file " (" jit_fmt_bytes(length(blk_body)) ")"
         }
@@ -497,6 +504,8 @@ END {
           sep = ", "
           vblk_body = vheader "\n" vcontent
           nblk++; blk[nblk] = vblk_body
+          # #389: a byte record beside the mark just above, same vfkey.
+          jit_shown_mark(bytes_shown_file, vfkey "\t" length(vblk_body))
           if (status_mode == "fired") {
             sys_msg = sys_msg (sys_msg != "" ? "\n" : "") "JIT : vocabulary/" layer "/" vocab_file " (" jit_fmt_bytes(length(vblk_body)) ")"
           }

@@ -152,6 +152,10 @@ END {
   # hold one, and the key is empty when the payload names no session. Either way this is ""
   # and the shown set lives and dies with this process. See common.sh.
   shown_file = jit_shown_file(state_dir, "vocab", raw, fs, fe, n)
+  # #389: the same session key, the third marker file (common.sh: jit_shown_path()).
+  # "" under the same conditions shown_file is "" -- no state dir, no session -- so a
+  # byte record is skipped exactly when the dedup mark it rides beside is.
+  bytes_shown_file = jit_shown_file(state_dir, "bytes", raw, fs, fe, n)
   for (i = 2; i + 2 <= n; i += 2) {
     if (fs[i] != fe[i]) continue
     if (raw[fs[i]] == "prompt") { message = jit_unescape(jit_field(raw, fs[i+2], fe[i+2])); break }
@@ -416,6 +420,11 @@ END {
         sep = ", "
         blk_body = vh "\n" vc
         nblk++; blk[nblk] = blk_body
+        # #389: a byte record for this exact delivery, keyed on the SAME lockey
+        # jit_shown_mark() just used -- so it exists precisely when the dedup mark
+        # does (never for a generic_only fire, which is never marked shown either,
+        # by the same guard one paragraph up).
+        if (!generic_only) jit_shown_mark(bytes_shown_file, lockey "\t" length(blk_body))
         # #367: JIT_CONTEXT_STATUS=fired -- one systemMessage line per entry as it
         # fires, naming the full loc: it fired from (never the bare basename alone --
         # the exact ambiguity #299 documents) and what it cost in bytes.

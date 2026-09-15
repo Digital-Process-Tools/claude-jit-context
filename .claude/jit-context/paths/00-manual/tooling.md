@@ -1,10 +1,10 @@
 ---
-title: These six fail loudly, and their exit codes carry meaning
-description: rebuild-tsv, jit-dry-run, jit-misses, jit-init, jit-doctor and jit-match are build tools, not hooks - they must fail loudly, their exit codes 0/1/2 each mean something, and the hook never-fail-hard contract does not apply.
-match: (^|/)scripts/(rebuild-tsv|jit-dry-run|jit-misses|jit-init|jit-doctor|jit-match)\.sh$
+title: These seven fail loudly, and their exit codes carry meaning
+description: rebuild-tsv, jit-dry-run, jit-misses, jit-init, jit-doctor, jit-match and jit-stats are build tools, not hooks - they must fail loudly, their exit codes 0/1/2 each mean something, and the hook never-fail-hard contract does not apply.
+match: (^|/)scripts/(rebuild-tsv|jit-dry-run|jit-misses|jit-init|jit-doctor|jit-match|jit-stats)\.sh$
 ---
 
-`rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh`, `jit-init.sh`, `jit-doctor.sh` and `jit-match.sh` are build and diagnostic tools. They are run deliberately, by a person or by CI, and never inside a stranger's session.
+`rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh`, `jit-init.sh`, `jit-doctor.sh`, `jit-match.sh` and `jit-stats.sh` are build and diagnostic tools. They are run deliberately, by a person or by CI, and never inside a stranger's session.
 
 **The alternation above is enumerated one script at a time, and that is on purpose** — `tests/test-dogfood-entries.sh` fails until every file `git ls-files -- scripts` returns is matched by some `paths/` rule, and #83 rejected a catch-all `scripts/` entry precisely because it would satisfy that leg by construction and the leg could never go red again. So a new script under `scripts/` is a deliberate decision between widening this list and writing the script its own entry, taken by whoever adds it.
 
@@ -20,6 +20,7 @@ match: (^|/)scripts/(rebuild-tsv|jit-dry-run|jit-misses|jit-init|jit-doctor|jit-
 | `jit-init.sh` | the starter entry was seeded **and** the index rebuilt, so it is live rather than inert | the entry is already there — a copy the user edited is not ours to replace — or the rebuild did not complete | a bad argument, a `--base` that is not a `<project>/.claude/jit-context` path, a symbolic link **at or below `.claude`**, an install carrying no template, or a directory that could not be created |
 | `jit-doctor.sh` | nothing inert. Every ADVISORY finding lands here too | a layer holds `*.md` entries and **no** `00-index.tsv`, so the matcher can never load them | a bad argument, a `--base` that is not a directory, or one with no `tools/`, `paths/` or `vocabulary/` under it |
 | `jit-match.sh` | every row the hook touched could be evaluated — a match, or cleanly none | the hook also reported something it could not evaluate (a refused row, layer or `config.env` line, or it wrote to stderr), or a candidate match failed index verification — what matched, if anything, still printed | a bad argument, `--base` not a `<project>/.claude/jit-context` path, or no text from either `--text` or stdin |
+| `jit-stats.sh` (#389) | a report was produced -- which may say nothing fired for this session key | no session state could be found at all: nothing has fired yet, anywhere, this session | a bad argument, or no jit-context tree at `--base`/`JIT_BASE` |
 
 **`jit-match.sh` answers #205: "which entries does this text call for?", from outside a session.** It shells out to the real `pre-prompt-hook.sh` with `CLAUDE_PROJECT_DIR` pointed at `--base`'s project — the exact pattern `jit-dry-run.sh --prompt` already established for its own sample call — rather than reimplementing the match: the `LC_ALL=C` pin, the Latin-1 fold and the fail-open-loudly behaviour on a malformed byte took several issues to get right, and a second matcher reading the same index drifts the next time only one of them is fixed. The payload it builds carries no `session_id`, so `jit_shown_file()` in `common.sh` returns `""` and every shown-set read/write is a no-op — the shown-set is never touched, and there is no `--session-id` flag to touch it with. `--format json` is hand-built by an `awk` block reusing `jit_json_fields()`/`jit_unescape()` from `common.sh` (the same functions the hooks use to read *their own* payload) rather than a second JSON reader — no `jq`. `--limit N` reports what it dropped, by name, in both formats; a silent top-N would be this repository's own defect class in the tool built to fix it.
 

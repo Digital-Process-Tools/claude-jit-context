@@ -645,6 +645,51 @@ else
   echo "  FAIL: hooks.log was not written at all for the refused-config session"
 fi
 
+
+echo "=== X: #389 -- a full, matching byte record gives the Stop line a size, and points at /jit:stats ==="
+
+P="$(new_project x)"
+mkdir -p "$(state_of "$P")"
+manual_entry "$P" vocabulary bridge.md
+manual_entry "$P" vocabulary cache.md
+printf 'loc:vocabulary:00-manual:bridge.md\nloc:vocabulary:00-manual:cache.md\n' > "$(state_of "$P")/vocab-shown-sess-x.txt"
+printf 'loc:vocabulary:00-manual:bridge.md\t500\nloc:vocabulary:00-manual:cache.md\t620\n' > "$(state_of "$P")/bytes-shown-sess-x.txt"
+OUT="$(run_stop "$P" "sess-x")"
+RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_contains "the total, the summed size and the pointer all land on one line" "$OUT" "2 entries, 1.1k this session + /jit:stats for more info"
+
+echo ""
+echo "=== Y: #389 -- one fired entry with no matching byte line withholds the size for ALL of them, never a short sum ==="
+
+P="$(new_project y)"
+mkdir -p "$(state_of "$P")"
+manual_entry "$P" vocabulary bridge.md
+manual_entry "$P" vocabulary cache.md
+printf 'loc:vocabulary:00-manual:bridge.md\nloc:vocabulary:00-manual:cache.md\n' > "$(state_of "$P")/vocab-shown-sess-y.txt"
+# Only bridge.md has a byte record -- cache.md's is missing, as if written by a hook
+# from before this change earlier in the same session.
+printf 'loc:vocabulary:00-manual:bridge.md\t500\n' > "$(state_of "$P")/bytes-shown-sess-y.txt"
+OUT="$(run_stop "$P" "sess-y")"
+RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_contains "the count and the pointer are still said" "$OUT" "2 entries this session + /jit:stats for more info"
+assert_not_contains "but no size is claimed -- a partial sum never renders as a confident one" "$OUT" "2 entries, "
+assert_not_contains "and never the lone known entry's own size either" "$OUT" "500b"
+
+echo ""
+echo "=== Z: #389 -- no byte record at all (a pre-#389 session) is the same withheld-size shape as Y ==="
+
+P="$(new_project z)"
+mkdir -p "$(state_of "$P")"
+manual_entry "$P" vocabulary bridge.md
+printf 'loc:vocabulary:00-manual:bridge.md\n' > "$(state_of "$P")/vocab-shown-sess-z.txt"
+OUT="$(run_stop "$P" "sess-z")"
+RC=$?
+assert_rc0 "the hook exits 0" "$RC"
+assert_contains "the pointer is said even with no size data on disk at all" "$OUT" "1 entry this session + /jit:stats for more info"
+assert_not_contains "and no size is fabricated" "$OUT" "1 entry, "
+
 echo ""
 echo "=========================================="
 SKIP_TOTAL=$((D_SKIPPED + T_SKIPPED))

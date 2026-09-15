@@ -4,5 +4,5 @@
 (^|/)scripts/(.*-hook|common|host)\.sh$	hooks.md
 \.(claude|codex)-plugin/plugin\.json$	release.md
 (^|/)tests/[^/]*\.sh$	tests.md
-(^|/)scripts/(rebuild-tsv|jit-dry-run|jit-misses|jit-init|jit-doctor|jit-match)\.sh$	tooling.md
+(^|/)scripts/(rebuild-tsv|jit-dry-run|jit-misses|jit-init|jit-doctor|jit-match|jit-stats)\.sh$	tooling.md
 (^|/)(\.oss/[^/]+|\.github/workflows/oss-changelog\.yml)$	vendored-oss.md

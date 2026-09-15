@@ -692,7 +692,9 @@ jit_shown_apply() {
       # That check did not come along when the write moved out of awk in #59, and the
       # filter admitted a byte this repository's own code says must not pass (#65).
       *\\*) continue ;;
-      path-shown-*.txt | vocab-shown-*.txt) ;;
+      # #389: the third marker file, one entry per delivered block ("<raw fired
+      # key><TAB><byte count>"), keyed by the same jit_shown_path(dir, "bytes", k).
+      path-shown-*.txt | vocab-shown-*.txt | bytes-shown-*.txt) ;;
       *) continue ;;
     esac
     # The test awk could not make. Checked here rather than in the sweep above as well,

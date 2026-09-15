@@ -99,6 +99,10 @@ echo "=== commands/init.md ==="
 check_command "init.md" "jit-init.sh"
 
 echo ""
+echo "=== commands/stats.md ==="
+check_command "stats.md" "jit-stats.sh"
+
+echo ""
 echo "  $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
 exit 0
