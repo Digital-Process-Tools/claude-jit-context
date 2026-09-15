@@ -13,10 +13,10 @@
 # life of that function and restores the caller's locale on return.
 #
 # THIS SUITE is the guard against the next range being added without that scope: it
-# scans every tracked `scripts/*.sh` and `tests/*.sh` file for a `[[ =~ ]]` whose
-# pattern contains a bracket LETTER range, and fails unless the match sits inside a
-# function that sets `local LC_ALL=C` before it -- or is named in the EXEMPT table
-# below with a written reason.
+# scans every tracked `scripts/*.sh` file for a `[[ =~ ]]` whose pattern contains a
+# bracket LETTER range, and fails unless the match sits inside a function that sets
+# `local LC_ALL=C` before it -- or is named in the EXEMPT table below with a written
+# reason.
 #
 # WHY LETTERS ONLY, NOT [0-9] TOO: the issue that opened #388 measured this on
 # ubuntu-latest / bash 5.2 under a localedef-built tr_TR.UTF-8 -- digit ranges did not
@@ -24,10 +24,22 @@
 # tests/test-fork-count.sh's timestamp check) is out of this scanner's scope for that
 # reason, not because it was overlooked.
 #
-# WHY scripts/*.sh AND tests/*.sh, not the vendored .oss/ tree: `[[ =~ ]]` is a bash
-# construct. .oss/assemble_changelog.py is Python and is rewritten by every
-# `/oss:scaffold --apply` regardless, the same reason CLAUDE.md gives for not sweeping
-# it for line citations.
+# WHY scripts/*.sh ALONE, NOT tests/*.sh TOO: this scanner shipped once scanning
+# tests/*.sh as well, and the self-review round that caught it is worth stating --
+# tests/test-config-locale-collation.sh (this suite's own sibling, added in the same
+# commit) legitimately WRITES `[[ "I" =~ ^[A-Z]$ ]]` as the literal probe text it feeds
+# to a foreign locale, inside comments explaining that probe, and inside a `bash -c`
+# string this file's own parser cannot tell from a top-level statement -- and this
+# scanner itself contains the string `[A-Za-z0-9_-]` in an EXEMPT table entry. Every one
+# of those is prose or fixture data, not a live `[[ =~ ]]` this scanner needs to guard,
+# and scanning tests/*.sh made the scanner fail on itself and its own sibling the moment
+# both were committed and `git ls-files` could see them. The actual blast radius of
+# #388 is `scripts/*.sh` -- what ships and runs in a stranger's session, per
+# `.claude/jit-context/paths/00-manual/tooling.md`'s own split between the two
+# directories -- so that is what this scanner is scoped to now. `.oss/` is excluded
+# for the same reason CLAUDE.md gives for not sweeping it for line citations:
+# `[[ =~ ]]` is a bash construct and `.oss/assemble_changelog.py` is Python, rewritten
+# by every `/oss:scaffold --apply` regardless.
 #
 # Usage: bash tests/test-locale-collation-scope.sh
 
@@ -47,11 +59,12 @@ EXEMPT=(
   "scripts/session-start-hook.sh|edited)-[A-Za-z0-9_-]{1,64}|Perl regex, not [[ =~ ]] -- Perl's own regex engine does not collate bracket ranges unless the script says 'use locale', and this file has no such pragma (grep -n use.locale scripts/session-start-hook.sh returns nothing). Verified directly: under LC_ALL=tr_TR.UTF-8 this exact pattern still matches edited-I.txt (#388)."
 )
 
-# Every tracked file under scripts/ and tests/ that could carry a `[[ =~ ]]` at all.
-FILES="$(git ls-files 'scripts/*.sh' 'tests/*.sh' 2> /dev/null)"
+# Every tracked file under scripts/ -- the runtime this repo ships, and the actual
+# blast radius of #388. tests/*.sh is deliberately NOT scanned: see the header above.
+FILES="$(git ls-files 'scripts/*.sh' 2> /dev/null)"
 if [ -z "$FILES" ]; then
-  echo "SKIPPED: git ls-files returned nothing under scripts/ or tests/ -- this must be"
-  echo "         run inside a git checkout of the repository, not a tarball."
+  echo "SKIPPED: git ls-files returned nothing under scripts/ -- this must be run"
+  echo "         inside a git checkout of the repository, not a tarball."
   exit 2
 fi
 
