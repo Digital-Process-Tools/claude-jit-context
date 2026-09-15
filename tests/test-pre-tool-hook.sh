@@ -816,8 +816,12 @@ for eng in $ENGINES; do
     echo "advisory rule body" > "$t/adv.md"
     echo "blkr rule body" > "$t/blkr.md"
   }
+  # #394: transcript_path names the SAME file every call in this section -- a main
+  # session own transcript basename equals its own session_id, so this is the shape a
+  # real un-spawned session sends and once keeps meaning once per session here, exactly
+  # as before this change.
   t112_run() {
-    printf '{"session_id":"%s","tool_name":"%s","tool_input":%s}\n' "$2" "$3" "$4" \
+    printf '{"session_id":"%s","transcript_path":"/tmp/%s.jsonl","tool_name":"%s","tool_input":%s}\n' "$2" "$2" "$3" "$4" \
       | PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$1" bash "$HOOK" > "$T112_OUT" 2> /dev/null
   }
 
@@ -895,8 +899,10 @@ for eng in $ENGINES; do
   T139=$(mktemp -d)
   t139_tree "$T139"
   T139_MARK="$T139/.claude/jit-context/.discovery/state/vocab-shown-s139$u.txt"
+  # #394: a main-session-shaped transcript_path, constant across every call in this
+  # section (same reasoning as t112_run above).
   t139_run() {
-    printf '{"session_id":"s139%s","tool_name":"Bash","tool_input":{"command":"%s"}}\n' "$u" "$1" \
+    printf '{"session_id":"s139%s","transcript_path":"/tmp/s139%s.jsonl","tool_name":"Bash","tool_input":{"command":"%s"}}\n' "$u" "$u" "$1" \
       | PATH="$ENGINE_BIN/$eng:$PATH" CLAUDE_PROJECT_DIR="$T139" bash "$HOOK" > "$T139_OUT" 2> /dev/null
   }
 

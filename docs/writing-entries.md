@@ -72,7 +72,9 @@ Coverage runs take 8 minutes locally and are produced by CI anyway.
 | -------- | ------------------------------------------------------- |
 | `remind` | Injects the entry as additional context — the whole body, or its title and `description:` under `summary` |
 | `block`  | Rejects the tool call, returning the **whole body** as the reason, whatever the injection mode says |
-| `once`   | Injects at most once per session — see below, it does not bound a refusal |
+| `once`   | Injects at most once per READER — see below, it does not bound a refusal |
+
+**`once` means once per reader, not once per session (#394).** A dedup keyed on `session_id` alone reaches every agent a session spawns: a maintainer tick that fans out into a dozen developer lanes shares ONE `session_id` across all of them, so the first lane to trip a `once` rule spent the budget for every lane behind it, silently. The dedup key is the reader's own transcript instead — its `transcript_path`, from the same hook payload — so a main session and each of its spawns keep separate budgets. For a plain, unspawned session the two keys are identical (a transcript's own basename IS its session_id there), so this changes nothing you would notice outside a multi-agent run. A payload with no usable `transcript_path` — a hand-run hook, a host that does not supply one — degrades to firing on every match, exactly like `remind`, rather than guessing at a wider key.
 
 **A `block` rule refuses whether or not its text can be delivered.** Whether the call is stopped is decided by the index row; the entry file decides only what the reason *says*. So an entry that is unreadable, or empty, or missing under a row that still names it, produces a refusal carrying `(the text of this rule was not delivered: …)` in place of the body — never a permitted call. A refusal with a poor reason is still a refusal; a silent allow is not.
 
