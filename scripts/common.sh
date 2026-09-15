@@ -852,6 +852,15 @@ jit_config_refuse() {
 }
 
 jit_load_config() {
+  # #388: `[A-Za-z0-9_]` below is a POSIX bracket range inside `[[ =~ ]]`, which glibc
+  # matches by the active locale's collation order rather than by byte value. Turkish
+  # collation (LC_ALL=tr_TR.UTF-8, and az_AZ) does not place I inside A..Z, so every real
+  # setting whose name carries an I after the prefix -- JIT_CONTEXT_INJECT among them --
+  # was refused as "unknown setting" under that locale alone. `local` scopes this to the
+  # function and restores the caller's locale on return; nothing else in this function
+  # reads a value in a way that wants the caller's collation (every value check below is
+  # a literal `case` match, never a range).
+  local LC_ALL=C
   local file="$1" line key value reason q rest tail lineno=0
   while IFS= read -r line || [ -n "$line" ]; do
     lineno=$((lineno + 1))
