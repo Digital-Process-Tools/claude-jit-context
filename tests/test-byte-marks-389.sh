@@ -188,8 +188,8 @@ run_tool "$P" "sess-f" > /dev/null
 run_prompt "$P" "sess-f" > /dev/null
 OUT="$(run_stop "$P" "sess-f")"
 assert_contains "the total names three entries" "$OUT" "3 entries"
-assert_contains "and points at the skill this issue adds" "$OUT" "/jit:stats for more info"
-if grep -qE '"JIT : 3 entries, [0-9]+(\.[0-9])?[bk] this session \+ /jit:stats for more info"' <<< "$OUT"; then
+assert_contains "and points at the skill this issue adds" "$OUT" "/claude-jit-context:stats for more info"
+if grep -qE '"JIT : 3 entries, [0-9]+(\.[0-9])?[bk] this session \+ /claude-jit-context:stats for more info"' <<< "$OUT"; then
   ok "the size rendered is a real, non-zero figure, not withheld"
 else
   bad "no size was rendered even though every one of the three hooks wrote a byte line" "got: $OUT"

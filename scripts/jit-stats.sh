@@ -145,42 +145,73 @@ bytes_for() {
 # out of the log's "layer:file(pattern)" token; best-effort for the same reason the
 # session key above is -- hooks.log carries no session id column either.
 match_for() {
-  # #389 self-review: a bare ":$file(" needle matched anywhere the byte text
-  # occurred, including mid-token inside an UNRELATED layer's own entry name
-  # (a crafted or coincidentally-similar earlier token on the same log line).
-  # hooks.log's own token shape is "<layer>:<file>(<pattern>)" (see log_matches
-  # in pre-prompt-hook.sh/pre-path-hook.sh/pre-tool-hook.sh) -- searching on
-  # "<layer>:<file>(" instead of the bare file name is the same anchoring fix
-  # bytes_for() above already applies, narrowed to the identity this hook
-  # actually has in hand at the call site (dim, layer AND file, not file alone).
-  local dim="$1" layer="$2" file="$3" needle line
+  # #389 self-review, second pass: the first fix narrowed the needle from a
+  # bare ":$file(" to "<layer>:<file>(" but two things about it were still
+  # wrong, both caught by re-review after the first fix landed.
+  #
+  # ONE. `tools` log tokens are never "<layer>:<file>(" at all -- every tools
+  # site (pre-tool-hook.sh) writes the FIXED literal prefix "tool:" regardless
+  # of which layer the rule lives in ("tool:" r_logname "(" r_match ")"), and
+  # a `rule:`-prefixed legacy shown-mark (a hook from before #299, possibly
+  # still firing earlier in a session that spans an upgrade) never carried a
+  # layer to begin with. Requiring layer for every dimension silently zeroed
+  # out `tools` correlation entirely. `tools` now searches "tool:<file>("
+  # instead, and does not require a layer at all.
+  #
+  # TWO. Even the narrower "<layer>:<file>(" needle was still an UNANCHORED
+  # substring search within one log line, so a real layer name that happens
+  # to be a suffix of a DIFFERENT one ("00-manual" inside "sub-00-manual")
+  # could still borrow that other entry's token. hooks.log's own field
+  # separator is exactly what jit_log_write()'s callers already build
+  # log_matches with -- ", " between tokens, and "| " ahead of the first one
+  # -- so this now splits the line on that separator and requires the needle
+  # to be a PREFIX of one whole token, never a substring landing mid-token.
+  # That is a real anchor, the same kind of guarantee bytes_for() above gets
+  # from $JIT_NL: a token boundary a crafted or coincidental key can be a
+  # substring of, but can never BE without actually starting there.
+  local dim="$1" layer="$2" file="$3" needle line rest tok
   [ -f "$LOG_FILE" ] && [ ! -L "$LOG_FILE" ] || {
     printf ''
     return 0
   }
-  [ -n "$layer" ] || {
-    printf ''
-    return 0
-  }
-  needle="$layer:$file("
   case "$dim" in
-    paths | vocabulary | tools) line="$(LC_ALL=C grep -F -- "$needle" "$LOG_FILE" 2> /dev/null | tail -1)" ;;
+    tools) needle="tool:$file(" ;;
+    paths | vocabulary)
+      [ -n "$layer" ] || {
+        printf ''
+        return 0
+      }
+      needle="$layer:$file("
+      ;;
     *)
       printf ''
       return 0
       ;;
   esac
+  line="$(LC_ALL=C grep -F -- "$needle" "$LOG_FILE" 2> /dev/null | tail -1)"
   [ -n "$line" ] || {
     printf ''
     return 0
   }
-  line="${line#*"$needle"}"
-  case "$line" in
-    *')'*) printf '%s' "${line%%)*}" ;;
-    *) printf '' ;;
-  esac
+  rest="${line#*"| "}"
+  IFS=',' read -r -a _js_toks <<< "$rest"
+  for tok in "${_js_toks[@]+"${_js_toks[@]}"}"; do
+    tok="${tok# }"
+    case "$tok" in
+      "$needle"*)
+        tok="${tok#"$needle"}"
+        case "$tok" in
+          *')'*)
+            printf '%s' "${tok%%)*}"
+            return 0
+            ;;
+        esac
+        ;;
+    esac
+  done
+  printf ''
+  return 0
 }
-
 N_SHOWN=0
 for MF in "$VOCAB_FILE" "$PATH_FILE"; do
   [ -f "$MF" ] && [ ! -L "$MF" ] || continue

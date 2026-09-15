@@ -141,6 +141,38 @@ if grep -qF "matched=XTRA-PATTERN" <<< "$OUT"; then
 else
   ok "XTRA-PATTERN is never attributed to this entry"
 fi
+
+echo "=== H: second self-review pass -- a legacy tools ('rule:') mark still correlates, it never carried a layer ==="
+
+P="$(new_project h)"
+mkdir -p "$P/.claude/jit-context/.discovery/state" "$P/.claude/jit-context/.discovery/logs"
+printf 'rule:adv.md\n' > "$P/.claude/jit-context/.discovery/state/vocab-shown-sess-h.txt"
+printf '[12:00:00.000] pre-tool (Bash) 1ms | tool:adv.md(BLOCKED:foo)\n' \
+  > "$P/.claude/jit-context/.discovery/logs/hooks.log"
+OUT="$(CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/jit-stats.sh" 2>&1)"
+assert_contains "a legacy tools mark with no layer still finds its own tool: token" "$OUT" "matched=BLOCKED:foo"
+
+echo ""
+echo "=== I: second self-review pass -- the token anchor survives a layer name that is a suffix of another ==="
+
+P="$(new_project i)"
+mkdir -p "$P/.claude/jit-context/.discovery/state" "$P/.claude/jit-context/.discovery/logs"
+printf 'loc:paths:00-manual:auth.md\n' > "$P/.claude/jit-context/.discovery/state/path-shown-sess-i.txt"
+# "sub-00-manual:auth.md(" is a true substring of the real needle's own text
+# ("00-manual:auth.md(") sitting immediately to its left in the SAME token,
+# earlier on the line -- the shape the second self-review round found still
+# open after the first fix. The token-boundary anchor (split on the log's
+# own ", " field separator, matched from each token's OWN start) must not
+# borrow FAKE-PATTERN from the token this false needle sits inside.
+printf '[12:00:00.000] pre-path (Read) 1ms | sub-00-manual:auth.md(FAKE-PATTERN), 00-manual:auth.md(REAL-PATTERN)\n' \
+  > "$P/.claude/jit-context/.discovery/logs/hooks.log"
+OUT="$(CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/jit-stats.sh" 2>&1)"
+assert_contains "the real entry's own token is what gets reported" "$OUT" "matched=REAL-PATTERN"
+if grep -qF "matched=FAKE-PATTERN" <<< "$OUT"; then
+  bad "an unrelated layer's own longer token must never be borrowed" "got: $OUT"
+else
+  ok "FAKE-PATTERN is never attributed to this entry"
+fi
 echo ""
 echo "=========================================="
 echo "Results: $PASS passed, $FAIL failed"
