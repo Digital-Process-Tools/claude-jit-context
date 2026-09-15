@@ -1,10 +1,12 @@
 #!/bin/bash
 # #394: `mode: once` used to mean "once per session_id" -- and a spawned agent
-# inherits its parent's session_id (measured against real transcripts and pinned by
-# .claude/jit-context/vocabulary/00-manual/jit-rules-and-subagents.md in this repo's
-# own dogfood tree: "a spawn carries its parent's" session_id). One shown set for the
-# whole session meant the first agent to trip a `once` rule spent the budget for every
-# spawn behind it, silently.
+# inherits its parent's session_id. Measured directly against real Claude Code
+# transcripts on disk (not against a jit-context entry in this repo -- there is no
+# entry here that discusses this): a spawned agent's own transcript file
+# (subagents/agent-<hex>.jsonl) records the SAME sessionId as its parent transcript,
+# while carrying its own distinct agentId. One shown set for the whole session meant
+# the first agent to trip a `once` rule spent the budget for every spawn behind it,
+# silently.
 #
 # `once` is redefined here to mean once per READER instead: the dedup key is
 # transcript_path's basename (jit_agent_key(), common.sh), not session_id. For the
