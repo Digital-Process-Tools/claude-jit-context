@@ -2,7 +2,7 @@
 # #388: jit_load_config's key check is `[[ "$key" =~ ^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$ ]]`.
 # A bracket range inside `[[ =~ ]]` is matched by the locale's collation order, not by byte
 # value. Turkish collation (and Azerbaijani) does not place I inside A..Z, so under
-# LC_ALL=tr_TR.UTF-8 every real setting whose name carries an I AFTER the prefix -- 
+# LC_ALL=tr_TR.UTF-8 every real setting whose name carries an I AFTER the prefix --
 # JIT_CONTEXT_INJECT, JIT_CONTEXT_MISSES, JIT_CONTEXT_COLLISION_BYTES,
 # DYNAMIC_RULES_MODULE_PREFIX among them -- is refused as "unknown setting" and dropped.
 #
@@ -30,6 +30,9 @@ SCRIPTS="$SCRIPT_DIR/scripts"
 PASS=0
 FAIL=0
 
+# jit-drive: none -- assert_eq compares two already-extracted strings (an env var
+# capture and a fixed constant), never a captured hook/tool OUTPUT or a PATH argument;
+# it is not one of the drivable shapes test-assertion-helpers.sh's harness feeds.
 assert_eq() {
   local desc="$1" got="$2" want="$3"
   if [ "$got" = "$want" ]; then
@@ -60,8 +63,14 @@ probe_locale() {
   [ "$out" = "nomatch" ]
 }
 
+# `locale -a` written to a file rather than piped into `grep -q`: this repo's own
+# tests/test-assertion-helpers.sh structurally refuses `| grep -q` and `| head` in
+# every suite under tests/ (#56 -- an early-exiting reader under pipefail can report
+# the opposite of what was found once output crosses the pipe buffer).
+LOCALE_LIST="$TMP/locale-a.txt"
+locale -a > "$LOCALE_LIST" 2> /dev/null
 for cand in tr_TR.UTF-8 tr_TR az_AZ.UTF-8 az_AZ; do
-  if locale -a 2> /dev/null | grep -qxF "$cand"; then
+  if grep -qxF "$cand" "$LOCALE_LIST"; then
     if probe_locale "$cand" ""; then
       COLL_LOCALE="$cand"
       COLL_LOCPATH=""
@@ -100,7 +109,7 @@ echo "=== Using locale for collation cases: LC_ALL=$COLL_LOCALE LOCPATH=${COLL_L
 echo ""
 
 CFG="$TMP/config.env"
-cat > "$CFG" <<'CFGEOF'
+cat > "$CFG" << 'CFGEOF'
 JIT_CONTEXT_INJECT=full
 JIT_CONTEXT_MISSES=on
 JIT_CONTEXT_COLLISION_BYTES=4096

@@ -48,8 +48,16 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR" || exit 1
 
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
 PASS=0
 FAIL=0
+
+# jit-drive: none -- this suite drives no hook and captures no tool OUTPUT; it is a
+# static source scanner over its own repository's tracked files, and its verdicts
+# (PASS/FAIL lines built from `git ls-files`/`grep`/`sed` results) are not one of the
+# drivable shapes test-assertion-helpers.sh's harness feeds.
 
 # EXEMPT entries: "path|fragment|reason". `fragment` is a distinctive, greppable
 # substring of the OFFENDING LINE itself (never a line number, per this repo's own
@@ -126,8 +134,14 @@ while IFS= read -r file; do
     done
     if [ -n "$fn_start" ]; then
       # `local LC_ALL=C` (or `local ... LC_ALL=C ...` on the same local statement)
-      # anywhere between the function header and the candidate line.
-      if sed -n "${fn_start},${lineno}p" "$file" | grep -qE '^[[:space:]]*local[[:space:]].*\bLC_ALL=C\b'; then
+      # anywhere between the function header and the candidate line. Written to a
+      # file rather than piped into `grep -q`: this repo's own
+      # tests/test-assertion-helpers.sh structurally refuses `| grep -q` in every
+      # suite under tests/ (#56 -- an early-exiting reader under pipefail can report
+      # the opposite of what was found once output crosses the pipe buffer).
+      FN_BODY="$TMP/fn-body.txt"
+      sed -n "${fn_start},${lineno}p" "$file" > "$FN_BODY"
+      if grep -qE '^[[:space:]]*local[[:space:]].*\bLC_ALL=C\b' "$FN_BODY"; then
         scoped=1
       fi
     fi
