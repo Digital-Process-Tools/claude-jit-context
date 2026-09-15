@@ -3,6 +3,8 @@
 # demand. A deliberate, hand-run tool (paths/00-manual/tooling.md's contract): fail
 # loudly, exit codes carry meaning.
 #
+# jit-drive: assert_contains contains capture
+#
 # Usage: bash tests/test-jit-stats.sh
 
 set -uo pipefail
@@ -110,7 +112,6 @@ RC=$?
 echo "=== F: #389 self-review finding -- bytes_for() must not borrow an unrelated line's byte count ==="
 
 P="$(new_project f)"
-STATE="$(dirname "$(dirname "$0")")/proj-f-state-unused"
 mkdir -p "$P/.claude/jit-context/.discovery/state"
 printf 'loc:paths:00-manual:md\n' > "$P/.claude/jit-context/.discovery/state/path-shown-sess-f.txt"
 printf 'loc:paths:00-manual:x-loc:paths:00-manual:md\t999\nloc:paths:00-manual:md\t5\n' \
