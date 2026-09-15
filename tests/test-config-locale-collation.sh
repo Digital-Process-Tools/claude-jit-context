@@ -21,6 +21,29 @@
 # so a fix that broke refusal outright (e.g. an unconditional early return) would not
 # read as green.
 #
+# THIS SUITE ALSO MEASURES THE ISSUE'S CLAIM 1, rather than letting it stay an
+# inference. tests/test-locale-collation-scope.sh's source guard is scoped to `[[ =~ ]]`
+# only -- it does not flag a `case` pattern or a `${v//[!...]/}` parameter expansion
+# carrying the same kind of bracket range. That scope rests entirely on #388's own
+# claim that those two forms compare bytes and do not collate, measured there on
+# ubuntu-latest / bash 5.2 and reported here (see the developer lane's notes) as
+# REASONED rather than OBSERVED, for lack of a glibc host at the time. This suite
+# already builds a real collating locale on any host that can produce one, and CI runs
+# a glibc leg, so the claim is measurable here for free -- there is no reason to keep
+# shipping an unverified inference when the fixture to check it already exists.
+#
+# Under the built locale this suite asserts DIRECTLY that the three non-`=~` shapes do
+# NOT move (produce byte-identical results to the same shapes under LC_ALL=C), with a
+# positive control beside them proving the locale is genuinely collating: `[[ =~ ]]`
+# itself MUST diverge from its C behaviour, or the whole comparison is meaningless --
+# a locale that fails to build could otherwise pass every "did not move" assertion for
+# the wrong reason. If any of the three non-`=~` shapes DOES move, that is not a
+# COVERED failure to be argued down: it means the scope of
+# tests/test-locale-collation-scope.sh is wrong and must be widened, and this suite
+# fails loudly saying so rather than passing quietly. Same three states as everywhere
+# else in this suite: on a host with no collating locale, this section is folded into
+# the same NOT EVALUATED / SKIPPED block below as the rest -- never a silent pass.
+#
 # Usage: bash tests/test-config-locale-collation.sh
 
 set -uo pipefail
@@ -149,6 +172,52 @@ assert_eq "a genuinely unknown key is still refused (positive control)" \
 # The caller's locale must not have leaked out of the function.
 assert_eq "the caller's own collation is unaffected after jit_load_config returns" \
   "$(grep '^POST_PROBE=' "$OUT")" "POST_PROBE=nomatch"
+
+echo ""
+echo "=== Claim 1: measuring, not inferring, whether case/parameter-expansion collate ==="
+echo ""
+
+# One script, run twice -- once under the built collating locale, once under LC_ALL=C --
+# so every shape is compared against a REAL baseline run on this exact host and shell,
+# never a hardcoded expected string that could itself be wrong on a platform nobody
+# tested. `v` is set inside the script (not exported in) so both runs build it fresh.
+SHAPES_SCRIPT='
+v="SESS-I"
+case "I" in
+  [A-Z]) echo "CASE_LETTER=match" ;;
+  *) echo "CASE_LETTER=nomatch" ;;
+esac
+case "SESS-I" in
+  *[!A-Za-z0-9._-]*) echo "CASE_STAR=hasbad" ;;
+  *) echo "CASE_STAR=clean" ;;
+esac
+printf "PARAM_EXP=%s\n" "${v//[!a-zA-Z0-9]/-}"
+[[ "I" =~ ^[A-Z]$ ]] && echo "REGEX_CTRL=match" || echo "REGEX_CTRL=nomatch"
+'
+LOCALE_SHAPES="$TMP/shapes-locale.txt"
+C_SHAPES="$TMP/shapes-c.txt"
+LOCPATH="$COLL_LOCPATH" LC_ALL="$COLL_LOCALE" bash -c "$SHAPES_SCRIPT" > "$LOCALE_SHAPES" 2> /dev/null
+LC_ALL=C bash -c "$SHAPES_SCRIPT" > "$C_SHAPES" 2> /dev/null
+
+# Positive control FIRST: if this locale does not actually diverge from C on the one
+# shape #388 is about, the three "did not move" assertions below are not measuring
+# anything -- they would pass on a locale that failed to build too.
+assert_eq "positive control: [[ =~ ]] DOES collate under $COLL_LOCALE (proves the locale is real)" \
+  "$(grep '^REGEX_CTRL=' "$LOCALE_SHAPES")" "REGEX_CTRL=nomatch"
+assert_eq "positive control: the same [[ =~ ]] check does NOT collate under LC_ALL=C (baseline)" \
+  "$(grep '^REGEX_CTRL=' "$C_SHAPES")" "REGEX_CTRL=match"
+
+# Claim 1 itself. Each of these compares the collating-locale run's line to the C run's
+# line, not to a hardcoded string -- if they ever differ, tests/test-locale-collation-scope.sh's
+# `[[ =~ ]]`-only scope is WRONG and must be widened to cover this shape too. This is
+# not a finding to argue down: a real divergence here means the scanner is silently
+# not guarding a construct #388's own bug class actually reaches.
+assert_eq "claim 1: case \"I\" in [A-Z]) ... does not collate under $COLL_LOCALE (must equal the LC_ALL=C baseline, or the scanner's =~-only scope is wrong)" \
+  "$(grep '^CASE_LETTER=' "$LOCALE_SHAPES")" "$(grep '^CASE_LETTER=' "$C_SHAPES")"
+assert_eq "claim 1: case \"SESS-I\" in *[!A-Za-z0-9._-]*) ... does not collate under $COLL_LOCALE (must equal the LC_ALL=C baseline, or the scanner's =~-only scope is wrong)" \
+  "$(grep '^CASE_STAR=' "$LOCALE_SHAPES")" "$(grep '^CASE_STAR=' "$C_SHAPES")"
+assert_eq "claim 1: \${v//[!a-zA-Z0-9]/-} does not collate under $COLL_LOCALE (must equal the LC_ALL=C baseline, or the scanner's =~-only scope is wrong)" \
+  "$(grep '^PARAM_EXP=' "$LOCALE_SHAPES")" "$(grep '^PARAM_EXP=' "$C_SHAPES")"
 
 echo ""
 echo "$PASS passed, $FAIL failed"
