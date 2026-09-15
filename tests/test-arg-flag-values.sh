@@ -323,6 +323,29 @@ positive_argv() {
         --limit) printf '%s\n%s\n%s\n%s\n%s\n%s\n' "--base" "$TREE" "--text" "anything" "--limit" "3" ;;
       esac
       ;;
+    jit-stats.sh)
+      # $TREE has no .discovery/state -- jit-stats.sh exits 1 there (nothing has
+      # fired), which is a real, honest exit but not the exit-0 shape this control
+      # asks for, so it gets its own tiny tree with one marker file already planted.
+      case "$2" in
+        --base | --misses-top)
+          FRESH_N=$((FRESH_N + 1))
+          mkdir -p "$TMP/statsfresh$FRESH_N/.discovery/state"
+          printf 'loc:vocabulary:00-manual:x.md
+' > "$TMP/statsfresh$FRESH_N/.discovery/state/vocab-shown-argvctrl.txt"
+          case "$2" in
+            --base) printf '%s
+%s
+' "--base" "$TMP/statsfresh$FRESH_N" ;;
+            --misses-top) printf '%s
+%s
+%s
+%s
+' "--base" "$TMP/statsfresh$FRESH_N" "--misses-top" "5" ;;
+          esac
+          ;;
+      esac
+      ;;
   esac
 }
 
