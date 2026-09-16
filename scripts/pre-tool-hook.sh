@@ -973,12 +973,14 @@ END {
       shown[hk] = 1
       jit_shown_mark(shown_file, hk)
       # #394: the per-agent mark, a SECOND write beside the session-wide one above --
-      # never instead of it. agent_shown_file is "" when transcript_path was absent or
-      # unusable (jit_agent_key degrades the same way jit_session_key already does), and
-      # jit_shown_mark() already no-ops on an empty file name, so this line costs nothing
-      # extra to gate: a `once` row with no usable transcript_path simply keeps firing on
-      # every call, in memory only, for the life of this one process -- exactly what
-      # `remind` already does, never a silent fallback onto the wider session-wide key.
+      # never instead of it.
+      #
+      # #398 UPDATE: the paragraph this comment originally carried (that a missing
+      # transcript_path never falls back onto the session-wide key) is no longer true --
+      # see jit_agent_shown_file() in common.sh, which now falls back to
+      # jit_session_key() precisely in that case. jit_shown_mark() still no-ops on an
+      # empty file name, so this line still costs nothing extra to gate; what changed is
+      # only that agent_shown_file itself is rarely empty any more.
       #
       # #398: for a main, non-spawned session agent_shown_file IS shown_file, byte for
       # byte -- the very invariant #394 own changelog leans on. Writing the mark a
