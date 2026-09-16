@@ -49,6 +49,24 @@ JIT_CONTEXT_STOP_REPORT=0
 # `off` silences that one line and nothing else; JIT_CONTEXT_STATUS=off silences
 # every human-facing line. Only on and off are implemented (#386).
 JIT_CONTEXT_MISSES=on
+
+# hooks.log rotates automatically once it reaches this many bytes -- checked once
+# per session, at SessionStart only, never on the per-call hot path. Never deletes:
+# the old log becomes hooks.log.1, and a second rotation overwrites whatever
+# hooks.log.1 already held (one generation kept, not a growing history). "0" means
+# never rotate. Bytes, not megabytes, matching JIT_CONTEXT_COLLISION_BYTES's own
+# convention; refused (named in hooks.log) on anything but "0" or digits with no
+# leading zero (#406).
+#
+# Deliberately not the same number as jit-misses.sh's own --size-threshold
+# (10000000, #248): that one says "worth mentioning" and fires early; this one says
+# "act now" and sits at roughly double it, so growth is visible before anything
+# actually happens.
+#
+# jit-misses.sh reads only the CURRENT log, never a rotated generation -- a rotation
+# narrows its window, and it says so explicitly rather than reporting "nothing
+# recurs" for a reason that has nothing to do with the words a project is missing.
+JIT_CONTEXT_LOG_MAX_BYTES=20000000
 ```
 
 **This file is read, not executed.** One `KEY=VALUE` per line; `#` comments and blank lines are ignored, surrounding quotes are stripped, and a leading `export` is accepted. Nothing inside a value is expanded — a `$`, a backtick or a `$(…)` is a literal character.
