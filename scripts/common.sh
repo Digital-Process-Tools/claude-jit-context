@@ -2707,8 +2707,30 @@ function jit_shown_file(dir, kind, raw, fs, fe, n,   k) {
 # accounting (#389, which reads back "vocab-shown-$SESSION_ID.txt" and nothing else) is
 # untouched. This is a SECOND marker a once row is also written into, not a
 # replacement for the first.
-function jit_agent_shown_file(dir, kind, raw, fs, fe, n) {
-  return jit_shown_path(dir, kind, jit_agent_key(raw, fs, fe, n))
+#
+# #398: jit_agent_key() returns empty for a payload with no usable transcript_path -- a
+# hand-run hook, or a host that does not supply the field. #394 left that case with no
+# key and therefore no marker at all, so a once row degraded to firing on every call
+# and its session-wide mark (jit_shown_mark below) grew by one line per call for the
+# life of the session, unbounded. That is worse than v0.9.0, which deduped those same
+# calls on session_id.
+#
+# So this falls back to jit_session_key() here, and only here: when the reader cannot
+# be told apart from its session, dedup on the session instead of not at all. This
+# restores exactly v0.9.0 behaviour for that host -- session-keyed, single mark, fires
+# once -- and is a regression against the per-agent isolation #394 built only in the
+# narrow intersection of a host missing transcript_path, a multi-agent run, and an
+# author who opted a rule into once -- measured at #394 own filing to have zero real
+# adopters. Weighed against that: the alternative shipped by #394 was unconditional, on
+# every such host, whether or not it ever spawns an agent. A host that DOES supply
+# transcript_path -- every real Claude Code CLI and Agent SDK invocation, per the hooks
+# reference, which documents transcript_path as one of the fields every hook receives
+# -- never reaches this branch at all, so the per-agent isolation #394 built is
+# untouched on the path that is actually exercised in practice.
+function jit_agent_shown_file(dir, kind, raw, fs, fe, n,   k) {
+  k = jit_agent_key(raw, fs, fe, n)
+  if (k == "") k = jit_session_key(raw, fs, fe, n)
+  return jit_shown_path(dir, kind, k)
 }
 # The name, built from a key the caller already has. Split out because pre-path-hook.sh
 # runs a SECOND awk pass for its Bash path candidates -- the payload is parsed once, in
