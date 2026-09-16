@@ -645,8 +645,41 @@ fi
 # a non-zero exit this says so via jit_awk_crash_sysmsg() (common.sh) rather than
 # staying quiet -- this hook has no decision field to fail closed WITH, the same
 # reasoning pre-prompt-hook.sh's own #397 fix documents.
+# #397 self-review (oss:auditor), still true after #400's rc-vs-crash split below:
+# mode 0's own program writes the candidates channel and calls `exit` right after
+# (see the `close(log_tmp); exit` two lines above the mode-0 awk source) -- so a
+# crash landing in the narrow window between that flush and process death can
+# leave a fully-formed $JIT_TMP sentinel behind even though awk's own exit status
+# says it did not finish cleanly. Left alone, the caller below still finds that
+# sentinel, still runs the SECOND pass, and THAT pass's own stdout lands after
+# this hook's own "could not evaluate" message -- two JSON objects on one hook's
+# stdout, where the harness expects exactly one. $JIT_TMP is not trustworthy
+# whenever this hook has nothing trustworthy to report, so it is cleared here
+# first; the existing "[ -s "$JIT_TMP" ]" gate downstream then takes the same
+# path it already takes for a healthy call that wrote nothing to it. Scoped to
+# ONLY the two "could not evaluate" outcomes (not the #400 "ordinary error, but
+# trust the output" branch below): that branch is reached exclusively through
+# the direct single-pass match/no-match path, which never touches the candidates
+# channel in the first place, so there is nothing there to clear and nothing to
+# protect against.
+#
+# #400 self-review: `: > "$JIT_TMP"` alone, even with `2> /dev/null`, still
+# printed "No such file or directory" to this hook's own stderr when $JIT_TMP was
+# empty (the same degraded-TMPDIR corner jit_awk_capture() can also degrade
+# through) -- bash reports a failed redirect target using the ORIGINAL stderr,
+# before a later `2>` on the same line takes effect, so the suppression this line
+# once had never actually applied to its own failure. Guarded instead: nothing to
+# truncate when there was never a channel to begin with.
+jit_path_awk_could_not_evaluate() {
+  [ -n "$JIT_TMP" ] && : > "$JIT_TMP" 2> /dev/null
+  jit_awk_crash_sysmsg "$1"
+}
+jit_path_awk_ordinary_empty() {
+  [ -n "$JIT_TMP" ] && : > "$JIT_TMP" 2> /dev/null
+  jit_awk_empty_ok
+}
+
 jit_path_awk() {
-  local _jit_awk_rc
   jit_awk_capture awk \
     -v path_layers="$JIT_PATH_LAYERS" \
     -v vocab_layers="$JIT_VOCAB_LAYERS" \
@@ -660,38 +693,7 @@ jit_path_awk() {
     -v cand_begin="$JIT_CAND_BEGIN" \
     -v status_mode="$JIT_STATUS" \
     "$JIT_PATH_PROG"
-  _jit_awk_rc="$JIT_AWK_CAPTURE_RC"
-  if [ "$_jit_awk_rc" = "uncaptured" ]; then
-    : # jit_awk_capture() already ran it directly, straight to real stdout -- see
-    # its own comment in common.sh for why "no scratch file" degrades rather
-    # than refuses.
-  elif [ "$_jit_awk_rc" -eq 0 ]; then
-    cat "$JIT_AWK_CAPTURE_FILE"
-  else
-    # #397 self-review (oss:auditor): mode 0's own program writes the candidates
-    # channel and calls `exit` right after (see the `close(log_tmp); exit` two lines
-    # above the mode-0 awk source) -- so a crash landing in the narrow window between
-    # that flush and process death can leave a fully-formed $JIT_TMP sentinel behind
-    # even though awk's own exit status says it did not finish cleanly. Left alone,
-    # the caller below still finds that sentinel, still runs the SECOND pass, and
-    # THAT pass's own stdout lands after this crash message -- two JSON objects on
-    # one hook's stdout, where the harness expects exactly one. $JIT_TMP is not
-    # trustworthy after any non-zero exit regardless of what is sitting in it, so it
-    # is cleared here before the crash message is the only thing printed; the
-    # existing "[ -s "$JIT_TMP" ]" gate downstream then takes the same path it
-    # already takes for a healthy call that wrote nothing to it.
-    # #400 self-review: `: > "$JIT_TMP"` alone, even with `2> /dev/null`, still
-    # printed "No such file or directory" to this hook's own stderr when $JIT_TMP
-    # was empty (the same degraded-TMPDIR corner jit_awk_capture() above now also
-    # degrades through) -- bash reports a failed redirect target using the
-    # ORIGINAL stderr, before the later `2>` in the same command line takes
-    # effect, so the suppression this line already had never actually applied to
-    # its own failure. Guarded now instead of redirected around: nothing to
-    # truncate when there was never a channel to begin with.
-    [ -n "$JIT_TMP" ] && : > "$JIT_TMP" 2> /dev/null
-    jit_awk_crash_sysmsg "$_jit_awk_rc"
-  fi
-  rm -f "$JIT_AWK_CAPTURE_FILE"
+  jit_awk_dispatch jit_path_awk_could_not_evaluate jit_path_awk_ordinary_empty
 }
 
 # No `cat |` in front of it: jit_path_awk() is a wrapper around one awk, awk reads stdin

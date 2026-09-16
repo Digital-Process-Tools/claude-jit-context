@@ -525,17 +525,16 @@ END {
   }
 }
 '
-_jit_awk_rc="$JIT_AWK_CAPTURE_RC"
-if [ "$_jit_awk_rc" = "uncaptured" ]; then
-  : # jit_awk_capture() already ran it directly, straight to real stdout -- see its
-  # own comment in common.sh for why "no scratch file" degrades rather than refuses.
-elif [ "$_jit_awk_rc" -eq 0 ]; then
-  cat "$JIT_AWK_CAPTURE_FILE"
-else
-  jit_awk_crash_sysmsg "$_jit_awk_rc"
-fi
-rm -f "$JIT_AWK_CAPTURE_FILE"
-unset _jit_awk_rc
+# #400 (CI, macOS leg): a SIGSEGV (signal death, rc > 128) is a genuine crash;
+# awk's OWN ordinary error exit (an unopenable marker deferred to shutdown on
+# one-true-awk, #50) is not, and may carry a perfectly good, already-printed
+# envelope. jit_awk_dispatch() (common.sh) tells the two apart and, on an
+# ordinary error with nothing captured, keeps going quietly (jit_awk_empty_ok(),
+# the same "{}" a genuine no-match produces) rather than raising a new alarm --
+# #50's own established direction for the injection hooks, kept distinct from
+# jit_awk_crash_sysmsg(), reserved for the signal-death branch this issue is
+# actually about.
+jit_awk_dispatch jit_awk_crash_sysmsg jit_awk_empty_ok
 
 # --- Timing + log ---
 T_END=$(_ms)

@@ -1400,14 +1400,19 @@ fi
 # first cut that dropped a trailing newline through "$(...)", and #400's own
 # self-review then found a SECOND cut (a sentinel byte inside one "$(...)") that
 # occasionally lost the sentinel entirely under real load and printed a false
-# crash message; see jit_awk_capture()'s own comment for both. On a non-zero exit
-# this is the refusal path -- the one hook whose whole job is deciding whether the
-# call about to run is safe -- so it fails CLOSED via jit_awk_crash_block()
-# (common.sh) rather than let a call ride through on a crash no rule was actually
-# checked against.
+# crash message; see jit_awk_capture()'s own comment for both. A SIGNAL DEATH
+# (rc > 128) is the refusal path's own reason to fail CLOSED -- the one hook whose
+# whole job is deciding whether the call about to run is safe -- via
+# jit_awk_crash_block() (common.sh), rather than let a call ride through on a
+# crash no rule was actually checked against. awk's OWN ordinary error exits are
+# NOT that: #400's own CI (macOS leg, test-marker-degradation.sh section D) found
+# this hook discarding a genuine, already-decided "decision":"block" (an unopenable
+# marker is a deferred, non-fatal-until-shutdown i/o error on one-true-awk) and
+# replacing it with a false crash message. jit_awk_dispatch() (common.sh) is the
+# one place that five-way branch (uncaptured / success / signal death / ordinary
+# error with output / ordinary error with nothing) is written now.
 if [ -n "$JIT_AWK_PROGRAM_FILE" ]; then
   jit_awk_capture awk "${JIT_AWK_ARGS[@]}" -f "$JIT_AWK_PROGRAM_FILE"
-  _jit_awk_rc="$JIT_AWK_CAPTURE_RC"
 else
   # #371 self-review (oss:auditor): falling back to the POSITIONAL form here would
   # re-trigger the exact E2BIG this fix exists to remove -- pre-tool-hook.sh's
@@ -1428,18 +1433,8 @@ else
   # this repo already relies on (jit_tmp_open(), #60) and every CI leg already
   # proves, on all three platforms, today.
   jit_awk_capture awk "${JIT_AWK_ARGS[@]}" -f <(printf '%s' "$JIT_AWK_PROGRAM")
-  _jit_awk_rc="$JIT_AWK_CAPTURE_RC"
 fi
-if [ "$_jit_awk_rc" = "uncaptured" ]; then
-  : # jit_awk_capture() already ran it directly, straight to real stdout -- see its
-  # own comment in common.sh for why "no scratch file" degrades rather than refuses.
-elif [ "$_jit_awk_rc" -eq 0 ]; then
-  cat "$JIT_AWK_CAPTURE_FILE"
-else
-  jit_awk_crash_block "$_jit_awk_rc"
-fi
-rm -f "$JIT_AWK_CAPTURE_FILE"
-unset _jit_awk_rc
+jit_awk_dispatch jit_awk_crash_block jit_awk_crash_block
 
 # --- Timing + log ---
 T_END=$(_ms)

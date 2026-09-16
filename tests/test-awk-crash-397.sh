@@ -349,6 +349,82 @@ RACE_OUT=$(printf '{"session_id":"s397g","transcript_path":"/tmp/s397g.jsonl","t
 assert_has "the race: still speaks over systemMessage" "$RACE_OUT" '"systemMessage"'
 assert_single_valid_json "the race: exactly ONE json object, not two (self-review finding)" "$RACE_OUT"
 
+echo "=== rc vs. crash: awk's own ordinary error exit is not #393's signal death (#400) ==="
+# #400 (CI, macOS leg): an unopenable marker path is a FATAL i/o error on one-true-awk,
+# but jit_shown_load()'s own comment in common.sh explains why that is benign -- the
+# failing read never calls close(), so the diagnostic and the non-zero exit are deferred
+# to interpreter shutdown, AFTER the real envelope in END{} has already been printed and
+# flushed. Measured directly against this exact shape (test-marker-degradation.sh
+# section B/D's own fixture): a directory at the session's marker path makes awk exit 2
+# on this platform, with a complete, correct envelope already sitting in stdout. That is
+# NOT #393's signal death (139, SIGSEGV) -- treating every non-zero exit as "nothing was
+# evaluated" discarded a genuine, already-decided "decision":"block" and replaced it with
+# a false crash message. These two shims drive both directions of that distinction
+# directly, without needing a real unopenable marker: an ordinary (non-signal) exit code
+# is not enough on its own to decide "could not evaluate" -- whether anything was
+# actually captured is the second, decisive question.
+GOODEXIT_DIR=$(mktemp -d)
+cat > "$GOODEXIT_DIR/awk" << 'SHIMEOF'
+#!/bin/sh
+printf '{"decision":"block","reason":"the real, already-decided reason"}'
+exit 2
+SHIMEOF
+chmod +x "$GOODEXIT_DIR/awk"
+
+EMPTYEXIT_DIR=$(mktemp -d)
+cat > "$EMPTYEXIT_DIR/awk" << 'SHIMEOF'
+#!/bin/sh
+exit 2
+SHIMEOF
+chmod +x "$EMPTYEXIT_DIR/awk"
+
+# pre-tool-hook.sh: an ordinary exit that already wrote a good envelope is TRUSTED and
+# used verbatim -- never replaced with a crash message.
+GOOD_OUT=$(printf '{"session_id":"s397h","transcript_path":"/tmp/s397h.jsonl","tool_name":"Bash","tool_input":{"command":"rmrfxyz397 now"}}\n' \
+  | PATH="$GOODEXIT_DIR:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2> /dev/null)
+assert_has "pre-tool-hook.sh: an ordinary exit with a good envelope is trusted, not discarded" \
+  "$GOOD_OUT" '"decision":"block"'
+assert_has "pre-tool-hook.sh: and the REAL reason survives, not a crash placeholder" \
+  "$GOOD_OUT" "the real, already-decided reason"
+assert_lacks "pre-tool-hook.sh: and never claims awk could not evaluate this call" \
+  "$GOOD_OUT" "could not evaluate"
+
+# pre-tool-hook.sh: an ordinary exit with NOTHING captured is still genuinely ambiguous --
+# this hook cannot verify, so it still fails CLOSED, same as #397's own crash path.
+EMPTY_OUT=$(printf '{"session_id":"s397i","transcript_path":"/tmp/s397i.jsonl","tool_name":"Bash","tool_input":{"command":"rmrfxyz397 now"}}\n' \
+  | PATH="$EMPTYEXIT_DIR:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2> /dev/null)
+assert_has "pre-tool-hook.sh: an ordinary exit with nothing captured still fails CLOSED" \
+  "$EMPTY_OUT" '"decision":"block"'
+assert_has "pre-tool-hook.sh: and still names the evaluator failure" \
+  "$EMPTY_OUT" "could not evaluate"
+
+# pre-prompt-hook.sh: an ordinary exit that already wrote a good envelope is trusted.
+GOODEXIT_DIR2=$(mktemp -d)
+cat > "$GOODEXIT_DIR2/awk" << 'SHIMEOF'
+#!/bin/sh
+printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"the real vocabulary body"}}'
+exit 1
+SHIMEOF
+chmod +x "$GOODEXIT_DIR2/awk"
+
+GOOD_PROMPT_OUT=$(printf '{"session_id":"s397j","transcript_path":"/tmp/s397j.jsonl","prompt":"hello397 there"}\n' \
+  | PATH="$GOODEXIT_DIR2:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PROMPT_HOOK" 2> /dev/null)
+assert_has "pre-prompt-hook.sh: an ordinary exit with a good envelope is trusted" \
+  "$GOOD_PROMPT_OUT" "the real vocabulary body"
+assert_lacks "pre-prompt-hook.sh: and never claims awk could not evaluate this turn" \
+  "$GOOD_PROMPT_OUT" "could not evaluate"
+
+# pre-prompt-hook.sh: an ordinary exit with NOTHING captured keeps going quietly (#50's
+# own established direction for the injection hooks) rather than raising a new alarm --
+# the same "{}" a genuine no-match produces, not a systemMessage.
+EMPTY_PROMPT_OUT=$(printf '{"session_id":"s397k","transcript_path":"/tmp/s397k.jsonl","prompt":"hello397 there"}\n' \
+  | PATH="$EMPTYEXIT_DIR:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PROMPT_HOOK" 2> /dev/null)
+assert_has "pre-prompt-hook.sh: an ordinary exit with nothing captured degrades to {}" \
+  "$EMPTY_PROMPT_OUT" '{}'
+assert_lacks "pre-prompt-hook.sh: and does not raise a new alarm for an ordinary hiccup" \
+  "$EMPTY_PROMPT_OUT" "systemMessage"
+
+rm -rf "$GOODEXIT_DIR" "$EMPTYEXIT_DIR" "$GOODEXIT_DIR2"
 rm -rf "$SHIM_DIR" "$SHIM_DIR2" "$TEST_DIR"
 
 echo
