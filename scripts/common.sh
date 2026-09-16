@@ -3803,14 +3803,71 @@ jit_awk_capture() {
   # be a stricter contract than this codebase has ever held for anything else.
   # A caller checks for this value before treating JIT_AWK_CAPTURE_RC as a
   # number -- see the three-way branches at each of this function's call sites.
-  local d f
+  local d f urc
   d="${TMPDIR:-/tmp}"
   d="${d%/}"
   f="$(mktemp "$d/claude-jit-awkout-XXXXXXXX" 2> /dev/null)" || f=""
   if [ -z "$f" ]; then
-    # shellcheck disable=SC2034
-    JIT_AWK_CAPTURE_RC="uncaptured"
+    # #403: this branch used to run the command and `return 0` without ever reading
+    # $? -- a SIGSEGV (exit 139, #393's own measured mechanism) then printed 0 bytes,
+    # exactly as an ordinary `mode: block` rule with nothing to say would, and the
+    # harness read that silence as permission. $?  IS available here (LC_ALL=C "$@"
+    # is a plain foreground command, no subshell in between); it was simply never
+    # looked at.
+    #
+    # The trap: unlike the captured branch below, this one writes straight to REAL
+    # stdout -- there is no scratch file to inspect before deciding, and no reliable
+    # disk-free way to intercept it either. A single "$( )" was already tried and
+    # rejected for this exact codebase (see the #400 commit this function's own
+    # header comment describes): it strips a trailing newline a healthy "{}" answer
+    # relies on, and a two-statement sentinel variant of it lost the sentinel ~1/800
+    # times under real load for a reason never root-caused. Reusing either shape here
+    # would risk the same false-crash regression on the one corner (TMPDIR
+    # unwritable) this function exists to keep degrading through rather than failing.
+    #
+    # So a genuine SIGNAL DEATH (rc > 128) is reported by setting JIT_AWK_CAPTURE_RC
+    # to the real numeric code rather than "uncaptured", and letting
+    # jit_awk_dispatch()'s own existing `rc > 128` branch (unchanged by this fix)
+    # call the caller's crash_fn -- the SAME per-hook-family answer (block on
+    # pre-tool-hook.sh, systemMessage on the other two) the captured path already
+    # gives, without a second five-way branch to keep in sync. Every OTHER exit
+    # shape (clean success, or awk's own ordinary non-crash error) still reports
+    # "uncaptured" exactly as before: whatever awk already wrote directly to real
+    # stdout is trusted as-is, unchanged from pre-#403 behaviour.
+    #
+    # Does the crash_fn's own extra bytes ever land AFTER awk already wrote a
+    # (partial or complete) answer of its own, producing two JSON values on one
+    # stdout -- the exact defect class #397's own self-review caught on the captured
+    # path? Checked, not assumed: every decisive awk program in this codebase
+    # (pre-tool-hook.sh, pre-prompt-hook.sh, pre-path-hook.sh) has exactly ONE
+    # terminal stdout print per code path -- `print "{}"; exit` early, or exactly one
+    # of the `printf "%s", ...`/`print "{}"` statements in its END block -- and
+    # nothing runs after it; grepping each file for `print(f)? "` confirms this
+    # directly rather than by memory. Real stdout here is a pipe to the harness, so
+    # glibc/BSD libc fully-buffer it: a single print call this small (a rule's
+    # `reason` text, typically well under 4KB) never reaches even one write()
+    # syscall before the process would already be done, and #393's own 8/8 measured
+    # crashes wrote ZERO bytes before dying, consistent with that. It is NOT provably
+    # impossible: an unusually large injected body (this codebase elsewhere handles
+    # entries up to 200000 bytes) could make ONE printf call issue several internal
+    # write()s, and a crash landing between two of them would leave a partial answer
+    # on the wire before the crash_fn's own bytes land after it -- REASONED, not
+    # observed, exactly the same evidentiary bar this codebase already uses for the
+    # NUL-byte caveat above. Accepted for the same reason #400 accepted degrading
+    # this corner at all: asking for more than every other scratch-file user in this
+    # codebase already gets would be a stricter contract than this function has ever
+    # held, and the alternative (a $( )-based capture) is the regression #400 already
+    # measured and removed.
     LC_ALL=C "$@"
+    urc=$?
+    JIT_AWK_CAPTURE_OUT=""
+    if [ "$urc" -gt 128 ] 2> /dev/null; then
+      # shellcheck disable=SC2034
+      JIT_AWK_CAPTURE_RC=$urc
+    else
+      # shellcheck disable=SC2034
+      JIT_AWK_CAPTURE_RC="uncaptured"
+    fi
     return 0
   fi
   LC_ALL=C "$@" > "$f"
