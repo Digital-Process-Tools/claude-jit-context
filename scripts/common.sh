@@ -3673,3 +3673,232 @@ function jit_envelope_inject_sysmsg(event, text_escaped, sysmsg_escaped) {
   return "{\"hookSpecificOutput\":{\"hookEventName\":\"" event "\",\"additionalContext\":\"" text_escaped "\"},\"systemMessage\":\"" sysmsg_escaped "\"}"
 }
 '
+
+# --- The decisive awk crashed: silence is not "no rule matched" (#397) -------------
+#
+# #393 measured a working awk exiting 139 (SIGSEGV) under concurrent load, 8 times
+# across 8 different sections, transient rather than a broken interpreter. #397's own
+# comment measured what that does specifically to THIS repository's decisive awk: the
+# crash writes nothing to stdout, the wrapper never captured its exit status, and the
+# exit 0 after it is unconditional -- so a crashed awk and a mode: block rule with no
+# opinion are byte-identical on the wire. The harness reads empty output as permission
+# and the call proceeds.
+#
+# Two answers, not one, because the three hooks that fork the decisive awk are not the
+# same shape:
+#
+#   pre-tool-hook.sh is the refusal path -- the one hook whose whole job is deciding
+#   whether the call the harness is about to run is safe. A mode: block rule that
+#   could not be checked is the exact defect #397 measured, so this fails CLOSED:
+#   refuse the call and say why, rather than let it ride through on a crash no rule was
+#   actually checked against.
+#
+#   pre-prompt-hook.sh and pre-path-hook.sh have no decision field to fail closed WITH
+#   -- grep JIT_AWK_ENVELOPE above: only pre-tool-hook.sh's awk program ever calls
+#   jit_envelope_block(). A crash there costs a missed injection, never a bypassed
+#   refusal, so there is nothing to protect by inventing a block these two hooks have
+#   never had. Say so instead, over the systemMessage channel #367/#368 already proved
+#   these two deliver on every branch -- honest, and it does not turn one transient
+#   crash into every remaining prompt of the session being refused.
+#
+# NOT the retry question -- #397 is explicit that is a separate issue, with its own
+# cost (one wasted fork per call, forever, on a machine already in trouble). This only
+# makes the crash speak instead of staying silent; the exit status each call site now
+# captures in one place is what a retry loop would wrap around later, not something it
+# needs to invent.
+# #400 (CI, PR #400 red): a bare "$(LC_ALL=C awk ...)" strips every trailing
+# newline the captured output had, and the empty envelope's own `print "{}"` relied
+# on one -- so on the two hooks whose decisive awk was rewritten to capture,
+# tests/test-inert-without-tree.sh's section B saw four of six hooks' `{}\n{}\n`
+# answers glue onto one line and undercounted them. Isolated with `od -c` on each
+# hook against main: pre-tool-hook.sh and pre-prompt-hook.sh regressed; the third
+# hook that captures, pre-path-hook.sh, was NOT uniformly spared, contrary to what
+# looked at first like a clean exemption -- its own `jit_path_awk()` regressed too
+# whenever the captured awk itself produces the "{}" (a Read/Edit tool_input with a
+# file_path, never routed through the Bash-command two-pass candidates channel);
+# only the ONE branch that still calls bash's own `echo "{}"` directly (the
+# candidates-written-but-none-resolved case) was ever exempt, by construction
+# rather than by hook identity. So the fix is not "add \n back" -- the ORIGINAL
+# bytes varied per envelope (`print "{}"` emitted one; `printf "%s", ...block/
+# inject(...)` emitted none) and per hook, and the crash envelopes below are new
+# text this issue adds, never captured at all.
+#
+# A FIRST cut of this fix appended a sentinel byte after the captured command inside
+# one "$( cmd; printf sentinel )" substitution, to smuggle the trailing bytes and the
+# real exit status through the one substitution that strips them. It worked in every
+# hand-driven and suite-driven check, and still lost the sentinel about 1 time in 800
+# under a tight sequential loop of the REAL pre-prompt-hook.sh awk program against a
+# real (unshimmed, non-crashing) awk -- `JIT_DEBUG_CAPTURE` traced the raw captured
+# string down to the awk's own 2-byte "{}" with the sentinel and the exit digit both
+# entirely absent, which then read as rc="{}": not a number, so `[ "$rc" -eq 0 ]`
+# errored, took the else branch, and printed a crash message for a call that never
+# crashed at all -- a new false-refusal risk on the exact refusal path this issue
+# exists to make trustworthy, worse than the bug it replaced. Root cause not chased
+# further (a pipe-buffering race between two commands sharing one command-substitution
+# subshell is the leading guess, not a finding) because there is a route around it
+# that does not depend on understanding it: write directly to a file rather than
+# through any command substitution, and read the exit status of the awk command
+# itself, with no subshell between it and $? at all.
+#
+# `>` a real file is one write() through one already-open descriptor, not a pipe two
+# separate commands share -- there is no second statement racing the first for a
+# sentinel to lose, and no substitution to strip a trailing byte from what is written.
+# `$?` right after `"$@" > file` is `"$@"`'s own exit status directly, no subshell, no
+# arithmetic.
+#
+# #400 (CI, ubuntu leg): the first cut of this read the file back with `cat`, and
+# tests/test-fork-count.sh's own "no hook puts a cat in front of something that reads
+# stdin itself" section counted that as one added fork per call on the three
+# highest-frequency hooks -- a real, counted cost against a budget this repo
+# advertises as 30-110ms and guards on every platform, not a false positive: the
+# suite's own docstring is broader than its section title (it pins EVERY external
+# command a hook forks, not only a redundant `cat | reader`), and post-tool-hook.sh's
+# own pinned-at-one exemption is exactly the shape this WOULD have needed if kept.
+# `$(<file)` is fork-free too but is command substitution underneath, so it strips
+# trailing newlines the same way the original bug this whole issue is about did --
+# not viable. `IFS= read -r -d '' out < file` IS: a bash builtin, no fork, and
+# verified byte-exact including a trailing newline at 200000 bytes (the same NUL
+# caveat `$( )` already carries elsewhere in this codebase applies here too -- never
+# reachable, because every byte reaching this file already passed through
+# jit_json_escape(), which escapes every control byte 0-31 as \u00XX). `read`'s own
+# exit status is not checked: it is 1 whenever the file has no trailing NUL delimiter
+# (every real case here), by design, and that is not a distinct signal from success --
+# the variable is populated exactly either way, which is confirmed directly rather
+# than assumed.
+# One helper, four call sites (both pre-tool-hook.sh branches, pre-prompt-hook.sh,
+# pre-path-hook.sh's jit_path_awk()) rather than four copies of the file-and-cleanup
+# bookkeeping to keep in sync.
+jit_awk_capture() {
+  # $@ the command to run (LC_ALL=C is applied here, not by the caller, so a
+  # caller writes `jit_awk_capture awk ...` rather than `jit_awk_capture LC_ALL=C
+  # awk ...` -- the latter would try to run a program literally named "LC_ALL=C").
+  # Sets JIT_AWK_CAPTURE_OUT / JIT_AWK_CAPTURE_RC; not local, by design, so the
+  # caller reads them back after this returns. On success the caller emits the
+  # EXACT bytes with `printf '%s' "$JIT_AWK_CAPTURE_OUT"` -- a builtin, no fork,
+  # unlike the `cat "$JIT_AWK_CAPTURE_FILE"` a first cut of this used. The scratch
+  # file itself is removed here, immediately after being read back, rather than
+  # left for the caller: nothing outside this function needs its path any more
+  # once JIT_AWK_CAPTURE_OUT holds its content, and removing it here rather than at
+  # each of the four call sites is one fewer thing for a future call site to
+  # forget.
+  #
+  # No writable scratch file (TMPDIR unwritable or absent) is NOT treated as a
+  # crash: tests/test-hook-tmpfile.sh section C ("the scratch file lives under
+  # $TMPDIR, and losing it is not an error") already pins, for every hook and
+  # predating #397, that losing scratch space degrades a hook to running without
+  # its log/dedup channel -- never to refusing or staying silent, because every
+  # rule still fires. #400 self-review found this function breaking that exact,
+  # already-tested contract: TMPDIR being unwritable made its OWN mktemp fail
+  # exactly like $JIT_TMP's already does, and reporting that as "could not
+  # evaluate" turned an established, benign degrade into a new outage on all
+  # three hooks (every entry stopped injecting/blocking whenever TMPDIR alone
+  # was the problem, confirmed by that suite's own TMPDIR="$TEST_DIR/no-such-
+  # tmpdir" fixture). So this is a THIRD outcome, not folded into either of the
+  # other two: JIT_AWK_CAPTURE_RC="uncaptured" and the command runs directly,
+  # straight to real stdout, exactly as every hook did before #397 -- the one
+  # corner where #397's own crash-detection is unavailable, accepted because it
+  # is the SAME already-accepted corner every other scratch-file user in this
+  # codebase (jit_tmp_open() included) already degrades through rather than
+  # errors on, and asking for scratch space just to verify a decisive awk would
+  # be a stricter contract than this codebase has ever held for anything else.
+  # A caller checks for this value before treating JIT_AWK_CAPTURE_RC as a
+  # number -- see the three-way branches at each of this function's call sites.
+  local d f
+  d="${TMPDIR:-/tmp}"
+  d="${d%/}"
+  f="$(mktemp "$d/claude-jit-awkout-XXXXXXXX" 2> /dev/null)" || f=""
+  if [ -z "$f" ]; then
+    # shellcheck disable=SC2034
+    JIT_AWK_CAPTURE_RC="uncaptured"
+    LC_ALL=C "$@"
+    return 0
+  fi
+  LC_ALL=C "$@" > "$f"
+  # shellcheck disable=SC2034
+  JIT_AWK_CAPTURE_RC=$?
+  # `read`'s own exit status is not the signal here -- see the comment above this
+  # function for why. IFS= so leading/trailing whitespace in the captured bytes
+  # (there is none in a well-formed envelope, but this must not depend on that)
+  # is never trimmed by the split `read` would otherwise perform.
+  # shellcheck disable=SC2034
+  IFS= read -r -d '' JIT_AWK_CAPTURE_OUT < "$f"
+  rm -f "$f"
+}
+
+jit_awk_crash_block() {
+  # $1 the decisive awk's exit status (e.g. 139 for SIGSEGV)
+  local rc="${1:-?}"
+  printf "{\"decision\":\"block\",\"reason\":\"# JIT Context: the rule engine could not evaluate this call -- awk exited %s before it finished. Refusing rather than permitting a call no rule was actually checked against. See issue #397.\"}" "$rc"
+}
+
+jit_awk_crash_sysmsg() {
+  # $1 the decisive awk's exit status (e.g. 139 for SIGSEGV)
+  local rc="${1:-?}"
+  printf "{\"systemMessage\":\"JIT Context: the rule engine could not evaluate this turn -- awk exited %s before it finished. No entries were checked, so none were injected. See issue #397.\"}" "$rc"
+}
+
+# #400 (CI, macOS leg, test-marker-degradation.sh section B): a SIGSEGV (measured 139 =
+# 128+11 on macOS) and awk's OWN ordinary error exit are not the same event, and treating
+# every non-zero exit as "nothing was evaluated" broke an established, pre-#397 contract
+# (#50) this repository already tests: an unopenable marker path is a FATAL i/o error on
+# one-true-awk, but jit_shown_load()'s own comment (this file, above) says why it is
+# benign -- the read call that fails NEVER calls close(), so one-true-awk defers the
+# diagnostic to interpreter shutdown, AFTER every print in END{} has already run and
+# flushed. Measured directly (not assumed): the exact #50 fixture -- a directory at the
+# session's marker path -- makes both pre-tool-hook.sh and pre-path-hook.sh exit 2 on
+# this machine's awk (one-true-awk, macOS), stderr reading "awk: i/o error occurred on
+# <path> ... source line number NNNN", and JIT_AWK_CAPTURE_OUT already holding the real,
+# complete, correctly-decided envelope (a genuine "decision":"block" carrying the
+# MATCHED RULE's own reason text, not a placeholder) by the time that rc is read back --
+# the crash-only branch was discarding a good answer and replacing it with a false "could
+# not evaluate" for a call that plainly was. Only OBSERVED on this platform's one-true-awk;
+# gawk (Linux, Windows/Git Bash CI legs) is REASONED to behave comparably for the same
+# reason -- jit_shown_load()'s own comment already names the engine this was written
+# against -- and is exactly the platform claim the audit accompanying this fix marks
+# reasoned rather than observed.
+#
+# So exit status alone is not enough; JIT_AWK_CAPTURE_OUT's own emptiness is the second
+# axis, and the two together give three outcomes rather than two:
+#   * a SIGNAL DEATH (rc > 128 -- 128+N is POSIX shell convention across bash on Linux,
+#     macOS and Git Bash alike, not an awk-specific number, so this test is portable even
+#     though the ORDINARY error codes an engine chooses are not) is a genuine crash,
+#     #393's own measured mechanism: nothing after it can be trusted, output or not.
+#   * an ORDINARY nonzero exit (awk's own chosen status, always well under 128 on both
+#     engines this repo has ever measured) with NON-EMPTY captured output is what this
+#     scenario actually is: trust it, exactly as jit_shown_load()'s own comment already
+#     argues the codebase should.
+#   * an ORDINARY nonzero exit with NOTHING captured is still genuinely ambiguous -- a
+#     fatal error that hit before the first print ever ran (a bad pattern awk could not
+#     even compile, say) reads identically to this deferred-error shape from here, and
+#     there is no reasoning function's own way to tell them apart. jit_awk_dispatch()'s
+#     two function arguments answer that ambiguity differently per hook family, which is
+#     the one difference #397's own split between the refusal and the injection hooks
+#     was already about: pre-tool-hook.sh cannot verify, so it still refuses (pass
+#     jit_awk_crash_block for BOTH arguments); the injection hooks have nothing to
+#     refuse, and #50 already ruled that keeping going -- the same "{}" a genuine
+#     no-match produces, not a new alarm -- is the safe direction for an ordinary
+#     awk-side hiccup this narrow, as opposed to jit_awk_crash_sysmsg, reserved for the
+#     signal-death branch, the class #393/#397 are actually about.
+jit_awk_empty_ok() {
+  printf '{}\n'
+}
+
+# jit_awk_dispatch <crash_fn> <ordinary_empty_fn>
+# Reads JIT_AWK_CAPTURE_RC/_OUT, already set by a prior jit_awk_capture() call, and
+# prints the right thing to real stdout -- the single place this five-way branch is
+# written, rather than once per call site (four, after this fix), each free to drift.
+jit_awk_dispatch() {
+  local crash_fn="$1" empty_fn="$2"
+  if [ "$JIT_AWK_CAPTURE_RC" = "uncaptured" ]; then
+    return 0
+  fi
+  if [ "$JIT_AWK_CAPTURE_RC" -eq 0 ] 2> /dev/null; then
+    printf '%s' "$JIT_AWK_CAPTURE_OUT"
+  elif [ "$JIT_AWK_CAPTURE_RC" -gt 128 ] 2> /dev/null; then
+    "$crash_fn" "$JIT_AWK_CAPTURE_RC"
+  elif [ -n "$JIT_AWK_CAPTURE_OUT" ]; then
+    printf '%s' "$JIT_AWK_CAPTURE_OUT"
+  else
+    "$empty_fn" "$JIT_AWK_CAPTURE_RC"
+  fi
+}

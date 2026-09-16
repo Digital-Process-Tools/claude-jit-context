@@ -57,7 +57,21 @@ jit_scan_entry_ages "$JIT_BASE/vocabulary"
 
 # `awk` reads stdin itself; the `cat` in front of it was one fork per invocation buying
 # nothing.
-LC_ALL=C awk \
+# #397: this used to write straight to stdout with its exit status never read.
+# A crash (measured: SIGSEGV, exit 139, under #393's concurrent load) then printed
+# 0 bytes and the unconditional exit 0 below made that byte-identical to "no
+# vocabulary entry matched" -- silence, when the honest answer is "could not tell".
+# Output is captured and the exit status checked below (after the awk program) so
+# a crash can say so instead of staying quiet; see jit_awk_crash_sysmsg() in
+# common.sh for why this hook says rather than refuses -- it has no decision field
+# to fail closed WITH. jit_awk_capture() (common.sh) reads the exact bytes back
+# from a scratch file, never through a command substitution: #400 (CI) caught a
+# first cut that dropped the trailing newline the empty "{}" envelope relied on
+# through a bare "$( )", and #400's own self-review then found a rare but real
+# race in the SECOND cut's own sentinel-byte-inside-"$( )" trick that occasionally
+# lost the sentinel under real load and printed a false crash message -- see
+# jit_awk_capture()'s own comment in common.sh.
+jit_awk_capture awk \
   -v vocab_layers="$JIT_LAYERS" \
   -v vocab_base="$JIT_BASE/vocabulary" \
   -v state_dir="$JIT_STATE_DIR" \
@@ -511,6 +525,16 @@ END {
   }
 }
 '
+# #400 (CI, macOS leg): a SIGSEGV (signal death, rc > 128) is a genuine crash;
+# awk's OWN ordinary error exit (an unopenable marker deferred to shutdown on
+# one-true-awk, #50) is not, and may carry a perfectly good, already-printed
+# envelope. jit_awk_dispatch() (common.sh) tells the two apart and, on an
+# ordinary error with nothing captured, keeps going quietly (jit_awk_empty_ok(),
+# the same "{}" a genuine no-match produces) rather than raising a new alarm --
+# #50's own established direction for the injection hooks, kept distinct from
+# jit_awk_crash_sysmsg(), reserved for the signal-death branch this issue is
+# actually about.
+jit_awk_dispatch jit_awk_crash_sysmsg jit_awk_empty_ok
 
 # --- Timing + log ---
 T_END=$(_ms)

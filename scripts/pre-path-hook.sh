@@ -627,8 +627,60 @@ fi
 
 # One place the -v list lives, because this program may run twice. cand_mode is the only
 # thing that differs: 0 parses the payload on stdin, 1 takes its paths from the environment.
+#
+# #397: used to write straight to stdout with its exit status never read, at BOTH call
+# sites below. A crash (measured: SIGSEGV, exit 139, under #393's concurrent load) then
+# printed 0 bytes -- for mode 0 that reads identically to "wrote its candidates to
+# $JIT_TMP instead of stdout", the OTHER legitimate way this function produces no direct
+# output, so the crash and the healthy no-output case were indistinguishable exactly the
+# way #397 describes. Output is now captured once here and the exit status checked
+# before anything is printed: on success the captured bytes go out unchanged -- #400
+# (CI) caught a first cut of this that captured through a bare "$( )" and silently
+# dropped the trailing newline a healthy "{}" relied on: this hook was NOT uniformly
+# exempt just because it happens to have a second, bash-level `echo "{}"` elsewhere
+# (the candidates-written-but-none-resolved case) -- this function's OWN "{}" (a
+# Read/Edit tool_input, never routed through the Bash-command two-pass channel) went
+# through the same capture and regressed identically to the other two hooks. Fixed by
+# routing through jit_awk_capture() (common.sh), which preserves the exact bytes; on
+# a non-zero exit this says so via jit_awk_crash_sysmsg() (common.sh) rather than
+# staying quiet -- this hook has no decision field to fail closed WITH, the same
+# reasoning pre-prompt-hook.sh's own #397 fix documents.
+# #397 self-review (oss:auditor), still true after #400's rc-vs-crash split below:
+# mode 0's own program writes the candidates channel and calls `exit` right after
+# (see the `close(log_tmp); exit` two lines above the mode-0 awk source) -- so a
+# crash landing in the narrow window between that flush and process death can
+# leave a fully-formed $JIT_TMP sentinel behind even though awk's own exit status
+# says it did not finish cleanly. Left alone, the caller below still finds that
+# sentinel, still runs the SECOND pass, and THAT pass's own stdout lands after
+# this hook's own "could not evaluate" message -- two JSON objects on one hook's
+# stdout, where the harness expects exactly one. $JIT_TMP is not trustworthy
+# whenever this hook has nothing trustworthy to report, so it is cleared here
+# first; the existing "[ -s "$JIT_TMP" ]" gate downstream then takes the same
+# path it already takes for a healthy call that wrote nothing to it. Scoped to
+# ONLY the two "could not evaluate" outcomes (not the #400 "ordinary error, but
+# trust the output" branch below): that branch is reached exclusively through
+# the direct single-pass match/no-match path, which never touches the candidates
+# channel in the first place, so there is nothing there to clear and nothing to
+# protect against.
+#
+# #400 self-review: `: > "$JIT_TMP"` alone, even with `2> /dev/null`, still
+# printed "No such file or directory" to this hook's own stderr when $JIT_TMP was
+# empty (the same degraded-TMPDIR corner jit_awk_capture() can also degrade
+# through) -- bash reports a failed redirect target using the ORIGINAL stderr,
+# before a later `2>` on the same line takes effect, so the suppression this line
+# once had never actually applied to its own failure. Guarded instead: nothing to
+# truncate when there was never a channel to begin with.
+jit_path_awk_could_not_evaluate() {
+  [ -n "$JIT_TMP" ] && : > "$JIT_TMP" 2> /dev/null
+  jit_awk_crash_sysmsg "$1"
+}
+jit_path_awk_ordinary_empty() {
+  [ -n "$JIT_TMP" ] && : > "$JIT_TMP" 2> /dev/null
+  jit_awk_empty_ok
+}
+
 jit_path_awk() {
-  LC_ALL=C awk \
+  jit_awk_capture awk \
     -v path_layers="$JIT_PATH_LAYERS" \
     -v vocab_layers="$JIT_VOCAB_LAYERS" \
     -v paths_base="$JIT_BASE/paths" \
@@ -641,6 +693,7 @@ jit_path_awk() {
     -v cand_begin="$JIT_CAND_BEGIN" \
     -v status_mode="$JIT_STATUS" \
     "$JIT_PATH_PROG"
+  jit_awk_dispatch jit_path_awk_could_not_evaluate jit_path_awk_ordinary_empty
 }
 
 # No `cat |` in front of it: jit_path_awk() is a wrapper around one awk, awk reads stdin

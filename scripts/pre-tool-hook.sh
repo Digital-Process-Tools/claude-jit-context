@@ -1389,8 +1389,30 @@ if [ -n "$JIT_AWK_PROGRAM_FILE" ]; then
   fi
 fi
 
+# #397: the decisive awk used to write straight to stdout here, uncaptured, with
+# its exit status never read. A crash (measured: SIGSEGV, exit 139, under #393's
+# concurrent load) then printed 0 bytes and this hook still `exit 0`s below -- so a
+# crashed awk and a `mode: block` rule with nothing to say were byte-identical on
+# the wire, and the harness reads empty output as PERMISSION. Output is now
+# captured before anything is printed, and the exit status checked: on success the
+# captured bytes go out UNCHANGED, read from a scratch file (jit_awk_capture(),
+# common.sh) rather than through a command substitution -- #400 (CI) caught a
+# first cut that dropped a trailing newline through "$(...)", and #400's own
+# self-review then found a SECOND cut (a sentinel byte inside one "$(...)") that
+# occasionally lost the sentinel entirely under real load and printed a false
+# crash message; see jit_awk_capture()'s own comment for both. A SIGNAL DEATH
+# (rc > 128) is the refusal path's own reason to fail CLOSED -- the one hook whose
+# whole job is deciding whether the call about to run is safe -- via
+# jit_awk_crash_block() (common.sh), rather than let a call ride through on a
+# crash no rule was actually checked against. awk's OWN ordinary error exits are
+# NOT that: #400's own CI (macOS leg, test-marker-degradation.sh section D) found
+# this hook discarding a genuine, already-decided "decision":"block" (an unopenable
+# marker is a deferred, non-fatal-until-shutdown i/o error on one-true-awk) and
+# replacing it with a false crash message. jit_awk_dispatch() (common.sh) is the
+# one place that five-way branch (uncaptured / success / signal death / ordinary
+# error with output / ordinary error with nothing) is written now.
 if [ -n "$JIT_AWK_PROGRAM_FILE" ]; then
-  LC_ALL=C awk "${JIT_AWK_ARGS[@]}" -f "$JIT_AWK_PROGRAM_FILE"
+  jit_awk_capture awk "${JIT_AWK_ARGS[@]}" -f "$JIT_AWK_PROGRAM_FILE"
 else
   # #371 self-review (oss:auditor): falling back to the POSITIONAL form here would
   # re-trigger the exact E2BIG this fix exists to remove -- pre-tool-hook.sh's
@@ -1410,8 +1432,9 @@ else
   # preferred whenever $TMPDIR is healthy, because it is the one every other hook in
   # this repo already relies on (jit_tmp_open(), #60) and every CI leg already
   # proves, on all three platforms, today.
-  LC_ALL=C awk "${JIT_AWK_ARGS[@]}" -f <(printf '%s' "$JIT_AWK_PROGRAM")
+  jit_awk_capture awk "${JIT_AWK_ARGS[@]}" -f <(printf '%s' "$JIT_AWK_PROGRAM")
 fi
+jit_awk_dispatch jit_awk_crash_block jit_awk_crash_block
 
 # --- Timing + log ---
 T_END=$(_ms)
