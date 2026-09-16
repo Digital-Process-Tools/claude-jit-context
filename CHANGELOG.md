@@ -7,6 +7,167 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-16
+
+### Added
+
+- **An entry body can now transclude another entry directly**, `{{dimension/layer/file.md}}` (#378). "Full argument: `skills/manager/phases/merge.md`" is what a reader used to have to go and get; now the argument can be handed over in place. Expanded at fire time — the same path every other body transform here already runs through — with a depth cap of 3, a per-fire total cap of 12 files, and cycle detection, all enforced by the same containment guard (`jit_bad_entry_file()`/`jit_entry_why()`) an ordinary index row is refused by: no `..`, no absolute path, no symlink target, and a target that does not resolve is refused **in place, named**, never dropped silently. A `{{` immediately preceded by `$`, or one inside a fenced code block, is left untouched — the GitHub Actions `${{ github.sha }}` shape already quoted in `vendored-oss.md` survives unexpanded either way. The transcluded file's own frontmatter is stripped before its body is spliced in. Two things this intentionally does not (yet) do: dedupe against the same entry also firing on its own in the same session, and make `rebuild-tsv.sh`'s size report count a transcluded body toward the entry that pulled it in — both are named as follow-ups in `.claude/jit-context/paths/00-manual/entries.md`.
+
+- **The Stop line now carries a size and a pointer, not just a count** (#389): `JIT : 6 entries, 20.1k this session + /claude-jit-context:stats for more info`. A third marker file, `bytes-shown-<session>.txt` (`jit_shown_path(dir, "bytes", k)`, the same convention `path-shown-*.txt`/`vocab-shown-*.txt` already use), records one line per delivered block — the byte count paired with the exact `loc:`/`rule:` key the entry's own dedup mark already uses — written at every site that marks a real delivery: `pre-prompt-hook.sh`'s vocabulary pass, both of `pre-path-hook.sh`'s (paths and its own vocabulary pass), and both of `pre-tool-hook.sh`'s (the held-advisory commit loop and its vocabulary pass). A refusal or a no-subject sentinel never gets a byte line, because nothing was delivered to measure. `stop-hook.sh` sums the byte record for the exact same deduped set it already counts for the total, and the size is printed only when **every** fired entry in that set has a matching, well-formed byte line — one missing or unparseable record withholds the whole size rather than reporting a sum that quietly excludes it. `scripts/jit-stats.sh`, reachable as `/claude-jit-context:stats` (`commands/stats.md`), is the detail the Stop line points at: entry name, dimension, layer, the word or pattern that matched (read back out of `hooks.log`), the bytes, and the recurring misses (`jit-misses.sh`). The session it reports on is a heuristic — the most recently written marker file's session suffix — because a hand-run command has no access to the JSON payload's `session_id` the way a hook does, and it says so on its own first line rather than claiming a certainty it does not have.
+
+### Changed
+
+- The SessionStart line about recurring words is one report and one action (#386). It read `recurring misses (last 5000 line(s) of the log, raw counts, not filtered for ordinary words -- judge before adding a vocabulary entry): "click" x4, "ready" x4 ... -- also, 10134016 bytes, at or past the 10000000 byte watch threshold (#248) ...`: a window, a caveat, an issue number and a flag, addressed to a person who wanted to know what was found and what to do. It now reads `JIT : you use these words a lot and no entry matches them: "server-diag" x4. Write one with /claude-jit-context:vocabulary <word>, or turn this off with JIT_CONTEXT_MISSES=off in .claude/jit-context/config.env`, and a log past the size watch gets its own line, `JIT : hooks.log is 10.1 MB. Delete or rotate it: <path>`. `jit-misses.sh` filters ordinary words itself now, against `data/generic-words.txt`, the list `rebuild-tsv.sh` already consults (#232) -- `click`, `ready` and `update` were being offered as candidate entries with a note asking the reader to filter them, by a tool sitting one directory from the list that could. `--generic-words PATH` and `JIT_CONTEXT_GENERIC_WORDS` override the list the way `rebuild-tsv.sh` honours them; the header says which of three states held -- filtered, opted out, or a list that could not be read -- so a report that filtered and one that could not never print the same. `JIT_CONTEXT_MISSES=on|off` is a new `config.env` setting, narrower than `JIT_CONTEXT_STATUS=off`, which still silences everything.
+
+- `.claude/jit-context/paths/00-manual/tests.md` names a contributor-path hazard measured while diagnosing #393: running several test suites (or worktrees) concurrently on one clone can crash a suite's own forked `awk` -- `stop-hook.sh`'s JSON parse was measured exiting 139 (SIGSEGV) under such load, which the hook already treats as "unknown, stay silent" (#284), and that is what a concurrent `tests/test-stop-hook.sh` run was reporting as a different section failing every time. No shared-state channel was found for this one (unlike #388's git-stash finding) and CI is not exposed to it -- `run-all.sh` runs every suite sequentially, one per job. Documentation only; no script changed.
+
+### Fixed
+
+- **`jit-doctor` stops calling a layer's own unindexed `.md` "fat" or "never fired"** (#374).
+  The two advisory passes globbed every `*.md` under a layer directory regardless of whether
+  it was a rule at all -- so a `00-README.md` (title/description only, no `tool:`/`match:`
+  frontmatter, correctly excluded from `00-index.tsv` by `rebuild-tsv.sh`) was reported over
+  the byte threshold and "no record in the log" on every run, forever: an absence this tool
+  produced -- the file was never eligible to fire -- read as an absence in the world, the same
+  class the tools-dimension log-key fix already in this file exists to end, one class over.
+
+  The two passes now read against `00-index.tsv` before adding an entry to the set they walk:
+  a `.md` whose name is not a line in the layer's own index (the filename column, which sits
+  at a different position per dimension -- tools rows carry it third, paths/vocabulary rows
+  carry it second) is left out of both advisories, exactly as the hooks themselves -- which
+  read that index and nothing else -- would never load it. It still counts toward the layer's
+  own entry tally, so it does not silently vanish from the report; a real indexed rule that
+  never fired is unaffected and still reported exactly as before, per the positive control this
+  fix adds alongside the fixture that reproduces the bug. Read against the index rather than a
+  second frontmatter parser, following this file's own standing test for eligibility.
+
+  An index that exists but cannot be *read* (permission denied) is handled as its own case,
+  not folded into "no rows match": `awk` failing to open it would otherwise leave the lookup
+  empty, silently excluding every genuinely-indexed rule in that layer from both advisories with
+  nothing naming why. Checking `-r` alongside `-f` -- this file's own sibling convention for the
+  same file -- and falling back to the pre-fix behaviour (every `.md` eligible) when the index
+  cannot be read trades a possible false "fat"/"never fired" for never a false silence.
+
+- **A pasted URL no longer feeds unrelated vocabulary keywords** (#377). `pre-prompt-hook.sh`
+  lowercases, CamelCase-splits and strips everything outside `[a-z0-9 -]` before matching the
+  prompt against `vocabulary/*/00-index.tsv` -- a URL like `https://docs.dp.tools/sync/`
+  reached that flatten as `https docs dp tools sync`, and any entry keyed on `sync`, `tools`
+  or `docs` fired on the paste with nothing to do with the page. A scheme-anchored URL
+  (`https?://` or `Https://`/`HTTP://`, any case, followed by a run of non-whitespace, stopping
+  at a comma, semicolon, bare CR or pipe too) is now masked to a single space before the
+  flatten runs, so its path and query segments are never handed to the vocabulary matcher as
+  free tokens. The hook's own request log is unaffected -- only the copy the matching subject
+  is built from is masked. Three review passes found four gaps, one at a time, and one
+  attempted fix that was itself reverted:
+
+  - a case-sensitive scheme match let an auto-capitalised `Https://` paste straight through;
+  - the greedy non-whitespace run swallowed a genuine word glued onto the URL by punctuation
+    with no space -- found for a comma (`url,billing`), then for a bare CR byte (`\r`, reachable
+    through a JSON payload's own `\r` escape, not part of a CRLF pair), then for a pipe
+    (`url|billing`);
+  - a closing `)`/`]`/`}` was added to the stop-set for the same reason and reverted one round
+    later: a Wikipedia-style path segment routinely carries an unescaped parenthesis mid-path
+    (`/wiki/Foo_(bar)`), and RFC 3986 reserves a bracketed host for a literal IPv6 address
+    (`http://[2001:db8::1]:8080/y`) -- excluding those characters truncated the mask right
+    after the opening bracket/paren and let the rest of a genuine URL's path leak into the
+    vocabulary subject unmasked, a worse regression than the word-glue bug the exclusion was
+    meant to fix.
+
+  All four drop-a-real-match gaps are fixed and covered by tests; the reverted attempt is
+  covered by a non-regression test in the other direction (a parenthesised or IPv6-literal URL
+  must still be masked in full). The stop-set is curated, not a URL grammar, and is not
+  exhaustive by design -- colon is deliberately excluded from it for the identical mid-URL
+  reason (a port number, `http://x.com:8080/y`), and any other prose-glue punctuation not
+  listed (colon, an opening bracket, etc.) can still swallow a following word. Enumerating
+  every separator by hand is the same guess-without-measurement the wider `url/` dimension
+  below is deliberately left out of scope for.
+
+  This also removes the inverse capability a domain-shaped vocabulary keyword (e.g. a row
+  normalised to `docs example com`) used to get by accident from inside a pasted URL: that
+  match now requires the domain to appear in real prose, not inside a link. A real `url/`
+  dimension that matches a URL on purpose, alongside `paths/`, `tools/` and `vocabulary/`,
+  is the larger follow-up #377 itself asks not to be guessed at without first measuring how
+  often a pasted link arrives with no scheme at all -- out of scope here.
+
+- **`rebuild-tsv.sh`'s keyword classify collapsed to one awk process per file, not one fork per keyword** (#379). The vocabulary keyword loop forked `sed` once, `tr`+`sed` once and `grep` once per keyword (plus a conditional pair for the identifier-collision check) -- on a 195-entry, ~7000-keyword tree that measured 68% of a 1m50s rebuild spent in process spawn, not in work. The split/trim/normalise/blacklist/identifier-collision steps now run inside one `LC_ALL=C awk` per file, matching #255's existing per-directory batch for the generic-word classify. Measured on a synthetic 195-entry, 7020-keyword fixture: 58.0s (39.63s system) before, 6.3s (3.98s system) after, with a byte-identical index on both sides.
+
+    Self-review caught what the collapse itself introduced: a malformed, project-configurable `VOCAB_KEYWORD_BLACKLIST` used to cost one keyword's `grep -Eq` exit 2, read as "not blacklisted" -- one awk process per file instead means the SAME bad pattern aborts that whole process on its first evaluation, silently dropping every keyword on the file with an actively wrong "normalised to nothing" reason. The pattern is now validated once, up front, against a fixed canary string (an ERE's compile validity does not depend on the data it is later matched against), degrading loudly (`FATAL`, exit 2) to the same "matches nothing" safe default a bad pattern already produced, rather than ever evaluating it inside the per-file classify pass. A second, independent guard -- counting the classify pass's own E/B/O output lines against the comma-count of the `keywords:` line it read, the same technique #255's `VERDICT_FLAGS` check already uses a few lines below in this file -- catches a crash from any other cause too.
+
+- **`jit_load_config` no longer refuses a real setting name under a collating locale** (#388).
+  `[[ "$key" =~ ^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$ ]]` uses a POSIX bracket
+  range inside `[[ =~ ]]`, which glibc matches by the active locale's COLLATION order, not
+  by byte value. Turkish collation (`LC_ALL=tr_TR.UTF-8`, and `az_AZ`) does not place `I`
+  inside `A`..`Z`, so under that locale every real setting whose name carried an `I` after
+  its prefix -- `JIT_CONTEXT_INJECT`, `JIT_CONTEXT_MISSES`, `JIT_CONTEXT_COLLISION_BYTES`,
+  `DYNAMIC_RULES_MODULE_PREFIX` among them -- was refused as "unknown setting" and dropped,
+  reported through `jit_config_refuse` but for the wrong reason: the name was spelled
+  correctly and was not unknown. This is a glibc behaviour; darwin's libc does not collate
+  bracket ranges at all, so it never reproduced locally.
+
+  `jit_load_config()` now opens with `local LC_ALL=C`, scoped to the function so the
+  caller's own locale is restored on return. The rest of the function reads every value
+  through a literal `case` match, never a range, so nothing else in it wanted the caller's
+  collation.
+
+  `tests/test-config-locale-collation.sh` covers the runtime behaviour with three honest
+  outcomes rather than two: it probes this host for a locale whose `[[ =~ ]]` collation
+  actually moves (built via `localedef` when not already present) and exits `2` with a
+  `SKIPPED` block naming what went untested when none can be produced -- which is every
+  local run on macOS, where the probe itself cannot construct the attack. It is not evidence
+  the fix is broken; it is the platform this repo's own libc does not reproduce this on at
+  all.
+
+  `tests/test-locale-collation-scope.sh` is the source guard: it fails when a bracket
+  LETTER range appears inside `[[ =~ ]]` with no enclosing `local LC_ALL=C` and no written
+  `EXEMPT` entry, so the next range added to this codebase does not silently reintroduce the
+  same class. The one other range in the shipped scripts -- a Perl regex in
+  `session-start-hook.sh` -- is exempted with a written reason: Perl's own regex engine does
+  not collate bracket ranges unless the script says `use locale`, and this file has none.
+
+  The source guard's `[[ =~ ]]`-only scope rests on #388's own claim that `case` patterns and
+  `${v//[!...]/}` parameter expansion compare bytes rather than collating, measured on
+  ubuntu-latest / bash 5.2 and not independently reproducible on the platform this repo
+  developed the fix on (darwin does not collate at all). `tests/test-config-locale-collation.sh`
+  now measures that claim directly, rather than leaving it an inference: on any host where it
+  can build a real collating locale, it runs `case "I" in [A-Z])`, `case "SESS-I" in
+  *[!A-Za-z0-9._-]*)` and `${v//[!a-zA-Z0-9]/-}` under both that locale and `LC_ALL=C` and
+  asserts the two are byte-identical, beside a positive control that `[[ =~ ]]` itself DOES
+  diverge (proving the locale is genuinely collating, not merely built). If any of the three
+  non-`=~` shapes ever moves, this now fails loudly rather than leaving the scanner's scope an
+  unverified assumption.
+
+- **`mode: once` now dedups per reader instead of per session** (#394). A spawned agent inherits its parent's `session_id` -- measured directly against real Claude Code transcripts on disk: a spawned agent's own transcript file (`subagents/agent-<hex>.jsonl`) records the SAME `sessionId` as its parent's transcript while carrying its own, distinct `agentId`. `once`'s dedup was keyed on that shared value, so the first agent in a multi-agent run to trip a `once` rule spent its one delivery for every agent spawned after it, silently -- the same defect class this plugin exists to catch, sitting in its own dedup. The key is now the reader's own `transcript_path` basename instead: a main session and every agent it spawns get separate budgets, one delivery each. For a plain, unspawned session the two keys are identical -- a transcript's own basename IS its `session_id` there -- so nothing changes outside a multi-agent run, and `once` keeps meaning exactly what it always did for a session with no subagents.
+
+  This is a narrower fix than it might sound. `once` is opt-in and had zero real adopters in this repository's own tree or in the consuming repository the issue measured (18 `remind`, 3 `block`, 0 `once`) -- the *default* mode for an entry with no `mode:` field is `remind`, unaffected by this change, and stays that way. So this does not retroactively shrink what any shipped `remind` rule injects; it fixes `once` so an author who reaches for it going forward gets what the word says, instead of a mode that silently starves every reader but the first.
+
+  A payload carrying no usable `transcript_path` -- a hand-run hook, a host that does not supply one -- was shipped here degrading to firing on every match, exactly like `remind`, rather than falling back to the old session-wide key or guessing at a sanitised name. **That degradation shipped with a real defect and was reversed a few hours later in #398**: instead of a marker, the missing key left the once-mode dedup CHECK reading a permanently empty set forever while the session-wide mark kept being written on every call -- `once` firing unconditionally, with its marker file growing without bound for the life of the session, on any host that omits `transcript_path`. #398 falls back to the session-wide key for that one case instead, restoring this repository's pre-#394 behaviour there. See `changelog.d/398.fixed.md` for the full account and the trade it argues. A `transcript_path` basename outside the existing bare-name character set is unaffected by this correction and still draws no per-agent marker, for the same reason -- it falls back to the session key exactly as the missing-field case does.
+
+- **A crashed `awk` no longer reads as permission on the refusal path** (#397). The `v0.10.0` release audit measured the exact mechanism: shim `awk` to `kill -SEGV $$` and run `pre-tool-hook.sh` against a fixture with one `mode: block` rule -- the process wrote 0 bytes to stdout, exited 0, and the harness read the empty output as the tool call being allowed. A crashed `awk` and a `block` rule with no opinion were byte-identical on the wire, because the decisive awk's exit status was never captured and the `exit 0` below it was unconditional. `#393` had already measured a working `awk` exiting 139 (SIGSEGV) 8 times across 8 sections under concurrent load, transient rather than broken -- this is what that crash does on the hook whose whole job is deciding whether a call is safe.
+
+  Fixed differently on the two shapes of hook this repository has, because they had different things to protect. `pre-tool-hook.sh` is the refusal path: its decisive `awk`'s output is now captured and its exit status checked before anything is printed, and a non-zero exit now fails CLOSED -- `jit_awk_crash_block()` (`common.sh`) refuses the call and says an evaluator crash is why, rather than let it ride through on a crash no rule was actually checked against. That refusal does not know, and cannot know, whether a `block` rule would have matched: driven directly, a command matching no rule at all gets the identical refusal under the same crash, because a crashed evaluator genuinely cannot tell the two cases apart. The real cost of that: on a machine where `awk` is not merely crashing under load (#393's own transient measurement) but permanently unusable, `pre-tool-hook.sh` refuses **every** tool call for the rest of that session, including calls no rule would ever have matched, until `awk` itself is fixed. `pre-prompt-hook.sh` and `pre-path-hook.sh` never had a `decision` field to fail closed with -- only `pre-tool-hook.sh`'s awk program ever calls `jit_envelope_block()` -- so a crash there costs a missed injection, never a bypassed refusal; both now say so over the `systemMessage` channel (`jit_awk_crash_sysmsg()`) instead of staying silent, without turning one transient crash into every remaining prompt of a session being refused.
+
+  No escape hatch. A setting that makes a crashed decisive awk permit rather than refuse was weighed and rejected: this repository's own stated position is that a rule which cannot be evaluated is not a rule that did not match, and a safety guard with an off switch is a guard a user reaches for the first time it is inconvenient rather than the day `awk` is actually fixed -- especially one that, once flipped, is indistinguishable on the wire from every legitimate permission this hook ever grants, so nobody auditing a session afterward could tell a rule genuinely not matching from a refusal that was silently waived. The `pre-prompt-hook.sh`/`pre-path-hook.sh` behaviour above already is the non-refusing accommodation for a broken `awk` everywhere it is safe to give one; extending it to the one hook whose entire job is refusing unsafe calls would undo the fix this issue exists to ship. The honest relief valve for a permanently broken `awk` is fixing `awk`, loudly diagnosable from the refusal reason itself -- not a switch that quietly disables the guard.
+
+  Not a retry: whether a transient SIGSEGV should be retried before it speaks is a separate question with its own cost (one wasted fork per call, forever, on a machine already in trouble), and is left open. This only makes the crash speak -- or, on the refusal path, refuse -- instead of staying silent.
+
+- **Two regressions #394 shipped a few hours earlier, both in `mode: once`, both driven with before/after reproductions against real hooks** (#398). #394 (merged as `c9b0573`, itself only hours old when the `v0.10.0` release audit caught these) added a second, per-agent marker file beside the existing session-wide one, keyed on the payload's `transcript_path` instead of `session_id`. Two things followed from adding it *beside* the session key rather than replacing it, and both were driven, not inferred.
+
+  First: in a plain, non-spawned session the two marker paths are the SAME file -- the very property #394's own changelog leans on ("for a plain, unspawned session the two keys are identical"). So every `once`-mode delivery in the common case appended the identical line to the identical file twice. Invisible below `stop-hook.sh`'s 500-key cap, the total still came out exact; past it, `JIT_FIRED_OVERFLOW` is incremented before the `JIT_FIRED_KEYS` dedup ever runs, so a doubled key over the cap counted as a second, unattributed entry -- 600 distinct keys, doubled, reported as `701 entries this session (201 of unknown origin)`. The fix writes the per-agent mark only when its path is genuinely different from the session-wide one; a real spawn still gets its own file.
+
+  Second, and worse: `once` degraded to firing on *every* call, with its session-wide marker file growing without bound for the life of the session, whenever the payload carried no `transcript_path`. The dedup check had moved onto the per-agent set, which is only ever populated from that field -- so a payload lacking it read a permanently empty set on every call, while the session-wide mark kept being written regardless. `once` behaved as `remind` while looking, from the code around it, deliberately designed. #394's own changelog argued against falling back to `session_id` here, reasoning that it "would quietly reintroduce this same defect on any host that omits the field" -- but that weighed suppression-across-agents against nothing: the alternative actually shipped was no dedup at all, on every such host, whether or not it ever spawns an agent, plus an unbounded marker file. Real Claude Code CLI and Agent SDK payloads document `transcript_path` as a field "every hook receives," so this mainly bit hand-run hooks, non-standard harnesses and hosts that omit it -- but for those hosts the fallback chosen here is `session_id`, restoring `v0.9.0`'s exact behaviour (fires once, then quiet) rather than #394's silent-always-fires default. This narrows #394's own per-agent isolation only in the intersection of "a host missing `transcript_path`", "a multi-agent run", and "an author who opted a rule into `once`" -- a mode with zero real adopters at #394's own filing.
+
+  Neither regression was visible to `tests/test-once-per-agent-394.sh`, which is thorough on the spawn case but compares the new behaviour only against itself. Both needed `v0.9.0`'s counts alongside the new ones to show up at all; `tests/test-398-once-mode-regressions.sh` pins those counts directly, and the two sections of `test-once-per-agent-394.sh` that asserted the now-superseded "fires on every call" behaviour were updated to assert the session-keyed fallback instead.
+
+  `stop-hook.sh`'s pre-cap-dedup ordering (counting `JIT_FIRED_OVERFLOW` before `JIT_FIRED_KEYS` dedups) is a separate, pre-existing question this issue does not touch -- the duplicate write is what turned it into a wrong number, not the ordering itself.
+
+- **The uncaptured `awk` path still failed open under #397's own defect class -- an unwritable `$TMPDIR` made a `block` rule permit** (#403). `jit_awk_capture()`'s own `[ -z "$f" ]` branch (`common.sh`) -- no scratch file to capture through, because `mktemp` under `$TMPDIR` failed -- ran the decisive `awk` directly to real stdout and `return`ed without ever reading `$?`. Driven through the real hook by the `v0.10.0` round-2 release audit: a healthy `awk` still delivered `{"decision":"block", ...}` for a matching rule, and a `SIGSEGV`'d one (`#393`'s own measured mechanism, exit 139) printed 0 bytes and still exited 0 -- a crashed evaluator and a `block` rule with nothing to say were byte-identical on the wire again, on the exact corner #397 had not yet reached.
+
+  `$?` is available here -- `LC_ALL=C "$@"` is a plain foreground command, no subshell between it and the exit status -- it was simply never read. A genuine signal death (`rc > 128`) now sets `JIT_AWK_CAPTURE_RC` to the real numeric code instead of `"uncaptured"`, which routes it through `jit_awk_dispatch()`'s own existing `rc > 128` branch (unchanged by this fix) into the caller's `crash_fn` -- the same per-hook-family answer (`block` on `pre-tool-hook.sh`, `systemMessage` on the other two) the captured path already gives. Every other exit shape on this branch -- clean success, or `awk`'s own ordinary non-crash error -- still reports `"uncaptured"` exactly as before: whatever `awk` already wrote directly to real stdout is trusted as-is.
+
+  The hard part was never reading `$?` -- it was whether printing the crash message on top of an already-crashed `awk`'s own direct-to-stdout output could double the envelope, the exact defect class #397's own self-review caught on the captured path. A `"$( )"`-based capture was ruled out here for the same reason #400 already ruled it out: it strips a trailing newline a healthy `"{}"` answer relies on, and a two-statement sentinel variant of it lost the sentinel about 1 time in 800 under real load for a reason never root-caused. Checked rather than assumed: every decisive `awk` program in this codebase (`pre-tool-hook.sh`, `pre-prompt-hook.sh`, `pre-path-hook.sh`) has exactly ONE terminal stdout print per code path, and nothing runs after it, so a crash lands either before any output at all (`#393`'s own 8-for-8 measured crashes wrote zero bytes) or, in principle, mid-write for an unusually large body -- REASONED, not observed, and demonstrated directly with a synthetic shim that writes 200000 bytes before crashing: the fix still appends exactly one crash envelope after them, which is correct for a genuine double-write but would read as malformed JSON if the real `awk` ever did the same. Accepted for the same reason #400 accepted degrading this corner at all: this function has never held a stricter contract than every other scratch-file user in this codebase, and the alternative is the regression #400 already measured and removed.
+
+  Tested for the first time: `grep -n uncaptured scripts/*.sh tests/*.sh docs/*.md` returned five hits before this fix, all in `scripts/`. `tests/test-uncaptured-awk-crash-403.sh` drives both directions on the same unwritable-`$TMPDIR` corner -- healthy `awk` still delivers (the positive control, run first), crashed `awk` refuses on `pre-tool-hook.sh` and degrades over `systemMessage` on the other two -- and counts DECODED JSON objects rather than a substring, because `test-marker-degradation.sh` section D was found to be a false pass this same morning for matching a substring the fabricated crash message also contained.
+
 ## [0.9.0] - 2026-09-10
 
 ### Changed
@@ -3540,7 +3701,8 @@ and publishes it.
 
 Initial internal version: tool and path rules, configured through `config.json`.
 
-[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.10.0
 [0.9.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.9.0
 [0.8.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.8.0
 [0.7.2]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.7.2
