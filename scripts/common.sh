@@ -537,11 +537,26 @@ jit_log_write() {
 # space growing a little further; refusing to run because rotation failed would cost
 # the session, and hooks.md forbids that trade.
 jit_log_rotate() {
-  # $1: JIT_CONTEXT_LOG_MAX_BYTES, already validated by jit_load_config() as either
-  # "0" or a plain unsigned integer with no leading zero (so it is always safe to
-  # compare with `-ge` -- bash reads a leading "0" as an octal prefix in arithmetic
-  # context, and a refused value never reaches here as a string like "010").
+  # $1: a byte count. jit_load_config() validates what it reads out of config.env, and
+  # that is NOT the only way this value arrives -- exporting JIT_CONTEXT_LOG_MAX_BYTES
+  # into the environment reaches session-start-hook.sh's presence check without passing
+  # through jit_load_config() at all. So this validates the value it actually received
+  # rather than trusting a claim about its caller. Two symptoms measured on the
+  # unvalidated version, in a stranger's session: `[ "$cur" -ge abc ]` printed
+  # "[: abc: integer expected" on stderr, and `-ge -5` was TRUE for every size, so a
+  # negative value silently rotated on every single SessionStart -- two rotations and
+  # the previous generation is gone. The noisy one was the harmless one.
   local max="$1" cur
+  # Refused here rather than clamped, and a leading zero refused with the rest: `[ ]`
+  # compares in decimal (`[ 9 -ge 010 ]` is true, unlike `[[ 9 -ge 010 ]]`), so "010" is
+  # not misread today -- but it is written by someone who meant one of two different
+  # numbers, and this function cannot tell which. Refusing keeps that ambiguity from
+  # being resolved by accident here or by a later change from `[ ]` to `[[ ]]`.
+  case "$max" in
+    "" | *[!0-9]*) return 0 ;;
+    0) ;;
+    0*) return 0 ;;
+  esac
   [ "$JIT_LOG_DISABLED" = 0 ] || return 0
   # "0" is a stated value for "never rotate", not a side effect of the clamp below --
   # it is checked here, explicitly, before anything that could be mistaken for one.
@@ -1083,11 +1098,13 @@ jit_load_config() {
     # jit_log_rotate() rather than falling out of a clamp -- so it has to survive
     # here rather than being folded into the "malformed" branch below.
     #
-    # Refused on anything but "0" or a digit string with no leading zero. A leading
-    # zero is refused rather than merely stripped: bash's `[ "$x" -ge N ]` reads a
-    # value starting with 0 as an OCTAL literal in arithmetic context, so "010" would
-    # silently mean 8 wherever it is compared, not ten -- the exact "reads as applied
-    # and is not" failure this whole function exists to refuse, one digit over.
+    # Refused on anything but "0" or a digit string with no leading zero. The leading
+    # zero is refused for ambiguity, not for octal: `[ ]` compares in decimal, so
+    # `[ 9 -ge 010 ]` is true and "010" is read as ten today. It is still refused,
+    # because someone writing it meant either ten or eight and nothing here can tell
+    # which -- and naming the line is cheaper than guessing right. Note `[[ 9 -ge 010 ]]`
+    # IS octal, so the reading changes with the test operator; refusing the value means
+    # that difference can never quietly become a behaviour change.
     if [ "$key" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
       case "$value" in
         0) ;;

@@ -177,6 +177,38 @@ CLAUDE_PROJECT_DIR="$PROJ" bash -c "source \"$COMMON\"; jit_log_rotate 500" 2> /
 assert_true "A7 a symlinked hooks.log.1 is never overwritten through" \
   '[ -L "$LOGDIR/hooks.log.1" ] && [ "$(readlink "$LOGDIR/hooks.log.1")" = "/etc/passwd" ]'
 
+# A8: config.env is validated by jit_load_config(). The ENVIRONMENT is not -- nothing in
+# jit_load_config() ever sees a value exported into the hook's own environment, and the
+# session-start-hook presence check reads it happily. So jit_log_rotate() has to refuse a
+# malformed value on the value it actually received, not on a claim about its caller.
+# stderr is asserted EMPTY here on purpose: `[ "$cur" -ge abc ]` exits non-zero, so a
+# rotation correctly does not happen, and the only symptom is a bash diagnostic printed
+# into someone's session. Suppressing stderr the way the tests above do would make this
+# pass against the broken code.
+fixture a8
+for BAD in abc "" " " 12x -5 "1 2"; do
+  CLAUDE_PROJECT_DIR="$PROJ" JIT_CONTEXT_LOG_MAX_BYTES="$BAD" \
+    bash -c "source \"$COMMON\"; jit_log_rotate \"\$JIT_CONTEXT_LOG_MAX_BYTES\"; echo rc=\$?" \
+    > "$TMPROOT/a8.out" 2> "$TMPROOT/a8.err"
+  assert_contains "A8 env value '$BAD': jit_log_rotate returns success" "$(cat "$TMPROOT/a8.out")" "rc=0"
+  assert_eq "A8 env value '$BAD': nothing is printed to stderr" "$(cat "$TMPROOT/a8.err")" ""
+  assert_true "A8 env value '$BAD': no rotation happened" '[ ! -e "$LOGDIR/hooks.log.1" ]'
+done
+# Positive control for the loop above: a well-formed env value still rotates, so A8 is not
+# passing merely because nothing in it can ever rotate.
+CLAUDE_PROJECT_DIR="$PROJ" JIT_CONTEXT_LOG_MAX_BYTES=500 \
+  bash -c "source \"$COMMON\"; jit_log_rotate \"\$JIT_CONTEXT_LOG_MAX_BYTES\"" 2> "$TMPROOT/a8b.err"
+assert_true "A8 positive control: a well-formed env value DOES rotate" '[ -f "$LOGDIR/hooks.log.1" ]'
+assert_eq "A8 positive control: and prints nothing to stderr" "$(cat "$TMPROOT/a8b.err")" ""
+
+# A9: the same value arriving through the hook, end to end -- the path a person actually
+# hits by exporting the variable in a shell profile. The hook must stay silent and still
+# emit valid JSON.
+fixture a9
+OUT_A9="$(CLAUDE_PROJECT_DIR="$PROJ" JIT_CONTEXT_LOG_MAX_BYTES=abc bash "$HOOK" < /dev/null 2> "$TMPROOT/a9.err")"
+assert_eq "A9 a malformed env value through the hook: stderr stays empty" "$(cat "$TMPROOT/a9.err")" ""
+assert_true "A9 a malformed env value through the hook: no rotation" '[ ! -e "$LOGDIR/hooks.log.1" ]'
+
 echo ""
 echo "=== section B: jit-misses.sh reads the rotation marker, never hooks.log.1 ==="
 
