@@ -2622,6 +2622,42 @@ function jit_session_key(raw, fs, fe, n,   i, k) {
   }
   return ""
 }
+# --- Agent identity, for once-mode per-agent dedup (#394) -------------------
+# `once` used to mean once per session_id -- and a spawned agent inherits the parent
+# session_id (measured: same session_id on a main lane and on every Explore/developer
+# spawn it launches). One shown set for the whole session meant the first agent to trip
+# a once rule spent it for every agent behind it, silently -- exactly the failure this
+# plugin exists to name, reproduced in its own dedup.
+#
+# transcript_path is the field that actually varies per reader: a main session own hook
+# payload names its own session-uuid.jsonl, and a spawned agent payload names its OWN
+# transcript under subagents/agent-hexid.jsonl -- verified against real transcripts on
+# disk, both shapes, not assumed from documentation. For the main session the basename
+# IS the session_id, so once keeps its exact old behaviour there; only a spawn own
+# marker file moves.
+#
+# Same bare-name discipline as jit_session_key() above, because this value becomes a
+# marker FILE NAME too: anything outside [A-Za-z0-9_-], over 64 bytes, or spanning an
+# escaped quote is refused -- NO marker, never a sanitised guess. A `.jsonl` suffix is
+# stripped first (both shapes carry it); a `/` or `\` separator is stripped down to the
+# basename first (a Windows transcript path uses `\`, a POSIX one never contains one in
+# a real path), so directory content ahead of the basename plays no part in the check.
+function jit_agent_key(raw, fs, fe, n,   i, v, base) {
+  for (i = 2; i + 2 <= n; i += 2) {
+    if (fs[i] != fe[i]) continue
+    if (raw[fs[i]] != "transcript_path") continue
+    if (fs[i+2] != fe[i+2]) return ""
+    v = raw[fs[i+2]]
+    if (v == "") return ""
+    base = v
+    gsub(/.*[\/\\]/, "", base)
+    sub(/\.jsonl$/, "", base)
+    if (base == "" || length(base) > 64) return ""
+    if (base ~ /[^A-Za-z0-9_-]/) return ""
+    return base
+  }
+  return ""
+}
 # --- Stop/SubagentStop re-entry guard (#279) ---------------------------------
 # The harness re-invokes a Stop hook whose own output (additionalContext) blocked the
 # turn from ending, and marks that re-entry with "stop_hook_active":true in the same
@@ -2665,6 +2701,15 @@ function jit_stop_hook_active(raw, fs, fe, n,   i) {
 function jit_shown_file(dir, kind, raw, fs, fe, n,   k) {
   return jit_shown_path(dir, kind, jit_session_key(raw, fs, fe, n))
 }
+# The per-agent sibling (#394): same shape, keyed on jit_agent_key() instead. Used ONLY
+# by pre-tool-hook.sh, for once-mode dedup -- the vocab/bytes shown_file above stays
+# session-keyed and is still written to on every delivery, so the Stop hook own byte
+# accounting (#389, which reads back "vocab-shown-$SESSION_ID.txt" and nothing else) is
+# untouched. This is a SECOND marker a once row is also written into, not a
+# replacement for the first.
+function jit_agent_shown_file(dir, kind, raw, fs, fe, n) {
+  return jit_shown_path(dir, kind, jit_agent_key(raw, fs, fe, n))
+}
 # The name, built from a key the caller already has. Split out because pre-path-hook.sh
 # runs a SECOND awk pass for its Bash path candidates -- the payload is parsed once, in
 # the first pass, and the second one is handed the key rather than the JSON. One format
@@ -2683,6 +2728,15 @@ function jit_shown_path(dir, kind, k) {
 #
 # Nothing re-reads a marker inside one invocation, so no handle needs freeing: the process is
 # about to exit.
+#
+# #394: that "nothing re-reads" was a real invariant, not just an unused capability -- a
+# SECOND call on the SAME path returns 0 immediately rather than reopening it, because
+# one-true-awk keeps the getline file handle positioned at EOF from the first read and
+# this function never closes it (the paragraph above is why). Driven: loading a file
+# into a second array right after loading it into a first came back empty, silently, no
+# awk error at all. A caller that needs the same lines in two arrays copies the first
+# result rather than calling this twice -- see pre-tool-hook.sh, where shown_file and
+# agent_shown_file are the identical path for a main (non-spawned) session.
 function jit_shown_load(file, set,   line) {
   if (file == "") return
   while ((getline line < file) > 0) set[line] = 1

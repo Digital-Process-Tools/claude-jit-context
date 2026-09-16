@@ -186,6 +186,11 @@ END {
   # #389: shares the byte marker file the SAME way shown_file above shares the vocab
   # one across every dimension this hook touches -- one naming convention.
   bytes_shown_file = jit_shown_file(state_dir, "bytes", raw, fs, fe, n)
+  # #394: the once-mode dedup CHECK reads this one instead of shown_file above -- see
+  # the "once" mode branch below. shown_file/bytes_shown_file above are UNCHANGED and
+  # still written on every delivery, so #389s own Stop-hook accounting keeps reading
+  # exactly the file it always has.
+  agent_shown_file = jit_agent_shown_file(state_dir, "vocab", raw, fs, fe, n)
   for (i = 2; i + 2 <= n; i += 2) {
     # Only a field that is ONE raw piece can be a key this hook wants — every key below is
     # quote-free — and only the matching value is ever materialised or decoded. That is
@@ -377,6 +382,18 @@ END {
 
   # --- Load shown file into set ---
   jit_shown_load(shown_file, shown)
+  # #394: the once-mode dedup set. NEVER jit_shown_load(agent_shown_file, agent_shown)
+  # here -- for a main (non-spawned) session agent_shown_file IS shown_file, byte for
+  # byte, and a second getline against a path this process already read to EOF comes
+  # back empty on one-true-awk with no error at all (see jit_shown_load()s own comment
+  # in common.sh). Equal paths copy the set already in hand; only a genuinely different
+  # path -- a spawned agent, whose transcript_path differs from the session_id -- is
+  # read from disk at all.
+  if (agent_shown_file == shown_file) {
+    for (jak in shown) agent_shown[jak] = 1
+  } else {
+    jit_shown_load(agent_shown_file, agent_shown)
+  }
 
   # --- Tool rules matching ---
   # THE LAYER LOOP #176 ADDED. This dimension had none: tools_tsv and tools_dir arrived
@@ -601,14 +618,23 @@ END {
       # "once" mode. The mark moved BELOW the read (#78): a rule whose body never arrived
       # used to consume its own once-per-session budget, so the next call skipped the row
       # entirely and the rule was silently gone for the session.
+      #
+      # #394: the membership test below reads agent_shown, not shown -- once now means
+      # once per READER (the agent_key basename), not once per session_id. A subagent
+      # shares its parent session_id but carries its own transcript_path, so its own
+      # agent_shown set starts empty even though the session-wide shown set may already
+      # hold this key from an earlier spawn. For the main session the two sets are the
+      # SAME marker file (agent_key equals session_id there), so this is byte-identical
+      # to the old behaviour on every call that is not a spawn.
       key = ""
       hushed = 0
       if (index(r_modes, "once") > 0) {
         key = jit_loc_key("tools", tool_layer, r_file)
-        # `held` as well as `shown`: an advisory rule delivered earlier in THIS scan is not in
-        # `shown` yet -- its mark waits on the block decision below (#112) -- and without this
-        # a second row naming the same file would inject it twice in one call.
-        if ((key in shown) || (key in held)) {
+        # `held` as well as `agent_shown`: an advisory rule delivered earlier in THIS scan
+        # is not in `agent_shown` yet -- its mark waits on the block decision below (#112)
+        # -- and without this a second row naming the same file would inject it twice in
+        # one call.
+        if ((key in agent_shown) || (key in held)) {
           # `hushed`, not `continue`, for a row that can refuse (#139). `once` was leaving
           # this loop before the row reached its decision, so `mode: once, block` refused
           # the first matching call of a session and permitted every one after it -- no
@@ -946,6 +972,15 @@ END {
     for (hk in held) {
       shown[hk] = 1
       jit_shown_mark(shown_file, hk)
+      # #394: the per-agent mark, a SECOND write beside the session-wide one above --
+      # never instead of it. agent_shown_file is "" when transcript_path was absent or
+      # unusable (jit_agent_key degrades the same way jit_session_key already does), and
+      # jit_shown_mark() already no-ops on an empty file name, so this line costs nothing
+      # extra to gate: a `once` row with no usable transcript_path simply keeps firing on
+      # every call, in memory only, for the life of this one process -- exactly what
+      # `remind` already does, never a silent fallback onto the wider session-wide key.
+      agent_shown[hk] = 1
+      jit_shown_mark(agent_shown_file, hk)
       # #389: only when held_bytes actually carries this key -- a `break` earlier in
       # the row loop can end the scan before the length was ever measured for a row
       # this same call still held from an EARLIER layer, and a missing byte record

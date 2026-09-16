@@ -450,10 +450,18 @@ assert_contains "the second call of the session is refused too" "$E_AGAIN" '"dec
 # And the mark channel still WORKS. Without this a fix that deleted the channel outright
 # would pass everything above: the advisory row is once-mode, so the second call naming it
 # in session T has to find its own honest mark and stay quiet.
-E_ADV=$(cd "$E_ROOT" && printf '{"session_id":"T","tool_name":"Bash","tool_input":{"command":"advonce now"}}' \
+#
+# #394: transcript_path is required here now -- once-mode dedup reads jit_agent_key(),
+# not session_id, and a payload with no transcript_path degrades to firing on every
+# call by design (never a silent fallback onto session_id, which would reintroduce
+# #394 on any host that omits the field). A real Claude Code payload always carries
+# transcript_path, so this is the shape to test against; a session_id-only payload is
+# covered separately, in tests/test-once-per-agent-394.sh's "no transcript_path"
+# section, which asserts the OPPOSITE of what this section asserted before #394.
+E_ADV=$(cd "$E_ROOT" && printf '{"session_id":"T","transcript_path":"/tmp/T.jsonl","tool_name":"Bash","tool_input":{"command":"advonce now"}}' \
   | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2> /dev/null)
 assert_contains "control: the advisory once rule fires on its first call" "$E_ADV" "ADVISORY ONCE"
-E_ADV2=$(cd "$E_ROOT" && printf '{"session_id":"T","tool_name":"Bash","tool_input":{"command":"advonce now"}}' \
+E_ADV2=$(cd "$E_ROOT" && printf '{"session_id":"T","transcript_path":"/tmp/T.jsonl","tool_name":"Bash","tool_input":{"command":"advonce now"}}' \
   | CLAUDE_PROJECT_DIR=. bash "$SCRIPTS/pre-tool-hook.sh" 2> /dev/null)
 assert_eq "an honest mark is still written, so once-mode still dedups" "$E_ADV2" "{}"
 
