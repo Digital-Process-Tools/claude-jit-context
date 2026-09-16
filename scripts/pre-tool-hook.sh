@@ -979,8 +979,18 @@ END {
       # extra to gate: a `once` row with no usable transcript_path simply keeps firing on
       # every call, in memory only, for the life of this one process -- exactly what
       # `remind` already does, never a silent fallback onto the wider session-wide key.
+      #
+      # #398: for a main, non-spawned session agent_shown_file IS shown_file, byte for
+      # byte -- the very invariant #394 own changelog leans on. Writing the mark a
+      # second time through the identical path doubled every once-mode delivery line
+      # count for the common case, and past stop-hook.sh 500-key dedup cap (#389) a
+      # doubled key is counted as a second, unattributed entry before dedup ever runs --
+      # 600 distinct keys doubled reported as 701 with 201 of unknown origin. Only a
+      # genuinely different path -- a real spawn, or the #398 fallback above landing on
+      # the same session key -- gets its own write; agent_shown itself stays populated
+      # either way, for this call own membership test.
       agent_shown[hk] = 1
-      jit_shown_mark(agent_shown_file, hk)
+      if (agent_shown_file != shown_file) jit_shown_mark(agent_shown_file, hk)
       # #389: only when held_bytes actually carries this key -- a `break` earlier in
       # the row loop can end the scan before the length was ever measured for a row
       # this same call still held from an EARLIER layer, and a missing byte record

@@ -114,22 +114,24 @@ OUT2=$(run_hook "$T2" "s394b" "/proj/.claude/projects/x/s394b.jsonl")
 assert_not_contains "second call of the same session_id AND same transcript_path is deduped" "$OUT2" "advisory rule body"
 rm -rf "$T2"
 
-echo "=== #394: no transcript_path at all -- degrades to firing on every call, like remind ==="
-# The stated rule (common.sh, jit_session_key's own precedent): an absent field means NO
-# marker and no dedup at all, never a guess. Never falls back to session_id either --
-# that would silently reintroduce the exact bug this issue exists to close on any host
-# that omits transcript_path.
+echo "=== #394/#398: no transcript_path at all -- falls back to session-keyed dedup, matching v0.9.0 ==="
+# #394 shipped "no key at all" here, which degraded once to firing on every call with an
+# unbounded marker file -- driven and fixed as #398 regression 2. That argued position
+# (common.sh's jit_session_key precedent, "never a guess") is superseded: #398 chose to
+# fall back to jit_session_key() specifically because the alternative was strictly worse
+# on every host that omits transcript_path, not only on the ones that also spawn agents.
+# See jit_agent_shown_file()'s own comment in common.sh for the full trade.
 T3=$(mktemp -d)
 build_tree "$T3"
 OUT1=$(run_hook "$T3" "s394c" "")
 assert_contains "first call with no transcript_path injects" "$OUT1" "advisory rule body"
 OUT2=$(run_hook "$T3" "s394c" "")
-assert_contains "second call with no transcript_path injects too -- no cross-call dedup" "$OUT2" "advisory rule body"
+assert_not_contains "second call with no transcript_path is deduped -- session-keyed fallback, not remind" "$OUT2" "advisory rule body"
 # session_id IS present here (s394c) -- only transcript_path is missing -- so the
-# ORDINARY session-keyed marker still exists; #394 changes nothing about that file.
-# What must NOT exist is any SECOND vocab-shown-*.txt: that would mean the once-mode
-# check silently fell back onto some other key when transcript_path was unusable,
-# which is exactly the guess the stated policy forbids.
+# ORDINARY session-keyed marker still exists, and is now the ONLY one #398 writes into
+# for this case: the fallback lands ON that same file rather than creating a second one.
+# What must NOT exist is any SECOND vocab-shown-*.txt -- that would mean the fallback
+# invented some OTHER key rather than reusing the ordinary session one.
 STATE_DIR="$T3/.claude/jit-context/.discovery/state"
 EXTRA=""
 if [ -d "$STATE_DIR" ]; then
@@ -148,7 +150,7 @@ else
 fi
 rm -rf "$T3"
 
-echo "=== #394: transcript_path whose basename carries a character outside the bare-name set -- no marker, never a sanitised guess ==="
+echo "=== #394/#398: transcript_path whose basename carries a character outside the bare-name set -- falls back to session-keyed dedup too ==="
 T4=$(mktemp -d)
 build_tree "$T4"
 BAD_TP='/proj/.claude/projects/x/subagents/agent with spaces; rm -rf /.jsonl'
@@ -170,10 +172,11 @@ if [ -n "$BAD_MARKER_FOUND" ]; then
 else
   ok "no agent marker is written for a bad-basename transcript_path"
 fi
-# And it does NOT dedup across two calls sharing that same bad transcript_path either --
-# the degrade is "no marker", not "a marker under a sanitised name".
+# And it DOES dedup across two calls sharing that same bad transcript_path -- jit_agent_key
+# refuses the unusable basename, and the #398 fallback lands on the ordinary, valid
+# session_id (s394d) instead, the same as the plain-no-transcript_path case above.
 OUT2=$(run_hook "$T4" "s394d" "$BAD_TP")
-assert_contains "a second call with the SAME bad-basename transcript_path still injects" "$OUT2" "advisory rule body"
+assert_not_contains "a second call with the SAME bad-basename transcript_path is deduped, session-keyed" "$OUT2" "advisory rule body"
 rm -rf "$T4"
 
 echo "=== #394: jit_agent_key() itself, both real transcript shapes, driven directly ==="
