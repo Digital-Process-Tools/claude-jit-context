@@ -627,8 +627,21 @@ fi
 
 # One place the -v list lives, because this program may run twice. cand_mode is the only
 # thing that differs: 0 parses the payload on stdin, 1 takes its paths from the environment.
+#
+# #397: used to write straight to stdout with its exit status never read, at BOTH call
+# sites below. A crash (measured: SIGSEGV, exit 139, under #393's concurrent load) then
+# printed 0 bytes -- for mode 0 that reads identically to "wrote its candidates to
+# $JIT_TMP instead of stdout", the OTHER legitimate way this function produces no direct
+# output, so the crash and the healthy no-output case were indistinguishable exactly the
+# way #397 describes. Output is now captured once here and the exit status checked
+# before anything is printed: on success the captured bytes go out unchanged (still
+# possibly empty, still possibly nothing -- that half of the contract is untouched); on
+# a non-zero exit this says so via jit_awk_crash_sysmsg() (common.sh) rather than
+# staying quiet -- this hook has no decision field to fail closed WITH, the same
+# reasoning pre-prompt-hook.sh's own #397 fix documents.
 jit_path_awk() {
-  LC_ALL=C awk \
+  local _jit_awk_out _jit_awk_rc
+  _jit_awk_out="$(LC_ALL=C awk \
     -v path_layers="$JIT_PATH_LAYERS" \
     -v vocab_layers="$JIT_VOCAB_LAYERS" \
     -v paths_base="$JIT_BASE/paths" \
@@ -640,7 +653,13 @@ jit_path_awk() {
     -v cand_mode="$1" \
     -v cand_begin="$JIT_CAND_BEGIN" \
     -v status_mode="$JIT_STATUS" \
-    "$JIT_PATH_PROG"
+    "$JIT_PATH_PROG")"
+  _jit_awk_rc=$?
+  if [ "$_jit_awk_rc" -eq 0 ]; then
+    printf '%s' "$_jit_awk_out"
+  else
+    jit_awk_crash_sysmsg "$_jit_awk_rc"
+  fi
 }
 
 # No `cat |` in front of it: jit_path_awk() is a wrapper around one awk, awk reads stdin

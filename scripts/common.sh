@@ -3673,3 +3673,47 @@ function jit_envelope_inject_sysmsg(event, text_escaped, sysmsg_escaped) {
   return "{\"hookSpecificOutput\":{\"hookEventName\":\"" event "\",\"additionalContext\":\"" text_escaped "\"},\"systemMessage\":\"" sysmsg_escaped "\"}"
 }
 '
+
+# --- The decisive awk crashed: silence is not "no rule matched" (#397) -------------
+#
+# #393 measured a working awk exiting 139 (SIGSEGV) under concurrent load, 8 times
+# across 8 different sections, transient rather than a broken interpreter. #397's own
+# comment measured what that does specifically to THIS repository's decisive awk: the
+# crash writes nothing to stdout, the wrapper never captured its exit status, and the
+# exit 0 after it is unconditional -- so a crashed awk and a mode: block rule with no
+# opinion are byte-identical on the wire. The harness reads empty output as permission
+# and the call proceeds.
+#
+# Two answers, not one, because the three hooks that fork the decisive awk are not the
+# same shape:
+#
+#   pre-tool-hook.sh is the refusal path -- the one hook whose whole job is deciding
+#   whether the call the harness is about to run is safe. A mode: block rule that
+#   could not be checked is the exact defect #397 measured, so this fails CLOSED:
+#   refuse the call and say why, rather than let it ride through on a crash no rule was
+#   actually checked against.
+#
+#   pre-prompt-hook.sh and pre-path-hook.sh have no decision field to fail closed WITH
+#   -- grep JIT_AWK_ENVELOPE above: only pre-tool-hook.sh's awk program ever calls
+#   jit_envelope_block(). A crash there costs a missed injection, never a bypassed
+#   refusal, so there is nothing to protect by inventing a block these two hooks have
+#   never had. Say so instead, over the systemMessage channel #367/#368 already proved
+#   these two deliver on every branch -- honest, and it does not turn one transient
+#   crash into every remaining prompt of the session being refused.
+#
+# NOT the retry question -- #397 is explicit that is a separate issue, with its own
+# cost (one wasted fork per call, forever, on a machine already in trouble). This only
+# makes the crash speak instead of staying silent; the exit status each call site now
+# captures in one place is what a retry loop would wrap around later, not something it
+# needs to invent.
+jit_awk_crash_block() {
+  # $1 the decisive awk's exit status (e.g. 139 for SIGSEGV)
+  local rc="${1:-?}"
+  printf "{\"decision\":\"block\",\"reason\":\"# JIT Context: the rule engine could not evaluate this call -- awk exited %s before it finished. Refusing rather than permitting a call no rule was actually checked against. See issue #397.\"}" "$rc"
+}
+
+jit_awk_crash_sysmsg() {
+  # $1 the decisive awk's exit status (e.g. 139 for SIGSEGV)
+  local rc="${1:-?}"
+  printf "{\"systemMessage\":\"JIT Context: the rule engine could not evaluate this turn -- awk exited %s before it finished. No entries were checked, so none were injected. See issue #397.\"}" "$rc"
+}

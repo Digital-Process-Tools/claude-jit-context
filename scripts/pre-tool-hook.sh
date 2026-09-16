@@ -1389,8 +1389,20 @@ if [ -n "$JIT_AWK_PROGRAM_FILE" ]; then
   fi
 fi
 
+# #397: the decisive awk used to write straight to stdout here, uncaptured, with
+# its exit status never read. A crash (measured: SIGSEGV, exit 139, under #393's
+# concurrent load) then printed 0 bytes and this hook still `exit 0`s below -- so a
+# crashed awk and a `mode: block` rule with nothing to say were byte-identical on
+# the wire, and the harness reads empty output as PERMISSION. Output is now
+# captured into a variable and the exit status checked before anything is printed:
+# on success the captured bytes go out unchanged (a trailing newline lost to `$( )`
+# was never part of the JSON payload either way); on a non-zero exit this is the
+# refusal path -- the one hook whose whole job is deciding whether the call about
+# to run is safe -- so it fails CLOSED via jit_awk_crash_block() (common.sh) rather
+# than let a call ride through on a crash no rule was actually checked against.
 if [ -n "$JIT_AWK_PROGRAM_FILE" ]; then
-  LC_ALL=C awk "${JIT_AWK_ARGS[@]}" -f "$JIT_AWK_PROGRAM_FILE"
+  _jit_awk_out="$(LC_ALL=C awk "${JIT_AWK_ARGS[@]}" -f "$JIT_AWK_PROGRAM_FILE")"
+  _jit_awk_rc=$?
 else
   # #371 self-review (oss:auditor): falling back to the POSITIONAL form here would
   # re-trigger the exact E2BIG this fix exists to remove -- pre-tool-hook.sh's
@@ -1410,8 +1422,15 @@ else
   # preferred whenever $TMPDIR is healthy, because it is the one every other hook in
   # this repo already relies on (jit_tmp_open(), #60) and every CI leg already
   # proves, on all three platforms, today.
-  LC_ALL=C awk "${JIT_AWK_ARGS[@]}" -f <(printf '%s' "$JIT_AWK_PROGRAM")
+  _jit_awk_out="$(LC_ALL=C awk "${JIT_AWK_ARGS[@]}" -f <(printf '%s' "$JIT_AWK_PROGRAM"))"
+  _jit_awk_rc=$?
 fi
+if [ "$_jit_awk_rc" -eq 0 ]; then
+  printf '%s' "$_jit_awk_out"
+else
+  jit_awk_crash_block "$_jit_awk_rc"
+fi
+unset _jit_awk_out _jit_awk_rc
 
 # --- Timing + log ---
 T_END=$(_ms)

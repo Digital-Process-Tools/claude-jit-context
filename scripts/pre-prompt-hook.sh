@@ -57,14 +57,23 @@ jit_scan_entry_ages "$JIT_BASE/vocabulary"
 
 # `awk` reads stdin itself; the `cat` in front of it was one fork per invocation buying
 # nothing.
-LC_ALL=C awk \
-  -v vocab_layers="$JIT_LAYERS" \
-  -v vocab_base="$JIT_BASE/vocabulary" \
-  -v state_dir="$JIT_STATE_DIR" \
-  -v inject_default="$JIT_INJECT" \
-  -v status_mode="$JIT_STATUS" \
-  -v log_tmp="$JIT_TMP" \
-  "$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE$JIT_AWK_ENVELOPE_SYSMSG"'
+# #397: this used to write straight to stdout with its exit status never read.
+# A crash (measured: SIGSEGV, exit 139, under #393's concurrent load) then printed
+# 0 bytes and the unconditional exit 0 below made that byte-identical to "no
+# vocabulary entry matched" -- silence, when the honest answer is "could not tell".
+# Output is captured and the exit status checked below (after the awk program) so
+# a crash can say so instead of staying quiet; see jit_awk_crash_sysmsg() in
+# common.sh for why this hook says rather than refuses -- it has no decision field
+# to fail closed WITH.
+_jit_awk_out="$(
+  LC_ALL=C awk \
+    -v vocab_layers="$JIT_LAYERS" \
+    -v vocab_base="$JIT_BASE/vocabulary" \
+    -v state_dir="$JIT_STATE_DIR" \
+    -v inject_default="$JIT_INJECT" \
+    -v status_mode="$JIT_STATUS" \
+    -v log_tmp="$JIT_TMP" \
+    "$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE$JIT_AWK_ENVELOPE_SYSMSG"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -511,6 +520,14 @@ END {
   }
 }
 '
+)"
+_jit_awk_rc=$?
+if [ "$_jit_awk_rc" -eq 0 ]; then
+  printf '%s' "$_jit_awk_out"
+else
+  jit_awk_crash_sysmsg "$_jit_awk_rc"
+fi
+unset _jit_awk_out _jit_awk_rc
 
 # --- Timing + log ---
 T_END=$(_ms)
