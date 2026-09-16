@@ -18,6 +18,20 @@
 # NOT the retry question -- #397 is explicit that is separate and left open. This suite
 # only pins "the crash speaks (or refuses), never silence".
 #
+# #400 (CI, PR #400 red): the fix's first cut captured the decisive awk's output through
+# a bare "$( )", which strips every trailing newline -- so the empty envelope's own
+# `print "{}"` lost the newline it always had, and tests/test-inert-without-tree.sh's
+# section B saw four of six hooks' `{}\n{}\n` answers glue onto one line. This suite's
+# own assert_has/assert_lacks/assert_single_valid_json above are ALL driven off a
+# captured bash VARIABLE ($( )), which strips exactly the same bytes the bug strips --
+# so this suite was blind to its own subject's regression class by construction, the
+# same way #397's own double-print self-review finding was only caught by counting
+# decoded objects rather than reading content. assert_exact_bytes below closes that:
+# it reads a hook's stdout from a FILE (never a captured variable), the one channel
+# framing survives through, and pins the exact byte sequence -- content AND
+# termination -- against what main would have emitted for the identical fixture and
+# payload, measured directly rather than assumed.
+#
 # assert_has/assert_lacks below take a captured hook-output STRING directly (not a
 # file), by design: the crash-shaped output here is always small, single-line JSON
 # built entirely from this suite's own fixture, never author-controlled markdown, so
@@ -160,6 +174,124 @@ if n != 1:
     echo "    got: ${output:0:300}"
   fi
 }
+
+# jit-drive: none -- assert_exact_bytes compares two files for EXACT byte equality
+# (via cmp), which is not one of this harness's drivable contains/not_contains/
+# blocked/token_row semantics: nothing here searches for a needle, so there is no
+# substring to drive PASS/FAIL against. Reads the hook's stdout from a FILE, never a
+# captured shell variable: `$( )` strips every trailing newline from anything it
+# captures, so a variable-based comparison here would be exactly as blind to a
+# missing terminator as the bug it exists to catch (#400 self-review). `cmp` compares
+# raw bytes, not text lines, so it cannot be fooled by a platform's line-ending
+# translation either.
+assert_exact_bytes() {
+  local desc="$1" path="$2" expected="$3" expected_file
+  expected_file=$(mktemp)
+  printf '%s' "$expected" > "$expected_file"
+  if cmp -s "$expected_file" "$path"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
+    # od's own output for these fixtures is already a few bytes -- no `| head` needed
+    # (or wanted: piping a writer into an early-exiting reader is the #56 shape this
+    # suite's own assertion helpers exist to catch, so this file does not reintroduce
+    # it in its own diagnostics).
+    echo "    expected ($(wc -c < "$expected_file" | tr -d ' ') bytes): $(od -c < "$expected_file")"
+    echo "    got ($(wc -c < "$path" 2> /dev/null | tr -d ' ') bytes): $(od -c < "$path" 2> /dev/null)"
+  fi
+  rm -f "$expected_file"
+}
+
+echo "=== framing: content survives a captured variable, termination does not (#400) ==="
+
+# One more fixture, deliberately separate from the one above: a single block rule and
+# nothing else, so the healthy "{}" case below is genuinely a no-match rather than
+# something this suite's own vocabulary/path rows could accidentally satisfy.
+FRAME_DIR=$(mktemp -d)
+FT="$FRAME_DIR/.claude/jit-context/tools/00-manual"
+FV="$FRAME_DIR/.claude/jit-context/vocabulary"
+FP="$FRAME_DIR/.claude/jit-context/paths/00-manual"
+mkdir -p "$FT" "$FP"
+mkdir -p "$FV/00-manual" "$FV/10-auto" "$FV/20-grouped" "$FV/30-crosscutting"
+printf 'Bash\trmrfxyz397\tdeny397.md\tblock\t\t\n' > "$FT/$IDX"
+echo "deny body 397" > "$FT/deny397.md"
+for l in 00-manual 10-auto 20-grouped 30-crosscutting; do : > "$FV/$l/$IDX"; done
+: > "$FP/$IDX"
+
+FRAME_OUT=$(mktemp)
+
+# main's own bytes for this exact shape, measured directly rather than assumed: `print
+# "{}"` (awk's own statement, unconditionally newline-terminated) is what every one of
+# these three hooks has always emitted for "nothing matched" -- #400's own regression
+# was this byte going missing on exactly two, then found to be at risk on the third too.
+printf '{"tool_name":"Bash","tool_input":{"command":"totally-unrelated-397"}}' \
+  | CLAUDE_PROJECT_DIR="$FRAME_DIR" bash "$SCRIPT_DIR/scripts/pre-tool-hook.sh" 2> /dev/null > "$FRAME_OUT"
+assert_exact_bytes "pre-tool-hook.sh: the no-match envelope is \"{}\" plus its newline, byte for byte" \
+  "$FRAME_OUT" $'{}\n'
+
+printf '{"prompt":"nothing397 here"}' \
+  | CLAUDE_PROJECT_DIR="$FRAME_DIR" bash "$SCRIPT_DIR/scripts/pre-prompt-hook.sh" 2> /dev/null > "$FRAME_OUT"
+assert_exact_bytes "pre-prompt-hook.sh: the no-match envelope is \"{}\" plus its newline, byte for byte" \
+  "$FRAME_OUT" $'{}\n'
+
+printf '{"tool_name":"Read","tool_input":{"file_path":"nowhere397.md"}}' \
+  | CLAUDE_PROJECT_DIR="$FRAME_DIR" bash "$SCRIPT_DIR/scripts/pre-path-hook.sh" 2> /dev/null > "$FRAME_OUT"
+assert_exact_bytes "pre-path-hook.sh: the no-match envelope is \"{}\" plus its newline, byte for byte" \
+  "$FRAME_OUT" $'{}\n'
+
+# The refusal path's own envelope never had a trailing newline even before #397 --
+# `printf "%s", jit_envelope_block(...)`, not `print` -- so the crash envelope this
+# issue adds must match THAT shape, not the "{}" one: ends in the closing brace and
+# nothing after it, no newline appended by the capture-and-reprint route.
+printf '{"tool_name":"Bash","tool_input":{"command":"rmrfxyz397 now"}}' \
+  | CLAUDE_PROJECT_DIR="$FRAME_DIR" bash "$SCRIPT_DIR/scripts/pre-tool-hook.sh" 2> /dev/null > "$FRAME_OUT"
+if [ -s "$FRAME_OUT" ] && [ "$(tail -c 1 "$FRAME_OUT" | od -An -c | tr -d ' \n')" = '}' ]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: pre-tool-hook.sh: control -- a real block envelope still ends in '}' with nothing after it"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: pre-tool-hook.sh: control -- a real block envelope should end in '}' with nothing after it"
+  echo "    got: $(od -c < "$FRAME_OUT" 2> /dev/null | tail -3)"
+fi
+
+# Same control for the two hooks whose crash envelope is the systemMessage shape --
+# `printf "%s", jit_envelope_inject_sysmsg(...)`/jit_json_escape(...) output never had a
+# trailing newline either, so the crash text this issue adds (jit_awk_crash_sysmsg(),
+# built the same way) must not pick one up passing through jit_awk_capture().
+SCRATCH_SEG2=$(mktemp -d)
+cat > "$SCRATCH_SEG2/awk" << 'SHIMEOF'
+#!/bin/sh
+kill -SEGV $$
+SHIMEOF
+chmod +x "$SCRATCH_SEG2/awk"
+
+printf '{"prompt":"anything"}' \
+  | PATH="$SCRATCH_SEG2:$PATH" CLAUDE_PROJECT_DIR="$FRAME_DIR" bash "$SCRIPT_DIR/scripts/pre-prompt-hook.sh" 2> /dev/null > "$FRAME_OUT"
+if [ -s "$FRAME_OUT" ] && [ "$(tail -c 1 "$FRAME_OUT" | od -An -c | tr -d ' \n')" = '}' ]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: pre-prompt-hook.sh: crash envelope ends in '}' with nothing after it"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: pre-prompt-hook.sh: crash envelope should end in '}' with nothing after it"
+  echo "    got: $(od -c < "$FRAME_OUT" 2> /dev/null | tail -3)"
+fi
+
+printf '{"tool_name":"Read","tool_input":{"file_path":"nowhere397.md"}}' \
+  | PATH="$SCRATCH_SEG2:$PATH" CLAUDE_PROJECT_DIR="$FRAME_DIR" bash "$SCRIPT_DIR/scripts/pre-path-hook.sh" 2> /dev/null > "$FRAME_OUT"
+if [ -s "$FRAME_OUT" ] && [ "$(tail -c 1 "$FRAME_OUT" | od -An -c | tr -d ' \n')" = '}' ]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: pre-path-hook.sh: crash envelope ends in '}' with nothing after it"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: pre-path-hook.sh: crash envelope should end in '}' with nothing after it"
+  echo "    got: $(od -c < "$FRAME_OUT" 2> /dev/null | tail -3)"
+fi
+
+rm -rf "$SCRATCH_SEG2"
+rm -f "$FRAME_OUT"
+rm -rf "$FRAME_DIR"
 
 echo "=== pre-tool-hook.sh: decisive awk crash on the refusal path (#397) ==="
 

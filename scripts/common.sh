@@ -3706,6 +3706,98 @@ function jit_envelope_inject_sysmsg(event, text_escaped, sysmsg_escaped) {
 # makes the crash speak instead of staying silent; the exit status each call site now
 # captures in one place is what a retry loop would wrap around later, not something it
 # needs to invent.
+# #400 (CI, PR #400 red): a bare "$(LC_ALL=C awk ...)" strips every trailing
+# newline the captured output had, and the empty envelope's own `print "{}"` relied
+# on one -- so on the two hooks whose decisive awk was rewritten to capture,
+# tests/test-inert-without-tree.sh's section B saw four of six hooks' `{}\n{}\n`
+# answers glue onto one line and undercounted them. Isolated with `od -c` on each
+# hook against main: pre-tool-hook.sh and pre-prompt-hook.sh regressed; the third
+# hook that captures, pre-path-hook.sh, was NOT uniformly spared, contrary to what
+# looked at first like a clean exemption -- its own `jit_path_awk()` regressed too
+# whenever the captured awk itself produces the "{}" (a Read/Edit tool_input with a
+# file_path, never routed through the Bash-command two-pass candidates channel);
+# only the ONE branch that still calls bash's own `echo "{}"` directly (the
+# candidates-written-but-none-resolved case) was ever exempt, by construction
+# rather than by hook identity. So the fix is not "add \n back" -- the ORIGINAL
+# bytes varied per envelope (`print "{}"` emitted one; `printf "%s", ...block/
+# inject(...)` emitted none) and per hook, and the crash envelopes below are new
+# text this issue adds, never captured at all.
+#
+# A FIRST cut of this fix appended a sentinel byte after the captured command inside
+# one "$( cmd; printf sentinel )" substitution, to smuggle the trailing bytes and the
+# real exit status through the one substitution that strips them. It worked in every
+# hand-driven and suite-driven check, and still lost the sentinel about 1 time in 800
+# under a tight sequential loop of the REAL pre-prompt-hook.sh awk program against a
+# real (unshimmed, non-crashing) awk -- `JIT_DEBUG_CAPTURE` traced the raw captured
+# string down to the awk's own 2-byte "{}" with the sentinel and the exit digit both
+# entirely absent, which then read as rc="{}": not a number, so `[ "$rc" -eq 0 ]`
+# errored, took the else branch, and printed a crash message for a call that never
+# crashed at all -- a new false-refusal risk on the exact refusal path this issue
+# exists to make trustworthy, worse than the bug it replaced. Root cause not chased
+# further (a pipe-buffering race between two commands sharing one command-substitution
+# subshell is the leading guess, not a finding) because there is a route around it
+# that does not depend on understanding it: write directly to a file rather than
+# through any command substitution, and read the exit status of the awk command
+# itself, with no subshell between it and $? at all.
+#
+# `>` a real file is one write() through one already-open descriptor, not a pipe two
+# separate commands share -- there is no second statement racing the first for a
+# sentinel to lose, and no substitution to strip a trailing byte from what is written.
+# `cat` reads it back byte for byte; `$?` right after `"$@" > file` is `"$@"`'s own
+# exit status directly, no subshell, no arithmetic. One helper, four call sites (both
+# pre-tool-hook.sh branches, pre-prompt-hook.sh, pre-path-hook.sh's jit_path_awk())
+# rather than four copies of the file-and-cleanup bookkeeping to keep in sync.
+jit_awk_capture() {
+  # $@ the command to run (LC_ALL=C is applied here, not by the caller, so a
+  # caller writes `jit_awk_capture awk ...` rather than `jit_awk_capture LC_ALL=C
+  # awk ...` -- the latter would try to run a program literally named "LC_ALL=C").
+  # Sets JIT_AWK_CAPTURE_FILE / JIT_AWK_CAPTURE_RC; not local, by design, so the
+  # caller reads them back after this returns. On success the caller reads the
+  # EXACT bytes with `cat "$JIT_AWK_CAPTURE_FILE"` -- never through a variable,
+  # which is the one channel a trailing newline cannot survive. The caller removes
+  # the file once it is done with it; this function does not, because it may be
+  # called twice in one hook (pre-path-hook.sh's two passes) and an EXIT trap here
+  # would only ever be able to hold the LAST call's file, silently leaking the
+  # first -- the same one-trap-per-process shape jit_tmp_open()'s own comment
+  # documents, worked around there by combining trap targets and not worth
+  # duplicating for a file this function's own caller already knows how to remove.
+  #
+  # No writable scratch file (TMPDIR unwritable or absent) is NOT treated as a
+  # crash: tests/test-hook-tmpfile.sh section C ("the scratch file lives under
+  # $TMPDIR, and losing it is not an error") already pins, for every hook and
+  # predating #397, that losing scratch space degrades a hook to running without
+  # its log/dedup channel -- never to refusing or staying silent, because every
+  # rule still fires. #400 self-review found this function breaking that exact,
+  # already-tested contract: TMPDIR being unwritable made its OWN mktemp fail
+  # exactly like $JIT_TMP's already does, and reporting that as "could not
+  # evaluate" turned an established, benign degrade into a new outage on all
+  # three hooks (every entry stopped injecting/blocking whenever TMPDIR alone
+  # was the problem, confirmed by that suite's own TMPDIR="$TEST_DIR/no-such-
+  # tmpdir" fixture). So this is a THIRD outcome, not folded into either of the
+  # other two: JIT_AWK_CAPTURE_RC="uncaptured" and the command runs directly,
+  # straight to real stdout, exactly as every hook did before #397 -- the one
+  # corner where #397's own crash-detection is unavailable, accepted because it
+  # is the SAME already-accepted corner every other scratch-file user in this
+  # codebase (jit_tmp_open() included) already degrades through rather than
+  # errors on, and asking for scratch space just to verify a decisive awk would
+  # be a stricter contract than this codebase has ever held for anything else.
+  # A caller checks for this value before treating JIT_AWK_CAPTURE_RC as a
+  # number -- see the three-way branches at each of this function's call sites.
+  local d
+  d="${TMPDIR:-/tmp}"
+  d="${d%/}"
+  JIT_AWK_CAPTURE_FILE="$(mktemp "$d/claude-jit-awkout-XXXXXXXX" 2> /dev/null)" || JIT_AWK_CAPTURE_FILE=""
+  if [ -z "$JIT_AWK_CAPTURE_FILE" ]; then
+    # shellcheck disable=SC2034
+    JIT_AWK_CAPTURE_RC="uncaptured"
+    LC_ALL=C "$@"
+    return 0
+  fi
+  LC_ALL=C "$@" > "$JIT_AWK_CAPTURE_FILE"
+  # shellcheck disable=SC2034
+  JIT_AWK_CAPTURE_RC=$?
+}
+
 jit_awk_crash_block() {
   # $1 the decisive awk's exit status (e.g. 139 for SIGSEGV)
   local rc="${1:-?}"

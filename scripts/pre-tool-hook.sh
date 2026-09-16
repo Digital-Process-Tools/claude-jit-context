@@ -1394,15 +1394,20 @@ fi
 # concurrent load) then printed 0 bytes and this hook still `exit 0`s below -- so a
 # crashed awk and a `mode: block` rule with nothing to say were byte-identical on
 # the wire, and the harness reads empty output as PERMISSION. Output is now
-# captured into a variable and the exit status checked before anything is printed:
-# on success the captured bytes go out unchanged (a trailing newline lost to `$( )`
-# was never part of the JSON payload either way); on a non-zero exit this is the
-# refusal path -- the one hook whose whole job is deciding whether the call about
-# to run is safe -- so it fails CLOSED via jit_awk_crash_block() (common.sh) rather
-# than let a call ride through on a crash no rule was actually checked against.
+# captured before anything is printed, and the exit status checked: on success the
+# captured bytes go out UNCHANGED, read from a scratch file (jit_awk_capture(),
+# common.sh) rather than through a command substitution -- #400 (CI) caught a
+# first cut that dropped a trailing newline through "$(...)", and #400's own
+# self-review then found a SECOND cut (a sentinel byte inside one "$(...)") that
+# occasionally lost the sentinel entirely under real load and printed a false
+# crash message; see jit_awk_capture()'s own comment for both. On a non-zero exit
+# this is the refusal path -- the one hook whose whole job is deciding whether the
+# call about to run is safe -- so it fails CLOSED via jit_awk_crash_block()
+# (common.sh) rather than let a call ride through on a crash no rule was actually
+# checked against.
 if [ -n "$JIT_AWK_PROGRAM_FILE" ]; then
-  _jit_awk_out="$(LC_ALL=C awk "${JIT_AWK_ARGS[@]}" -f "$JIT_AWK_PROGRAM_FILE")"
-  _jit_awk_rc=$?
+  jit_awk_capture awk "${JIT_AWK_ARGS[@]}" -f "$JIT_AWK_PROGRAM_FILE"
+  _jit_awk_rc="$JIT_AWK_CAPTURE_RC"
 else
   # #371 self-review (oss:auditor): falling back to the POSITIONAL form here would
   # re-trigger the exact E2BIG this fix exists to remove -- pre-tool-hook.sh's
@@ -1422,15 +1427,19 @@ else
   # preferred whenever $TMPDIR is healthy, because it is the one every other hook in
   # this repo already relies on (jit_tmp_open(), #60) and every CI leg already
   # proves, on all three platforms, today.
-  _jit_awk_out="$(LC_ALL=C awk "${JIT_AWK_ARGS[@]}" -f <(printf '%s' "$JIT_AWK_PROGRAM"))"
-  _jit_awk_rc=$?
+  jit_awk_capture awk "${JIT_AWK_ARGS[@]}" -f <(printf '%s' "$JIT_AWK_PROGRAM")
+  _jit_awk_rc="$JIT_AWK_CAPTURE_RC"
 fi
-if [ "$_jit_awk_rc" -eq 0 ]; then
-  printf '%s' "$_jit_awk_out"
+if [ "$_jit_awk_rc" = "uncaptured" ]; then
+  : # jit_awk_capture() already ran it directly, straight to real stdout -- see its
+  # own comment in common.sh for why "no scratch file" degrades rather than refuses.
+elif [ "$_jit_awk_rc" -eq 0 ]; then
+  cat "$JIT_AWK_CAPTURE_FILE"
 else
   jit_awk_crash_block "$_jit_awk_rc"
 fi
-unset _jit_awk_out _jit_awk_rc
+rm -f "$JIT_AWK_CAPTURE_FILE"
+unset _jit_awk_rc
 
 # --- Timing + log ---
 T_END=$(_ms)

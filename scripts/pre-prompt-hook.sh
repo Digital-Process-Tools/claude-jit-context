@@ -64,16 +64,21 @@ jit_scan_entry_ages "$JIT_BASE/vocabulary"
 # Output is captured and the exit status checked below (after the awk program) so
 # a crash can say so instead of staying quiet; see jit_awk_crash_sysmsg() in
 # common.sh for why this hook says rather than refuses -- it has no decision field
-# to fail closed WITH.
-_jit_awk_out="$(
-  LC_ALL=C awk \
-    -v vocab_layers="$JIT_LAYERS" \
-    -v vocab_base="$JIT_BASE/vocabulary" \
-    -v state_dir="$JIT_STATE_DIR" \
-    -v inject_default="$JIT_INJECT" \
-    -v status_mode="$JIT_STATUS" \
-    -v log_tmp="$JIT_TMP" \
-    "$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE$JIT_AWK_ENVELOPE_SYSMSG"'
+# to fail closed WITH. jit_awk_capture() (common.sh) reads the exact bytes back
+# from a scratch file, never through a command substitution: #400 (CI) caught a
+# first cut that dropped the trailing newline the empty "{}" envelope relied on
+# through a bare "$( )", and #400's own self-review then found a rare but real
+# race in the SECOND cut's own sentinel-byte-inside-"$( )" trick that occasionally
+# lost the sentinel under real load and printed a false crash message -- see
+# jit_awk_capture()'s own comment in common.sh.
+jit_awk_capture awk \
+  -v vocab_layers="$JIT_LAYERS" \
+  -v vocab_base="$JIT_BASE/vocabulary" \
+  -v state_dir="$JIT_STATE_DIR" \
+  -v inject_default="$JIT_INJECT" \
+  -v status_mode="$JIT_STATUS" \
+  -v log_tmp="$JIT_TMP" \
+  "$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE$JIT_AWK_ENVELOPE_SYSMSG"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -520,14 +525,17 @@ END {
   }
 }
 '
-)"
-_jit_awk_rc=$?
-if [ "$_jit_awk_rc" -eq 0 ]; then
-  printf '%s' "$_jit_awk_out"
+_jit_awk_rc="$JIT_AWK_CAPTURE_RC"
+if [ "$_jit_awk_rc" = "uncaptured" ]; then
+  : # jit_awk_capture() already ran it directly, straight to real stdout -- see its
+  # own comment in common.sh for why "no scratch file" degrades rather than refuses.
+elif [ "$_jit_awk_rc" -eq 0 ]; then
+  cat "$JIT_AWK_CAPTURE_FILE"
 else
   jit_awk_crash_sysmsg "$_jit_awk_rc"
 fi
-unset _jit_awk_out _jit_awk_rc
+rm -f "$JIT_AWK_CAPTURE_FILE"
+unset _jit_awk_rc
 
 # --- Timing + log ---
 T_END=$(_ms)

@@ -634,14 +634,20 @@ fi
 # $JIT_TMP instead of stdout", the OTHER legitimate way this function produces no direct
 # output, so the crash and the healthy no-output case were indistinguishable exactly the
 # way #397 describes. Output is now captured once here and the exit status checked
-# before anything is printed: on success the captured bytes go out unchanged (still
-# possibly empty, still possibly nothing -- that half of the contract is untouched); on
+# before anything is printed: on success the captured bytes go out unchanged -- #400
+# (CI) caught a first cut of this that captured through a bare "$( )" and silently
+# dropped the trailing newline a healthy "{}" relied on: this hook was NOT uniformly
+# exempt just because it happens to have a second, bash-level `echo "{}"` elsewhere
+# (the candidates-written-but-none-resolved case) -- this function's OWN "{}" (a
+# Read/Edit tool_input, never routed through the Bash-command two-pass channel) went
+# through the same capture and regressed identically to the other two hooks. Fixed by
+# routing through jit_awk_capture() (common.sh), which preserves the exact bytes; on
 # a non-zero exit this says so via jit_awk_crash_sysmsg() (common.sh) rather than
 # staying quiet -- this hook has no decision field to fail closed WITH, the same
 # reasoning pre-prompt-hook.sh's own #397 fix documents.
 jit_path_awk() {
-  local _jit_awk_out _jit_awk_rc
-  _jit_awk_out="$(LC_ALL=C awk \
+  local _jit_awk_rc
+  jit_awk_capture awk \
     -v path_layers="$JIT_PATH_LAYERS" \
     -v vocab_layers="$JIT_VOCAB_LAYERS" \
     -v paths_base="$JIT_BASE/paths" \
@@ -653,10 +659,14 @@ jit_path_awk() {
     -v cand_mode="$1" \
     -v cand_begin="$JIT_CAND_BEGIN" \
     -v status_mode="$JIT_STATUS" \
-    "$JIT_PATH_PROG")"
-  _jit_awk_rc=$?
-  if [ "$_jit_awk_rc" -eq 0 ]; then
-    printf '%s' "$_jit_awk_out"
+    "$JIT_PATH_PROG"
+  _jit_awk_rc="$JIT_AWK_CAPTURE_RC"
+  if [ "$_jit_awk_rc" = "uncaptured" ]; then
+    : # jit_awk_capture() already ran it directly, straight to real stdout -- see
+    # its own comment in common.sh for why "no scratch file" degrades rather
+    # than refuses.
+  elif [ "$_jit_awk_rc" -eq 0 ]; then
+    cat "$JIT_AWK_CAPTURE_FILE"
   else
     # #397 self-review (oss:auditor): mode 0's own program writes the candidates
     # channel and calls `exit` right after (see the `close(log_tmp); exit` two lines
@@ -670,9 +680,18 @@ jit_path_awk() {
     # is cleared here before the crash message is the only thing printed; the
     # existing "[ -s "$JIT_TMP" ]" gate downstream then takes the same path it
     # already takes for a healthy call that wrote nothing to it.
-    : > "$JIT_TMP" 2> /dev/null || true
+    # #400 self-review: `: > "$JIT_TMP"` alone, even with `2> /dev/null`, still
+    # printed "No such file or directory" to this hook's own stderr when $JIT_TMP
+    # was empty (the same degraded-TMPDIR corner jit_awk_capture() above now also
+    # degrades through) -- bash reports a failed redirect target using the
+    # ORIGINAL stderr, before the later `2>` in the same command line takes
+    # effect, so the suppression this line already had never actually applied to
+    # its own failure. Guarded now instead of redirected around: nothing to
+    # truncate when there was never a channel to begin with.
+    [ -n "$JIT_TMP" ] && : > "$JIT_TMP" 2> /dev/null
     jit_awk_crash_sysmsg "$_jit_awk_rc"
   fi
+  rm -f "$JIT_AWK_CAPTURE_FILE"
 }
 
 # No `cat |` in front of it: jit_path_awk() is a wrapper around one awk, awk reads stdin
