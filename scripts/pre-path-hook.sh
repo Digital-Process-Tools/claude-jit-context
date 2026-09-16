@@ -658,6 +658,19 @@ jit_path_awk() {
   if [ "$_jit_awk_rc" -eq 0 ]; then
     printf '%s' "$_jit_awk_out"
   else
+    # #397 self-review (oss:auditor): mode 0's own program writes the candidates
+    # channel and calls `exit` right after (see the `close(log_tmp); exit` two lines
+    # above the mode-0 awk source) -- so a crash landing in the narrow window between
+    # that flush and process death can leave a fully-formed $JIT_TMP sentinel behind
+    # even though awk's own exit status says it did not finish cleanly. Left alone,
+    # the caller below still finds that sentinel, still runs the SECOND pass, and
+    # THAT pass's own stdout lands after this crash message -- two JSON objects on
+    # one hook's stdout, where the harness expects exactly one. $JIT_TMP is not
+    # trustworthy after any non-zero exit regardless of what is sitting in it, so it
+    # is cleared here before the crash message is the only thing printed; the
+    # existing "[ -s "$JIT_TMP" ]" gate downstream then takes the same path it
+    # already takes for a healthy call that wrote nothing to it.
+    : > "$JIT_TMP" 2> /dev/null || true
     jit_awk_crash_sysmsg "$_jit_awk_rc"
   fi
 }

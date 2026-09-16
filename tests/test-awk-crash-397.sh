@@ -1,0 +1,226 @@
+#!/bin/bash
+# Tests for #397: a decisive awk that crashes must not render as silence.
+#
+# Three hooks fork a decisive awk whose stdout IS the hook's JSON reply. Before #397's
+# fix, a crashed awk (SIGSEGV, exit 139 -- #393's own measured mechanism under
+# concurrent load, 8 times across 8 sections) printed 0 bytes and the hook still
+# `exit 0`d unconditionally below it: a crashed awk and a rule with no opinion were
+# byte-identical on the wire, and on pre-tool-hook.sh (the one hook with a `mode: block`
+# refusal decision) that meant the harness read the crash as PERMISSION. This suite
+# drives the crash directly, on all three hooks, and pins the shape #397's fix commits
+# to: pre-tool-hook.sh fails CLOSED (a `block` decision naming the crash),
+# pre-prompt-hook.sh and pre-path-hook.sh say so over `systemMessage` without blocking
+# anything (neither has a `decision` field to fail closed WITH), and pre-path-hook.sh
+# specifically emits exactly ONE json object even when the crash lands after its own
+# two-pass candidates channel has already been written to disk (self-review finding,
+# oss:auditor).
+#
+# NOT the retry question -- #397 is explicit that is separate and left open. This suite
+# only pins "the crash speaks (or refuses), never silence".
+#
+# assert_has/assert_lacks below take a captured hook-output STRING directly (not a
+# file), by design: the crash-shaped output here is always small, single-line JSON
+# built entirely from this suite's own fixture, never author-controlled markdown, so
+# #56's SIGPIPE-inversion risk and #78's NUL-dropping risk do not apply the way they
+# do to the other suites' free-form entry bodies. Driven below (jit-drive: capture).
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PASS=0
+FAIL=0
+
+# --- Positive control first (#397's own "must fire" pairing) ---------------------
+# A shim that does not actually crash awk would make every "the crash speaks" assertion
+# below pass for the wrong reason -- the harness never saw a real crash, just a hook that
+# was never exercised. Probe the exact construct the shim below uses, on THIS host,
+# before trusting anything downstream of it.
+SHIM_DIR=$(mktemp -d)
+cat > "$SHIM_DIR/awk" << 'SHIMEOF'
+#!/bin/sh
+kill -SEGV $$
+SHIMEOF
+chmod +x "$SHIM_DIR/awk"
+PATH="$SHIM_DIR:$PATH" awk 'BEGIN { print "unreachable" }' > /dev/null 2>&1
+PROBE_RC=$?
+if [ "$PROBE_RC" -ne 139 ]; then
+  echo "SKIPPED: this host's shell cannot make a shimmed 'awk' exit 139 via kill -SEGV \$\$" >&2
+  echo "         (got exit $PROBE_RC instead) -- #397's crash-handling assertions are UNTESTED here." >&2
+  echo "         Nothing else in this suite ran." >&2
+  rm -rf "$SHIM_DIR"
+  exit 2
+fi
+
+# --- A second shim, for pre-path-hook.sh's own two-pass race (self-review finding) ---
+# Writes the mode-0 candidates sentinel to the file named by its own `-v log_tmp=...`
+# argument, exactly as a real awk crashing AFTER `close(log_tmp); exit` -- but before the
+# process actually dies -- would leave behind, then crashes. If pre-path-hook.sh ever
+# regresses to trusting that leftover sentinel after a non-zero exit, this reproduces
+# the double-JSON-object defect the fix for that finding closes.
+SHIM_DIR2=$(mktemp -d)
+cat > "$SHIM_DIR2/awk" << 'SHIMEOF'
+#!/bin/sh
+TMPFILE=""
+want_val=0
+for a in "$@"; do
+  if [ "$want_val" = "1" ]; then
+    case "$a" in
+      log_tmp=*) TMPFILE="${a#log_tmp=}" ;;
+    esac
+    want_val=0
+    continue
+  fi
+  case "$a" in
+    -v) want_val=1 ;;
+  esac
+done
+if [ -n "$TMPFILE" ]; then
+  printf -- '--jit-candidates--\nfakesession\nscripts/\n' > "$TMPFILE"
+fi
+kill -SEGV $$
+SHIMEOF
+chmod +x "$SHIM_DIR2/awk"
+
+# --- Fixture: one tree, all three dimensions, reused by every hook below ---
+TEST_DIR=$(mktemp -d)
+IDX="00-index"
+IDX="$IDX.tsv"
+TOOLS_DIR="$TEST_DIR/.claude/jit-context/tools/00-manual"
+VOCAB_DIR="$TEST_DIR/.claude/jit-context/vocabulary"
+PATHS_DIR="$TEST_DIR/.claude/jit-context/paths/00-manual"
+mkdir -p "$TOOLS_DIR" "$PATHS_DIR"
+mkdir -p "$VOCAB_DIR/00-manual" "$VOCAB_DIR/10-auto" "$VOCAB_DIR/20-grouped" "$VOCAB_DIR/30-crosscutting"
+
+printf 'Bash\trmrfxyz397\tdeny397.md\tblock\t\t\n' > "$TOOLS_DIR/$IDX"
+echo "deny body 397" > "$TOOLS_DIR/deny397.md"
+printf 'hello397\thello397.md\n' > "$VOCAB_DIR/00-manual/$IDX"
+echo "hello vocab 397" > "$VOCAB_DIR/00-manual/hello397.md"
+for l in 10-auto 20-grouped 30-crosscutting; do : > "$VOCAB_DIR/$l/$IDX"; done
+: > "$PATHS_DIR/$IDX"
+
+# --- Helpers -----------------------------------------------------------------------
+# jit-drive: assert_has contains capture
+# jit-drive: assert_lacks not_contains capture
+assert_has() {
+  local desc="$1" output="$2" needle="$3"
+  if grep -qF -- "$needle" <<< "$output"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
+    echo "    expected to contain: $needle"
+    echo "    got: ${output:0:300}"
+  fi
+}
+
+assert_lacks() {
+  local desc="$1" output="$2" needle="$3"
+  if grep -qF -- "$needle" <<< "$output"; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
+    echo "    should NOT contain: $needle"
+    echo "    got: ${output:0:300}"
+  else
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
+  fi
+}
+
+# One JSON object, valid, and exactly one -- guarded, not required: a host with no
+# python3 still gets every assert_has/assert_lacks check above, just not this one (same
+# degrade-gracefully shape test-jit-match.sh already uses for the same tool).
+assert_single_valid_json() {
+  local desc="$1" output="$2"
+  if ! command -v python3 > /dev/null 2>&1; then
+    echo "  SKIP (no python3 on this host): $desc"
+    return
+  fi
+  if printf '%s' "$output" | python3 -c '
+import sys, json
+data = sys.stdin.read().strip()
+dec = json.JSONDecoder()
+idx = 0
+n = 0
+while idx < len(data):
+    obj, end = dec.raw_decode(data, idx)
+    n += 1
+    idx = end
+    while idx < len(data) and data[idx].isspace():
+        idx += 1
+if n != 1:
+    sys.exit(1)
+' 2> /dev/null; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
+    echo "    expected exactly one valid JSON object"
+    echo "    got: ${output:0:300}"
+  fi
+}
+
+echo "=== pre-tool-hook.sh: decisive awk crash on the refusal path (#397) ==="
+
+TOOL_HOOK="$SCRIPT_DIR/scripts/pre-tool-hook.sh"
+
+NORMAL_OUT=$(printf '{"session_id":"s397a","transcript_path":"/tmp/s397a.jsonl","tool_name":"Bash","tool_input":{"command":"rmrfxyz397 now"}}\n' \
+  | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2> /dev/null)
+assert_has "control: a healthy awk still blocks the matching call" "$NORMAL_OUT" '"decision":"block"'
+assert_has "control: and carries the rule's own reason" "$NORMAL_OUT" "deny body 397"
+
+CRASH_OUT=$(printf '{"session_id":"s397b","transcript_path":"/tmp/s397b.jsonl","tool_name":"Bash","tool_input":{"command":"rmrfxyz397 now"}}\n' \
+  | PATH="$SHIM_DIR:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$TOOL_HOOK" 2> /dev/null)
+assert_has "a crashed awk fails CLOSED, not open" "$CRASH_OUT" '"decision":"block"'
+assert_has "and names the crash rather than staying quiet" "$CRASH_OUT" "could not evaluate"
+assert_has "and cites the issue this refusal comes from" "$CRASH_OUT" "#397"
+assert_lacks "the crash reason is not the rule's own body -- no rule ran" "$CRASH_OUT" "deny body 397"
+assert_single_valid_json "the crash reply is exactly one valid JSON object" "$CRASH_OUT"
+
+echo "=== pre-prompt-hook.sh: decisive awk crash has no decision field to fail closed with (#397) ==="
+
+PROMPT_HOOK="$SCRIPT_DIR/scripts/pre-prompt-hook.sh"
+
+NORMAL_OUT=$(printf '{"session_id":"s397c","transcript_path":"/tmp/s397c.jsonl","prompt":"hello397 there"}\n' \
+  | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PROMPT_HOOK" 2> /dev/null)
+assert_has "control: a healthy awk still injects the matching vocabulary entry" "$NORMAL_OUT" "hello vocab 397"
+
+CRASH_OUT=$(printf '{"session_id":"s397d","transcript_path":"/tmp/s397d.jsonl","prompt":"hello397 there"}\n' \
+  | PATH="$SHIM_DIR:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PROMPT_HOOK" 2> /dev/null)
+assert_has "a crashed awk speaks over systemMessage instead of staying quiet" "$CRASH_OUT" '"systemMessage"'
+assert_lacks "and never invents a decision field this hook has never had" "$CRASH_OUT" '"decision"'
+assert_lacks "no vocabulary body reaches the reply -- no rule ran" "$CRASH_OUT" "hello vocab 397"
+assert_single_valid_json "the crash reply is exactly one valid JSON object" "$CRASH_OUT"
+
+echo "=== pre-path-hook.sh: decisive awk crash, plus the two-pass double-print race (#397 self-review) ==="
+
+PATH_HOOK="$SCRIPT_DIR/scripts/pre-path-hook.sh"
+
+NORMAL_OUT=$(printf '{"session_id":"s397e","transcript_path":"/tmp/s397e.jsonl","tool_name":"Read","tool_input":{"file_path":"deny397.md"}}\n' \
+  | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PATH_HOOK" 2> /dev/null)
+assert_has "control: a healthy awk still exits clean on an unmatched path" "$NORMAL_OUT" '{}'
+
+CRASH_OUT=$(printf '{"session_id":"s397f","transcript_path":"/tmp/s397f.jsonl","tool_name":"Bash","tool_input":{"command":"grep -r x scripts/"}}\n' \
+  | PATH="$SHIM_DIR:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PATH_HOOK" 2> /dev/null)
+assert_has "a crashed awk speaks over systemMessage instead of staying quiet" "$CRASH_OUT" '"systemMessage"'
+assert_lacks "and never invents a decision field this hook has never had" "$CRASH_OUT" '"decision"'
+assert_single_valid_json "the crash reply is exactly one valid JSON object" "$CRASH_OUT"
+
+# The race: the shimmed awk here writes a real candidates sentinel to $JIT_TMP before
+# crashing, simulating a SIGSEGV landing after `close(log_tmp); exit` has already
+# flushed it to disk. Left unfixed, pre-path-hook.sh's own downstream `[ -s "$JIT_TMP" ]`
+# check would trust that leftover sentinel and run a SECOND awk pass, printing a second
+# JSON object after this crash message -- two objects on one hook's stdout.
+RACE_OUT=$(printf '{"session_id":"s397g","transcript_path":"/tmp/s397g.jsonl","tool_name":"Bash","tool_input":{"command":"grep -r x scripts/"}}\n' \
+  | PATH="$SHIM_DIR2:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$PATH_HOOK" 2> /dev/null)
+assert_has "the race: still speaks over systemMessage" "$RACE_OUT" '"systemMessage"'
+assert_single_valid_json "the race: exactly ONE json object, not two (self-review finding)" "$RACE_OUT"
+
+rm -rf "$SHIM_DIR" "$SHIM_DIR2" "$TEST_DIR"
+
+echo
+echo "========================"
+echo "  $PASS/$((PASS + FAIL)) passed, $FAIL failed"
+echo "========================"
+[ "$FAIL" -eq 0 ] || exit 1
