@@ -64,6 +64,14 @@ run_hook() {
   echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2> /dev/null
 }
 
+# #402: the one place below that needs CLAUDE_PROJECT_DIR pointed somewhere OTHER than
+# $TEST_DIR, and the hook actually invoked from a DIFFERENT cwd -- run_hook above always
+# agrees the two, which is exactly the state this section exists to disagree.
+run_hook_with_pd() {
+  local payload="$1" pd="$2" cwd="$3"
+  (cd "$cwd" && echo "$payload" | env -u CLAUDE_PLUGIN_ROOT "CLAUDE_PROJECT_DIR=$pd" bash "$HOOK" 2> /dev/null)
+}
+
 # jit-drive: assert_contains contains capture
 # jit-drive: assert_not_contains not_contains capture
 # jit-drive: assert_blocked blocked capture
@@ -1118,6 +1126,83 @@ else
 fi
 
 rm -f "$TEST_DIR/.claude/jit-context/config.env"
+
+# =====================================================================================
+echo ""
+echo "=== #402: CLAUDE_PROJECT_DIR naming a different git worktree -- confirmed, not just checkable ==="
+# jit-doctor.sh's own advisory (#412) can only ever be run by hand, after the fact -- the
+# reopening comment on #402 is explicit that this does not close it: "What closes this is
+# a confirmed mechanism plus a red test, not a diagnostic." This section is that: it
+# reproduces the actual defect on the real hook (not jit-doctor's side channel) and pins
+# the fix that puts a warning on the hot path where it actually bites.
+if ! git --version > /dev/null 2>&1; then
+  echo "  SKIPPED: no git on PATH -- this section tests the git-worktree case specifically" \
+    "and cannot construct it without git. Nothing here was tested."
+else
+  D402="$(mktemp -d 2> /dev/null)" || D402=""
+  if [ -z "$D402" ]; then
+    echo "  SKIPPED: mktemp -d produced no directory, so no fixture can be built here."
+  elif ! (
+    mkdir -p "$D402/main" \
+      && cd "$D402/main" \
+      && git init -q \
+      && git config user.email "t@example.com" \
+      && git config user.name "t" \
+      && git commit -q --allow-empty -m init
+  ) > "$D402/git-init.log" 2>&1; then
+    echo "  SKIPPED: could not initialise a git repo here -- see $D402/git-init.log."
+    echo "           Nothing here was tested."
+  elif ! (cd "$D402/main" && git worktree add -q "$D402/wt" -b jit402wt) > "$D402/worktree-add.log" 2>&1; then
+    echo "  SKIPPED: 'git worktree add' failed on this platform -- see $D402/worktree-add.log."
+    echo "           Nothing here was tested."
+  else
+    # Two trees, ONE rule name, DIFFERENT bodies -- the fixture has to distinguish "which
+    # copy fired" by content, not just by whether anything fired at all.
+    for tree in main wt; do
+      mkdir -p "$D402/$tree/.claude/jit-context/tools/00-manual"
+      for d in 00-manual 10-auto 20-grouped 30-crosscutting; do
+        mkdir -p "$D402/$tree/.claude/jit-context/vocabulary/$d"
+        : > "$D402/$tree/.claude/jit-context/vocabulary/$d/00-index.tsv"
+      done
+      printf 'Bash\tgit push\tguard.md\tremind\t\t\n' > "$D402/$tree/.claude/jit-context/tools/00-manual/00-index.tsv"
+    done
+    echo "JIT-402-STALE-BODY-MAIN" > "$D402/main/.claude/jit-context/tools/00-manual/guard.md"
+    echo "JIT-402-LIVE-BODY-WT" > "$D402/wt/.claude/jit-context/tools/00-manual/guard.md"
+
+    PUSH_PAYLOAD='{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}'
+
+    # The mechanism, confirmed rather than assumed: sitting IN the worktree, with
+    # CLAUDE_PROJECT_DIR still naming main, the hook injects MAIN's body -- not the one
+    # actually on disk in the tree the shell is sitting in.
+    MISOUT=$(run_hook_with_pd "$PUSH_PAYLOAD" "$D402/main" "$D402/wt")
+    assert_contains "#402 mechanism: a worktree-mismatched session serves the OTHER tree's body" "$MISOUT" "JIT-402-STALE-BODY-MAIN"
+    assert_not_contains "#402 mechanism: and not the body actually on disk where the shell sits" "$MISOUT" "JIT-402-LIVE-BODY-WT"
+
+    # The fix, red before it existed: the hook itself now says so, on the very call that
+    # would otherwise serve the wrong-tree body silently.
+    assert_contains "#402 fix: the hook itself now carries the mismatch warning" "$MISOUT" "names a DIFFERENT git worktree"
+    assert_contains "#402 fix: and names it by issue" "$MISOUT" "(#402)"
+
+    # Positive control: CLAUDE_PROJECT_DIR agreeing with the shell's own worktree raises
+    # nothing and serves that tree's own (live) body, on both sides of the split.
+    AGREE_MAIN=$(run_hook_with_pd "$PUSH_PAYLOAD" "$D402/main" "$D402/main")
+    assert_contains "control: agreeing dirs (main) serve that tree's own body" "$AGREE_MAIN" "JIT-402-STALE-BODY-MAIN"
+    assert_not_contains "control: agreeing dirs (main) raise no mismatch warning" "$AGREE_MAIN" "names a DIFFERENT git worktree"
+
+    AGREE_WT=$(run_hook_with_pd "$PUSH_PAYLOAD" "$D402/wt" "$D402/wt")
+    assert_contains "control: agreeing dirs (worktree) serve that tree's own body" "$AGREE_WT" "JIT-402-LIVE-BODY-WT"
+    assert_not_contains "control: agreeing dirs (worktree) raise no mismatch warning" "$AGREE_WT" "names a DIFFERENT git worktree"
+
+    # Negative control: a non-git CLAUDE_PROJECT_DIR must decline silently (no rule there
+    # to match, no false mismatch claim either) rather than manufacture a warning it could
+    # not actually confirm.
+    NOTGIT="$D402/notgit"
+    mkdir -p "$NOTGIT"
+    NOGITOUT=$(run_hook_with_pd "$PUSH_PAYLOAD" "$NOTGIT" "$D402/wt")
+    assert_not_contains "control: a non-git CLAUDE_PROJECT_DIR never claims a mismatch it could not check for" "$NOGITOUT" "names a DIFFERENT git worktree"
+  fi
+  rm -rf "$D402"
+fi
 
 # --- Cleanup ---
 rm -rf "$TEST_DIR"

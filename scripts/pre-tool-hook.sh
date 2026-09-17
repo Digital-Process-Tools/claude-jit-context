@@ -75,6 +75,15 @@ JIT_VOCAB_LAYERS="$JIT_LAYERS"
 # call, the same shape jit_layers_notice()'s caller already uses for a bash-built list.
 JIT_MISSING_REQUIRES="$(jit_missing_requires "$JIT_BASE/tools" "$JIT_TOOL_LAYERS")"
 
+# #402: computed once, in bash, for the same reason as JIT_MISSING_REQUIRES above -- the
+# comparison needs `git rev-parse`, which the awk half cannot run itself. Empty unless a
+# mismatch was CONFIRMED; see jit_worktree_mismatch_line() in common.sh.
+#
+# Routed through ENVIRON, not -v, for the reason #378's comment on JIT_BASE's own export
+# gives: a -v value has its escapes PROCESSED, and this string embeds $PWD and
+# $CLAUDE_PROJECT_DIR verbatim -- real filesystem paths, backslash and all on Windows.
+export JIT_WORKTREE_NOTE="$(jit_worktree_mismatch_line)"
+
 # `awk` reads stdin itself; the `cat` in front of it was one fork per invocation, on the
 # hottest path this plugin has, buying nothing.
 #
@@ -1331,6 +1340,23 @@ END {
     cnote = jit_config_notice(config_refused, config_refused_n)
     if (blocked == "") jit_blk_prepend(cnote)
     else block_tail = block_tail "\n---\n" cnote
+  }
+
+  # --- CLAUDE_PROJECT_DIR names a DIFFERENT worktree than $PWD, confirmed (#402) ------
+  # `worktree_note` arrives through ENVIRON, not -v, from jit_worktree_mismatch_line() in
+  # common.sh (bash, not awk -- git rev-parse and $PWD/CLAUDE_PROJECT_DIR live there): it
+  # embeds real filesystem paths verbatim, and a -v value has its escapes PROCESSED, which
+  # would mangle a Windows path own backslashes. Empty unless a mismatch was CONFIRMED.
+  # Once per session, delivered on the block path too, for the same reason the two notices
+  # above are: the state is real whether or not this particular call also happened to
+  # match a rule or trip a refusal.
+  worktree_note = ENVIRON["JIT_WORKTREE_NOTE"]
+  if (worktree_note != "" && !("jit-worktree-mismatch" in shown)) {
+    shown["jit-worktree-mismatch"] = 1
+    jit_shown_mark(shown_file, "jit-worktree-mismatch")
+    wnote = jit_worktree_notice(worktree_note)
+    if (blocked == "") jit_blk_prepend(wnote)
+    else block_tail = block_tail "\n---\n" wnote
   }
   # --- Write log info to temp file (bash reads it for timing) ---
   sc = 0; for (s in shown) sc++
