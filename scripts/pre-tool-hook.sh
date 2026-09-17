@@ -82,7 +82,13 @@ JIT_MISSING_REQUIRES="$(jit_missing_requires "$JIT_BASE/tools" "$JIT_TOOL_LAYERS
 # Routed through ENVIRON, not -v, for the reason #378's comment on JIT_BASE's own export
 # gives: a -v value has its escapes PROCESSED, and this string embeds $PWD and
 # $CLAUDE_PROJECT_DIR verbatim -- real filesystem paths, backslash and all on Windows.
-export JIT_WORKTREE_NOTE="$(jit_worktree_mismatch_line)"
+#
+# Assigned then exported on separate lines (SC2155): `export VAR="$(cmd)"` masks the
+# command's own exit status behind export's, which always succeeds -- irrelevant to a
+# function that only ever prints (never fails) here, but shellcheck cannot see that from
+# the call site alone, and this file has no existing SC2155 suppression to follow instead.
+JIT_WORKTREE_NOTE="$(jit_worktree_mismatch_line)"
+export JIT_WORKTREE_NOTE
 
 # `awk` reads stdin itself; the `cat` in front of it was one fork per invocation, on the
 # hottest path this plugin has, buying nothing.
