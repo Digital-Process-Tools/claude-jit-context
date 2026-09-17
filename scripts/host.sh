@@ -206,12 +206,18 @@
 # Claude Code manifest at `hooks/hooks.json`. A Gemini install of this repo as its own
 # extension root would read that SAME `hooks/hooks.json` -- built for Claude Code's
 # event names -- and, per gemini-cli's own `isValidEventName()` filtering unrecognised
-# names without erroring, would silently register only the one event name the two
-# hosts happen to share (SessionStart) while UserPromptSubmit/PreToolUse/PostToolUse/
-# Stop are dropped with nothing louder than a debug-level warning. Shipping a manifest
-# that produces that outcome -- or a second manifest pair nobody has watched load --
-# would be exactly "a Codex-shaped branch bolted on... where it collapses", the outcome
-# #252 opens by naming.
+# names without erroring, would register only the one event name the two hosts happen
+# to share (SessionStart) while UserPromptSubmit/PreToolUse/PostToolUse/Stop are
+# dropped. That drop is not a quiet debug line -- `processHooksConfiguration()` calls
+# `coreEvents.emitFeedback("warning", 'Invalid hook event name: "..." from ... config.
+# Skipping.')` per invalid name, and `emitFeedback` is gemini-cli's own user-facing
+# channel, distinct from the plain `debugLogger.warn()` calls the same function uses
+# for its OTHER error case (non-array hook definitions) two lines below. So a naive
+# install would not read as fully working, but it would read as four separate warnings
+# rather than as "this repo is not installable here", which is still the wrong shape --
+# and shipping a manifest that produces even a loud, four-warning partial install --
+# or a second manifest pair nobody has watched load -- would be exactly "a Codex-shaped
+# branch bolted on... where it collapses", the outcome #252 opens by naming.
 # codex's column 8 maps `apply_patch` to BOTH `Edit` and `Write`, not to whichever one
 # guesses right. Codex has one file-writing tool where Claude Code has two, so no
 # mapping recovers the distinction a rule author drew by writing `tool: Write` versus
