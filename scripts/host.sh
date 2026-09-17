@@ -130,10 +130,88 @@
 # `tool: Edit|Write`). Column 8 exists because "same schema" was never "same
 # vocabulary".
 #
-# gemini-cli carries no signature and no known variables at all: Gemini CLI documents
-# none for command hooks, which remember's own registry notes is not a gap in what it
-# records -- "it is what UNKNOWN already behaves like." It is also the design's real
-# test (BeforeTool/AfterTool), and nothing in #288 speaks to it.
+# gemini-cli (#252, 2026-09-17): the "documents none for command hooks" line that used
+# to sit here was true of Gemini CLI's DOCS and false of its shipped CODE. Reading the
+# actual installed gemini-cli 0.58.0 bundle (packages/core/src/hooks/hookRunner.ts,
+# HookRunner.executeCommandHook()) found it sets GEMINI_SESSION_ID, GEMINI_PROJECT_DIR,
+# GEMINI_CWD and GEMINI_PLANS_DIR in every hook child process's env, unconditionally --
+# plus CLAUDE_PROJECT_DIR, "// For compatibility" in the source's own comment, exactly
+# the alias pattern already documented above for Codex's CLAUDE_PLUGIN_ROOT. That is a
+# source read of the same kind #288 did for Codex, and it points the opposite way: #288
+# found CODEX_SESSION_ID/CODEX_THREAD_ID documented but never delivered to a real hook
+# process; this one finds GEMINI_SESSION_ID genuinely delivered, every time. So column 2
+# is GEMINI_SESSION_ID and column 3 is GEMINI_PROJECT_DIR,CLAUDE_PROJECT_DIR -- real,
+# source-verified values, replacing empty placeholders that were never checked against
+# anything. Column 4 (plugin_root_var) stays "": the same source shows Gemini has no
+# runtime env-var equivalent for the plugin/extension root at all -- an extension's
+# `${extensionPath}` is hydrated into the command STRING once, when hooks/hooks.json is
+# read (recursivelyHydrateStrings()), not exposed as an environment variable to the
+# spawned process the way CLAUDE_PLUGIN_ROOT/PLUGIN_ROOT are. "" is the honest value
+# here, not a gap.
+#
+# This is still a source read, never a live run, and the file's own STATE column exists
+# exactly to keep those two apart: state (5) stays UNKNOWN and both envelope columns
+# (6, 7) stay UNKNOWN / refusal-not-established. A source read establishes what a wire
+# SHOULD look like; #252 opens on the case where a hook fires, is silently skipped by
+# the host's trust/hash gate, or answers in a shape nobody checked, and none of those
+# reads any different from a genuine match until something is actually watched fire.
+# The methodology bar in #252's own body says it plainly: "a host is not supported
+# until this plugin has been observed running under it."
+#
+# A live observation was attempted from this tree (gemini-cli 0.58.0, `gemini
+# extensions link --consent` on a probe extension logging every hook's raw stdin, then
+# `gemini -p "..."` from a real worktree) and could not complete: every invocation
+# failed immediately with `IneligibleTierError: This client is no longer supported for
+# Gemini Code Assist for individuals... migrate to the Antigravity suite of products`,
+# thrown before the probe extension's SessionStart hook -- the one hook with no tool
+# call and no prompt content at all -- ever wrote a single line to its own log. That is
+# an account/auth-tier limitation of the machine this was attempted on, not a code
+# defect in this plugin or in gemini-cli, and it blocks EVERY hook, not only the
+# tool-call ones this issue is actually about. Re-attempting needs a Gemini account
+# still eligible for Code Assist, an API-key auth path, or the Antigravity migration
+# the error names -- not a retry of the same command.
+#
+# It is also the design's real test (BeforeTool/AfterTool, not PreToolUse/PostToolUse),
+# and the source read answers the SHAPE half of that question without a live run: the
+# full HookEventName enum is BeforeTool, AfterTool, BeforeAgent, AfterAgent, Notification,
+# SessionStart, SessionEnd, PreCompress, BeforeModel, AfterModel, BeforeToolSelection --
+# no PreToolUse, PostToolUse, UserPromptSubmit or Stop literal anywhere in it, confirming
+# #252's own prediction that Gemini diverges where Codex didn't. BeforeAgent is the
+# nearest analogue to UserPromptSubmit (it carries a `prompt` field the hook's
+# additionalContext gets appended to) and AfterAgent to Stop, going by field names in
+# the same source, not by a live capture. None of this needs a NEW column: bindings
+# from a host's own event names onto this plugin's scripts live in that host's own
+# manifest file (hooks/hooks.codex.json's whole reason for existing, and remember's own
+# host.py declined an event-mapping table in the registry for the identical reason --
+# quoted at length in #252's own body). What #252 actually asked the registry to prove
+# is answered by a second source read: gemini-cli's own DefaultHookOutput class carries
+# `continue`, `stopReason`, `suppressOutput`, `systemMessage`, `decision`, `reason` and
+# `hookSpecificOutput` -- field-for-field the same names Claude Code's own contract
+# uses -- and `isBlockingDecision()` treats `decision === "block" || decision === "deny"`
+# as a refusal, a superset of Claude Code's own `"block"`. `hookSpecificOutput` also
+# carries `additionalContext` under that exact name for injection. So the REGISTRY shape
+# (an envelope identifier per host, no event-name column) already covers a host whose
+# event names diverge but whose wire shape does not -- no second column, no second fork
+# of any hook was needed to express what was found. What still gates a support claim is
+# only ever the OBSERVED state this file already enforces, and that is unmet here for a
+# reason outside this plugin's own code.
+#
+# No `.gemini-extension.json` or `hooks/hooks.gemini.json` ships in this change, and
+# that omission is deliberate rather than incomplete. Gemini CLI hardcodes both its
+# manifest filename (`EXTENSIONS_CONFIG_FILENAME = "gemini-extension.json"`, no
+# alternate) and its hooks file's path (`loadExtensionHooks()` reads literally
+# `<extensionDir>/hooks/hooks.json`, no override field) -- unlike Codex's plugin.json,
+# which names its own hooks file via an explicit "hooks" key, which is exactly what let
+# `.codex-plugin/plugin.json` and `hooks/hooks.codex.json` coexist with this repo's own
+# Claude Code manifest at `hooks/hooks.json`. A Gemini install of this repo as its own
+# extension root would read that SAME `hooks/hooks.json` -- built for Claude Code's
+# event names -- and, per gemini-cli's own `isValidEventName()` filtering unrecognised
+# names without erroring, would silently register only the one event name the two
+# hosts happen to share (SessionStart) while UserPromptSubmit/PreToolUse/PostToolUse/
+# Stop are dropped with nothing louder than a debug-level warning. Shipping a manifest
+# that produces that outcome -- or a second manifest pair nobody has watched load --
+# would be exactly "a Codex-shaped branch bolted on... where it collapses", the outcome
+# #252 opens by naming.
 # codex's column 8 maps `apply_patch` to BOTH `Edit` and `Write`, not to whichever one
 # guesses right. Codex has one file-writing tool where Claude Code has two, so no
 # mapping recovers the distinction a rule author drew by writing `tool: Write` versus
@@ -150,7 +228,7 @@
 JIT_HOST_REGISTRY='
 claude-code|CLAUDE_CODE_ENTRYPOINT,CLAUDE_CODE_SESSION_ID|CLAUDE_PROJECT_DIR|CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block|
 codex||CLAUDE_PROJECT_DIR|PLUGIN_ROOT,CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block|apply_patch=Edit;Write
-gemini-cli||||UNKNOWN|UNKNOWN|refusal-not-established|
+gemini-cli|GEMINI_SESSION_ID|GEMINI_PROJECT_DIR,CLAUDE_PROJECT_DIR||UNKNOWN|UNKNOWN|refusal-not-established|
 '
 
 # jit_host_row NAME -- echoes NAME's whole pipe-delimited row on stdout and returns 0,
