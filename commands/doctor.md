@@ -6,9 +6,15 @@ allowed-tools: Bash
 Run the diagnostic and relay its output verbatim:
 
 ```bash
-IFS=' ' read -r -a jit_doctor_args <<< "${ARGUMENTS:-}"
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/jit-doctor.sh" ${jit_doctor_args[@]+"${jit_doctor_args[@]}"}
+bash -c 'IFS=" " read -r -a jit_doctor_args <<< "${1:-}"; exec bash "$2/scripts/jit-doctor.sh" "${jit_doctor_args[@]+"${jit_doctor_args[@]}"}"' _ "${ARGUMENTS:-}" "${CLAUDE_PLUGIN_ROOT}"
 ```
+
+**The `read -a` runs inside an explicit `bash -c`, not in whatever shell runs this command
+body (#405).** `read -a` is a bash-only spelling of the builtin -- zsh spells it `read -A`
+and errors `bad option: -a` on the bash form, silently dropping any typed `--base <tree>`
+rather than reaching the script below. `ARGUMENTS` and `CLAUDE_PLUGIN_ROOT` are passed in
+as `$1`/`$2` so the splitting always happens inside a real bash, regardless of what invoked
+this body.
 
 `${CLAUDE_PLUGIN_ROOT}` is what makes this reachable without a version number: the only
 other way to run this tool is `bash ~/.claude/plugins/cache/dpt-plugins/claude-jit-context/<version>/scripts/jit-doctor.sh`,

@@ -6,8 +6,7 @@ allowed-tools: Bash
 Run the report and relay its output verbatim:
 
 ```bash
-IFS=' ' read -r -a jit_stats_args <<< "${ARGUMENTS:-}"
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh" ${jit_stats_args[@]+"${jit_stats_args[@]}"}
+bash -c 'IFS=" " read -r -a jit_stats_args <<< "${1:-}"; exec bash "$2/scripts/jit-stats.sh" "${jit_stats_args[@]+"${jit_stats_args[@]}"}"' _ "${ARGUMENTS:-}" "${CLAUDE_PLUGIN_ROOT}"
 ```
 
 `${CLAUDE_PLUGIN_ROOT}` is the same resolution `commands/doctor.md` and `commands/init.md`
@@ -16,8 +15,19 @@ that changes on every update.
 
 `jit-stats.sh` parses `--base <tree>` and `--misses-top <n>` the same way `jit-doctor.sh`
 parses `--base` -- two separate words -- so `$ARGUMENTS` genuinely carries more than one
-shell word here, and the `read -a` above makes that splitting explicit rather than leaning
-on bash's own unquoted-expansion word-splitting (#278).
+shell word here, and the array built from `read -a` makes that splitting explicit rather
+than leaning on bash's own unquoted-expansion word-splitting (#278).
+
+**The `read -a` itself runs inside an explicit `bash -c`, not in whatever shell runs this
+command body (#405).** `read -a` is a bash-only spelling of the builtin -- zsh spells it
+`read -A` and errors `bad option: -a` on the bash form -- and a slash command's fenced
+`bash` body is not guaranteed to run under bash. Before this fix, that error left
+`$jit_stats_args` unset and the script below ran with **no arguments at all**: a typed
+`--misses-top 30` or `--base <tree>` was silently dropped rather than reaching the script,
+which then produced a plausible report answering a different question than the one asked.
+`ARGUMENTS` and `CLAUDE_PLUGIN_ROOT` are passed in as `$1`/`$2` (POSIX parameter expansion,
+valid in every shell that could be running this body) so the actual word-splitting always
+happens inside a real bash, regardless of what invoked it.
 
 Do not summarise away any line -- relay the report exactly as printed. Three outcomes:
 

@@ -112,31 +112,57 @@ if [ -f "$BYTES_FILE" ] && [ ! -L "$BYTES_FILE" ]; then
   unset _jb
 fi
 
+# Three states, not two (#405): the marker records the file PLUS the
+# per-match injection header ("# JIT Context: <name> (matched: <pattern>)",
+# variable-length), so it is the exact cost -- but a majority of a real
+# session's rows can carry no marker at all, most often because the entry
+# fired before this session's byte accounting started recording (an upgrade
+# mid-session is the case the issue measured). `bytes=unknown` on all of
+# those collapses "never measured" and "measured, approximately, from the
+# file itself" into one word. When the marker is missing but the entry's own
+# file is right there and readable, its on-disk size is within the marker's
+# own measured 80-121-byte margin (the header's own overhead) -- close enough
+# to be useful, and printed with a leading "~" so it is never mistaken for
+# the exact figure. A caller with no path to offer (dim/layer not resolved --
+# a legacy bare shown-mark) gets no fallback and stays "unknown", honestly.
 bytes_for() {
-  local key="$1" needle rest
-  [ -n "$BYTES_RAW" ] || {
-    printf ''
-    return 0
-  }
-  needle="$JIT_NL$key$(printf '\t')"
-  case "$JIT_NL$BYTES_RAW$JIT_NL" in
-    *"$needle"*)
-      # #389 self-review: stripped through the SAME NL-anchored needle the
-      # existence check above just proved is present, never through the bare
-      # "<key><TAB>" text alone -- an unanchored strip can land inside an
-      # unrelated, earlier line whose own longer key happens to end with this
-      # key's text immediately before a tab, and silently return that line's
-      # byte count instead (see scripts/stop-hook.sh's identical fix).
-      rest="${JIT_NL}${BYTES_RAW}${JIT_NL}"
-      rest="${rest#*"$needle"}"
-      rest="${rest%%$JIT_NL*}"
-      case "$rest" in
-        '' | *[!0-9]*) printf '' ;;
-        *) printf '%s' "$rest" ;;
-      esac
-      ;;
-    *) printf '' ;;
-  esac
+  local key="$1" path="$2" needle rest n
+  if [ -n "$BYTES_RAW" ]; then
+    needle="$JIT_NL$key$(printf '\t')"
+    case "$JIT_NL$BYTES_RAW$JIT_NL" in
+      *"$needle"*)
+        # #389 self-review: stripped through the SAME NL-anchored needle the
+        # existence check above just proved is present, never through the bare
+        # "<key><TAB>" text alone -- an unanchored strip can land inside an
+        # unrelated, earlier line whose own longer key happens to end with this
+        # key's text immediately before a tab, and silently return that line's
+        # byte count instead (see scripts/stop-hook.sh's identical fix).
+        rest="${JIT_NL}${BYTES_RAW}${JIT_NL}"
+        rest="${rest#*"$needle"}"
+        rest="${rest%%$JIT_NL*}"
+        case "$rest" in
+          '' | *[!0-9]*) : ;;
+          *)
+            printf '%s' "$rest"
+            return 0
+            ;;
+        esac
+        ;;
+    esac
+  fi
+  if [ -n "$path" ] && [ -f "$path" ] && [ ! -L "$path" ]; then
+    n="$(wc -c < "$path" 2> /dev/null)"
+    n="${n//[[:space:]]/}"
+    case "$n" in
+      '' | *[!0-9]*) ;;
+      *)
+        printf '~%s' "$n"
+        return 0
+        ;;
+    esac
+  fi
+  printf ''
+  return 0
 }
 
 # The word or pattern that matched is not in the marker files at all -- only
@@ -144,6 +170,77 @@ bytes_for() {
 # (paths/00-manual/hooks.md). Correlated here by grepping the entry's own basename
 # out of the log's "layer:file(pattern)" token; best-effort for the same reason the
 # session key above is -- hooks.log carries no session id column either.
+# The wrapper is "layer:file(" + PATTERN + ")", built once in pre-tool-hook.sh /
+# pre-path-hook.sh with a fixed literal "(" and ")" around whatever the rule's
+# own `match:` ERE happens to be (#405). PATTERN is untrusted committed text
+# that can itself open groups -- "(^|/)(agents/...)$" is the common shape for
+# any `paths` rule -- so the wrapper's own closing ")" is NOT the first ")" in
+# the tail; it is the one that brings a running paren count back to the depth
+# it started at. Cutting at the first ")" (the previous behaviour) reported
+# "(^|/" for nearly every `paths` rule and rendered identically to a genuine
+# short match -- see the issue for the full measurement.
+#
+# Bracket expressions ([)] is a literal ")", not a group) and a backslash
+# escape (\) is a literal ")" too) are both tracked so a pattern that legally
+# contains either is not cut inside it either -- the issue's own test list
+# names both. This is not a full ERE parser: bracket-expression edge cases
+# POSIX itself treats specially (a bare "]" immediately after "[" or "[^" is
+# literal) are the only ones handled; nothing here needs to be, since the
+# input is always a committed `match:` value, never attacker-controlled at
+# a boundary this correlation's own failure mode (a report, not a decision)
+# would make dangerous.
+jit_stats_extract_wrapped() {
+  local s="$1" depth=0 in_bracket=0 bracket_first=0 i=0 len ch out=""
+  len=${#s}
+  while [ "$i" -lt "$len" ]; do
+    ch="${s:$i:1}"
+    if [ "$in_bracket" -eq 1 ]; then
+      if [ "$bracket_first" -eq 1 ]; then
+        if [ "$ch" = '^' ]; then
+          :
+        else
+          bracket_first=0
+        fi
+      elif [ "$ch" = ']' ]; then
+        in_bracket=0
+      fi
+      out="$out$ch"
+      i=$((i + 1))
+      continue
+    fi
+    if [ "$ch" = '\' ]; then
+      out="$out$ch${s:$((i + 1)):1}"
+      i=$((i + 2))
+      continue
+    elif [ "$ch" = '[' ]; then
+      in_bracket=1
+      bracket_first=1
+      out="$out$ch"
+      i=$((i + 1))
+      continue
+    elif [ "$ch" = '(' ]; then
+      depth=$((depth + 1))
+      out="$out$ch"
+    elif [ "$ch" = ')' ]; then
+      if [ "$depth" -eq 0 ]; then
+        printf '%s' "$out"
+        return 0
+      fi
+      depth=$((depth - 1))
+      out="$out$ch"
+    else
+      out="$out$ch"
+    fi
+    i=$((i + 1))
+  done
+  # No balancing close found -- a malformed or truncated token. Print nothing
+  # rather than the partial scan, the same "blank means could not tell"
+  # posture the header above match_for() already states for this whole
+  # correlation.
+  printf ''
+  return 1
+}
+
 match_for() {
   # #389 self-review, second pass: the first fix narrowed the needle from a
   # bare ":$file(" to "<layer>:<file>(" but two things about it were still
@@ -202,7 +299,7 @@ match_for() {
         tok="${tok#"$needle"}"
         case "$tok" in
           *')'*)
-            printf '%s' "${tok%%)*}"
+            jit_stats_extract_wrapped "$tok"
             return 0
             ;;
         esac
@@ -244,7 +341,24 @@ for MF in "$VOCAB_FILE" "$PATH_FILE"; do
       *) NAME="$LN" ;;
     esac
     N_SHOWN=$((N_SHOWN + 1))
-    B="$(bytes_for "$LN")"
+    # The fallback path bytes_for() may fall back to reads a real file off
+    # disk, so NAME and LAYER go through the SAME accepted-name guard the
+    # report line below uses to print them -- never the raw log/marker text
+    # -- before they are allowed to become a filesystem path component
+    # (#405; see jit_report_name()'s own comment in common.sh on why the
+    # name is attacker-chosen text).
+    B_PATH=""
+    if [ -n "$LAYER" ] && [ -n "$NAME" ]; then
+      case "$DIM" in
+        paths | vocabulary)
+          if [ "$(jit_report_name "$NAME")" != "$JIT_NAME_WITHHELD" ] \
+            && [ "$(jit_report_name "$LAYER")" != "$JIT_NAME_WITHHELD" ]; then
+            B_PATH="$JIT_BASE/$DIM/$LAYER/$NAME"
+          fi
+          ;;
+      esac
+    fi
+    B="$(bytes_for "$LN" "$B_PATH")"
     M="$(match_for "$DIM" "$LAYER" "$NAME")"
     printf '%s\n' "$(jit_report_name "$NAME")  dim=${DIM:-unknown} layer=${LAYER:-unknown} bytes=${B:-unknown} matched=${M:-unknown}"
   done < "$MF"
