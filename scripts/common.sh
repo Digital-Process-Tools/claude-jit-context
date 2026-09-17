@@ -570,8 +570,17 @@ jit_log_rotate() {
   cur="$(wc -c < "$LOG_FILE" 2> /dev/null | tr -d '[:space:]')"
   case "$cur" in "" | *[!0-9]*) return 0 ;; esac
   [ "$cur" -ge "$max" ] || return 0
-  if [ -e "$LOG_FILE.1" ]; then
-    [ -L "$LOG_FILE.1" ] && return 0
+  # `-L` is checked FIRST and unconditionally, never gated behind `-e`: `-e` follows the
+  # link and is FALSE for a DANGLING symlink (a target that does not exist, or does not
+  # resolve on this host), so a version of this check that only asked "-L" inside an
+  # "if -e" branch let a dangling hooks.log.1 fall straight through to the mv below,
+  # which replaces it just like it would replace an ordinary file. `-L` (lstat, not
+  # stat) does not care whether the target exists -- reproduced locally by symlinking
+  # hooks.log.1 to a path that does not exist: the old ordering rotated over it every
+  # time, silently destroying the symlink instead of refusing.
+  if [ -L "$LOG_FILE.1" ]; then
+    return 0
+  elif [ -e "$LOG_FILE.1" ]; then
     [ -f "$LOG_FILE.1" ] || return 0
   fi
   mv -f -- "$LOG_FILE" "$LOG_FILE.1" 2> /dev/null || return 0

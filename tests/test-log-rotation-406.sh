@@ -209,6 +209,32 @@ else
   echo "             symlink containment was tested."
 fi
 
+# A7b: the same containment, but the symlink is DANGLING -- its target does not exist
+# (or does not resolve on this host, which is indistinguishable from here). The
+# original guard checked `-L` only INSIDE an `if [ -e "$LOG_FILE.1" ]` branch, and `-e`
+# FOLLOWS the link: it is false for a dangling target, so a dangling hooks.log.1 fell
+# straight through to the unconditional `mv -f` below it and was silently replaced,
+# exactly the failure a real-but-live symlink (A7 above) could never exercise. This is
+# what the windows-latest CI leg actually hit on #406/#407 -- not a Windows-only quirk,
+# reproduced locally on macOS too, hence fixed in jit_log_rotate() itself rather than
+# skipped as a platform difference.
+fixture a7b
+ln -s /this-path-does-not-exist-406 "$LOGDIR/hooks.log.1" 2> /dev/null
+if [ -L "$LOGDIR/hooks.log.1" ]; then
+  CLAUDE_PROJECT_DIR="$PROJ" bash -c "source \"$COMMON\"; jit_log_rotate 500" 2> /dev/null
+  assert_true "A7b a DANGLING symlinked hooks.log.1 is never overwritten through" \
+    '[ -L "$LOGDIR/hooks.log.1" ] && [ "$(readlink "$LOGDIR/hooks.log.1")" = "/this-path-does-not-exist-406" ]'
+elif [ "$REQUIRE_SYMLINKS" = 1 ]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: A7b SYMBOLIC LINKS WERE REQUIRED AND NOT OBTAINED."
+  echo "        JIT_TESTS_REQUIRE_SYMLINKS=1 says this environment was configured to have"
+  echo "        them, so 'ln -s' not producing a real symlink here is a broken"
+  echo "        configuration, not a platform without the capability."
+else
+  echo "  SKIP-NOTE: A7b could not build a real (dangling) symlinked hooks.log.1 here."
+  echo "             Nothing about dangling-symlink containment was tested."
+fi
+
 # A8: config.env is validated by jit_load_config(). The ENVIRONMENT is not -- nothing in
 # jit_load_config() ever sees a value exported into the hook's own environment, and the
 # session-start-hook presence check reads it happily. So jit_log_rotate() has to refuse a
