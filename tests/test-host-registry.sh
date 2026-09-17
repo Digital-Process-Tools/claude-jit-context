@@ -206,8 +206,12 @@ assert_calls() {
 BLOCK_SKELETON_ESC='{\"decision\":\"block\",\"reason\":\"'
 BLOCK_SKELETON_PLAIN='{"decision":"block","reason":"'
 assert_literal_in "common.sh envelope carries the block skeleton" "$BLOCK_SKELETON_ESC" "$BLOCK_SKELETON_PLAIN" "$COMMON_SH"
+# #391: pre-tool-hook.sh's print site now calls jit_envelope_block_sysmsg() (defined in
+# common.sh next to jit_envelope_block(), and falling back to it when there is no
+# systemMessage to add) rather than the bare builder directly -- so the needle moves
+# with it, still asserting the shared builder over a hand-rolled literal.
 assert_calls "pre-tool-hook.sh calls the shared block builder, not its own literal" \
-  "jit_envelope_block(" "$REPO/scripts/pre-tool-hook.sh"
+  "jit_envelope_block_sysmsg(" "$REPO/scripts/pre-tool-hook.sh"
 
 INJECT_HEAD_ESC='{\"hookSpecificOutput\":{\"hookEventName\":\"'
 INJECT_HEAD_PLAIN='{"hookSpecificOutput":{"hookEventName":"'
@@ -215,34 +219,37 @@ INJECT_TAIL_ESC='\",\"additionalContext\":\"'
 INJECT_TAIL_PLAIN='","additionalContext":"'
 assert_literal_in "common.sh envelope carries the inject head" "$INJECT_HEAD_ESC" "$INJECT_HEAD_PLAIN" "$COMMON_SH"
 assert_literal_in "common.sh envelope carries the inject tail" "$INJECT_TAIL_ESC" "$INJECT_TAIL_PLAIN" "$COMMON_SH"
-# #367: pre-prompt-hook.sh and pre-path-hook.sh now call the sysmsg-capable variant
-# (jit_envelope_inject_sysmsg); pre-tool-hook.sh keeps calling the bare one. Asserted
-# per hook, each WITH its trailing paren, rather than through one shared paren-less
-# needle: a self-review finding on this same change caught the loosened version, which
-# would have passed on a hook that merely MENTIONED the function name in a comment
-# while hand-rolling its own literal underneath.
-assert_calls "pre-tool-hook.sh calls the bare shared inject builder" \
-  "jit_envelope_inject(" "$REPO/scripts/pre-tool-hook.sh"
-for hook in pre-prompt-hook.sh pre-path-hook.sh; do
+# #367 gave pre-prompt-hook.sh and pre-path-hook.sh the sysmsg-capable variant
+# (jit_envelope_inject_sysmsg) and deliberately kept pre-tool-hook.sh on the bare one,
+# reasoning it sat too close to Linux per-argument exec() cap (#369) to afford it.
+# #371 then moved that hook program off argv entirely (a mktemp file, read via
+# `awk -f`), removing the cap from consideration -- so #391 gives pre-tool-hook.sh the
+# sysmsg wiring too, including a block-path counterpart (jit_envelope_block_sysmsg)
+# neither of the other two hooks ever needed, since neither of them can refuse a call.
+# Asserted per hook, each WITH its trailing paren, rather than through one shared
+# paren-less needle: a self-review finding on the #367 change caught the loosened
+# version, which would have passed on a hook that merely MENTIONED the function name in
+# a comment while hand-rolling its own literal underneath.
+for hook in pre-prompt-hook.sh pre-path-hook.sh pre-tool-hook.sh; do
   assert_calls "$hook calls the sysmsg-capable shared inject builder" \
     "jit_envelope_inject_sysmsg(" "$REPO/scripts/$hook"
 done
-# The negative control for the #369 byte-budget decision this change rests on
-# (oss:auditor finding): pre-tool-hook.sh sits ~20 bytes under Linux's per-argument
-# exec() cap, so it deliberately carries NONE of the per-fire systemMessage wiring the
-# other two gained. Nothing else in this suite would notice it being added back --
-# tests/test-awk-arg-max-369.sh would fail eventually, but only once the addition was
-# large enough to cross the cap, and only on the byte count rather than on the cause.
+assert_calls "pre-tool-hook.sh calls the sysmsg-capable shared BLOCK builder too -- the one shape the other two never needed" \
+  "jit_envelope_block_sysmsg(" "$REPO/scripts/pre-tool-hook.sh"
+# #391 positive control, replacing the #367/#369 negative one above: pre-tool-hook.sh
+# now carries the per-fire systemMessage wiring the other two hooks already had, and
+# this asserts that rather than its absence. tests/test-awk-arg-max-369.sh is still the
+# byte-budget guard -- pre-tool-hook.sh is exempt from it by the SAME naming convention
+# (`-f "$JIT_AWK_PROGRAM_FILE"`) that made the cap irrelevant to this decision in the
+# first place, not by an assumption made here.
 for _needle in "status_mode" "sys_msg" "JIT_AWK_ENVELOPE_SYSMSG"; do
   if grep -qF -- "$_needle" "$REPO/scripts/pre-tool-hook.sh" 2> /dev/null; then
-    FAIL=$((FAIL + 1))
-    echo "  FAIL: pre-tool-hook.sh carries '$_needle' -- the per-fire systemMessage wiring"
-    echo "        is deliberately absent there (#367/#369: its awk program has ~20 bytes of"
-    echo "        headroom under the Linux per-argument exec() cap). Adding it needs the"
-    echo "        program moved off argv first (awk -f a generated tempfile)."
-  else
     PASS=$((PASS + 1))
-    echo "  PASS: pre-tool-hook.sh carries no '$_needle' (the #369 byte budget holds)"
+    echo "  PASS: pre-tool-hook.sh carries '$_needle' (#391: the systemMessage wiring)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: pre-tool-hook.sh is missing '$_needle' -- #391 gave every hook the"
+    echo "        per-fire systemMessage wiring, pre-tool-hook.sh included."
   fi
 done
 unset _needle

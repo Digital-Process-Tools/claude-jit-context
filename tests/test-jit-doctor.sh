@@ -87,6 +87,18 @@ run_doctor() {
   return "$st"
 }
 
+# #402: the ONE section below that needs CLAUDE_PROJECT_DIR actually SET (to something
+# other than the invoking shell's own cwd) rather than removed, so it gets its own
+# runner instead of a flag on run_doctor above.
+run_doctor_with_pd() {
+  local pd="$1" st=0
+  shift
+  : > "$OUT"
+  : > "$ERR"
+  env -u CLAUDE_PLUGIN_ROOT "CLAUDE_PROJECT_DIR=$pd" "HOME=$TMP/home" bash "$DOCTOR" "$@" > "$OUT" 2> "$ERR" || st=$?
+  return "$st"
+}
+
 # The index file name is held in a variable and never written beside a redirect: this
 # repository own tools/00-manual rule blocks a shell write to that name and reads the
 # whole command string, so a literal here is refused before the fixture is built.
@@ -740,6 +752,130 @@ else
   assert_exit "still advisory-only, exit 0" 0 "$ST"
 fi
 chmod 644 "$UNREADIDX/tools/00-manual/$IDX" 2> /dev/null || true
+
+# =====================================================================================
+echo ""
+echo "=== #402: CLAUDE_PROJECT_DIR naming a DIFFERENT git worktree is advisory, never silent ==="
+if ! git --version > /dev/null 2>&1; then
+  echo "  SKIPPED: no git on PATH -- this section tests the git-worktree case specifically"
+  echo "           and cannot construct it without git. Nothing here was tested."
+else
+  D402="$TMP/d402"
+  mkdir -p "$D402/main"
+  if (
+    cd "$D402/main" \
+      && git init -q \
+      && git config user.email "t@example.com" \
+      && git config user.name "t" \
+      && git commit -q --allow-empty -m init
+  ) > "$D402/git-init.log" 2>&1; then
+    mk_tree "$D402/main/.claude/jit-context"
+    if (cd "$D402/main" && git worktree add -q "$D402/wt" -b jit402-wt) > "$D402/worktree-add.log" 2>&1; then
+      mk_tree "$D402/wt/.claude/jit-context"
+
+      # The regression itself: sitting IN the worktree, CLAUDE_PROJECT_DIR still names
+      # the main clone -- #402's leading candidate, reproduced rather than assumed.
+      ST=0
+      (cd "$D402/wt" && run_doctor_with_pd "$D402/main" --base "$D402/wt/.claude/jit-context") || ST=$?
+      assert_has "a worktree session with a stale CLAUDE_PROJECT_DIR gets the #402 advisory" "$OUT" "#402"
+      assert_has "and names the git worktree this shell is actually sitting in" "$OUT" "$D402/wt"
+      assert_has "and the one CLAUDE_PROJECT_DIR actually names" "$OUT" "$D402/main"
+      assert_exit "advisory-only, never a defect -- still exit 0" 0 "$ST"
+
+      # Positive control: CLAUDE_PROJECT_DIR agreeing with the shell's own worktree
+      # never raises it, on either side of the split.
+      ST=0
+      (cd "$D402/main" && run_doctor_with_pd "$D402/main" --base "$D402/main/.claude/jit-context") || ST=$?
+      assert_lacks "control: CLAUDE_PROJECT_DIR agreeing with cwd raises nothing (main)" "$OUT" "#402"
+      assert_exit "control: exit 0" 0 "$ST"
+
+      ST=0
+      (cd "$D402/wt" && run_doctor_with_pd "$D402/wt" --base "$D402/wt/.claude/jit-context") || ST=$?
+      assert_lacks "control: CLAUDE_PROJECT_DIR agreeing with cwd raises nothing (worktree)" "$OUT" "#402"
+      assert_exit "control: exit 0" 0 "$ST"
+
+      # Negative control, tightened by self-review (oss:auditor finding): CLAUDE_PROJECT_DIR
+      # pointing at a plain, non-git directory must decline rather than manufacture a
+      # false MISMATCH -- but declining silently would read exactly like "confirmed the
+      # same tree", the identical ambiguity this file already refuses to leave standing
+      # for its OTHER advisories (`cannot tell` on the hooks-copy section above). So the
+      # check says explicitly that it could not run, and never claims a match.
+      NOTGIT="$TMP/d402-notgit"
+      mkdir -p "$NOTGIT/.claude/jit-context"
+      mk_tree "$NOTGIT/.claude/jit-context"
+      ST=0
+      (cd "$D402/wt" && run_doctor_with_pd "$NOTGIT" --base "$NOTGIT/.claude/jit-context") || ST=$?
+      assert_has "control: a non-git CLAUDE_PROJECT_DIR says cannot tell, not a false match" "$OUT" "cannot tell whether CLAUDE_PROJECT_DIR"
+      assert_lacks "control: and never claims the trees are the SAME (a false positive in the other direction)" "$OUT" "names a DIFFERENT git worktree"
+      # Second-pass self-review finding: the boilerplate prefix above would ALSO pass a
+      # future bug that always blames the wrong side (e.g. CLAUDE_PROJECT_DIR named as
+      # unresolved even when $PWD was the actual failure). Assert the OFFENDING side by
+      # name, and that the healthy side is never named as unresolved.
+      assert_has "control: names CLAUDE_PROJECT_DIR as the unresolved side" "$OUT" "CLAUDE_PROJECT_DIR ($NOTGIT)"
+      assert_lacks "control: never blames \$PWD, which resolved fine here" "$OUT" "\$PWD ($D402/wt)"
+      assert_exit "control: exit 0" 0 "$ST"
+
+      # Same shape, the other side missing: cwd is not inside a git worktree at all
+      # (CLAUDE_PROJECT_DIR is). Both directions of "which side could not be resolved"
+      # have to decline the same way, or the mismatch check only half covers its own
+      # blind spot.
+      ST=0
+      (cd "$NOTGIT" && run_doctor_with_pd "$D402/main" --base "$NOTGIT/.claude/jit-context") || ST=$?
+      assert_has "control: a non-git cwd says cannot tell too" "$OUT" "cannot tell whether CLAUDE_PROJECT_DIR"
+      assert_lacks "control: and never claims a mismatch it could not actually see" "$OUT" "names a DIFFERENT git worktree"
+      assert_has "control: names \$PWD as the unresolved side this time" "$OUT" "\$PWD ($NOTGIT)"
+      assert_lacks "control: never blames CLAUDE_PROJECT_DIR, which resolved fine here" "$OUT" "CLAUDE_PROJECT_DIR ($D402/main)"
+      assert_exit "control: exit 0" 0 "$ST"
+
+      # Second-pass self-review finding: the "git is not on PATH" branch had zero test
+      # coverage -- the suite's OWN top-level "no git at all" guard only SKIPS this whole
+      # section, it never constructs the case. A curated PATH, symlinking every external
+      # command this script is actually observed to call (awk/cat/date/dirname/find/grep/
+      # mkdir/printf/sed) EXCEPT git, drives it for real rather than skipping past it.
+      #
+      # #413 (Windows CI): bash itself is launched via its REAL absolute path, never
+      # through this curated farm -- a SYMLINKED bash failed to even start on
+      # windows-latest (exit 127, "error while loading shared libraries"), because MSYS
+      # resolves bash's own sibling DLLs relative to the executable's OWN real
+      # directory, and a symlink elsewhere breaks that lookup. The curated PATH is still
+      # what the CHILD process (jit-doctor.sh) uses for its OWN internal command -v /
+      # awk / grep / sed calls -- only the interpreter that launches it skips the farm.
+      NOGITBIN="$TMP/d402-nogit-bin"
+      mkdir -p "$NOGITBIN"
+      NOGIT_READY=1
+      BASH_REAL="$(command -v bash 2> /dev/null)"
+      [ -n "$BASH_REAL" ] || NOGIT_READY=0
+      for c in printf mkdir cat grep wc date dirname find sed awk touch rm mktemp env sh basename cut tr head expr true false; do
+        b="$(command -v "$c" 2> /dev/null)"
+        if [ -n "$b" ]; then ln -sf "$b" "$NOGITBIN/$c"; fi
+      done
+      # Empirical smoke test, not a platform guess (#413 self-review): if any of the
+      # OTHER symlinked tools share bash's DLL-relative-directory problem on this
+      # platform, this catches it before trusting a broken farm -- `awk` is exercised
+      # specifically because jit-doctor.sh cannot run at all without it.
+      if [ "$NOGIT_READY" = 1 ] && ! PATH="$NOGITBIN" "$BASH_REAL" -c 'awk "BEGIN{exit 0}"' > /dev/null 2>&1; then
+        NOGIT_READY=0
+      fi
+      if [ "$NOGIT_READY" = 1 ]; then
+        ST=0
+        : > "$OUT"
+        : > "$ERR"
+        (cd "$D402/wt" && env -u CLAUDE_PLUGIN_ROOT "CLAUDE_PROJECT_DIR=$D402/main" "HOME=$TMP/home" "PATH=$NOGITBIN" "$BASH_REAL" "$DOCTOR" --base "$D402/wt/.claude/jit-context" > "$OUT" 2> "$ERR") || ST=$?
+        assert_has "no git on PATH at all: still says cannot tell, never silent" "$OUT" "git is not on PATH"
+        assert_lacks "and never claims a mismatch it could not check for" "$OUT" "names a DIFFERENT git worktree"
+        assert_exit "no git on PATH: still exit 0" 0 "$ST"
+      else
+        echo "  SKIPPED: could not build a working curated PATH without git on this platform (bash unresolvable, or a symlinked tool cannot actually run here) -- the 'no git on PATH' branch was not exercised."
+      fi
+    else
+      echo "  SKIPPED: 'git worktree add' failed on this platform -- see $D402/worktree-add.log."
+      echo "           Nothing here was tested."
+    fi
+  else
+    echo "  SKIPPED: could not initialise a git repo here -- see $D402/git-init.log."
+    echo "           Nothing here was tested."
+  fi
+fi
 
 echo ""
 echo "========================"

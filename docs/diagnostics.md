@@ -68,8 +68,10 @@ never ran here* and *they ran and matched nothing* are different facts.
 
 It exits **1** when a layer holds entries and no index — those rules cannot fire, exactly —
 **2** when it could not evaluate the tree, and **0** otherwise. Its `ADVISORY` findings —
-short keywords, entries over a byte threshold, entries with no record in the log — never move
-the exit code.
+short keywords, entries over a byte threshold, entries with no record in the log, and
+`CLAUDE_PROJECT_DIR` naming a different git worktree than the one the shell is actually sitting
+in (#402 — the read-side counterpart to the cross-tree refusal `rebuild-tsv.sh` already applies
+on the write side, above) — never move the exit code.
 
 It does not lint patterns. `jit-dry-run.sh` below owns that, and doctor points at it rather
 than answering the same question a second time.

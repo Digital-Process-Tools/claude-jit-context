@@ -1044,6 +1044,81 @@ echo "364 raw-name block rule body" > "$TOOLS_DIR/rawpatch364.md"
 OUT=$(run_hook '{"tool_name":"apply_patch","tool_input":{"file_path":"/tmp/rawpatch364.tsv"}}')
 assert_blocked "#364: a rule written tool: apply_patch still fires on that raw name" "$OUT"
 
+# --- #391: JIT_CONTEXT_STATUS=fired must cover the tools dimension too, including a
+# refusal. Own rows/files so nothing above collides with them, and config.env is written
+# LAST in this shared TEST_DIR -- every earlier OUT= call in this file has already run,
+# so switching the mode here cannot change an assertion already made. IDX391 splits the
+# redirect from the literal index name, same workaround IDX364 above already uses. ---
+echo ""
+echo "=== #391: JIT_CONTEXT_STATUS=fired names the fired tools/vocabulary rule on a systemMessage line, including on a refusal ==="
+printf 'JIT_CONTEXT_STATUS=fired\n' > "$TEST_DIR/.claude/jit-context/config.env"
+
+IDX391="$TOOLS_DIR"
+IDX391="$IDX391/00-index.tsv"
+printf 'Bash\tfired391trigger\tfired391.md\tremind\t\t\n' >> "$IDX391"
+echo "fired391 rule body" > "$TOOLS_DIR/fired391.md"
+VIDX391="$VOCAB_DIR/00-manual"
+VIDX391="$VIDX391/00-index.tsv"
+printf 'vocabfired391kw\tvocabfired391.md\n' >> "$VIDX391"
+echo "vocabfired391 vocabulary body" > "$VOCAB_DIR/00-manual/vocabfired391.md"
+printf 'Bash\tblockfired391trigger\tblockfired391.md\tblock\t\t\n' >> "$IDX391"
+echo "blockfired391 block rule body" > "$TOOLS_DIR/blockfired391.md"
+
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"fired391trigger ./x/vocabfired391kw/y"}}')
+assert_contains "#391: an injected tools rule is named on systemMessage under fired mode" "$OUT" '"systemMessage":"JIT : tools/00-manual/fired391.md ('
+assert_contains "#391: a vocabulary match is named on systemMessage under fired mode too" "$OUT" 'JIT : vocabulary/00-manual/vocabfired391.md ('
+
+# oss:auditor self-review: assert_contains above pipes $OUT through a bare `<<<` +
+# `grep -q` with no `-F` and no LC_ALL=C -- tests/test-awk-locale-pins.sh already
+# measured that shape silently missing an ASCII needle sitting after an odd byte under
+# this suite's own ambient locale, and every needle below carries the FIRST raw
+# non-ASCII byte (the em-dash `sys_msg` now emits) this file has ever asked
+# assert_contains to find. Checked directly with `LC_ALL=C grep -qF` instead, over a
+# real file rather than a here-string, matching this repository's own stated reason for
+# that shape ($( ) drops NUL bytes, and a piped grep can invert on SIGPIPE) -- never the
+# locale-sensitive helper, for content this new.
+BLOCKOUT="$TEST_DIR/blockfired391-out.json"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"blockfired391trigger"}}')
+printf '%s' "$OUT" > "$BLOCKOUT"
+assert_blocked "#391: the block decision itself is unchanged" "$OUT"
+assert_contains "#391: a REFUSAL also names itself on systemMessage, not just an injection" "$OUT" '"systemMessage":"JIT : tools/00-manual/blockfired391.md ('
+if LC_ALL=C grep -qF -- 'blocked"' "$BLOCKOUT" 2> /dev/null; then
+  PASS=$((PASS + 1))
+  echo "  PASS: #391: the refusal line marks itself as blocked, distinct from a delivered one"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: #391: the refusal line marks itself as blocked, distinct from a delivered one"
+fi
+# Self-review finding (Explore): an EARLIER cut of this measured `length(body)` at the
+# refusing row, which undercounts by the header line and any require/forbid prefix --
+# for this fixture 30 bytes (body alone) against the 93 bytes actually delivered as
+# "reason", more than 2x off. The number now has to be pulled off the REASON the call
+# actually got, in bytes, not assumed from the fixture text -- so this reads it back
+# out of $OUT with python3 rather than typing a second copy of the expected count that
+# could drift the same way the bug did.
+# #414 (Windows CI): python3's `print()` writes stdout in TEXT mode by default, and
+# on Windows that translates every embedded "\n" in the string to "\r\n" -- the
+# reason field here carries exactly one embedded newline (header + "\n" + body), so
+# `print()` silently grew it by one byte there (93 -> 94), a platform artifact of THIS
+# TEST'S OWN measurement, not of the hook: the hook's own `length()` call runs entirely
+# inside one awk process and never crosses a text-mode stdio boundary. `sys.stdout.
+# buffer.write()` bypasses that translation on every platform -- it writes the exact
+# bytes given, encoded, with no newline translation and no trailing newline added.
+REASON_LEN=$(REASON_ENC=$(python3 -c 'import json,sys; sys.stdout.buffer.write(json.load(open(sys.argv[1]))["reason"].encode("utf-8"))' "$BLOCKOUT") && printf '%s' "$REASON_ENC" | wc -c | tr -d "[:space:]")
+# Two fixed, plain-ASCII substrings rather than one needle spanning the em-dash: this
+# says "the right byte count appears, AND the line still ends in blocked" without ever
+# asking grep to match the em-dash byte itself, which is the whole point of this rewrite.
+if LC_ALL=C grep -qF -- "($REASON_LEN""b)" "$BLOCKOUT" 2> /dev/null && LC_ALL=C grep -qF -- 'blocked"' "$BLOCKOUT" 2> /dev/null; then
+  PASS=$((PASS + 1))
+  echo "  PASS: #391: the refusal systemMessage byte count is the REAL reason size ($REASON_LEN bytes), not body alone"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: #391: the refusal systemMessage byte count is the REAL reason size ($REASON_LEN bytes), not body alone"
+  echo "    got: $(cut -c1-300 "$BLOCKOUT")"
+fi
+
+rm -f "$TEST_DIR/.claude/jit-context/config.env"
+
 # --- Cleanup ---
 rm -rf "$TEST_DIR"
 
