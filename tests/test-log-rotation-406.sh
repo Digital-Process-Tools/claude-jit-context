@@ -189,6 +189,17 @@ fi
 # them (paired with MSYS=winsymlinks:nativestrict on the Windows CI leg), a probe that
 # still failed is a broken configuration and must FAIL rather than skip quietly --
 # run-all.sh renders a skip green.
+# Positive control on the SAME fixture shape and threshold, per this file's own header
+# convention: without a symlink obstructing hooks.log.1, this exact call DOES rotate.
+# Without this, "the symlink survives" is equally true of a jit_log_rotate that does
+# nothing at all -- confirmed by deliberately breaking the guard to always return early
+# and finding A7/A7b still passed, since neither previously proved the call was capable
+# of mutating hooks.log.1 in the first place.
+fixture a7-control
+CLAUDE_PROJECT_DIR="$PROJ" bash -c "source \"$COMMON\"; jit_log_rotate 500" 2> /dev/null
+assert_true "A7 positive control: the same fixture DOES rotate when nothing blocks it" \
+  '[ -f "$LOGDIR/hooks.log.1" ]'
+
 fixture a7
 REQUIRE_SYMLINKS="${JIT_TESTS_REQUIRE_SYMLINKS:-}"
 ln -s /etc/passwd "$LOGDIR/hooks.log.1" 2> /dev/null
@@ -218,6 +229,14 @@ fi
 # what the windows-latest CI leg actually hit on #406/#407 -- not a Windows-only quirk,
 # reproduced locally on macOS too, hence fixed in jit_log_rotate() itself rather than
 # skipped as a platform difference.
+# Positive control on the same fixture shape and threshold, same reason as A7's above:
+# without this, "the dangling symlink survives" is equally true of a jit_log_rotate
+# that does nothing.
+fixture a7b-control
+CLAUDE_PROJECT_DIR="$PROJ" bash -c "source \"$COMMON\"; jit_log_rotate 500" 2> /dev/null
+assert_true "A7b positive control: the same fixture DOES rotate when nothing blocks it" \
+  '[ -f "$LOGDIR/hooks.log.1" ]'
+
 fixture a7b
 ln -s /this-path-does-not-exist-406 "$LOGDIR/hooks.log.1" 2> /dev/null
 if [ -L "$LOGDIR/hooks.log.1" ]; then
