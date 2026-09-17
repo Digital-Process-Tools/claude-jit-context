@@ -832,24 +832,40 @@ else
       # section, it never constructs the case. A curated PATH, symlinking every external
       # command this script is actually observed to call (awk/cat/date/dirname/find/grep/
       # mkdir/printf/sed) EXCEPT git, drives it for real rather than skipping past it.
+      #
+      # #413 (Windows CI): bash itself is launched via its REAL absolute path, never
+      # through this curated farm -- a SYMLINKED bash failed to even start on
+      # windows-latest (exit 127, "error while loading shared libraries"), because MSYS
+      # resolves bash's own sibling DLLs relative to the executable's OWN real
+      # directory, and a symlink elsewhere breaks that lookup. The curated PATH is still
+      # what the CHILD process (jit-doctor.sh) uses for its OWN internal command -v /
+      # awk / grep / sed calls -- only the interpreter that launches it skips the farm.
       NOGITBIN="$TMP/d402-nogit-bin"
       mkdir -p "$NOGITBIN"
       NOGIT_READY=1
-      for c in bash printf mkdir cat grep wc date dirname find sed awk touch rm mktemp env sh basename cut tr head expr true false; do
+      BASH_REAL="$(command -v bash 2> /dev/null)"
+      [ -n "$BASH_REAL" ] || NOGIT_READY=0
+      for c in printf mkdir cat grep wc date dirname find sed awk touch rm mktemp env sh basename cut tr head expr true false; do
         b="$(command -v "$c" 2> /dev/null)"
         if [ -n "$b" ]; then ln -sf "$b" "$NOGITBIN/$c"; fi
       done
-      [ -e "$NOGITBIN/bash" ] || NOGIT_READY=0
+      # Empirical smoke test, not a platform guess (#413 self-review): if any of the
+      # OTHER symlinked tools share bash's DLL-relative-directory problem on this
+      # platform, this catches it before trusting a broken farm -- `awk` is exercised
+      # specifically because jit-doctor.sh cannot run at all without it.
+      if [ "$NOGIT_READY" = 1 ] && ! PATH="$NOGITBIN" "$BASH_REAL" -c 'awk "BEGIN{exit 0}"' > /dev/null 2>&1; then
+        NOGIT_READY=0
+      fi
       if [ "$NOGIT_READY" = 1 ]; then
         ST=0
         : > "$OUT"
         : > "$ERR"
-        (cd "$D402/wt" && env -u CLAUDE_PLUGIN_ROOT "CLAUDE_PROJECT_DIR=$D402/main" "HOME=$TMP/home" "PATH=$NOGITBIN" bash "$DOCTOR" --base "$D402/wt/.claude/jit-context" > "$OUT" 2> "$ERR") || ST=$?
+        (cd "$D402/wt" && env -u CLAUDE_PLUGIN_ROOT "CLAUDE_PROJECT_DIR=$D402/main" "HOME=$TMP/home" "PATH=$NOGITBIN" "$BASH_REAL" "$DOCTOR" --base "$D402/wt/.claude/jit-context" > "$OUT" 2> "$ERR") || ST=$?
         assert_has "no git on PATH at all: still says cannot tell, never silent" "$OUT" "git is not on PATH"
         assert_lacks "and never claims a mismatch it could not check for" "$OUT" "names a DIFFERENT git worktree"
         assert_exit "no git on PATH: still exit 0" 0 "$ST"
       else
-        echo "  SKIPPED: could not build a curated PATH without git (a required external command has no resolvable path on this machine) -- the 'no git on PATH' branch was not exercised."
+        echo "  SKIPPED: could not build a working curated PATH without git on this platform (bash unresolvable, or a symlinked tool cannot actually run here) -- the 'no git on PATH' branch was not exercised."
       fi
     else
       echo "  SKIPPED: 'git worktree add' failed on this platform -- see $D402/worktree-add.log."

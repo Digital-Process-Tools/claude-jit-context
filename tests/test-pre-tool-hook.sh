@@ -1096,7 +1096,15 @@ fi
 # actually got, in bytes, not assumed from the fixture text -- so this reads it back
 # out of $OUT with python3 rather than typing a second copy of the expected count that
 # could drift the same way the bug did.
-REASON_LEN=$(REASON_ENC=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["reason"])' "$BLOCKOUT") && printf '%s' "$REASON_ENC" | wc -c | tr -d "[:space:]")
+# #414 (Windows CI): python3's `print()` writes stdout in TEXT mode by default, and
+# on Windows that translates every embedded "\n" in the string to "\r\n" -- the
+# reason field here carries exactly one embedded newline (header + "\n" + body), so
+# `print()` silently grew it by one byte there (93 -> 94), a platform artifact of THIS
+# TEST'S OWN measurement, not of the hook: the hook's own `length()` call runs entirely
+# inside one awk process and never crosses a text-mode stdio boundary. `sys.stdout.
+# buffer.write()` bypasses that translation on every platform -- it writes the exact
+# bytes given, encoded, with no newline translation and no trailing newline added.
+REASON_LEN=$(REASON_ENC=$(python3 -c 'import json,sys; sys.stdout.buffer.write(json.load(open(sys.argv[1]))["reason"].encode("utf-8"))' "$BLOCKOUT") && printf '%s' "$REASON_ENC" | wc -c | tr -d "[:space:]")
 # Two fixed, plain-ASCII substrings rather than one needle spanning the em-dash: this
 # says "the right byte count appears, AND the line still ends in blocked" without ever
 # asking grep to match the em-dash byte itself, which is the whole point of this rewrite.
