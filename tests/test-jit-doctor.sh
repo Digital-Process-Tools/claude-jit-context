@@ -842,7 +842,6 @@ else
       [ -e "$NOGITBIN/bash" ] || NOGIT_READY=0
       if [ "$NOGIT_READY" = 1 ]; then
         ST=0
-        OUT_SAVE=""
         : > "$OUT"
         : > "$ERR"
         (cd "$D402/wt" && env -u CLAUDE_PLUGIN_ROOT "CLAUDE_PROJECT_DIR=$D402/main" "HOME=$TMP/home" "PATH=$NOGITBIN" bash "$DOCTOR" --base "$D402/wt/.claude/jit-context" > "$OUT" 2> "$ERR") || ST=$?
