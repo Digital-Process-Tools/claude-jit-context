@@ -807,6 +807,12 @@ else
       (cd "$D402/wt" && run_doctor_with_pd "$NOTGIT" --base "$NOTGIT/.claude/jit-context") || ST=$?
       assert_has "control: a non-git CLAUDE_PROJECT_DIR says cannot tell, not a false match" "$OUT" "cannot tell whether CLAUDE_PROJECT_DIR"
       assert_lacks "control: and never claims the trees are the SAME (a false positive in the other direction)" "$OUT" "names a DIFFERENT git worktree"
+      # Second-pass self-review finding: the boilerplate prefix above would ALSO pass a
+      # future bug that always blames the wrong side (e.g. CLAUDE_PROJECT_DIR named as
+      # unresolved even when $PWD was the actual failure). Assert the OFFENDING side by
+      # name, and that the healthy side is never named as unresolved.
+      assert_has "control: names CLAUDE_PROJECT_DIR as the unresolved side" "$OUT" "CLAUDE_PROJECT_DIR ($NOTGIT)"
+      assert_lacks "control: never blames \$PWD, which resolved fine here" "$OUT" "\$PWD ($D402/wt)"
       assert_exit "control: exit 0" 0 "$ST"
 
       # Same shape, the other side missing: cwd is not inside a git worktree at all
@@ -817,7 +823,35 @@ else
       (cd "$NOTGIT" && run_doctor_with_pd "$D402/main" --base "$NOTGIT/.claude/jit-context") || ST=$?
       assert_has "control: a non-git cwd says cannot tell too" "$OUT" "cannot tell whether CLAUDE_PROJECT_DIR"
       assert_lacks "control: and never claims a mismatch it could not actually see" "$OUT" "names a DIFFERENT git worktree"
+      assert_has "control: names \$PWD as the unresolved side this time" "$OUT" "\$PWD ($NOTGIT)"
+      assert_lacks "control: never blames CLAUDE_PROJECT_DIR, which resolved fine here" "$OUT" "CLAUDE_PROJECT_DIR ($D402/main)"
       assert_exit "control: exit 0" 0 "$ST"
+
+      # Second-pass self-review finding: the "git is not on PATH" branch had zero test
+      # coverage -- the suite's OWN top-level "no git at all" guard only SKIPS this whole
+      # section, it never constructs the case. A curated PATH, symlinking every external
+      # command this script is actually observed to call (awk/cat/date/dirname/find/grep/
+      # mkdir/printf/sed) EXCEPT git, drives it for real rather than skipping past it.
+      NOGITBIN="$TMP/d402-nogit-bin"
+      mkdir -p "$NOGITBIN"
+      NOGIT_READY=1
+      for c in bash printf mkdir cat grep wc date dirname find sed awk touch rm mktemp env sh basename cut tr head expr true false; do
+        b="$(command -v "$c" 2> /dev/null)"
+        if [ -n "$b" ]; then ln -sf "$b" "$NOGITBIN/$c"; fi
+      done
+      [ -e "$NOGITBIN/bash" ] || NOGIT_READY=0
+      if [ "$NOGIT_READY" = 1 ]; then
+        ST=0
+        OUT_SAVE=""
+        : > "$OUT"
+        : > "$ERR"
+        (cd "$D402/wt" && env -u CLAUDE_PLUGIN_ROOT "CLAUDE_PROJECT_DIR=$D402/main" "HOME=$TMP/home" "PATH=$NOGITBIN" bash "$DOCTOR" --base "$D402/wt/.claude/jit-context" > "$OUT" 2> "$ERR") || ST=$?
+        assert_has "no git on PATH at all: still says cannot tell, never silent" "$OUT" "git is not on PATH"
+        assert_lacks "and never claims a mismatch it could not check for" "$OUT" "names a DIFFERENT git worktree"
+        assert_exit "no git on PATH: still exit 0" 0 "$ST"
+      else
+        echo "  SKIPPED: could not build a curated PATH without git (a required external command has no resolvable path on this machine) -- the 'no git on PATH' branch was not exercised."
+      fi
     else
       echo "  SKIPPED: 'git worktree add' failed on this platform -- see $D402/worktree-add.log."
       echo "           Nothing here was tested."
