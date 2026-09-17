@@ -100,8 +100,9 @@ JIT_AWK_ARGS=(
   -v project="${CLAUDE_PROJECT_DIR:-.}"
   -v log_tmp="$JIT_TMP"
   -v missing_bins="$JIT_MISSING_REQUIRES"
+  -v status_mode="$JIT_STATUS"
 )
-JIT_AWK_PROGRAM="$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE"'
+JIT_AWK_PROGRAM="$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE$JIT_AWK_ENVELOPE_SYSMSG"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -368,6 +369,11 @@ END {
 
   nblk = 0
   blocked = ""
+  # #391: JIT_CONTEXT_STATUS=fired names each fired rule on its own systemMessage
+  # line -- see jit_fmt_bytes() and jit_envelope_inject_sysmsg()/jit_envelope_block_sysmsg()
+  # in common.sh. Built for tools, vocabulary AND a refusal alike, gated on status_mode
+  # so a project on the "summary"/"off" default pays nothing for it.
+  sys_msg = ""
   log_matches = ""
   sep = ""
   refused = ""
@@ -793,6 +799,7 @@ END {
           # requirement -- which is the safer direction and still wrong.
           if (index(fold_full, jit_fold_latin1(tolower(reqs[ri]))) == 0) {
             blocked = "BLOCKED: Missing required: " reqs[ri] ". " body
+            if (status_mode == "fired") sys_msg = "JIT : tools/" tool_layer "/" r_file " (" jit_fmt_bytes(length(body)) ") — blocked"
             log_matches = log_matches sep "tool:" r_logname "(BLOCKED:" reqs[ri] ")"
             sep = ", "
             # NOTHING is marked here (#139). This branch used to mark, on the reasoning that
@@ -814,6 +821,7 @@ END {
           # clé-privée` stopped seeing `CLÉ-PRIVÉE` and the deny-list rule allowed the call.
           if (index(fold_full, jit_fold_latin1(tolower(forbs[fi]))) > 0) {
             blocked = "BLOCKED: Forbidden: " forbs[fi] ". " body
+            if (status_mode == "fired") sys_msg = "JIT : tools/" tool_layer "/" r_file " (" jit_fmt_bytes(length(body)) ") — blocked"
             log_matches = log_matches sep "tool:" r_logname "(BLOCKED:" forbs[fi] ")"
             sep = ", "
             # Marks nothing, same as the require refusal above (#139).
@@ -842,11 +850,13 @@ END {
       if (index(r_modes, "block") > 0 && !requires_missing && blocked == "") {
         log_matches = log_matches sep "tool:" r_logname "(" r_match ")[full:block]"
         sep = ", "
-        # Marks nothing (#139). This was the line that disarmed `mode: once, block`: the
-        # first matching call of a session refused and marked, and every call after it left
-        # the loop at the `once` check before reaching this branch at all.
-        # body, not content: a block is a refusal, and a refusal is never a summary.
         blocked = header "\n" body
+        # #391: a refusal is the one line #368 measurement argued was worth the most --
+        # JIT_CONTEXT_STATUS=fired named every OTHER dimension fire and said nothing when
+        # a rule REFUSED a call, which is the opposite of quiet. No apostrophe in this
+        # comment on purpose -- it sits inside the single-quoted bash string that wraps
+        # this whole awk program, and one would close that string early.
+        if (status_mode == "fired") sys_msg = "JIT : tools/" tool_layer "/" r_file " (" jit_fmt_bytes(length(body)) ") — blocked"
         break
       }
 
@@ -953,6 +963,16 @@ END {
         # and nblk/blk[] are discarded right along with it, never read past that point.
         nblk++; blk[nblk] = adv_header "\n" content
         if (key != "") held_bytes[key] = length(adv_header "\n" content)
+        # #391: built INLINE, unlike held_bytes/held_name above -- nblk/blk[] themselves
+        # are built the same way, unconditionally, and thrown away wholesale if a LATER
+        # row in this same scan blocks (the `if (blocked != "") break` after the layer
+        # loop, and matched/jit_blk_join() never being read on the block branch below).
+        # A later block overwrites sys_msg with its OWN single line at the block site
+        # (an assignment, not an append), so nothing said here survives past that -- the
+        # same discard nblk/blk[] already get. Deferring this the way held_bytes/held_name
+        # defer the once-mode MARK would be wrong here: that mark is skipped for a
+        # non-once row on purpose, and this line must not be.
+        if (status_mode == "fired") sys_msg = sys_msg (sys_msg != "" ? "\n" : "") "JIT : tools/" tool_layer "/" r_file " (" jit_fmt_bytes(length(adv_header "\n" content)) ")"
       }
     }
     close(tools_tsv)
@@ -1196,6 +1216,11 @@ END {
           # #389: a byte record beside the mark above, same vlk -- skipped on the same
           # generic_only guard the prompt hooks own copy of this pass already uses.
           if (!generic_only) jit_shown_mark(bytes_shown_file, vlk "\t" length(vh "\n" vc))
+          # #391: named on fired mode too -- this branch commits immediately rather than
+          # deferring like the tools loop above, because a block decision has already
+          # ended the whole scan by the time vocabulary matching even starts (see the
+          # `if (blocked != "") break` right after the tools layer loop).
+          if (status_mode == "fired") sys_msg = sys_msg (sys_msg != "" ? "\n" : "") "JIT : vocabulary/" layer "/" vfile " (" jit_fmt_bytes(length(vh "\n" vc)) ")"
         }
       }
     }
@@ -1344,14 +1369,17 @@ END {
     # the whole test for what belongs in block_tail, and it only holds if the things that
     # do have one still get to use it.
     blocked = jit_json_escape(blocked block_tail)
-    printf "%s", jit_envelope_block(blocked)
+    # #391: sys_msg was already built where the refusing row set `blocked`, above --
+    # never rebuilt here, and never from `matched` (the discarded advisory rules) or
+    # `block_tail` (the refusal notices), neither of which is the refusing rule itself.
+    printf "%s", jit_envelope_block_sysmsg(blocked, (sys_msg != "") ? jit_json_escape(sys_msg) : "")
   } else if ((matched = jit_blk_join()) != "") {
     # jit_blk_join() (common.sh, JIT_AWK_BLK_BUILD, #230) assembles the "# JIT-CTX-BLOCKS"
     # manifest from nblk/blk[] the same way pre-prompt-hook.sh always has -- this hook
     # never built one before, so a consumer walking additionalContext always fell back to
     # searching it for "\n---\n", a separator an entry body can forge.
     matched = jit_json_escape(matched)
-    printf "%s", jit_envelope_inject("PreToolUse", matched)
+    printf "%s", jit_envelope_inject_sysmsg("PreToolUse", matched, (sys_msg != "") ? jit_json_escape(sys_msg) : "")
   } else {
     print "{}"
   }

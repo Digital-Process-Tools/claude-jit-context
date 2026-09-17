@@ -174,6 +174,32 @@ echo "tree"
 printf '  %-20s %s\n' "JIT_BASE" "$BASE"
 printf '  %-20s %s\n' "resolved from" "$BASE_FROM"
 printf '  %-20s %s\n' "CLAUDE_PROJECT_DIR" "${CLAUDE_PROJECT_DIR:-(unset)}"
+
+# #402: the leading candidate for a report of stale jit-context bodies surviving a
+# confirmed on-disk edit -- a WORKTREE session whose CLAUDE_PROJECT_DIR still names the
+# MAIN clone (or another worktree entirely). Every hook resolves JIT_BASE against
+# CLAUDE_PROJECT_DIR, never against $PWD (the "second trap" this repository own
+# CLAUDE.md already names), so an edit made in the tree the agent is actually sitting in
+# can be served back from a DIFFERENT tree's copy of the same relative path, silently.
+# rebuild-tsv.sh already refuses this shape at WRITE time (#231,
+# JIT_CONTEXT_ALLOW_CROSS_TREE); nothing on the READ side has ever surfaced it, and #402
+# itself could not confirm a mechanism -- this makes the most likely one checkable
+# rather than merely documented in prose.
+#
+# Advisory, not a defect: CLAUDE_PROJECT_DIR need not be a git repository at all (a
+# plain directory with no .git is a normal, healthy setup), and this must not read that
+# absence as a mismatch. `git rev-parse --show-toplevel` failing on EITHER side means
+# this check could not be run, not that the trees agree -- so it says nothing rather
+# than a false negative. Two failures, not one -- $CLAUDE_PROJECT_DIR is a git repo but
+# $PWD is not (or the reverse) must decline for the exact same reason a genuine mismatch
+# would be missed if either side were skipped.
+if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && command -v git > /dev/null 2>&1; then
+  PWD_TOPLEVEL="$(cd "$PWD" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)"
+  CPD_TOPLEVEL="$(cd "$CLAUDE_PROJECT_DIR" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)"
+  if [ -n "$PWD_TOPLEVEL" ] && [ -n "$CPD_TOPLEVEL" ] && [ "$PWD_TOPLEVEL" != "$CPD_TOPLEVEL" ]; then
+    advise "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $CPD_TOPLEVEL) names a DIFFERENT git worktree than the one this shell is sitting in ($PWD -- git worktree $PWD_TOPLEVEL). Every hook resolves JIT_BASE from CLAUDE_PROJECT_DIR, never from \$PWD -- an edit made in the tree you are sitting in can be served back from the OTHER tree copy of the same relative path, silently (#402)."
+  fi
+fi
 echo ""
 
 # --- which copy of the hooks would run ---------------------------------------

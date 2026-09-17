@@ -87,6 +87,18 @@ run_doctor() {
   return "$st"
 }
 
+# #402: the ONE section below that needs CLAUDE_PROJECT_DIR actually SET (to something
+# other than the invoking shell's own cwd) rather than removed, so it gets its own
+# runner instead of a flag on run_doctor above.
+run_doctor_with_pd() {
+  local pd="$1" st=0
+  shift
+  : > "$OUT"
+  : > "$ERR"
+  env -u CLAUDE_PLUGIN_ROOT "CLAUDE_PROJECT_DIR=$pd" "HOME=$TMP/home" bash "$DOCTOR" "$@" > "$OUT" 2> "$ERR" || st=$?
+  return "$st"
+}
+
 # The index file name is held in a variable and never written beside a redirect: this
 # repository own tools/00-manual rule blocks a shell write to that name and reads the
 # whole command string, so a literal here is refused before the fixture is built.
@@ -740,6 +752,67 @@ else
   assert_exit "still advisory-only, exit 0" 0 "$ST"
 fi
 chmod 644 "$UNREADIDX/tools/00-manual/$IDX" 2> /dev/null || true
+
+# =====================================================================================
+echo ""
+echo "=== #402: CLAUDE_PROJECT_DIR naming a DIFFERENT git worktree is advisory, never silent ==="
+if ! git --version > /dev/null 2>&1; then
+  echo "  SKIPPED: no git on PATH -- this section tests the git-worktree case specifically"
+  echo "           and cannot construct it without git. Nothing here was tested."
+else
+  D402="$TMP/d402"
+  mkdir -p "$D402/main"
+  if (
+    cd "$D402/main" \
+      && git init -q \
+      && git config user.email "t@example.com" \
+      && git config user.name "t" \
+      && git commit -q --allow-empty -m init
+  ) > "$D402/git-init.log" 2>&1; then
+    mk_tree "$D402/main/.claude/jit-context"
+    if (cd "$D402/main" && git worktree add -q "$D402/wt" -b jit402-wt) > "$D402/worktree-add.log" 2>&1; then
+      mk_tree "$D402/wt/.claude/jit-context"
+
+      # The regression itself: sitting IN the worktree, CLAUDE_PROJECT_DIR still names
+      # the main clone -- #402's leading candidate, reproduced rather than assumed.
+      ST=0
+      (cd "$D402/wt" && run_doctor_with_pd "$D402/main" --base "$D402/wt/.claude/jit-context") || ST=$?
+      assert_has "a worktree session with a stale CLAUDE_PROJECT_DIR gets the #402 advisory" "$OUT" "#402"
+      assert_has "and names the git worktree this shell is actually sitting in" "$OUT" "$D402/wt"
+      assert_has "and the one CLAUDE_PROJECT_DIR actually names" "$OUT" "$D402/main"
+      assert_exit "advisory-only, never a defect -- still exit 0" 0 "$ST"
+
+      # Positive control: CLAUDE_PROJECT_DIR agreeing with the shell's own worktree
+      # never raises it, on either side of the split.
+      ST=0
+      (cd "$D402/main" && run_doctor_with_pd "$D402/main" --base "$D402/main/.claude/jit-context") || ST=$?
+      assert_lacks "control: CLAUDE_PROJECT_DIR agreeing with cwd raises nothing (main)" "$OUT" "#402"
+      assert_exit "control: exit 0" 0 "$ST"
+
+      ST=0
+      (cd "$D402/wt" && run_doctor_with_pd "$D402/wt" --base "$D402/wt/.claude/jit-context") || ST=$?
+      assert_lacks "control: CLAUDE_PROJECT_DIR agreeing with cwd raises nothing (worktree)" "$OUT" "#402"
+      assert_exit "control: exit 0" 0 "$ST"
+
+      # Negative control: CLAUDE_PROJECT_DIR pointing at a plain, non-git directory must
+      # decline rather than manufacture a false mismatch -- absence of a signal is not
+      # evidence of one.
+      NOTGIT="$TMP/d402-notgit"
+      mkdir -p "$NOTGIT/.claude/jit-context"
+      mk_tree "$NOTGIT/.claude/jit-context"
+      ST=0
+      (cd "$D402/wt" && run_doctor_with_pd "$NOTGIT" --base "$NOTGIT/.claude/jit-context") || ST=$?
+      assert_lacks "control: a non-git CLAUDE_PROJECT_DIR declines rather than false-positives" "$OUT" "#402"
+      assert_exit "control: exit 0" 0 "$ST"
+    else
+      echo "  SKIPPED: 'git worktree add' failed on this platform -- see $D402/worktree-add.log."
+      echo "           Nothing here was tested."
+    fi
+  else
+    echo "  SKIPPED: could not initialise a git repo here -- see $D402/git-init.log."
+    echo "           Nothing here was tested."
+  fi
+fi
 
 echo ""
 echo "========================"

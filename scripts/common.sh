@@ -3656,10 +3656,14 @@ function jit_envelope_empty() {
   return "{}"
 }
 '
-# #367: kept OUT of JIT_AWK_ENVELOPE above -- that macro is included in pre-tool-hook.sh
-# too, which sits right at Linux's per-argument exec() cap (#369) and does not use
-# systemMessage (see its own tools-loop comment). Only pre-prompt-hook.sh and
-# pre-path-hook.sh add this one, so pre-tool-hook.sh pays nothing for it.
+# #367 excluded this macro from pre-tool-hook.sh because that hook sat right at Linux's
+# per-argument exec() cap (#369). #371 then moved that hook's composed program off argv
+# entirely (a mktemp'd file, read via `awk -f`), so a file on disk has no such limit --
+# the reason for the exclusion is gone, and #391 folds this macro into pre-tool-hook.sh
+# too, adding jit_envelope_block_sysmsg() below for its one shape the other two hooks
+# never needed: a REFUSAL that also carries a systemMessage line naming which rule
+# refused (#368 measured that Claude Code delivers systemMessage on a refused
+# PreToolUse call too, as its own event ahead of the tool_result error).
 # shellcheck disable=SC2034
 JIT_AWK_ENVELOPE_SYSMSG='
 function jit_fmt_bytes(n) {
@@ -3671,6 +3675,10 @@ function jit_envelope_inject_sysmsg(event, text_escaped, sysmsg_escaped) {
   if (text_escaped == "") return "{\"systemMessage\":\"" sysmsg_escaped "\"}"
   if (sysmsg_escaped == "") return jit_envelope_inject(event, text_escaped)
   return "{\"hookSpecificOutput\":{\"hookEventName\":\"" event "\",\"additionalContext\":\"" text_escaped "\"},\"systemMessage\":\"" sysmsg_escaped "\"}"
+}
+function jit_envelope_block_sysmsg(reason_escaped, sysmsg_escaped) {
+  if (sysmsg_escaped == "") return jit_envelope_block(reason_escaped)
+  return "{\"decision\":\"block\",\"reason\":\"" reason_escaped "\",\"systemMessage\":\"" sysmsg_escaped "\"}"
 }
 '
 

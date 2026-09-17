@@ -1044,6 +1044,37 @@ echo "364 raw-name block rule body" > "$TOOLS_DIR/rawpatch364.md"
 OUT=$(run_hook '{"tool_name":"apply_patch","tool_input":{"file_path":"/tmp/rawpatch364.tsv"}}')
 assert_blocked "#364: a rule written tool: apply_patch still fires on that raw name" "$OUT"
 
+# --- #391: JIT_CONTEXT_STATUS=fired must cover the tools dimension too, including a
+# refusal. Own rows/files so nothing above collides with them, and config.env is written
+# LAST in this shared TEST_DIR -- every earlier OUT= call in this file has already run,
+# so switching the mode here cannot change an assertion already made. IDX391 splits the
+# redirect from the literal index name, same workaround IDX364 above already uses. ---
+echo ""
+echo "=== #391: JIT_CONTEXT_STATUS=fired names the fired tools/vocabulary rule on a systemMessage line, including on a refusal ==="
+printf 'JIT_CONTEXT_STATUS=fired\n' > "$TEST_DIR/.claude/jit-context/config.env"
+
+IDX391="$TOOLS_DIR"
+IDX391="$IDX391/00-index.tsv"
+printf 'Bash\tfired391trigger\tfired391.md\tremind\t\t\n' >> "$IDX391"
+echo "fired391 rule body" > "$TOOLS_DIR/fired391.md"
+VIDX391="$VOCAB_DIR/00-manual"
+VIDX391="$VIDX391/00-index.tsv"
+printf 'vocabfired391kw\tvocabfired391.md\n' >> "$VIDX391"
+echo "vocabfired391 vocabulary body" > "$VOCAB_DIR/00-manual/vocabfired391.md"
+printf 'Bash\tblockfired391trigger\tblockfired391.md\tblock\t\t\n' >> "$IDX391"
+echo "blockfired391 block rule body" > "$TOOLS_DIR/blockfired391.md"
+
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"fired391trigger ./x/vocabfired391kw/y"}}')
+assert_contains "#391: an injected tools rule is named on systemMessage under fired mode" "$OUT" '"systemMessage":"JIT : tools/00-manual/fired391.md ('
+assert_contains "#391: a vocabulary match is named on systemMessage under fired mode too" "$OUT" 'JIT : vocabulary/00-manual/vocabfired391.md ('
+
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"blockfired391trigger"}}')
+assert_blocked "#391: the block decision itself is unchanged" "$OUT"
+assert_contains "#391: a REFUSAL also names itself on systemMessage, not just an injection" "$OUT" '"systemMessage":"JIT : tools/00-manual/blockfired391.md ('
+assert_contains "#391: the refusal line marks itself as blocked, distinct from a delivered one" "$OUT" '— blocked"'
+
+rm -f "$TEST_DIR/.claude/jit-context/config.env"
+
 # --- Cleanup ---
 rm -rf "$TEST_DIR"
 
