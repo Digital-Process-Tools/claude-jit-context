@@ -228,7 +228,13 @@ another plugin's observation. #288 supplied the missing half, on codex-cli 0.150
 `PreToolUse` fired, the payload carried `tool_name` and `tool_input` under those names,
 and a `{"decision":"block"}` stopped a real command from running. Gemini CLI has a row
 and is still `UNKNOWN`, for exactly the reason Codex no longer is -- nobody has watched
-a block fire under it.
+a block fire under it. #252 later filled in that row's real signature and project-dir
+variables (`GEMINI_SESSION_ID`, `GEMINI_PROJECT_DIR`/`CLAUDE_PROJECT_DIR`) from a read
+of gemini-cli's own shipped source, which is a stronger check than the docs Codex's
+CODEX_SESSION_ID turned out not to survive -- but it is still a source read, not a live
+run, and gemini-cli's `state` stays `UNKNOWN` and its refusal `refusal-not-established`
+until one happens. That attempt failed on this account's own auth tier before a single
+hook fired, which is the actual blocker: an environment limitation, not a design one.
 
 That last sentence was measured on a `Bash` call, and a live Codex run (#364) found the
 same envelope does not mean the same vocabulary: Codex names a file edit `apply_patch`,

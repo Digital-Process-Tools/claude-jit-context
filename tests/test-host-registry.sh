@@ -98,10 +98,27 @@ assert_eq "both signatures present -> claude-code wins (registry order)" "claude
 # inverted: there is nothing left to detect codex BY. What replaces them is the
 # misdetection fixture in the #289 block below -- the failure that actually happens --
 # together with the two envelope-equality assertions that make it cost nothing.
-# Gemini CLI carries no signature at all -- it is never the RESULT of
-# detection, by design (scripts/host.sh's own comment on this row, matching
-# remember's registry). Nothing to assert it detects AS; the case that matters
-# is that nothing spurious detects as gemini-cli, which no fixture here can do.
+# #252 (2026-09-17): reading gemini-cli 0.58.0's own shipped bundle
+# (packages/core/src/hooks/hookRunner.ts, HookRunner.executeCommandHook())
+# found it sets GEMINI_SESSION_ID, GEMINI_PROJECT_DIR, GEMINI_CWD and
+# GEMINI_PLANS_DIR in every hook child process's environment -- unlike
+# Codex's CODEX_SESSION_ID/CODEX_THREAD_ID (#288), which the same style of
+# read proved never reaches a real hook process at all. So gemini-cli DOES
+# now have a real signature, source-verified rather than guessed: the
+# "carries no signature, by design" framing this comment used to have was
+# built on a premise ("Gemini CLI documents none for command hooks") that
+# this same investigation found to be false, not on a design choice worth
+# keeping. GEMINI_PROJECT_DIR is excluded as a signature candidate for the
+# same reason CLAUDE_PROJECT_DIR/CLAUDE_PLUGIN_ROOT are excluded above: the
+# same source also shows Gemini sets CLAUDE_PROJECT_DIR on every hook "for
+# compatibility", so a variable a second host's compatibility alias could
+# also carry can never BE the signature that tells them apart.
+assert_eq "GEMINI_SESSION_ID alone -> gemini-cli (source-verified, #252)" "gemini-cli" "$(run_detect env GEMINI_SESSION_ID=abc)"
+assert_eq "GEMINI_PROJECT_DIR alone -> still unknown, not a signature" "unknown" "$(run_detect env GEMINI_PROJECT_DIR=/tmp/x)"
+assert_eq "GEMINI_PROJECT_DIR and CLAUDE_PROJECT_DIR together -> still unknown" "unknown" \
+  "$(run_detect env GEMINI_PROJECT_DIR=/tmp/x CLAUDE_PROJECT_DIR=/tmp/x)"
+assert_eq "claude-code and gemini-cli signatures both present -> claude-code wins (registry order)" "claude-code" \
+  "$(run_detect env CLAUDE_CODE_SESSION_ID=abc GEMINI_SESSION_ID=xyz)"
 
 echo ""
 echo "=== jit_host_state / jit_host_inject_envelope / jit_host_refusal_state: three answers, never two ==="
@@ -110,7 +127,20 @@ run_lookup() {
 }
 assert_eq "claude-code state is OBSERVED" "OBSERVED" "$(run_lookup jit_host_state claude-code)"
 assert_eq "codex state is OBSERVED (#288 watched it fire)" "OBSERVED" "$(run_lookup jit_host_state codex)"
-assert_eq "gemini-cli state is UNKNOWN" "UNKNOWN" "$(run_lookup jit_host_state gemini-cli)"
+assert_eq "gemini-cli state is UNKNOWN -- source-read is not OBSERVED (#252)" "UNKNOWN" "$(run_lookup jit_host_state gemini-cli)"
+
+# #252: gemini-cli's columns 2/3 are now filled from a source read of the
+# installed gemini-cli 0.58.0 bundle (see the registry comment above the
+# JIT_HOST_REGISTRY assignment), not from a live run -- so state (column 5)
+# and the envelope columns (6/7) stay exactly as they were. Filling columns
+# 2/3 is a plain data correction, never a claim this plugin has been watched
+# run under Gemini.
+gemini_row() {
+  env -i PATH="$PATH" bash -c 'source "'"$HOST_SH"'" >/dev/null 2>&1; jit_host_row gemini-cli'
+}
+IFS='|' read -r _ gemini_sig gemini_proj_dir _ _ _ _ _ <<< "$(gemini_row)"
+assert_eq "gemini-cli row carries its real signature var (#252)" "GEMINI_SESSION_ID" "$gemini_sig"
+assert_eq "gemini-cli row carries its real + compat project-dir vars (#252)" "GEMINI_PROJECT_DIR,CLAUDE_PROJECT_DIR" "$gemini_proj_dir"
 assert_eq "a name with no row is UNKNOWN" "UNKNOWN" "$(run_lookup jit_host_state bogus-host)"
 assert_eq "jit_host_detect own miss value is UNKNOWN" "UNKNOWN" "$(run_lookup jit_host_state unknown)"
 
