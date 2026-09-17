@@ -1068,10 +1068,46 @@ OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"fired391trigger ./x
 assert_contains "#391: an injected tools rule is named on systemMessage under fired mode" "$OUT" '"systemMessage":"JIT : tools/00-manual/fired391.md ('
 assert_contains "#391: a vocabulary match is named on systemMessage under fired mode too" "$OUT" 'JIT : vocabulary/00-manual/vocabfired391.md ('
 
+# oss:auditor self-review: assert_contains above pipes $OUT through a bare `<<<` +
+# `grep -q` with no `-F` and no LC_ALL=C -- tests/test-awk-locale-pins.sh already
+# measured that shape silently missing an ASCII needle sitting after an odd byte under
+# this suite's own ambient locale, and every needle below carries the FIRST raw
+# non-ASCII byte (the em-dash `sys_msg` now emits) this file has ever asked
+# assert_contains to find. Checked directly with `LC_ALL=C grep -qF` instead, over a
+# real file rather than a here-string, matching this repository's own stated reason for
+# that shape ($( ) drops NUL bytes, and a piped grep can invert on SIGPIPE) -- never the
+# locale-sensitive helper, for content this new.
+BLOCKOUT="$TEST_DIR/blockfired391-out.json"
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"blockfired391trigger"}}')
+printf '%s' "$OUT" > "$BLOCKOUT"
 assert_blocked "#391: the block decision itself is unchanged" "$OUT"
 assert_contains "#391: a REFUSAL also names itself on systemMessage, not just an injection" "$OUT" '"systemMessage":"JIT : tools/00-manual/blockfired391.md ('
-assert_contains "#391: the refusal line marks itself as blocked, distinct from a delivered one" "$OUT" '— blocked"'
+if LC_ALL=C grep -qF -- 'blocked"' "$BLOCKOUT" 2> /dev/null; then
+  PASS=$((PASS + 1))
+  echo "  PASS: #391: the refusal line marks itself as blocked, distinct from a delivered one"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: #391: the refusal line marks itself as blocked, distinct from a delivered one"
+fi
+# Self-review finding (Explore): an EARLIER cut of this measured `length(body)` at the
+# refusing row, which undercounts by the header line and any require/forbid prefix --
+# for this fixture 30 bytes (body alone) against the 93 bytes actually delivered as
+# "reason", more than 2x off. The number now has to be pulled off the REASON the call
+# actually got, in bytes, not assumed from the fixture text -- so this reads it back
+# out of $OUT with python3 rather than typing a second copy of the expected count that
+# could drift the same way the bug did.
+REASON_LEN=$(REASON_ENC=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["reason"])' "$BLOCKOUT") && printf '%s' "$REASON_ENC" | wc -c | tr -d "[:space:]")
+# Two fixed, plain-ASCII substrings rather than one needle spanning the em-dash: this
+# says "the right byte count appears, AND the line still ends in blocked" without ever
+# asking grep to match the em-dash byte itself, which is the whole point of this rewrite.
+if LC_ALL=C grep -qF -- "($REASON_LEN""b)" "$BLOCKOUT" 2> /dev/null && LC_ALL=C grep -qF -- 'blocked"' "$BLOCKOUT" 2> /dev/null; then
+  PASS=$((PASS + 1))
+  echo "  PASS: #391: the refusal systemMessage byte count is the REAL reason size ($REASON_LEN bytes), not body alone"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: #391: the refusal systemMessage byte count is the REAL reason size ($REASON_LEN bytes), not body alone"
+  echo "    got: $(cut -c1-300 "$BLOCKOUT")"
+fi
 
 rm -f "$TEST_DIR/.claude/jit-context/config.env"
 

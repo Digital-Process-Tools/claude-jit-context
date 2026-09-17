@@ -374,6 +374,13 @@ END {
   # in common.sh. Built for tools, vocabulary AND a refusal alike, gated on status_mode
   # so a project on the "summary"/"off" default pays nothing for it.
   sys_msg = ""
+  # #391 self-review: only the NAME is captured at the refusing row -- the byte count
+  # cannot be, because `blocked` may still grow (block_tail, the withheld/refused-row
+  # notices, appended well after the row loop ends) before it is actually delivered.
+  # Measuring `body` alone at the row undercounted every refusal by the header/prefix
+  # and any block_tail, sometimes by more than half. The real size is read off
+  # `blocked block_tail` at the print site instead, the same instant it is escaped.
+  sys_msg_block_file = ""
   log_matches = ""
   sep = ""
   refused = ""
@@ -799,7 +806,7 @@ END {
           # requirement -- which is the safer direction and still wrong.
           if (index(fold_full, jit_fold_latin1(tolower(reqs[ri]))) == 0) {
             blocked = "BLOCKED: Missing required: " reqs[ri] ". " body
-            if (status_mode == "fired") sys_msg = "JIT : tools/" tool_layer "/" r_file " (" jit_fmt_bytes(length(body)) ") — blocked"
+            if (status_mode == "fired") sys_msg_block_file = "tools/" tool_layer "/" r_file
             log_matches = log_matches sep "tool:" r_logname "(BLOCKED:" reqs[ri] ")"
             sep = ", "
             # NOTHING is marked here (#139). This branch used to mark, on the reasoning that
@@ -821,7 +828,7 @@ END {
           # clé-privée` stopped seeing `CLÉ-PRIVÉE` and the deny-list rule allowed the call.
           if (index(fold_full, jit_fold_latin1(tolower(forbs[fi]))) > 0) {
             blocked = "BLOCKED: Forbidden: " forbs[fi] ". " body
-            if (status_mode == "fired") sys_msg = "JIT : tools/" tool_layer "/" r_file " (" jit_fmt_bytes(length(body)) ") — blocked"
+            if (status_mode == "fired") sys_msg_block_file = "tools/" tool_layer "/" r_file
             log_matches = log_matches sep "tool:" r_logname "(BLOCKED:" forbs[fi] ")"
             sep = ", "
             # Marks nothing, same as the require refusal above (#139).
@@ -856,7 +863,7 @@ END {
         # a rule REFUSED a call, which is the opposite of quiet. No apostrophe in this
         # comment on purpose -- it sits inside the single-quoted bash string that wraps
         # this whole awk program, and one would close that string early.
-        if (status_mode == "fired") sys_msg = "JIT : tools/" tool_layer "/" r_file " (" jit_fmt_bytes(length(body)) ") — blocked"
+        if (status_mode == "fired") sys_msg_block_file = "tools/" tool_layer "/" r_file
         break
       }
 
@@ -1368,10 +1375,15 @@ END {
     # pre-prompt-hook.sh, which reads the same marker file. "It has no other channel" is
     # the whole test for what belongs in block_tail, and it only holds if the things that
     # do have one still get to use it.
+    # #391 self-review: the byte count has to be read HERE, off the raw (pre-escape)
+    # `blocked block_tail` -- the exact bytes about to be delivered as "reason" -- not
+    # at the refusing row, where `blocked` had not yet picked up its own header/prefix
+    # or any block_tail (the withheld/refused-row notices appended well after the row
+    # loop ends). Only the NAME travelled from the row; the size is measured fresh.
+    if (status_mode == "fired" && sys_msg_block_file != "") {
+      sys_msg = "JIT : " sys_msg_block_file " (" jit_fmt_bytes(length(blocked block_tail)) ") — blocked"
+    }
     blocked = jit_json_escape(blocked block_tail)
-    # #391: sys_msg was already built where the refusing row set `blocked`, above --
-    # never rebuilt here, and never from `matched` (the discarded advisory rules) or
-    # `block_tail` (the refusal notices), neither of which is the refusing rule itself.
     printf "%s", jit_envelope_block_sysmsg(blocked, (sys_msg != "") ? jit_json_escape(sys_msg) : "")
   } else if ((matched = jit_blk_join()) != "") {
     # jit_blk_join() (common.sh, JIT_AWK_BLK_BUILD, #230) assembles the "# JIT-CTX-BLOCKS"

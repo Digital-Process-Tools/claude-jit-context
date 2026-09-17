@@ -794,15 +794,29 @@ else
       assert_lacks "control: CLAUDE_PROJECT_DIR agreeing with cwd raises nothing (worktree)" "$OUT" "#402"
       assert_exit "control: exit 0" 0 "$ST"
 
-      # Negative control: CLAUDE_PROJECT_DIR pointing at a plain, non-git directory must
-      # decline rather than manufacture a false mismatch -- absence of a signal is not
-      # evidence of one.
+      # Negative control, tightened by self-review (oss:auditor finding): CLAUDE_PROJECT_DIR
+      # pointing at a plain, non-git directory must decline rather than manufacture a
+      # false MISMATCH -- but declining silently would read exactly like "confirmed the
+      # same tree", the identical ambiguity this file already refuses to leave standing
+      # for its OTHER advisories (`cannot tell` on the hooks-copy section above). So the
+      # check says explicitly that it could not run, and never claims a match.
       NOTGIT="$TMP/d402-notgit"
       mkdir -p "$NOTGIT/.claude/jit-context"
       mk_tree "$NOTGIT/.claude/jit-context"
       ST=0
       (cd "$D402/wt" && run_doctor_with_pd "$NOTGIT" --base "$NOTGIT/.claude/jit-context") || ST=$?
-      assert_lacks "control: a non-git CLAUDE_PROJECT_DIR declines rather than false-positives" "$OUT" "#402"
+      assert_has "control: a non-git CLAUDE_PROJECT_DIR says cannot tell, not a false match" "$OUT" "cannot tell whether CLAUDE_PROJECT_DIR"
+      assert_lacks "control: and never claims the trees are the SAME (a false positive in the other direction)" "$OUT" "names a DIFFERENT git worktree"
+      assert_exit "control: exit 0" 0 "$ST"
+
+      # Same shape, the other side missing: cwd is not inside a git worktree at all
+      # (CLAUDE_PROJECT_DIR is). Both directions of "which side could not be resolved"
+      # have to decline the same way, or the mismatch check only half covers its own
+      # blind spot.
+      ST=0
+      (cd "$NOTGIT" && run_doctor_with_pd "$D402/main" --base "$NOTGIT/.claude/jit-context") || ST=$?
+      assert_has "control: a non-git cwd says cannot tell too" "$OUT" "cannot tell whether CLAUDE_PROJECT_DIR"
+      assert_lacks "control: and never claims a mismatch it could not actually see" "$OUT" "names a DIFFERENT git worktree"
       assert_exit "control: exit 0" 0 "$ST"
     else
       echo "  SKIPPED: 'git worktree add' failed on this platform -- see $D402/worktree-add.log."
