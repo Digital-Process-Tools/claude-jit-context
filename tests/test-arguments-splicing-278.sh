@@ -72,7 +72,8 @@ for a in "$@"; do
 done
 STUB
 cp "$STUB_ROOT/scripts/jit-init.sh" "$STUB_ROOT/scripts/jit-doctor.sh"
-chmod +x "$STUB_ROOT/scripts/jit-init.sh" "$STUB_ROOT/scripts/jit-doctor.sh"
+cp "$STUB_ROOT/scripts/jit-init.sh" "$STUB_ROOT/scripts/jit-stats.sh"
+chmod +x "$STUB_ROOT/scripts/jit-init.sh" "$STUB_ROOT/scripts/jit-doctor.sh" "$STUB_ROOT/scripts/jit-stats.sh"
 
 # A directory to run the fence FROM, seeded with files a stray glob would pick up. Any
 # command body still relying on plain unquoted expansion will splice these in.
@@ -139,10 +140,30 @@ check_command_body() {
   else
     bad "commands/$name: unset \$ARGUMENTS under set -u still runs with zero extra args" "got: $out"
   fi
+
+  # D. #405: a slash command's fenced body is not guaranteed to run under
+  # bash -- if zsh is what invokes this file, `read -a` (the array-building
+  # fix for THIS issue, #278) is itself a bash-only spelling that errors
+  # `bad option: -a` under zsh, silently drops $ARGUMENTS, and reaches the
+  # stub with zero arguments instead of the two that were typed. Skipped
+  # gracefully (not silently) when no zsh is installed to run it against.
+  if command -v zsh > /dev/null 2>&1; then
+    out="$(cd "$CWD" && CLAUDE_PLUGIN_ROOT="$STUB_ROOT" ARGUMENTS='--base /some/project/.claude/jit-context' zsh "$fence" 2>&1)"
+    if grep -qF 'ARGC=2' <<< "$out" \
+      && grep -qF 'ARG1=[--base]' <<< "$out" \
+      && grep -qF 'ARG2=[/some/project/.claude/jit-context]' <<< "$out"; then
+      ok "commands/$name: \"--base DIR\" still reaches the script as two words when zsh runs this body"
+    else
+      bad "commands/$name: \"--base DIR\" still reaches the script as two words when zsh runs this body" "got: $out"
+    fi
+  else
+    echo "  SKIP: commands/$name zsh check -- no zsh on this machine"
+  fi
 }
 
 check_command_body "init.md"
 check_command_body "doctor.md"
+check_command_body "stats.md"
 
 echo ""
 echo "========================"

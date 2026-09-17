@@ -37,7 +37,8 @@ assert_contains() {
 TMP="$(mktemp -d 2> /dev/null || mktemp -d -t jitstats389)"
 trap 'chmod -R u+rwX "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 
-IDXNAME="00-index"; IDXNAME="$IDXNAME.tsv"
+IDXNAME="00-index"
+IDXNAME="$IDXNAME.tsv"
 
 new_project() {
   local p="$TMP/proj-$1"
@@ -108,7 +109,6 @@ OUT="$(bash "$SCRIPTS/jit-stats.sh" --nope 2>&1)"
 RC=$?
 [ "$RC" -eq 2 ] && ok "exit 2 on an unknown flag" || bad "expected exit 2, got $RC"
 
-
 echo "=== F: #389 self-review finding -- bytes_for() must not borrow an unrelated line's byte count ==="
 
 P="$(new_project f)"
@@ -174,6 +174,101 @@ if grep -qF "matched=FAKE-PATTERN" <<< "$OUT"; then
 else
   ok "FAKE-PATTERN is never attributed to this entry"
 fi
+echo "=== J: #405 -- a match: pattern containing a parenthesised group reports the WHOLE pattern, not the first ')' inside it ==="
+
+P="$(new_project j)"
+mkdir -p "$P/.claude/jit-context/.discovery/state" "$P/.claude/jit-context/.discovery/logs"
+printf 'loc:paths:00-manual:auth.md\n' > "$P/.claude/jit-context/.discovery/state/path-shown-sess-j.txt"
+# A real `paths` match:, wrapper-opened right after "auth.md(" -- the pattern
+# itself opens more groups than the wrapper does, which is exactly the shape
+# every real `paths` rule has (#405).
+printf '%s\n' '[12:00:00.000] pre-path (Read) 1ms | 00-manual:auth.md((^|/)(agents/([^/]+\.md|[^/]+/[^/]+\.md))$)' \
+  > "$P/.claude/jit-context/.discovery/logs/hooks.log"
+OUT="$(CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/jit-stats.sh" 2>&1)"
+assert_contains "the whole pattern is reported, not cut at the first inner ')'" "$OUT" 'matched=(^|/)(agents/([^/]+\.md|[^/]+/[^/]+\.md))$'
+if grep -qF 'matched=(^|/' <<< "$OUT" && ! grep -qF 'matched=(^|/)(agents' <<< "$OUT"; then
+  bad "cut at the first ')' inside the pattern" "got: $OUT"
+else
+  ok "not cut at the first inner ')'"
+fi
+
+echo ""
+echo "=== K: #405 -- a parenthesis-free pattern still reports correctly (control for J) ==="
+
+P="$(new_project k)"
+mkdir -p "$P/.claude/jit-context/.discovery/state" "$P/.claude/jit-context/.discovery/logs"
+printf 'loc:paths:00-manual:auth.md\n' > "$P/.claude/jit-context/.discovery/state/path-shown-sess-k.txt"
+printf '%s\n' '[12:00:00.000] pre-path (Read) 1ms | 00-manual:auth.md(NO-PARENS-HERE)' \
+  > "$P/.claude/jit-context/.discovery/logs/hooks.log"
+OUT="$(CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/jit-stats.sh" 2>&1)"
+assert_contains "a parenthesis-free pattern is unaffected by the fix" "$OUT" "matched=NO-PARENS-HERE"
+
+echo ""
+echo "=== L: #405 -- an escaped or bracketed ')' inside the pattern is not cut there either ==="
+
+P="$(new_project l)"
+mkdir -p "$P/.claude/jit-context/.discovery/state" "$P/.claude/jit-context/.discovery/logs"
+printf 'loc:paths:00-manual:auth.md\n' > "$P/.claude/jit-context/.discovery/state/path-shown-sess-l.txt"
+printf '%s\n' '[12:00:00.000] pre-path (Read) 1ms | 00-manual:auth.md(FOO[)]BAR)' \
+  > "$P/.claude/jit-context/.discovery/logs/hooks.log"
+OUT="$(CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/jit-stats.sh" 2>&1)"
+assert_contains "a bracketed ')' inside the pattern is not the cut point" "$OUT" 'matched=FOO[)]BAR'
+
+P="$(new_project l2)"
+mkdir -p "$P/.claude/jit-context/.discovery/state" "$P/.claude/jit-context/.discovery/logs"
+printf 'loc:paths:00-manual:auth.md\n' > "$P/.claude/jit-context/.discovery/state/path-shown-sess-l2.txt"
+printf '%s\n' '[12:00:00.000] pre-path (Read) 1ms | 00-manual:auth.md(FOO\)BAR)' \
+  > "$P/.claude/jit-context/.discovery/logs/hooks.log"
+OUT="$(CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/jit-stats.sh" 2>&1)"
+assert_contains "an escaped ')' inside the pattern is not the cut point" "$OUT" 'matched=FOO\)BAR'
+
+echo ""
+echo "=== M: #405 -- an entry with a byte marker renders the EXACT value, unmarked ==="
+
+P="$(new_project m)"
+mkdir -p "$P/.claude/jit-context/.discovery/state"
+printf 'loc:paths:00-manual:php-coding.md\n' > "$P/.claude/jit-context/.discovery/state/path-shown-sess-m.txt"
+printf 'loc:paths:00-manual:php-coding.md\t42\n' \
+  > "$P/.claude/jit-context/.discovery/state/bytes-shown-sess-m.txt"
+OUT="$(CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/jit-stats.sh" 2>&1)"
+assert_contains "the marker's exact value is reported, no leading ~" "$OUT" "bytes=42"
+if grep -qF 'bytes=~42' <<< "$OUT"; then
+  bad "an exact marker value must never be rendered as approximate" "got: $OUT"
+else
+  ok "not marked approximate"
+fi
+
+echo ""
+echo "=== N: #405 -- no marker, but the entry's own file is readable -- file size, VISIBLY marked approximate ==="
+
+P="$(new_project n)"
+mkdir -p "$P/.claude/jit-context/.discovery/state"
+printf 'loc:paths:00-manual:php-coding.md\n' > "$P/.claude/jit-context/.discovery/state/path-shown-sess-n.txt"
+# No bytes-shown-sess-n.txt at all -- the marker is simply missing, the #405
+# majority case.
+OUT="$(CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/jit-stats.sh" 2>&1)"
+if grep -qE 'bytes=~[1-9][0-9]*' <<< "$OUT"; then
+  ok "the file's own size is reported, marked approximate with a leading ~"
+else
+  bad "expected an approximate byte count (bytes=~N)" "got: $OUT"
+fi
+if grep -qF "bytes=unknown" <<< "$OUT"; then
+  bad "a readable file must not fall through to unknown" "got: $OUT"
+else
+  ok "did not fall through to unknown"
+fi
+
+echo ""
+echo "=== O: #405 -- no marker and no resolvable file -- genuinely unknown (control for M/N) ==="
+
+P="$(new_project o)"
+mkdir -p "$P/.claude/jit-context/.discovery/state"
+# A legacy bare shown-mark: no loc: prefix, so dim/layer/name cannot be
+# resolved to a path at all -- the fallback in N has nothing to fall back to.
+printf 'legacy-bare-name.md\n' > "$P/.claude/jit-context/.discovery/state/path-shown-sess-o.txt"
+OUT="$(CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/jit-stats.sh" 2>&1)"
+assert_contains "with nothing to correlate against, bytes stays honestly unknown" "$OUT" "bytes=unknown"
+
 echo ""
 echo "=========================================="
 echo "Results: $PASS passed, $FAIL failed"
