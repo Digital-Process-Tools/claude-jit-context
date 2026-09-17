@@ -161,21 +161,53 @@ OUT_VALID="$(CLAUDE_PROJECT_DIR="$PROJ" bash -c "
 " 2> /dev/null)"
 assert_contains "A5 positive control: a well-formed value is accepted and applied" "$OUT_VALID" "REFUSED_N=0 JIT_CONTEXT_LOG_MAX_BYTES=20000000"
 
+# A6's precondition is a directory this process genuinely cannot write to. `chmod 555`
+# does not reliably produce that on every CI host (root, or a filesystem without POSIX
+# modes) -- probe it before asserting on it, the same convention test-uncaptured-awk-crash-403.sh,
+# test-hook-tmpfile.sh, test-stop-hook.sh and test-session-markers.sh already use, rather
+# than asserting unconditionally on a precondition that may not hold.
 fixture a6
-chmod 555 "$LOGDIR"
-ORIG_A6="$(wc -c < "$LOGDIR/hooks.log" | tr -d '[:space:]')"
-CLAUDE_PROJECT_DIR="$PROJ" bash -c "source \"$COMMON\"; jit_log_rotate 500; echo rc=\$?" > "$TMPROOT/a6.out" 2> /dev/null
-chmod 755 "$LOGDIR"
-assert_contains "A6 an unwritable log directory: jit_log_rotate still returns success" "$(cat "$TMPROOT/a6.out")" "rc=0"
-assert_true "A6 an unwritable log directory: no hooks.log.1 was created" '[ ! -e "$LOGDIR/hooks.log.1" ]'
-assert_eq "A6 an unwritable log directory: hooks.log is untouched (positive control is A2 above)" \
-  "$(wc -c < "$LOGDIR/hooks.log" | tr -d '[:space:]')" "$ORIG_A6"
+chmod 555 "$LOGDIR" 2> /dev/null
+if [ -w "$LOGDIR" ]; then
+  chmod 755 "$LOGDIR" 2> /dev/null
+  echo "  SKIP-NOTE: A6 chmod did not remove write permission on $LOGDIR here (running as"
+  echo "             root, or a filesystem without POSIX modes). A6 tested nothing."
+else
+  ORIG_A6="$(wc -c < "$LOGDIR/hooks.log" | tr -d '[:space:]')"
+  CLAUDE_PROJECT_DIR="$PROJ" bash -c "source \"$COMMON\"; jit_log_rotate 500; echo rc=\$?" > "$TMPROOT/a6.out" 2> /dev/null
+  chmod 755 "$LOGDIR"
+  assert_contains "A6 an unwritable log directory: jit_log_rotate still returns success" "$(cat "$TMPROOT/a6.out")" "rc=0"
+  assert_true "A6 an unwritable log directory: no hooks.log.1 was created" '[ ! -e "$LOGDIR/hooks.log.1" ]'
+  assert_eq "A6 an unwritable log directory: hooks.log is untouched (positive control is A2 above)" \
+    "$(wc -c < "$LOGDIR/hooks.log" | tr -d '[:space:]')" "$ORIG_A6"
+fi
 
+# A7's precondition is a REAL symbolic link at hooks.log.1. On Git Bash without a real
+# symlink, `ln -s` copies the target instead -- test-log-containment.sh and
+# test-hook-tmpfile.sh document the same trap and the same fix: probe what was actually
+# built, and if JIT_TESTS_REQUIRE_SYMLINKS=1 says this environment was CONFIGURED to have
+# them (paired with MSYS=winsymlinks:nativestrict on the Windows CI leg), a probe that
+# still failed is a broken configuration and must FAIL rather than skip quietly --
+# run-all.sh renders a skip green.
 fixture a7
-ln -s /etc/passwd "$LOGDIR/hooks.log.1"
-CLAUDE_PROJECT_DIR="$PROJ" bash -c "source \"$COMMON\"; jit_log_rotate 500" 2> /dev/null
-assert_true "A7 a symlinked hooks.log.1 is never overwritten through" \
-  '[ -L "$LOGDIR/hooks.log.1" ] && [ "$(readlink "$LOGDIR/hooks.log.1")" = "/etc/passwd" ]'
+REQUIRE_SYMLINKS="${JIT_TESTS_REQUIRE_SYMLINKS:-}"
+ln -s /etc/passwd "$LOGDIR/hooks.log.1" 2> /dev/null
+if [ -L "$LOGDIR/hooks.log.1" ] && [ "$(readlink "$LOGDIR/hooks.log.1")" = "/etc/passwd" ]; then
+  CLAUDE_PROJECT_DIR="$PROJ" bash -c "source \"$COMMON\"; jit_log_rotate 500" 2> /dev/null
+  assert_true "A7 a symlinked hooks.log.1 is never overwritten through" \
+    '[ -L "$LOGDIR/hooks.log.1" ] && [ "$(readlink "$LOGDIR/hooks.log.1")" = "/etc/passwd" ]'
+elif [ "$REQUIRE_SYMLINKS" = 1 ]; then
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: A7 SYMBOLIC LINKS WERE REQUIRED AND NOT OBTAINED."
+  echo "        JIT_TESTS_REQUIRE_SYMLINKS=1 says this environment was configured to have"
+  echo "        them (MSYS=${MSYS:-<unset>}), so 'ln -s /etc/passwd ...' not producing a"
+  echo "        real symlink here is a broken configuration, not a platform without the"
+  echo "        capability. Nothing here is a defect in jit_log_rotate()."
+else
+  echo "  SKIP-NOTE: A7 could not build a real symlinked hooks.log.1 here (this platform's"
+  echo "             'ln -s' copied the target instead of linking it). Nothing about"
+  echo "             symlink containment was tested."
+fi
 
 # A8: config.env is validated by jit_load_config(). The ENVIRONMENT is not -- nothing in
 # jit_load_config() ever sees a value exported into the hook's own environment, and the
@@ -208,6 +240,7 @@ fixture a9
 OUT_A9="$(CLAUDE_PROJECT_DIR="$PROJ" JIT_CONTEXT_LOG_MAX_BYTES=abc bash "$HOOK" < /dev/null 2> "$TMPROOT/a9.err")"
 assert_eq "A9 a malformed env value through the hook: stderr stays empty" "$(cat "$TMPROOT/a9.err")" ""
 assert_true "A9 a malformed env value through the hook: no rotation" '[ ! -e "$LOGDIR/hooks.log.1" ]'
+assert_eq "A9 a malformed env value through the hook: stdout is still valid, empty JSON" "$OUT_A9" "{}"
 
 echo ""
 echo "=== section B: jit-misses.sh reads the rotation marker, never hooks.log.1 ==="
