@@ -1350,6 +1350,15 @@ END {
   # Once per session, delivered on the block path too, for the same reason the two notices
   # above are: the state is real whether or not this particular call also happened to
   # match a rule or trip a refusal.
+  #
+  # oss:developer self-review (Explore): the "once per session" marker is jit_shown_mark(),
+  # and shown_file itself is a path under JIT_BASE -- the very variable this notice exists
+  # to warn is naming the WRONG tree. So in the exact scenario this fires, the dedup marker
+  # is written into the CLAUDE_PROJECT_DIR-named tree, not the one the shell is sitting in.
+  # Consistent with every other piece of session bookkeeping in this bug class -- the whole
+  # mechanism behind #402 is that ALL of JIT_BASE moves together -- not a new failure mode
+  # this notice introduces, but worth naming: a future reader could otherwise assume this
+  # one marker is tree-local when nothing about JIT_BASE resolution makes that true.
   worktree_note = ENVIRON["JIT_WORKTREE_NOTE"]
   if (worktree_note != "" && !("jit-worktree-mismatch" in shown)) {
     shown["jit-worktree-mismatch"] = 1

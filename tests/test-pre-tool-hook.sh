@@ -1200,6 +1200,19 @@ else
     mkdir -p "$NOTGIT"
     NOGITOUT=$(run_hook_with_pd "$PUSH_PAYLOAD" "$NOTGIT" "$D402/wt")
     assert_not_contains "control: a non-git CLAUDE_PROJECT_DIR never claims a mismatch it could not check for" "$NOGITOUT" "names a DIFFERENT git worktree"
+
+    # Self-review finding (Explore): the assertions above all run in a FRESH process each,
+    # so none of them actually exercised the "once per session" dedup the code comment and
+    # commit message both claim -- a session_id-less payload leaves jit_shown_mark() a
+    # no-op, and the warning would look identical whether the dedup logic existed at all.
+    # A real session_id makes the marker file persist across two SEPARATE hook processes,
+    # which is what "once per session" actually has to mean here.
+    DEDUP_PAYLOAD='{"session_id":"jit402dedup","tool_name":"Bash","tool_input":{"command":"git push origin main"}}'
+    D1=$(run_hook_with_pd "$DEDUP_PAYLOAD" "$D402/main" "$D402/wt")
+    assert_contains "#402 dedup: the first call of a session carries the mismatch warning" "$D1" "names a DIFFERENT git worktree"
+    D2=$(run_hook_with_pd "$DEDUP_PAYLOAD" "$D402/main" "$D402/wt")
+    assert_not_contains "#402 dedup: a second call in the SAME session does not repeat it" "$D2" "names a DIFFERENT git worktree"
+    assert_contains "#402 dedup: but the tool rule itself still fires every call, not gated on the warning" "$D2" "JIT-402-STALE-BODY-MAIN"
   fi
   rm -rf "$D402"
 fi
