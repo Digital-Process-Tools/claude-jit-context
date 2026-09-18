@@ -266,5 +266,10 @@ echo "It fires on a prompt about writing entries, and on nothing else. Drive it 
 echo "  bash $SCRIPT_DIR/jit-dry-run.sh --base $BASE --prompt \"how do I write a jit entry\""
 echo ""
 echo "Then write your own beside it, and rebuild:"
-echo "  CLAUDE_PROJECT_DIR=$PROJECT bash $REBUILD"
+# $CPD, not $PROJECT: the same #417 substitution as the export and the refusal-branch
+# hint above -- $PROJECT is the empty string in the root-seed case, and a reader who
+# copy-pasted "CLAUDE_PROJECT_DIR= bash ..." from here would hit rebuild-tsv.sh's own new
+# refusal for an explicitly-empty CLAUDE_PROJECT_DIR on the very command this line exists
+# to hand them.
+echo "  CLAUDE_PROJECT_DIR=$CPD bash $REBUILD"
 exit 0

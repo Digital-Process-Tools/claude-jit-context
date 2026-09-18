@@ -469,6 +469,22 @@ if grep -qF 'CLAUDE_PROJECT_DIR="$PROJECT"' "$INIT"; then
 else
   ok "the raw, unfallback-ed \$PROJECT is no longer passed as CLAUDE_PROJECT_DIR"
 fi
+# A second-pass review caught a THIRD site missing the same substitution: the success-path
+# receipt (`echo "  CLAUDE_PROJECT_DIR=$PROJECT bash $REBUILD"`), unquoted inside a double-
+# quoted echo, so the assignment-shaped grep above cannot see it. Every printed or exported
+# CLAUDE_PROJECT_DIR in this file must read $CPD, and $PROJECT itself must appear only on
+# its own definition line and inside resolve_dir()'s own comment about it -- count both.
+CPD_USES=$(grep -cF 'CLAUDE_PROJECT_DIR=$CPD' "$INIT")
+if [ "${CPD_USES:-0}" -ge 2 ]; then
+  ok "every printed/exported CLAUDE_PROJECT_DIR reads \$CPD, including the success-path receipt (found $CPD_USES)"
+else
+  bad "every printed/exported CLAUDE_PROJECT_DIR reads \$CPD, including the success-path receipt" "found only $CPD_USES -- a site still prints or exports the raw, unfallback-ed \$PROJECT"
+fi
+if grep -F 'CLAUDE_PROJECT_DIR=$PROJECT' "$INIT" | grep -vqF '# '; then
+  bad "no CLAUDE_PROJECT_DIR= line still interpolates the raw \$PROJECT" "found one outside a comment -- see scripts/jit-init.sh"
+else
+  ok "no CLAUDE_PROJECT_DIR= line still interpolates the raw \$PROJECT"
+fi
 
 echo ""
 echo "========================"
