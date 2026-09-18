@@ -39,6 +39,37 @@ if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
 # own JIT_SAMPLE_CALL does the same (checked "$..." = "1", not [ -z ]). A presence check
 # would make JIT_CONTEXT_ALLOW_CROSS_TREE=0, set by someone spelling "leave the guard ON",
 # silently do the opposite.
+# #417: CLAUDE_PROJECT_DIR can be *set* to the empty string rather than left unset --
+# a caller that meant to name a tree, computed nothing, and exported the empty result
+# anyway (an interpolated variable that itself never got a value; #417's own evidence
+# was a file named literally "None" and one named ".tsv" with no basename, the shape an
+# empty interpolation leaves behind). `${CLAUDE_PROJECT_DIR:-}` cannot tell that apart
+# from the ordinary case (`bash scripts/rebuild-tsv.sh`, no export at all, JIT_BASE
+# meant to resolve against $PWD, README's own documented usage) -- both read as "" to a
+# `-n` test, and both used to take the guard below's skip branch, which falls straight
+# through to JIT_BASE's own $PWD fallback (common.sh) with zero refusal and zero note.
+# Only `${CLAUDE_PROJECT_DIR+set}` tells the two apart: it reads "set" whenever the
+# variable was exported at all, blank value included, and "unset" only when nothing
+# ever touched it. So an explicitly-empty CLAUDE_PROJECT_DIR is refused outright, before
+# the guard below (and JIT_BASE's own fallback) ever gets a chance to write the INDEX
+# wherever cwd happens to be -- while a genuinely unset one still reaches that fallback
+# exactly as before. (This is about the index write specifically, not every byte common.sh
+# may already have touched by the time this line runs: sourcing common.sh can still
+# materialise its own `.discovery/state` and `.discovery/logs` scaffolding under
+# JIT_BASE=$PWD/.claude/jit-context before this check ever executes, the same way it does
+# for the ordinary, legitimate unset case -- gated on that tree already existing (#51),
+# and carrying no rule or index content either way.)
+if [ "${CLAUDE_PROJECT_DIR+set}" = "set" ] && [ -z "$CLAUDE_PROJECT_DIR" ]; then
+  echo "FATAL    refusing: CLAUDE_PROJECT_DIR is set but empty" >&2
+  echo "         Something exported CLAUDE_PROJECT_DIR without giving it a value -- an" >&2
+  echo "         interpolated variable that itself never resolved, most likely. JIT_BASE" >&2
+  echo "         would otherwise fall through to \$PWD/.claude/jit-context (common.sh)," >&2
+  echo "         which is whatever tree this shell happens to be standing in (#417)." >&2
+  echo "         Unset CLAUDE_PROJECT_DIR outright to use \$PWD on purpose, or export" >&2
+  echo "         it with a real value." >&2
+  exit 2
+fi
+
 if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ "${JIT_CONTEXT_ALLOW_CROSS_TREE:-}" != "1" ]; then
   JIT_CWD_TOP="$(git rev-parse --show-toplevel 2> /dev/null)"
   JIT_PROJ_TOP="$(git -C "$CLAUDE_PROJECT_DIR" rev-parse --show-toplevel 2> /dev/null)"

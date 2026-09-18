@@ -244,10 +244,19 @@ if [ ! -f "$REBUILD" ]; then
   exit 2
 fi
 
-if ! CLAUDE_PROJECT_DIR="$PROJECT" bash "$REBUILD" > /dev/null 2>&1; then
+# ${PROJECT:-/}, not "$PROJECT": PROJECT is the empty string for `--base
+# /.claude/jit-context` (resolve_dir()'s own comment above), and rebuild-tsv.sh now
+# refuses an EXPLICITLY EMPTY CLAUDE_PROJECT_DIR outright (#417) -- it cannot tell "this
+# caller means the filesystem root" from "some caller's interpolated variable never
+# resolved". "/" is what PROJECT actually names here, so pass that literally rather than
+# the empty spelling of it; the alternative was this exact call silently indexing
+# whatever $PWD happened to be instead of "/" (the same #417 shape, wrong tree, no
+# refusal) any time this script was invoked from somewhere other than "/".
+CPD="${PROJECT:-/}"
+if ! CLAUDE_PROJECT_DIR="$CPD" bash "$REBUILD" > /dev/null 2>&1; then
   echo "REFUSED: rebuild-tsv.sh did not complete, so the entry is on disk and inert." >&2
   echo "         Run it yourself and read what it says:" >&2
-  echo "           CLAUDE_PROJECT_DIR=$PROJECT bash $REBUILD" >&2
+  echo "           CLAUDE_PROJECT_DIR=$CPD bash $REBUILD" >&2
   exit 1
 fi
 
@@ -257,5 +266,10 @@ echo "It fires on a prompt about writing entries, and on nothing else. Drive it 
 echo "  bash $SCRIPT_DIR/jit-dry-run.sh --base $BASE --prompt \"how do I write a jit entry\""
 echo ""
 echo "Then write your own beside it, and rebuild:"
-echo "  CLAUDE_PROJECT_DIR=$PROJECT bash $REBUILD"
+# $CPD, not $PROJECT: the same #417 substitution as the export and the refusal-branch
+# hint above -- $PROJECT is the empty string in the root-seed case, and a reader who
+# copy-pasted "CLAUDE_PROJECT_DIR= bash ..." from here would hit rebuild-tsv.sh's own new
+# refusal for an explicitly-empty CLAUDE_PROJECT_DIR on the very command this line exists
+# to hand them.
+echo "  CLAUDE_PROJECT_DIR=$CPD bash $REBUILD"
 exit 0
