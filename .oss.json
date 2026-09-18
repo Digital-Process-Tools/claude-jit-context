@@ -16,8 +16,10 @@
   "labels": {
     "priority": ["priority-critical", "priority-high", "priority-medium", "priority-low"],
     "lanes": ["lane-hooks", "lane-entries", "lane-index", "lane-docs", "lane-tests"],
-    "filed_by_loop": "filed-by-loop"
+    "filed_by_loop": "filed-by-loop",
+    "lane_other": "lane-other"
   },
+  "curate_route_threshold": 15,
   "milestones": [],
   "release": {
     "tag_pattern": "v{version}",
