@@ -1,2 +1,4 @@
+Bash	~(^|[;&|\n] *)(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|env|sudo|nohup|nice|time)[[:space:]]+)*git[[:space:]]+(-[^[:space:];&|]*[[:space:]]+([^-;&|[:space:]][^[:space:];&|]*[[:space:]]+)?)*stash[[:space:]]+(-[^[:space:];&|]*[[:space:]]+([^-;&|[:space:]][^[:space:];&|]*[[:space:]]+)?)*pop($|[[:space:];&|])	git-stash-worktree.md	remind			
 Edit|Write	~(^|[^[:alnum:]_.-])00-index[.]tsv$	no-hand-editing-the-index.md	block			
 Bash	~((^|[^-])>>?[[:space:]]*|(^|[;&|\n])[[:space:]]*tee[[:space:]][^;&|\n]*|(^|[;&|\n])[[:space:]]*(sed|perl)([[:space:]][^;&|\n]*)?[[:space:]](-[a-z]*i|--in-place)[^;&|\n]*)([^[:space:];&|<>\n]*[^[:alnum:]_.-])?00-index[.]tsv([^[:alnum:]_.-]|$)	no-shell-writes-to-the-index.md	block			
+Bash	~(^|[;&|\n] *)(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|env|sudo|nohup|nice|time)[[:space:]]+)*supertool[[:space:]]+(-[^[:space:];&|]*[[:space:]]+([^-;&|[:space:]][^[:space:];&|]*[[:space:]]+)?)*['"]	supertool-toml-trailing-delimiter.md	once			
