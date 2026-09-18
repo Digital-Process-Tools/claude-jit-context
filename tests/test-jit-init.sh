@@ -480,7 +480,12 @@ if [ "${CPD_USES:-0}" -ge 2 ]; then
 else
   bad "every printed/exported CLAUDE_PROJECT_DIR reads \$CPD, including the success-path receipt" "found only $CPD_USES -- a site still prints or exports the raw, unfallback-ed \$PROJECT"
 fi
-if grep -F 'CLAUDE_PROJECT_DIR=$PROJECT' "$INIT" | grep -vqF '# '; then
+# Captured first, tested with a here-string, never piped into grep -q: the same #56
+# ordering trap assert_contains() in tests/test-cross-tree-write-231.sh already avoids --
+# `| grep -vq` exits on its first match and the WRITER (the first grep) takes SIGPIPE, so
+# under `pipefail` a real match can report the opposite of what was found.
+RAW_PROJECT_LINES="$(grep -F 'CLAUDE_PROJECT_DIR=$PROJECT' "$INIT")"
+if [ -n "$RAW_PROJECT_LINES" ] && grep -vqF '# ' <<< "$RAW_PROJECT_LINES"; then
   bad "no CLAUDE_PROJECT_DIR= line still interpolates the raw \$PROJECT" "found one outside a comment -- see scripts/jit-init.sh"
 else
   ok "no CLAUDE_PROJECT_DIR= line still interpolates the raw \$PROJECT"
