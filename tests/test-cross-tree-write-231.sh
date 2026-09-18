@@ -253,6 +253,46 @@ assert_contains "and says both sides, not just one" "$(cat "$ERR")" \
   "cwd is not inside a git tree, and CLAUDE_PROJECT_DIR does not resolve to one either"
 
 echo ""
+echo "=== H. CLAUDE_PROJECT_DIR explicitly set but empty is refused, not silently resolved against cwd (#417) ==="
+# ${CLAUDE_PROJECT_DIR:-} reads "" for both an unset variable and one explicitly exported
+# empty -- indistinguishable to section A's [ -n ... ] test, and JIT_BASE (common.sh)
+# falls back to $PWD either way. The first case is legitimate (`bash scripts/rebuild-tsv.sh`
+# with no CLAUDE_PROJECT_DIR at all, README's own documented usage) and must keep working;
+# the second is a caller that MEANT to name a tree -- an interpolated variable that itself
+# never resolved -- and got the empty string exported instead (#417's own evidence: a file
+# named literally "None" and one named ".tsv" with no basename, the shape an empty
+# interpolation leaves behind). Only `${CLAUDE_PROJECT_DIR+set}` tells the two apart, so
+# this section pins the explicitly-empty side: refused outright, never silently written to
+# whatever $PWD happens to be.
+ERR="$ROOT/empty-projdir.err"
+(cd "$WT" && CLAUDE_PROJECT_DIR="" bash "$REBUILD" > /dev/null 2> "$ERR")
+RC=$?
+assert_rc "an explicitly empty CLAUDE_PROJECT_DIR is refused" 2 "$RC"
+assert_contains "and says why" "$(cat "$ERR")" "CLAUDE_PROJECT_DIR is set but empty"
+if [ -f "$WT_TSV" ]; then
+  bad "and cwd's own index was NOT silently written either" "found $WT_TSV"
+else
+  ok "and cwd's own index was NOT silently written either"
+fi
+
+echo ""
+echo "=== I. a genuinely UNSET CLAUDE_PROJECT_DIR still falls through to cwd as before (#417 positive control) ==="
+# The other half of the same fix: a genuinely unset CLAUDE_PROJECT_DIR must keep working
+# exactly like before -- the documented "bash scripts/rebuild-tsv.sh, no env at all"
+# contract (README). Paired with section H so a harness bug that stopped detecting ANY
+# write could not pass by making H look like a refusal it never earned.
+ERR="$ROOT/unset-projdir.err"
+(cd "$WT" && env -u CLAUDE_PROJECT_DIR bash "$REBUILD" > /dev/null 2> "$ERR")
+RC=$?
+assert_rc "a genuinely unset CLAUDE_PROJECT_DIR still writes cwd's own tree" 0 "$RC"
+if [ -f "$WT_TSV" ]; then
+  ok "and cwd's own index was written, same as always"
+else
+  bad "and cwd's own index was written, same as always" "no file at $WT_TSV"
+fi
+rm -f "$WT_TSV" "$MAIN_TSV"
+
+echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))
 echo "  $PASS/$TOTAL passed, $FAIL failed"
