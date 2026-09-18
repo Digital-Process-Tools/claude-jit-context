@@ -552,6 +552,21 @@ END {
     jit_blk_prepend(cnote)
   }
 
+  # --- CLAUDE_PROJECT_DIR names a DIFFERENT worktree than $PWD, confirmed (#402, #416) ---
+  # `worktree_note` arrives through ENVIRON, not -v, from jit_worktree_mismatch_line() in
+  # common.sh -- see the bash-side comment above for why. Empty unless a mismatch was
+  # CONFIRMED. Deduped on shown_file, the SAME "path"-keyed marker config_refused just
+  # used above -- this hook already keeps its own notices isolated from the tool/prompt
+  # pair (unlike jit-refused-config there, which shares a "vocab" marker), so this stays
+  # consistent with the isolation this file already chose rather than reaching across.
+  worktree_note = ENVIRON["JIT_WORKTREE_NOTE"]
+  if (worktree_note != "" && !("jit-worktree-mismatch" in shown)) {
+    shown["jit-worktree-mismatch"] = 1
+    jit_shown_mark(shown_file, "jit-worktree-mismatch")
+    wnote = jit_worktree_notice(worktree_note)
+    jit_blk_prepend(wnote)
+  }
+
   # --- Log info to temp file ---
   fp_short = ""
   for (pi = 1; pi <= path_count; pi++) {
@@ -624,6 +639,16 @@ if [ "$VOCAB_PATHS" = "1" ]; then
   jit_scan_layers "$JIT_BASE/vocabulary" vocabulary
   JIT_VOCAB_LAYERS="$JIT_LAYERS"
 fi
+
+# #416: same computation and same reasoning as pre-tool-hook.sh's copy (#402) -- the
+# comparison needs `git rev-parse`, which the awk half cannot run itself. Empty unless a
+# mismatch was CONFIRMED; see jit_worktree_mismatch_line() in common.sh.
+#
+# Routed through ENVIRON, not -v, for the reason #378's comment on JIT_BASE's own export
+# gives: a -v value has its escapes PROCESSED, and this string embeds $PWD and
+# $CLAUDE_PROJECT_DIR verbatim -- real filesystem paths, backslash and all on Windows.
+JIT_WORKTREE_NOTE="$(jit_worktree_mismatch_line)"
+export JIT_WORKTREE_NOTE
 
 # One place the -v list lives, because this program may run twice. cand_mode is the only
 # thing that differs: 0 parses the payload on stdin, 1 takes its paths from the environment.

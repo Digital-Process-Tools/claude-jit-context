@@ -48,6 +48,15 @@ run_hook() {
   echo "$1" | CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2> /dev/null
 }
 
+# #416: mirrors tests/test-pre-tool-hook.sh's run_hook_with_pd -- the one place below that
+# needs CLAUDE_PROJECT_DIR pointed somewhere OTHER than $TEST_DIR, and the hook actually
+# invoked from a DIFFERENT cwd. run_hook above always agrees the two, which is exactly the
+# state the #416 section exists to disagree.
+run_hook_with_pd() {
+  local payload="$1" pd="$2" cwd="$3"
+  (cd "$cwd" && echo "$payload" | env -u CLAUDE_PLUGIN_ROOT "CLAUDE_PROJECT_DIR=$pd" bash "$HOOK" 2> /dev/null)
+}
+
 # jit-drive: assert_contains contains capture
 # jit-drive: assert_not_contains not_contains capture
 assert_contains() {
@@ -679,6 +688,79 @@ for eng in $ENGINES; do
 done
 
 rm -rf "$ENGINE_BIN"
+
+# =====================================================================================
+echo ""
+echo "=== #416: CLAUDE_PROJECT_DIR naming a different git worktree -- pre-prompt-hook.sh ==="
+# #402 confirmed the mechanism and fixed pre-tool-hook.sh only, saying explicitly that
+# widening was the rest of the work rather than something #402 itself claimed to cover.
+# This is that rest, for the prompt hook: same fixture shape as tests/test-pre-tool-hook.sh
+# "#402", pinned against THIS hook's own vocabulary rule instead of a tool rule.
+if ! git --version > /dev/null 2>&1; then
+  echo "  SKIPPED: no git on PATH -- this section tests the git-worktree case specifically" \
+    "and cannot construct it without git. Nothing here was tested."
+else
+  D416="$(mktemp -d 2> /dev/null)" || D416=""
+  if [ -z "$D416" ]; then
+    echo "  SKIPPED: mktemp -d produced no directory, so no fixture can be built here."
+  elif ! (
+    mkdir -p "$D416/main" \
+      && cd "$D416/main" \
+      && git init -q \
+      && git config user.email "t@example.com" \
+      && git config user.name "t" \
+      && git commit -q --allow-empty -m init
+  ) > "$D416/git-init.log" 2>&1; then
+    echo "  SKIPPED: could not initialise a git repo here -- see $D416/git-init.log."
+    echo "           Nothing here was tested."
+  elif ! (cd "$D416/main" && git worktree add -q "$D416/wt" -b jit416wt) > "$D416/worktree-add.log" 2>&1; then
+    echo "  SKIPPED: 'git worktree add' failed on this platform -- see $D416/worktree-add.log."
+    echo "           Nothing here was tested."
+  else
+    IDXNAME="00-index"
+    IDXNAME="$IDXNAME.tsv"
+    for tree in main wt; do
+      for d in 00-manual 10-auto 20-grouped 30-crosscutting; do
+        mkdir -p "$D416/$tree/.claude/jit-context/vocabulary/$d"
+        : > "$D416/$tree/.claude/jit-context/vocabulary/$d/$IDXNAME"
+      done
+      printf 'jit416kw\tvoc.md\n' > "$D416/$tree/.claude/jit-context/vocabulary/00-manual/$IDXNAME"
+    done
+    echo "JIT-416-STALE-BODY-MAIN" > "$D416/main/.claude/jit-context/vocabulary/00-manual/voc.md"
+    echo "JIT-416-LIVE-BODY-WT" > "$D416/wt/.claude/jit-context/vocabulary/00-manual/voc.md"
+
+    PROMPT_PAYLOAD='{"prompt":"tell me about jit416kw please"}'
+
+    MISOUT=$(run_hook_with_pd "$PROMPT_PAYLOAD" "$D416/main" "$D416/wt")
+    assert_contains "#416 mechanism: a worktree-mismatched session serves the OTHER tree's body" "$MISOUT" "JIT-416-STALE-BODY-MAIN"
+    assert_not_contains "#416 mechanism: and not the body actually on disk where the shell sits" "$MISOUT" "JIT-416-LIVE-BODY-WT"
+    assert_contains "#416 fix: pre-prompt-hook.sh now carries the mismatch warning" "$MISOUT" "names a DIFFERENT git worktree"
+    assert_contains "#416 fix: and names it by issue" "$MISOUT" "(#402)"
+
+    AGREE_MAIN=$(run_hook_with_pd "$PROMPT_PAYLOAD" "$D416/main" "$D416/main")
+    assert_contains "control: agreeing dirs (main) serve that tree's own body" "$AGREE_MAIN" "JIT-416-STALE-BODY-MAIN"
+    assert_not_contains "control: agreeing dirs (main) raise no mismatch warning" "$AGREE_MAIN" "names a DIFFERENT git worktree"
+
+    NOTGIT="$D416/notgit"
+    mkdir -p "$NOTGIT"
+    NOGITOUT=$(run_hook_with_pd "$PROMPT_PAYLOAD" "$NOTGIT" "$D416/wt")
+    assert_not_contains "control: a non-git CLAUDE_PROJECT_DIR never claims a mismatch it could not check for" "$NOGITOUT" "names a DIFFERENT git worktree"
+
+    # Dedup: the "vocab"-shared shown_file this hook already uses for jit-refused-config
+    # means the marker persists across a real session_id, same as #402's own section. The
+    # vocabulary match itself shares that same marker file in THIS hook (unlike the tool
+    # hook's tool-rule dedup, which is separate from its worktree-notice marker), so a
+    # second call in the same session repeats neither the warning nor the vocab body --
+    # both already-shown, and both correctly silent on the second call.
+    DEDUP_PAYLOAD='{"session_id":"jit416dedup","prompt":"tell me about jit416kw please"}'
+    D1=$(run_hook_with_pd "$DEDUP_PAYLOAD" "$D416/main" "$D416/wt")
+    assert_contains "#416 dedup: the first call of a session carries the mismatch warning" "$D1" "names a DIFFERENT git worktree"
+    assert_contains "#416 dedup: and the vocabulary body on that same first call" "$D1" "JIT-416-STALE-BODY-MAIN"
+    D2=$(run_hook_with_pd "$DEDUP_PAYLOAD" "$D416/main" "$D416/wt")
+    assert_not_contains "#416 dedup: a second call in the SAME session does not repeat the warning" "$D2" "names a DIFFERENT git worktree"
+  fi
+  rm -rf "$D416"
+fi
 
 # --- Cleanup ---
 rm -rf "$TEST_DIR"
