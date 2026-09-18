@@ -1217,6 +1217,52 @@ else
   rm -rf "$D402"
 fi
 
+# #424: CLAUDE_PROJECT_DIR containing a backslash escape sequence used to make this
+# hook silently answer "{}" for a rule that fires correctly on the IDENTICAL tree
+# under a plain path -- tools_base/vocab_base were built in bash and handed to awk as
+# -v values, and awk's -v PROCESSES backslash escapes in the value it receives, so
+# JIT_BASE arrived mangled and every getline against it found nothing. Two trees, same
+# rule, same body, ONLY the path differs -- so any divergence in output is the defect,
+# not a difference in what was set up.
+D424="$(mktemp -d 2> /dev/null)" || D424=""
+if [ -z "$D424" ]; then
+  echo "  SKIPPED: mktemp -d produced no directory, so no #424 fixture can be built here."
+else
+  IDXNAME_424="00-index"
+  IDXNAME_424="$IDXNAME_424.tsv"
+  for tree in plain "bs\\zz"; do
+    mkdir -p "$D424/$tree/.claude/jit-context/tools/00-manual"
+    for d in 00-manual 10-auto 20-grouped 30-crosscutting; do
+      mkdir -p "$D424/$tree/.claude/jit-context/vocabulary/$d"
+      : > "$D424/$tree/.claude/jit-context/vocabulary/$d/$IDXNAME_424"
+    done
+    printf 'Bash\tgit push\tguard.md\tremind\t\t\n' > "$D424/$tree/.claude/jit-context/tools/00-manual/$IDXNAME_424"
+    echo "JIT-424-LIVE-BODY" > "$D424/$tree/.claude/jit-context/tools/00-manual/guard.md"
+  done
+
+  PUSH_PAYLOAD_424='{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}'
+
+  PLAIN_OUT=$(run_hook_with_pd "$PUSH_PAYLOAD_424" "$D424/plain" "$D424/plain")
+  assert_contains "#424 positive control: a plain CLAUDE_PROJECT_DIR path still fires the rule" "$PLAIN_OUT" "JIT-424-LIVE-BODY"
+
+  if [ -d "$D424/bs\\zz" ]; then
+    BS_OUT=$(run_hook_with_pd "$PUSH_PAYLOAD_424" "$D424/bs\\zz" "$D424/bs\\zz")
+    assert_contains "#424 fix: a backslash-bearing CLAUDE_PROJECT_DIR fires the SAME rule the plain path does" "$BS_OUT" "JIT-424-LIVE-BODY"
+    if [ "$BS_OUT" = "$PLAIN_OUT" ]; then
+      PASS=$((PASS + 1))
+      echo "  PASS: #424 fix: the two trees answer identically"
+    else
+      FAIL=$((FAIL + 1))
+      echo "  FAIL: #424 fix: the two trees answer identically"
+      echo "    plain: ${PLAIN_OUT:0:200}"
+      echo "    bs:    ${BS_OUT:0:200}"
+    fi
+  else
+    echo "  SKIPPED: could not create a directory containing a literal backslash on this filesystem."
+  fi
+  rm -rf "$D424"
+fi
+
 # --- Cleanup ---
 rm -rf "$TEST_DIR"
 

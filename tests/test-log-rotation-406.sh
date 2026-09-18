@@ -342,6 +342,44 @@ chmod 755 "$LOGDIR"
 assert_eq "C3 an unwritable log directory: the hook still exits 0" "$RC_C3" "0"
 assert_eq "C3 an unwritable log directory: still valid, empty JSON (never fails hard)" "$OUT_C3" "{}"
 
+# #423: the size-note branch reads JIT_CONTEXT_LOG_MAX_BYTES with no validation and
+# formats it through awk `$1 / 1000000` -- a non-numeric value silently becomes 0.0,
+# so the note claims rotation is on ("rotates automatically past 0.0 MB") when
+# jit_log_rotate() actually refused it and did nothing. A9 above never reaches this
+# branch at all: its fixture log is ~3.2KB, far under jit-misses.sh's own
+# --size-threshold default (10,000,000, #248) that gates whether the note prints in
+# the first place. C4/C5/C6 pad the log past that threshold, the same way the issue's
+# own manual reproduction did, so the note branch is actually exercised.
+fixture c4
+printf '%*s\n' 10000010 '' | tr ' ' 'x' >> "$LOGDIR/hooks.log"
+
+for BAD in abc -5 010; do
+  OUT_C4="$(CLAUDE_PROJECT_DIR="$PROJ" JIT_CONTEXT_LOG_MAX_BYTES="$BAD" bash "$HOOK" < /dev/null 2> "$TMPROOT/c4.err")"
+  assert_eq "C4 malformed JIT_CONTEXT_LOG_MAX_BYTES=$BAD: stderr stays empty" "$(cat "$TMPROOT/c4.err")" ""
+  assert_true "C4 malformed JIT_CONTEXT_LOG_MAX_BYTES=$BAD: no rotation happened" '[ ! -e "$LOGDIR/hooks.log.1" ]'
+  assert_not_contains "C4 malformed JIT_CONTEXT_LOG_MAX_BYTES=$BAD: never claims rotation is on" "$OUT_C4" "rotates automatically"
+  assert_contains "C4 malformed JIT_CONTEXT_LOG_MAX_BYTES=$BAD: names the refused value" "$OUT_C4" "$BAD"
+done
+
+# Positive control: a well-formed, large max on the SAME oversized log DOES still get
+# the "rotates automatically past X MB" wording -- so C4 above is not passing merely
+# because the note branch stopped saying anything at all.
+fixture c5
+printf '%*s\n' 10000010 '' | tr ' ' 'x' >> "$LOGDIR/hooks.log"
+OUT_C5="$(CLAUDE_PROJECT_DIR="$PROJ" JIT_CONTEXT_LOG_MAX_BYTES=20000000 bash "$HOOK" < /dev/null 2> "$TMPROOT/c5.err")"
+assert_eq "C5 positive control: well-formed large max, stderr stays empty" "$(cat "$TMPROOT/c5.err")" ""
+assert_contains "C5 positive control: still says rotation is on, correctly, at 20.0 MB" "$OUT_C5" "rotates automatically past 20.0 MB"
+assert_true "C5 positive control: below its own max, so no rotation this session" '[ ! -e "$LOGDIR/hooks.log.1" ]'
+
+# Positive control for C4's "off" wording, unaffected by this fix: JIT_CONTEXT_LOG_MAX_BYTES=0
+# is a real, valid value (never rotate), not a malformed one, and must still read as "off"
+# rather than as a refused value.
+fixture c6
+printf '%*s\n' 10000010 '' | tr ' ' 'x' >> "$LOGDIR/hooks.log"
+OUT_C6="$(CLAUDE_PROJECT_DIR="$PROJ" JIT_CONTEXT_LOG_MAX_BYTES=0 bash "$HOOK" < /dev/null 2> "$TMPROOT/c6.err")"
+assert_eq "C6 positive control: JIT_CONTEXT_LOG_MAX_BYTES=0, stderr stays empty" "$(cat "$TMPROOT/c6.err")" ""
+assert_contains "C6 positive control: 0 still reads as 'Automatic rotation is off', not a refusal" "$OUT_C6" "Automatic rotation is off"
+
 echo ""
 echo "== Results: $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

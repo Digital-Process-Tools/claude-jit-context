@@ -103,12 +103,20 @@ export JIT_WORKTREE_NOTE
 # cannot be created or written (unwritable/missing $TMPDIR, disk full) the invocation
 # below falls back to the positional form -- worse only in that it re-exposes the cap
 # this hook already hit, never a silent hook failure over a tempfile we could not get.
+# #424: tools_base/vocab_base used to be built here, in bash ("$JIT_BASE/tools"), and
+# handed to awk as -v values -- but awk's -v PROCESSES backslash escapes in the value
+# it is given, the same defect #402/#378 already fixed for JIT_WORKTREE_NOTE by routing
+# it through ENVIRON instead. A CLAUDE_PROJECT_DIR containing a backslash escape
+# sequence (e.g. a Windows-shaped path) made the -v decode silently mangle JIT_BASE's
+# own value, so every rule under tools/ or vocabulary/ failed to be found and the hook
+# answered "{}" -- indistinguishable from "no rule matched" (the class hooks.md warns
+# against). JIT_BASE is already exported (common.sh, `export JIT_BASE`) for exactly
+# this reason; the awk program below now reads it via ENVIRON["JIT_BASE"] and appends
+# "/tools" or "/vocabulary" itself, same as jit_transclude_resolve() already does.
 JIT_AWK_ARGS=(
   -v tool_layers="$JIT_TOOL_LAYERS"
   -v tool_aliases="$JIT_TOOL_ALIASES"
   -v vocab_layers="$JIT_VOCAB_LAYERS"
-  -v tools_base="$JIT_BASE/tools"
-  -v vocab_base="$JIT_BASE/vocabulary"
   -v state_dir="$JIT_STATE_DIR"
   -v inject_default="$JIT_INJECT"
   -v home="$HOME"
@@ -443,8 +451,8 @@ END {
     # Every report inside the loop names the layer it read, where it used to name the one
     # layer that could be read.
     tool_label = "tools/" tool_layer
-    tools_tsv = tools_base "/" tool_layer "/00-index.tsv"
-    tools_dir = tools_base "/" tool_layer
+    tools_tsv = ENVIRON["JIT_BASE"] "/tools/" tool_layer "/00-index.tsv"
+    tools_dir = ENVIRON["JIT_BASE"] "/tools/" tool_layer
     rown = 0
     while ((getline tline < tools_tsv) > 0) {
       rown++
@@ -1138,7 +1146,7 @@ END {
     n_vocab_layers = split(vocab_layers, layers, " ")
     for (li = 1; li <= n_vocab_layers; li++) {
       layer = layers[li]
-      lookup = vocab_base "/" layer "/00-index.tsv"
+      lookup = ENVIRON["JIT_BASE"] "/vocabulary/" layer "/00-index.tsv"
 
       # Single pass: match keywords, collect files + matched keywords
       delete vmatch
@@ -1163,7 +1171,7 @@ END {
 
         split(vl, vf, "\t")
         kw = vf[1]; vfile = vf[2]; kwverdict = vf[3]
-        why = jit_bad_entry_file(vfile, vocab_base "/" layer)
+        why = jit_bad_entry_file(vfile, ENVIRON["JIT_BASE"] "/vocabulary/" layer)
         if (why != "") {
           # Same concatenation, same refusal. Keyed on the name so one bad row is counted
           # once, not once per keyword that happens to point at it.
@@ -1195,7 +1203,7 @@ END {
         # Read first, mark only what was delivered -- see the same loop in
         # pre-prompt-hook.sh for why the old order marked entries nothing had injected.
         vc = ""
-        vpath = vocab_base "/" layer "/" vfile
+        vpath = ENVIRON["JIT_BASE"] "/vocabulary/" layer "/" vfile
         if (jit_entry_load(vpath, inject_default, 0, vent)) {
           if (generic_only) vent["mode"] = "summary"
           vc = jit_inject_text(vent, ".claude/jit-context/vocabulary/" layer "/" vfile, vpath)
