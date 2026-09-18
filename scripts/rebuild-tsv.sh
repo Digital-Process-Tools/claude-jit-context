@@ -51,9 +51,14 @@ if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
 # Only `${CLAUDE_PROJECT_DIR+set}` tells the two apart: it reads "set" whenever the
 # variable was exported at all, blank value included, and "unset" only when nothing
 # ever touched it. So an explicitly-empty CLAUDE_PROJECT_DIR is refused outright, before
-# the guard below (and JIT_BASE's own fallback) ever gets a chance to write wherever cwd
-# happens to be -- while a genuinely unset one still reaches that fallback exactly as
-# before.
+# the guard below (and JIT_BASE's own fallback) ever gets a chance to write the INDEX
+# wherever cwd happens to be -- while a genuinely unset one still reaches that fallback
+# exactly as before. (This is about the index write specifically, not every byte common.sh
+# may already have touched by the time this line runs: sourcing common.sh can still
+# materialise its own `.discovery/state` and `.discovery/logs` scaffolding under
+# JIT_BASE=$PWD/.claude/jit-context before this check ever executes, the same way it does
+# for the ordinary, legitimate unset case -- gated on that tree already existing (#51),
+# and carrying no rule or index content either way.)
 if [ "${CLAUDE_PROJECT_DIR+set}" = "set" ] && [ -z "$CLAUDE_PROJECT_DIR" ]; then
   echo "FATAL    refusing: CLAUDE_PROJECT_DIR is set but empty" >&2
   echo "         Something exported CLAUDE_PROJECT_DIR without giving it a value -- an" >&2

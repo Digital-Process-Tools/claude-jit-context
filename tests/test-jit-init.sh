@@ -445,6 +445,32 @@ else
 fi
 
 echo ""
+echo "=== empty PROJECT (--base /.claude/jit-context) is never passed to rebuild-tsv.sh as an empty CLAUDE_PROJECT_DIR (#417) ==="
+# PROJECT is the empty string when --base names the filesystem root exactly
+# (resolve_dir()'s own comment above it). rebuild-tsv.sh now refuses an explicitly-empty
+# CLAUDE_PROJECT_DIR outright (#417), so passing "$PROJECT" unmodified would silently turn
+# this legitimate, documented case into a hard failure every time this script runs from
+# anywhere other than "/". Driving it end to end would mean writing under the real
+# filesystem root, which this suite does not do -- so the fix is pinned at its one source
+# line instead: exactly one site derives CLAUDE_PROJECT_DIR for the rebuild call, and it
+# must fall back to the literal root rather than the empty spelling of it.
+# -F (fixed string), never a bare regex: a $-then-{ pattern is a BRE ambiguity across
+# grep implementations (verified here: ugrep 7.8.4's BRE treats an unescaped
+# `${PROJECT:-/}` as matching nothing at all, the opposite of what a portable grep -F
+# gives every implementation).
+SITES417=$(grep -cF 'CPD="${PROJECT:-/}"' "$INIT")
+if [ "${SITES417:-0}" -eq 1 ]; then
+  ok "exactly one site derives CLAUDE_PROJECT_DIR with the \${PROJECT:-/} fallback"
+else
+  bad "exactly one site derives CLAUDE_PROJECT_DIR with the \${PROJECT:-/} fallback" "found $SITES417 -- see scripts/jit-init.sh"
+fi
+if grep -qF 'CLAUDE_PROJECT_DIR="$PROJECT"' "$INIT"; then
+  bad "the raw, unfallback-ed \$PROJECT is no longer passed as CLAUDE_PROJECT_DIR" "found a literal CLAUDE_PROJECT_DIR=\"\$PROJECT\" in scripts/jit-init.sh"
+else
+  ok "the raw, unfallback-ed \$PROJECT is no longer passed as CLAUDE_PROJECT_DIR"
+fi
+
+echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))
 echo "  $PASS/$TOTAL passed, $FAIL failed"
