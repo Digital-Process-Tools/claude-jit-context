@@ -104,6 +104,40 @@ JIT_BASE="${CLAUDE_PROJECT_DIR:-${PWD:-.}}/.claude/jit-context"
 # exporting it changes nothing any existing row reads.
 export JIT_BASE
 
+# --- CLAUDE_PROJECT_DIR naming a DIFFERENT worktree than $PWD (#402) ----------------
+#
+# jit-doctor.sh's own advisory (#412) can only ever be RUN, by hand, after the fact --
+# and #412's own reopening comment is explicit that a diagnostic nobody runs mid-session
+# does not close this: "What closes this is a confirmed mechanism plus a red test, not a
+# diagnostic." This is that mechanism, surfaced on the hot path where it actually bites
+# rather than in a side channel.
+#
+# JIT_BASE above resolves from CLAUDE_PROJECT_DIR ALONE, never from $PWD -- so a session
+# whose CLAUDE_PROJECT_DIR still names one git worktree while the shell sits in another
+# has every hook read entries from the OTHER tree's copy of the same relative path.
+# Confirmed by direct reproduction (tests/test-pre-tool-hook.sh, "#402"): an entry edited
+# in the worktree the shell is actually in is not what pre-tool-hook.sh injects, because
+# it never opens that copy at all.
+#
+# Same three-way shape as jit-doctor.sh's check, and deliberately the same wording where
+# it overlaps -- a session can already cross-reference the two: an unresolvable side (no
+# git, or either $PWD or CLAUDE_PROJECT_DIR not inside a git worktree) says nothing,
+# because "could not tell" and "confirmed the same tree" must never render the same way.
+# Only a CONFIRMED mismatch produces a line; the hooks' own "never fail hard" contract
+# (paths/00-manual/hooks.md) means this can only ever ADD an advisory to what already
+# gets injected, never withhold or refuse it.
+jit_worktree_mismatch_line() {
+  [ -n "${CLAUDE_PROJECT_DIR:-}" ] || return 0
+  command -v git > /dev/null 2>&1 || return 0
+  local pwd_top cpd_top
+  pwd_top="$(cd "$PWD" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)"
+  cpd_top="$(cd "$CLAUDE_PROJECT_DIR" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)"
+  [ -n "$pwd_top" ] || return 0
+  [ -n "$cpd_top" ] || return 0
+  [ "$pwd_top" != "$cpd_top" ] || return 0
+  printf '%s' "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $cpd_top) names a DIFFERENT git worktree than the one this shell is sitting in (\$PWD ($PWD) -- git worktree $pwd_top)."
+}
+
 # --- Which host is running this hook (#252) ----------------------------------------
 # scripts/host.sh is the registry; this just calls it, and guards the call the way
 # every other capability in this file guards itself: a missing or unreadable
@@ -2095,6 +2129,14 @@ function jit_no_subject_notice(list, n) {
 function jit_config_notice(list, n) {
   return "# JIT Context: " n " line(s) in .claude/jit-context/config.env were refused, so they did NOT take effect\n" list \
     "\nconfig.env is read as plain KEY=VALUE and is never executed. Only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* settings are read; anything else, shell included, is refused. If a refused line is not one you wrote, treat that file as hostile -- it arrived with the repository."
+}
+# #402: `line` is built in bash by jit_worktree_mismatch_line() and arrives empty unless a
+# mismatch was CONFIRMED -- the caller only invokes jit_blk_prepend()/block_tail with this
+# when `line` is non-empty, the same "only speak when there is something to say" shape
+# every other notice in this file follows.
+function jit_worktree_notice(line) {
+  return "# JIT Context: CLAUDE_PROJECT_DIR names a different git worktree than this shell is sitting in\n" line \
+    "\nEvery hook resolves rules from CLAUDE_PROJECT_DIR, never from $PWD -- content injected below (or on any call in this session) can be served from the copy in the OTHER tree, silently (#402). Run: bash scripts/jit-doctor.sh"
 }
 '
 
