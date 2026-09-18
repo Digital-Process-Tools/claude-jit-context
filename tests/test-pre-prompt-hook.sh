@@ -741,6 +741,15 @@ else
     assert_contains "control: agreeing dirs (main) serve that tree's own body" "$AGREE_MAIN" "JIT-416-STALE-BODY-MAIN"
     assert_not_contains "control: agreeing dirs (main) raise no mismatch warning" "$AGREE_MAIN" "names a DIFFERENT git worktree"
 
+    # oss:auditor finding (#416 self-review): the mismatch section above only proved the
+    # MAIN-rooted agreeing pair stays silent -- without the symmetric WT-rooted pair, a
+    # notice that fires whenever pd != $D416/main (rather than on a genuine two-sided
+    # mismatch) would still pass every assertion up to this point. tests/test-pre-tool-hook.sh
+    # "#402" carries both halves (AGREE_MAIN and AGREE_WT); this closes the gap to match it.
+    AGREE_WT=$(run_hook_with_pd "$PROMPT_PAYLOAD" "$D416/wt" "$D416/wt")
+    assert_contains "control: agreeing dirs (worktree) serve that tree's own body" "$AGREE_WT" "JIT-416-LIVE-BODY-WT"
+    assert_not_contains "control: agreeing dirs (worktree) raise no mismatch warning" "$AGREE_WT" "names a DIFFERENT git worktree"
+
     NOTGIT="$D416/notgit"
     mkdir -p "$NOTGIT"
     NOGITOUT=$(run_hook_with_pd "$PROMPT_PAYLOAD" "$NOTGIT" "$D416/wt")
