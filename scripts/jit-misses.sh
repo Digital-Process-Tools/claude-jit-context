@@ -384,6 +384,18 @@ function jit_fold_latin1(s,   i, p, out) {
 {
   lines++
 
+  # #406: hooks.log rotates automatically now, and this tool deliberately reads only
+  # the CURRENT log -- never hooks.log.1 -- so a rotation makes the window narrower
+  # without anything here saying so, unless this line says so. jit_log_rotate() in
+  # common.sh writes this exact line as the first thing in a freshly rotated log, and
+  # it is deliberately NOT hook-record shaped (no "Nms |"), so it is invisible to
+  # every reader of hooks.log except this one, which looks for it by name.
+  if ($0 ~ /^\[[^]]*\] hooks\.log rotated at [0-9]+ bytes -- records before this line are in hooks\.log\.1$/) {
+    rotated = 1
+    rotated_ts = substr($0, 2, index($0, "]") - 2)
+    next
+  }
+
   # A hook record, from any hook. Anchored: an unanchored test would fire on a record whose
   # MESSAGE quotes a log line, and the point of this pass is to tell a log we can read from
   # one we cannot.
@@ -481,6 +493,19 @@ END {
     exit 2
   }
   if (shaped == 0) {
+    # #406: a log that is JUST the rotation marker (nothing has been logged since)
+    # is not "wrong format" -- it is the ordinary, expected shape of a log the
+    # instant after it rotated, and reading it as "not this tool log" would be a
+    # false alarm on a feature working exactly as designed. session-start-hook.sh
+    # treats this reason as ordinary silence, the same as "no such file" and "the
+    # file is empty" -- see its own case statement for why.
+    if (rotated) {
+      print "jit-misses: SKIPPED -- hooks.log was rotated at " rotated_ts " and has no records yet"
+      print "  log: " logfile
+      print "  older records are in hooks.log.1 -- this tool reads only the current log (#406);"
+      print "  the window narrows to whatever has been written since the rotation."
+      exit 2
+    }
     print "jit-misses: SKIPPED -- no line in this file has the hook log format"
     print "  log: " logfile
     print "  expected records like: [23:48:14.393] pre-prompt 9ms | (none) [shown:1] << ..."
@@ -493,6 +518,7 @@ END {
     print "  log: " logfile
     print "  The tool and path hooks log misses too, and none of those is a vocabulary gap."
     print "  A prompt miss can only come from a pre-prompt record, and this log has none."
+    if (rotated) print "  hooks.log was rotated at " rotated_ts "; older records are in hooks.log.1, not read here (#406)"
     exit 2
   }
 
@@ -504,6 +530,11 @@ END {
   printf "jit-misses: %s", logfile
   if (logbytes != "") printf " (%s bytes)", logbytes
   printf "\n"
+  # #406: named up front, before "bounded read", because it is a fact about the
+  # WINDOW this report covers, the same class of fact --tail already prints here.
+  # hooks.log.1 holds whatever came before the rotation; this tool never reads it
+  # (see the marker-detection rule above for why one generation was judged enough).
+  if (rotated) printf "  hooks.log was rotated at %s -- older records are in hooks.log.1 and are outside this window (#406)\n", rotated_ts
   if (bounded) printf "  bounded read -- last %d line(s) requested (--tail %d)\n", tailn, tailn
   if (logbytes != "" && threshold != "" && (logbytes + 0) >= (threshold + 0))
     printf "  the log has reached %s bytes, at or past the %s byte watch threshold -- reads may be getting slower; consider --tail or rotating\n", logbytes, threshold

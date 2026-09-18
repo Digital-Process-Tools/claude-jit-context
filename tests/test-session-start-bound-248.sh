@@ -116,10 +116,24 @@ OUT2=$(CLAUDE_PROJECT_DIR="$PROJ2" bash "$STUBDIR/session-start-hook.sh" < /dev/
 assert_valid_json_shape "still valid JSON-object shaped output against the stub" "$OUT2"
 assert_contains "threads the size-watch note through when nothing else fired" "$OUT2" "hooks.log is"
 assert_contains "in megabytes a person can read, not bytes (#386)" "$OUT2" "1000.0 MB"
-assert_contains "and names the one action (#386)" "$OUT2" "Delete or rotate it: "
+# #406: automatic rotation replaced the old "Delete or rotate it" instruction -- the
+# default is on, so the default-config run says rotation is already handling it
+# rather than asking a person to act by hand.
+assert_contains "#406 names the automatic remedy, not a manual instruction" "$OUT2" "It rotates automatically past"
+assert_not_contains "#406 no longer tells a person to delete or rotate it themselves" "$OUT2" "Delete or rotate it"
 assert_not_contains "#386 no issue number" "$OUT2" "#248"
 assert_not_contains "#386 no flag a person is not going to type" "$OUT2" "--tail"
 assert_not_contains "an 'ok, nothing recurs' stub does not fabricate a recurring-misses line" "$OUT2" "you use these words"
+
+echo ""
+echo "=== section B2: the same stub, with rotation explicitly turned off (#406) ==="
+mkdir -p "$PROJ2/.claude/jit-context"
+echo "JIT_CONTEXT_LOG_MAX_BYTES=0" > "$PROJ2/.claude/jit-context/config.env"
+OUT2B=$(CLAUDE_PROJECT_DIR="$PROJ2" bash "$STUBDIR/session-start-hook.sh" < /dev/null 2> /dev/null)
+assert_valid_json_shape "#406 still valid JSON-object shaped output, rotation off" "$OUT2B"
+assert_contains "#406 rotation off: falls back to the manual instruction" "$OUT2B" "Automatic rotation is off"
+assert_contains "#406 rotation off: still names the file to act on" "$OUT2B" "hooks.log"
+rm -f "$PROJ2/.claude/jit-context/config.env"
 
 echo ""
 echo "=== section B control: the same stub, but under threshold -- no size note ==="

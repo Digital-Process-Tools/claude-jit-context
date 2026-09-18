@@ -502,6 +502,101 @@ jit_log_write() {
   fi
 }
 
+# --- Rotating hooks.log, never deleting it (#406) ----------------------------------
+# jit_log_write() opens "$LOG_FILE" BY PATH on every call, O_APPEND, and holds no
+# descriptor across calls -- confirmed by reading it just above, not assumed. That is
+# what makes a rename here safe under concurrent sessions: a writer holding the old
+# inode (renamed out from under it, now hooks.log.1) keeps appending to THAT file
+# losslessly, and the next jit_log_write() anywhere reopens whatever now sits at
+# "$LOG_FILE" and creates it fresh. A logger holding a long-lived fd would keep
+# writing into the rotated generation and lose every subsequent line silently; this
+# one does not hold one, so it does not.
+#
+# Only session-start-hook.sh calls this. Every OTHER hook is on the per-call hot path
+# (30-110ms budget), and a stat() on every tool call to check a byte count is not
+# something that budget affords -- this hook already runs once per session and
+# already computes the size for the watch-threshold warning below, so it is the one
+# place a size check is free. Consequence, stated rather than left to be discovered:
+# a single very long session can push the log well past JIT_CONTEXT_LOG_MAX_BYTES,
+# because nothing checks again until the NEXT session starts.
+#
+# One generation kept: hooks.log -> hooks.log.1, and a second rotation overwrites
+# whatever hooks.log.1 already held. That is a bounded, stated retention of 1, not an
+# accidental deletion of "the oldest generation" the contract protects -- a SECOND
+# config key for retention count was considered and dropped: one previous file is
+# already enough to survive a rotation without losing the recent history
+# jit-misses.sh reads (see jit-misses.sh's own handling of the marker line below),
+# and a knob whose only two sane values are "1" and "a disk budget you have not
+# measured" is not a knob worth asking a person to turn. Raise
+# JIT_CONTEXT_LOG_MAX_BYTES instead if more history is wanted; that already bounds
+# disk to 2x the threshold either way.
+#
+# Every failure path here returns silently and leaves the log exactly as it was:
+# an unwritable directory, a `mv` that fails (races, permissions, a full disk), a
+# hooks.log.1 that is a symlink or a non-regular file. Losing a rotation costs disk
+# space growing a little further; refusing to run because rotation failed would cost
+# the session, and hooks.md forbids that trade.
+jit_log_rotate() {
+  # $1: a byte count. jit_load_config() validates what it reads out of config.env, and
+  # that is NOT the only way this value arrives -- exporting JIT_CONTEXT_LOG_MAX_BYTES
+  # into the environment reaches session-start-hook.sh's presence check without passing
+  # through jit_load_config() at all. So this validates the value it actually received
+  # rather than trusting a claim about its caller. Two symptoms measured on the
+  # unvalidated version, in a stranger's session: `[ "$cur" -ge abc ]` printed
+  # "[: abc: integer expected" on stderr, and `-ge -5` was TRUE for every size, so a
+  # negative value silently rotated on every single SessionStart -- two rotations and
+  # the previous generation is gone. The noisy one was the harmless one.
+  local max="$1" cur
+  # Refused here rather than clamped, and a leading zero refused with the rest: `[ ]`
+  # compares in decimal (`[ 9 -ge 010 ]` is true, unlike `[[ 9 -ge 010 ]]`), so "010" is
+  # not misread today -- but it is written by someone who meant one of two different
+  # numbers, and this function cannot tell which. Refusing keeps that ambiguity from
+  # being resolved by accident here or by a later change from `[ ]` to `[[ ]]`.
+  case "$max" in
+    "" | *[!0-9]*) return 0 ;;
+    0) ;;
+    0*) return 0 ;;
+  esac
+  [ "$JIT_LOG_DISABLED" = 0 ] || return 0
+  # "0" is a stated value for "never rotate", not a side effect of the clamp below --
+  # it is checked here, explicitly, before anything that could be mistaken for one.
+  [ "$max" = 0 ] && return 0
+  [ -f "$LOG_FILE" ] || return 0
+  # Re-checked here, not just trusted from common.sh load time above: this runs later
+  # in the same process, after other code may have run, and a TOCTOU window between
+  # "the log was a real file at load" and "the log is a real file right now" is
+  # exactly the hazard the load-time checks above exist to close.
+  [ -L "$LOG_FILE" ] && return 0
+  cur="$(wc -c < "$LOG_FILE" 2> /dev/null | tr -d '[:space:]')"
+  case "$cur" in "" | *[!0-9]*) return 0 ;; esac
+  [ "$cur" -ge "$max" ] || return 0
+  # `-L` is checked FIRST and unconditionally, never gated behind `-e`: `-e` follows the
+  # link and is FALSE for a DANGLING symlink (a target that does not exist, or does not
+  # resolve on this host), so a version of this check that only asked "-L" inside an
+  # "if -e" branch let a dangling hooks.log.1 fall straight through to the mv below,
+  # which replaces it just like it would replace an ordinary file. `-L` (lstat, not
+  # stat) does not care whether the target exists -- reproduced locally by symlinking
+  # hooks.log.1 to a path that does not exist: the old ordering rotated over it every
+  # time, silently destroying the symlink instead of refusing.
+  if [ -L "$LOG_FILE.1" ]; then
+    return 0
+  elif [ -e "$LOG_FILE.1" ]; then
+    [ -f "$LOG_FILE.1" ] || return 0
+  fi
+  mv -f -- "$LOG_FILE" "$LOG_FILE.1" 2> /dev/null || return 0
+  # #406: jit-misses.sh only ever reads the CURRENT log (never hooks.log.1 -- reading
+  # across generations would add real complexity, a second failure surface, to a
+  # parsing script whose own comments already spend a lot of care on exactly one
+  # pipe-vs-no-pipe exit-status invariant; the marginal benefit is small when only one
+  # generation is kept, since the window self-heals by the next rotation's worth of
+  # use). So a rotation makes jit-misses.sh's next read find nothing recurring, which
+  # reads exactly like "no misses" unless something says otherwise -- this marker line
+  # is that something. It is deliberately NOT shaped like a hook record (no "Nms |"),
+  # so it is invisible to every OTHER reader of this log; jit-misses.sh alone parses
+  # it, to say plainly that its window narrowed rather than silently reporting "ok".
+  jit_log_write "$(printf '[%s] hooks.log rotated at %s bytes -- records before this line are in hooks.log.1' "$(_ts)" "$cur")"
+}
+
 # --- The once-per-session markers, and what a session is --------------------
 # They used to be /tmp/claude-{vocab,path}-shown-$PPID.txt. Two things were wrong with
 # that and only one of them was visible.
@@ -1001,6 +1096,37 @@ jit_load_config() {
         on | off) ;;
         *)
           jit_config_refuse "$lineno" "not a misses toggle (on or off)"
+          continue
+          ;;
+      esac
+    fi
+    # #406: JIT_CONTEXT_LOG_MAX_BYTES -- bytes, matching JIT_CONTEXT_COLLISION_BYTES's
+    # own convention rather than megabytes, so a person who has already learned one
+    # size setting in this file does not have to learn a second unit for the next
+    # one. "0" is a stated value meaning "never rotate", checked explicitly by
+    # jit_log_rotate() rather than falling out of a clamp -- so it has to survive
+    # here rather than being folded into the "malformed" branch below.
+    #
+    # Refused on anything but "0" or a digit string with no leading zero. The leading
+    # zero is refused for ambiguity, not for octal: `[ ]` compares in decimal, so
+    # `[ 9 -ge 010 ]` is true and "010" is read as ten today. It is still refused,
+    # because someone writing it meant either ten or eight and nothing here can tell
+    # which -- and naming the line is cheaper than guessing right. Note `[[ 9 -ge 010 ]]`
+    # IS octal, so the reading changes with the test operator; refusing the value means
+    # that difference can never quietly become a behaviour change.
+    if [ "$key" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
+      case "$value" in
+        0) ;;
+        [1-9]*)
+          case "$value" in
+            *[!0-9]*)
+              jit_config_refuse "$lineno" "not a byte count (0, or digits with no leading zero)"
+              continue
+              ;;
+          esac
+          ;;
+        *)
+          jit_config_refuse "$lineno" "not a byte count (0, or digits with no leading zero)"
           continue
           ;;
       esac

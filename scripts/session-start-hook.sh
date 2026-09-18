@@ -113,6 +113,28 @@ if [ -n "$JIT_STATE_DIR" ]; then
   ' "$JIT_STATE_DIR" 2> /dev/null
 fi
 
+# #406: rotate hooks.log, never delete it, BEFORE jit-misses.sh reads it below -- so
+# this session's own size-watch note (if any, further down) reflects the log AFTER
+# rotation rather than the log that just triggered it. The whole point of automatic
+# rotation is that a person no longer has to act on that note by hand.
+#
+# The default (20,000,000 bytes, 20MB) is deliberately NOT jit-misses.sh's own
+# --size-threshold (10,000,000, #248): that number says "worth mentioning" and fires
+# early, well before anything needs to happen; this one says "act now" and sits at
+# roughly double it, so there is a real gap between the two rather than one number
+# wearing two meanings. Setting them equal would mean every session that shows the
+# watch note below has ALREADY rotated by the time a person reads it -- stale advice
+# about a log that no longer exists in the shape the note describes.
+#
+# `${VAR+set}` (presence), not `${VAR:-default}` (emptiness): "0" is a real, stated
+# value for "never rotate" and has to survive being set, same as the presence checks
+# JIT_CONTEXT_GENERIC_WORDS uses elsewhere for the same reason -- an explicit "0" is
+# not the same fact as "nothing was written here".
+if [ -z "${JIT_CONTEXT_LOG_MAX_BYTES+set}" ]; then
+  JIT_CONTEXT_LOG_MAX_BYTES=20000000
+fi
+jit_log_rotate "$JIT_CONTEXT_LOG_MAX_BYTES"
+
 # #233 part 3: jit-misses.sh already reads every prompt this project has logged and
 # ranks the words that keep matching nothing -- demand, measured, and collected for
 # free by pre-prompt-hook.sh on every call. It just never ran on its own; a human had to
@@ -201,7 +223,13 @@ else
   # records but none from pre-prompt -- means jit-misses.sh tried and could not, and that
   # is the case #247 is about: it says so instead of reading as "nothing recurs".
   case "$JIT_SKIP_REASON" in
-    "no such file"* | "the file is empty"*) JIT_SKIP_REASON="" ;;
+    # #406: a log that was just rotated (by THIS session, above, or an earlier one)
+    # and has no records yet is the same ordinary shape as a brand new project -- not
+    # "something is wrong", just "no data since the last thing that cleared it". Older
+    # records are still on disk in hooks.log.1; jit-misses.sh names that explicitly in
+    # its own SKIPPED reason, read back here, so this silencing does not depend on
+    # this file re-deriving what "rotated" means.
+    "no such file"* | "the file is empty"* | "hooks.log was rotated"*) JIT_SKIP_REASON="" ;;
   esac
   if [ -n "$JIT_SKIP_REASON" ]; then
     # The reason is prose jit-misses.sh chose, not a token restricted to [a-z0-9-] like
@@ -264,7 +292,23 @@ else
     # were already JSON-escaped above; the path is escaped here for the same reason.
     JIT_MB="$(printf '%s' "$JIT_SIZE_NOTE" | LC_ALL=C awk '{ printf "%.1f", $1 / 1000000 }')"
     JIT_LOG_ESC="$(printf '%s' "$LOG_FILE" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
-    JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. Delete or rotate it: $JIT_LOG_ESC"
+    # #406: this line used to say "Delete or rotate it" -- the exact instruction this
+    # issue exists to stop giving, since delete loses the corpus jit-misses.sh reads
+    # and nothing here ever said so. Rotation past JIT_CONTEXT_LOG_MAX_BYTES is now
+    # automatic (jit_log_rotate(), run above, before jit-misses.sh was even called),
+    # so what is left to tell a person depends on whether rotation is even on: when it
+    # is, this reading means either the size climbed AFTER this session's own rotation
+    # check ran, or a single long session outgrew JIT_CONTEXT_LOG_MAX_BYTES within
+    # itself (rotation only runs at SessionStart, by design -- see jit_log_rotate()) --
+    # either way it says so rather than repeating advice the feature already carried
+    # out; when it is off, there genuinely is no automatic remedy, and the file is
+    # still named so a person can act.
+    if [ "$JIT_CONTEXT_LOG_MAX_BYTES" = 0 ]; then
+      JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. Automatic rotation is off (JIT_CONTEXT_LOG_MAX_BYTES=0) -- delete or rotate it yourself: $JIT_LOG_ESC"
+    else
+      JIT_ROTATE_MB="$(printf '%s' "$JIT_CONTEXT_LOG_MAX_BYTES" | LC_ALL=C awk '{ printf "%.1f", $1 / 1000000 }')"
+      JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. It rotates automatically past $JIT_ROTATE_MB MB (kept as hooks.log.1) -- nothing to do, unless this single session outgrows it before the next one starts: $JIT_LOG_ESC"
+    fi
   fi
   if [ -n "$JIT_LINES" ]; then
     printf '{"systemMessage":"%s"}\n' "$JIT_LINES"
