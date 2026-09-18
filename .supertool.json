@@ -6,12 +6,21 @@
   "rtk": false,
   "allow_outside_cwd": false,
   "allow_vim_shell": false,
-  "presets": ["github", "git", "watch"],
+  "presets": [
+    "github",
+    "git",
+    "watch"
+  ],
   "ops": {
     "radar": {
       "watch_name": "dpt-claude-jit-context",
       "radar_tiers": {
-        "gh-prs": {}
+        "gh-prs": {
+          "pr_exclude_events": [
+            "checks_pending",
+            "conflicts_appeared"
+          ]
+        }
       }
     },
     "watch": {
@@ -31,14 +40,28 @@
     "shfmt": {
       "cmd": "shfmt -w {file}",
       "match": "*.sh",
-      "hooks_into": ["edit", "replace", "replace_lines", "paste", "append", "vim"],
+      "hooks_into": [
+        "edit",
+        "replace",
+        "replace_lines",
+        "paste",
+        "append",
+        "vim"
+      ],
       "rollback_on_fail": false,
       "timeout": 15
     },
     "prettier": {
       "cmd": "prettier --write {file}",
       "match": "*.{json,yml,yaml}",
-      "hooks_into": ["edit", "replace", "replace_lines", "paste", "append", "vim"],
+      "hooks_into": [
+        "edit",
+        "replace",
+        "replace_lines",
+        "paste",
+        "append",
+        "vim"
+      ],
       "rollback_on_fail": false,
       "timeout": 30
     }
@@ -47,21 +70,42 @@
     "bash-check": {
       "cmd": "{python} {supertool_dir}/validators/bash-check/bash-check.py {file}",
       "match": "*.sh",
-      "hooks_into": ["edit", "replace", "replace_lines", "paste", "append", "vim"],
+      "hooks_into": [
+        "edit",
+        "replace",
+        "replace_lines",
+        "paste",
+        "append",
+        "vim"
+      ],
       "rollback_on_fail": true,
       "timeout": 30
     },
     "jsonlint": {
       "cmd": "{python} {supertool_dir}/validators/jsonlint/jsonlint.py {file}",
       "match": "*.json",
-      "hooks_into": ["edit", "replace", "replace_lines", "paste", "append", "vim"],
+      "hooks_into": [
+        "edit",
+        "replace",
+        "replace_lines",
+        "paste",
+        "append",
+        "vim"
+      ],
       "rollback_on_fail": true,
       "timeout": 10
     },
     "git-status": {
       "cmd": "{python} {supertool_dir}/validators/git-status/git-status.py {file}",
       "match": "*",
-      "hooks_into": ["edit", "replace", "replace_lines", "paste", "append", "vim"],
+      "hooks_into": [
+        "edit",
+        "replace",
+        "replace_lines",
+        "paste",
+        "append",
+        "vim"
+      ],
       "rollback_on_fail": false,
       "timeout": 10
     }
