@@ -103,16 +103,22 @@ export JIT_WORKTREE_NOTE
 # cannot be created or written (unwritable/missing $TMPDIR, disk full) the invocation
 # below falls back to the positional form -- worse only in that it re-exposes the cap
 # this hook already hit, never a silent hook failure over a tempfile we could not get.
+# #424: tools_base/vocab_base used to be built here, in bash ("$JIT_BASE/tools"), and
+# handed to awk as -v values -- but awk's -v PROCESSES backslash escapes in the value
+# it is given, the same defect #402/#378 already fixed for JIT_WORKTREE_NOTE by routing
+# it through ENVIRON instead. A CLAUDE_PROJECT_DIR containing a backslash escape
+# sequence (e.g. a Windows-shaped path) made the -v decode silently mangle JIT_BASE's
+# own value, so every rule under tools/ or vocabulary/ failed to be found and the hook
+# answered "{}" -- indistinguishable from "no rule matched" (the class hooks.md warns
+# against). JIT_BASE is already exported (common.sh, `export JIT_BASE`) for exactly
+# this reason; the awk program below now reads it via ENVIRON["JIT_BASE"] and appends
+# "/tools" or "/vocabulary" itself, same as jit_transclude_resolve() already does.
 JIT_AWK_ARGS=(
   -v tool_layers="$JIT_TOOL_LAYERS"
   -v tool_aliases="$JIT_TOOL_ALIASES"
   -v vocab_layers="$JIT_VOCAB_LAYERS"
-  -v tools_base="$JIT_BASE/tools"
-  -v vocab_base="$JIT_BASE/vocabulary"
   -v state_dir="$JIT_STATE_DIR"
   -v inject_default="$JIT_INJECT"
-  -v home="$HOME"
-  -v project="${CLAUDE_PROJECT_DIR:-.}"
   -v log_tmp="$JIT_TMP"
   -v missing_bins="$JIT_MISSING_REQUIRES"
   -v status_mode="$JIT_STATUS"
@@ -152,7 +158,7 @@ function jit_json_escape(s,   k, c) {
 }
 # gsub(home "/", ...) and gsub(project "/", ...) below build their pattern by string
 # CONCATENATION, and gsub takes that result as an ERE -- awk does not know the caller
-# meant a literal prefix. home/project are -v values from the environment, not
+# meant a literal prefix. home/project are values FROM THE ENVIRONMENT, not
 # constants this repository controls: $HOME is normally metacharacter-free, but
 # CLAUDE_PROJECT_DIR is a Claude-Code-specific variable, unset under every other host,
 # and its fallback here is the single byte ".". As a regex, "." matches ANY character,
@@ -443,8 +449,8 @@ END {
     # Every report inside the loop names the layer it read, where it used to name the one
     # layer that could be read.
     tool_label = "tools/" tool_layer
-    tools_tsv = tools_base "/" tool_layer "/00-index.tsv"
-    tools_dir = tools_base "/" tool_layer
+    tools_tsv = ENVIRON["JIT_BASE"] "/tools/" tool_layer "/00-index.tsv"
+    tools_dir = ENVIRON["JIT_BASE"] "/tools/" tool_layer
     rown = 0
     while ((getline tline < tools_tsv) > 0) {
       rown++
@@ -1064,15 +1070,26 @@ END {
     if (index(ptoks[pi], "/") > 0) cmd_paths = cmd_paths " " ptoks[pi]
   }
   tt = f_file_path " " cmd_paths
-  # A GUARDED gsub, not a bare one: `project` always has a byte, from the
-  # "${CLAUDE_PROJECT_DIR:-.}" fallback at the bash -v site (":-" fires on unset AND
-  # empty, so project can never be ""), but `home="$HOME"` carries no such fallback.
-  # An unset or explicitly-empty $HOME (a minimal container, a sandboxed host,
-  # `env -u HOME`) makes jit_re_lit(home) correctly return "" -- there is nothing
+  # #424 self-review (oss:auditor): home/project used to be passed in via -v, the
+  # identical escape-processing defect #424 fixed for tools_base/vocab_base above --
+  # a backslash-bearing $HOME or CLAUDE_PROJECT_DIR silently mangled BOTH the string
+  # gsub() strips below AND jit_re_lit escaping of it (jit_re_lit escapes regex
+  # metacharacters in whatever string it is HANDED; it cannot recover a backslash -v
+  # already decoded away before jit_re_lit ever saw it). Read via ENVIRON instead,
+  # same as tools_base/vocab_base -- neither needs an explicit export in the bash
+  # half above: both already arrive in this process own initial environment from
+  # Claude Code own launcher (CLAUDE_PROJECT_DIR) or the shell login environment
+  # (HOME), never assigned inside this script the way JIT_BASE is.
+  home = ENVIRON["HOME"]
+  project = (ENVIRON["CLAUDE_PROJECT_DIR"] != "" ? ENVIRON["CLAUDE_PROJECT_DIR"] : ".")
+  # A GUARDED gsub, not a bare one: project always has a byte, from the fallback to
+  # "." just above (project can never be ""), but home carries no such fallback. An
+  # unset or explicitly-empty $HOME (a minimal container, a sandboxed host,
+  # env -u HOME) makes jit_re_lit(home) correctly return "" -- there is nothing
   # to escape -- and an UNGUARDED gsub("" "/", "", tt) then degenerates to
   # gsub("/", "", tt), which deletes EVERY slash in tt rather than a leading prefix
   # that was never there. That is the identical corruption class #361 fixed for
-  # `project`, reachable from the other side of the same two lines (found in the
+  # project, reachable from the other side of the same two lines (found in the
   # self-review spawned for #362, not by the original #361 report).
   if (home != "") gsub(jit_re_lit(home) "/", "", tt)
   gsub(jit_re_lit(project) "/", "", tt)
@@ -1138,7 +1155,7 @@ END {
     n_vocab_layers = split(vocab_layers, layers, " ")
     for (li = 1; li <= n_vocab_layers; li++) {
       layer = layers[li]
-      lookup = vocab_base "/" layer "/00-index.tsv"
+      lookup = ENVIRON["JIT_BASE"] "/vocabulary/" layer "/00-index.tsv"
 
       # Single pass: match keywords, collect files + matched keywords
       delete vmatch
@@ -1163,7 +1180,7 @@ END {
 
         split(vl, vf, "\t")
         kw = vf[1]; vfile = vf[2]; kwverdict = vf[3]
-        why = jit_bad_entry_file(vfile, vocab_base "/" layer)
+        why = jit_bad_entry_file(vfile, ENVIRON["JIT_BASE"] "/vocabulary/" layer)
         if (why != "") {
           # Same concatenation, same refusal. Keyed on the name so one bad row is counted
           # once, not once per keyword that happens to point at it.
@@ -1195,7 +1212,7 @@ END {
         # Read first, mark only what was delivered -- see the same loop in
         # pre-prompt-hook.sh for why the old order marked entries nothing had injected.
         vc = ""
-        vpath = vocab_base "/" layer "/" vfile
+        vpath = ENVIRON["JIT_BASE"] "/vocabulary/" layer "/" vfile
         if (jit_entry_load(vpath, inject_default, 0, vent)) {
           if (generic_only) vent["mode"] = "summary"
           vc = jit_inject_text(vent, ".claude/jit-context/vocabulary/" layer "/" vfile, vpath)

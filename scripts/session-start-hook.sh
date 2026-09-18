@@ -306,8 +306,33 @@ else
     if [ "$JIT_CONTEXT_LOG_MAX_BYTES" = 0 ]; then
       JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. Automatic rotation is off (JIT_CONTEXT_LOG_MAX_BYTES=0) -- delete or rotate it yourself: $JIT_LOG_ESC"
     else
-      JIT_ROTATE_MB="$(printf '%s' "$JIT_CONTEXT_LOG_MAX_BYTES" | LC_ALL=C awk '{ printf "%.1f", $1 / 1000000 }')"
-      JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. It rotates automatically past $JIT_ROTATE_MB MB (kept as hooks.log.1) -- nothing to do, unless this single session outgrows it before the next one starts: $JIT_LOG_ESC"
+      # #423: JIT_CONTEXT_LOG_MAX_BYTES arrives here with no validation -- it can be
+      # exported straight into the environment, bypassing jit_load_config()'s own
+      # case-statement check entirely, and jit_log_rotate() (common.sh) re-validates
+      # for exactly that reason and silently no-ops on anything it refuses. This case
+      # mirrors that SAME validation ("" or a non-digit char, or a leading zero on
+      # more than a bare "0", is refused; "0" itself is handled above, before this
+      # else) so the note never claims rotation is on for a value jit_log_rotate()
+      # just finished refusing -- formatting a refused value through
+      # awk '{ printf "%.1f", $1 / 1000000 }' silently reads it as 0 (or -0 for a
+      # leading "-"), which is indistinguishable from a real, tiny, working max.
+      case "$JIT_CONTEXT_LOG_MAX_BYTES" in
+        "" | *[!0-9]* | 0*)
+          # Self-review (oss:auditor): this refused value is exactly the kind of input
+          # #423's own comment above says "can be exported straight into the
+          # environment" -- i.e. it never passed jit_load_config()'s validation, so it
+          # cannot be assumed to be quote/backslash-free the way a real byte count
+          # always is. Escaped the same way $LOG_FILE is escaped into JIT_LOG_ESC just
+          # above (a literal " or \\ in the value would otherwise break the JSON this
+          # line is embedded in at the printf below).
+          JIT_MAX_ESC="$(printf '%s' "$JIT_CONTEXT_LOG_MAX_BYTES" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
+          JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. JIT_CONTEXT_LOG_MAX_BYTES=$JIT_MAX_ESC is not a byte count automatic rotation accepts, so it did NOT rotate this session -- delete or rotate it yourself: $JIT_LOG_ESC"
+          ;;
+        *)
+          JIT_ROTATE_MB="$(printf '%s' "$JIT_CONTEXT_LOG_MAX_BYTES" | LC_ALL=C awk '{ printf "%.1f", $1 / 1000000 }')"
+          JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. It rotates automatically past $JIT_ROTATE_MB MB (kept as hooks.log.1) -- nothing to do, unless this single session outgrows it before the next one starts: $JIT_LOG_ESC"
+          ;;
+      esac
     fi
   fi
   if [ -n "$JIT_LINES" ]; then

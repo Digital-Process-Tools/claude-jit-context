@@ -342,6 +342,72 @@ chmod 755 "$LOGDIR"
 assert_eq "C3 an unwritable log directory: the hook still exits 0" "$RC_C3" "0"
 assert_eq "C3 an unwritable log directory: still valid, empty JSON (never fails hard)" "$OUT_C3" "{}"
 
+# #423: the size-note branch reads JIT_CONTEXT_LOG_MAX_BYTES with no validation and
+# formats it through awk `$1 / 1000000` -- a non-numeric value silently becomes 0.0,
+# so the note claims rotation is on ("rotates automatically past 0.0 MB") when
+# jit_log_rotate() actually refused it and did nothing. A9 above never reaches this
+# branch at all: its fixture log is ~3.2KB, far under jit-misses.sh's own
+# --size-threshold default (10,000,000, #248) that gates whether the note prints in
+# the first place. C4/C5/C6 pad the log past that threshold, the same way the issue's
+# own manual reproduction did, so the note branch is actually exercised.
+fixture c4
+printf '%*s\n' 10000010 '' | tr ' ' 'x' >> "$LOGDIR/hooks.log"
+
+for BAD in abc -5 010; do
+  OUT_C4="$(CLAUDE_PROJECT_DIR="$PROJ" JIT_CONTEXT_LOG_MAX_BYTES="$BAD" bash "$HOOK" < /dev/null 2> "$TMPROOT/c4.err")"
+  assert_eq "C4 malformed JIT_CONTEXT_LOG_MAX_BYTES=$BAD: stderr stays empty" "$(cat "$TMPROOT/c4.err")" ""
+  assert_true "C4 malformed JIT_CONTEXT_LOG_MAX_BYTES=$BAD: no rotation happened" '[ ! -e "$LOGDIR/hooks.log.1" ]'
+  assert_not_contains "C4 malformed JIT_CONTEXT_LOG_MAX_BYTES=$BAD: never claims rotation is on" "$OUT_C4" "rotates automatically"
+  assert_contains "C4 malformed JIT_CONTEXT_LOG_MAX_BYTES=$BAD: names the refused value" "$OUT_C4" "$BAD"
+done
+
+# Positive control: a well-formed, large max on the SAME oversized log DOES still get
+# the "rotates automatically past X MB" wording -- so C4 above is not passing merely
+# because the note branch stopped saying anything at all.
+fixture c5
+printf '%*s\n' 10000010 '' | tr ' ' 'x' >> "$LOGDIR/hooks.log"
+OUT_C5="$(CLAUDE_PROJECT_DIR="$PROJ" JIT_CONTEXT_LOG_MAX_BYTES=20000000 bash "$HOOK" < /dev/null 2> "$TMPROOT/c5.err")"
+assert_eq "C5 positive control: well-formed large max, stderr stays empty" "$(cat "$TMPROOT/c5.err")" ""
+assert_contains "C5 positive control: still says rotation is on, correctly, at 20.0 MB" "$OUT_C5" "rotates automatically past 20.0 MB"
+assert_true "C5 positive control: below its own max, so no rotation this session" '[ ! -e "$LOGDIR/hooks.log.1" ]'
+
+# Positive control for C4's "off" wording, unaffected by this fix: JIT_CONTEXT_LOG_MAX_BYTES=0
+# is a real, valid value (never rotate), not a malformed one, and must still read as "off"
+# rather than as a refused value.
+fixture c6
+printf '%*s\n' 10000010 '' | tr ' ' 'x' >> "$LOGDIR/hooks.log"
+OUT_C6="$(CLAUDE_PROJECT_DIR="$PROJ" JIT_CONTEXT_LOG_MAX_BYTES=0 bash "$HOOK" < /dev/null 2> "$TMPROOT/c6.err")"
+assert_eq "C6 positive control: JIT_CONTEXT_LOG_MAX_BYTES=0, stderr stays empty" "$(cat "$TMPROOT/c6.err")" ""
+assert_contains "C6 positive control: 0 still reads as 'Automatic rotation is off', not a refusal" "$OUT_C6" "Automatic rotation is off"
+
+# oss:auditor self-review finding: the malformed-value note (C4) embeds the refused
+# JIT_CONTEXT_LOG_MAX_BYTES verbatim into the JSON systemMessage -- and this value
+# never passed jit_load_config()'s validation (it can be exported straight into the
+# environment), so it cannot be assumed quote/backslash-free the way a real byte count
+# always is. A value containing a literal '"' breaks the printf '{"systemMessage":...}'
+# shape outright if unescaped -- confirmed here by actually parsing the hook's stdout
+# as JSON, not just grepping for a substring, since a grep still finds the raw text
+# even inside now-broken JSON.
+if command -v python3 > /dev/null 2>&1; then
+  fixture c7
+  printf '%*s\n' 10000010 '' | tr ' ' 'x' >> "$LOGDIR/hooks.log"
+  HOSTILE_MAX='1"}false{"x":"'
+  OUT_C7="$(CLAUDE_PROJECT_DIR="$PROJ" JIT_CONTEXT_LOG_MAX_BYTES="$HOSTILE_MAX" bash "$HOOK" < /dev/null 2> "$TMPROOT/c7.err")"
+  printf '%s' "$OUT_C7" > "$TMPROOT/c7.out"
+  assert_eq "C7 a refused value carrying '\"': stderr stays empty" "$(cat "$TMPROOT/c7.err")" ""
+  if python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$TMPROOT/c7.out" 2> /dev/null; then
+    PASS=$((PASS + 1))
+    echo "  PASS: C7 a refused value carrying a literal quote still parses as valid JSON"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: C7 a refused value carrying a literal quote still parses as valid JSON"
+    echo "    got: ${OUT_C7:0:300}"
+  fi
+  assert_contains "C7 the escaped value is still visible in the message" "$OUT_C7" "1"
+else
+  echo "  SKIPPED: C7 needs python3 to parse the hook's JSON output; not found on PATH."
+fi
+
 echo ""
 echo "== Results: $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

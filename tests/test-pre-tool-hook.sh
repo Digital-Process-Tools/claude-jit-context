@@ -277,6 +277,47 @@ assert_path_contains "[#361] the log tail keeps every slash with no \$HOME" "$T3
 assert_path_not_contains "[#361] the log tail is not missing the bytes an empty HOME would drop" "$T361B_LOG" "srcpipelineconfig.yml"
 
 echo ""
+echo "=== Vocab: the project-prefix strip survives a backslash-bearing \$HOME (#424 self-review) ==="
+# home/project used to reach this gsub via -v (see #424 above in scripts/pre-tool-hook.sh),
+# and awk's -v processes backslash escapes -- so a literal two-byte "\t" (backslash, t) in
+# $HOME silently became a ONE-byte real TAB inside the awk-side `home` variable, while the
+# file_path token below still carries the real, undecoded two-byte "\t". The two no longer
+# match byte-for-byte, so gsub(jit_re_lit(home) "/", "", tt) silently fails and the project
+# prefix is never stripped -- not a corruption of unrelated bytes like #361/#362 (there is
+# no wildcard here), just the strip quietly not happening. BACKSLASH is built with printf
+# rather than typed, so there is exactly one literal backslash byte to reason about.
+BACKSLASH="$(printf '\\')"
+# HOME_BS deliberately does NOT sit under $TEST_DIR: if it did, `project`'s own
+# strip (which runs second, on CLAUDE_PROJECT_DIR=$TEST_DIR, and is unaffected by
+# this bug since $TEST_DIR carries no backslash) would remove $TEST_DIR's own
+# prefix regardless of whether `home`'s strip ran at all, and the two would be
+# indistinguishable -- confirmed empirically while writing this test: nesting
+# HOME_BS under $TEST_DIR made this assertion pass even with the bug still
+# present, because project's shorter, unaffected prefix match already produced
+# the same-looking tail. A HOME_BS rooted under its own mktemp -d isolates the
+# one strip this fixture means to exercise.
+HOMEROOT_424="$(mktemp -d 2> /dev/null)" || HOMEROOT_424="/tmp/jit424homeroot"
+mkdir -p "$HOMEROOT_424" 2> /dev/null
+HOME_BS="$HOMEROOT_424/x${BACKSLASH}tzzhome"
+# NOT built via a ${var//pattern/replacement} substitution on $BACKSLASH: bash treats
+# backslash as an ESCAPE character inside the pattern half of that construct, so a
+# pattern that IS itself one literal backslash byte does not match a real backslash
+# the way a plain string would -- confirmed empirically (JSON_HOME came out byte-
+# identical to HOME_BS, no doubling at all, silently). Built directly instead, from
+# the same pieces, so there is no pattern-matching step to get backslash-confused.
+JSON_HOME="$HOMEROOT_424/x${BACKSLASH}${BACKSLASH}tzzhome"
+T424H_LOG="$TEST_DIR/.claude/jit-context/.discovery/logs/hooks.log"
+: > "$T424H_LOG"
+T424H_PAYLOAD='{"tool_name":"Read","tool_input":{"file_path":"'"$JSON_HOME"'/pipeline/config.yml"}}'
+T424H_OUT=$(CLAUDE_PROJECT_DIR="$TEST_DIR" HOME="$HOME_BS" bash "$HOOK" \
+  <<< "$T424H_PAYLOAD" \
+  2> /dev/null)
+assert_contains "[#424] pipeline vocab still matches with a backslash-bearing \$HOME" "$T424H_OUT" "pipeline vocabulary"
+assert_path_not_contains "[#424] the log tail does not still carry the unstripped \$HOME prefix" "$T424H_LOG" "x${BACKSLASH}tzzhome/pipeline"
+assert_path_contains "[#424] the log tail keeps the stripped relative path" "$T424H_LOG" "pipeline/config.yml"
+rm -rf "$HOMEROOT_424"
+
+echo ""
 echo "=== Vocab: keyword only in command VERB/non-path (no false fire) ==="
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"check the blog runner"}}')
 assert_not_contains "blog NOT matched from non-path command word" "$OUT" "blog vocabulary"
@@ -1215,6 +1256,52 @@ else
     assert_contains "#402 dedup: but the tool rule itself still fires every call, not gated on the warning" "$D2" "JIT-402-STALE-BODY-MAIN"
   fi
   rm -rf "$D402"
+fi
+
+# #424: CLAUDE_PROJECT_DIR containing a backslash escape sequence used to make this
+# hook silently answer "{}" for a rule that fires correctly on the IDENTICAL tree
+# under a plain path -- tools_base/vocab_base were built in bash and handed to awk as
+# -v values, and awk's -v PROCESSES backslash escapes in the value it receives, so
+# JIT_BASE arrived mangled and every getline against it found nothing. Two trees, same
+# rule, same body, ONLY the path differs -- so any divergence in output is the defect,
+# not a difference in what was set up.
+D424="$(mktemp -d 2> /dev/null)" || D424=""
+if [ -z "$D424" ]; then
+  echo "  SKIPPED: mktemp -d produced no directory, so no #424 fixture can be built here."
+else
+  IDXNAME_424="00-index"
+  IDXNAME_424="$IDXNAME_424.tsv"
+  for tree in plain "bs\\zz"; do
+    mkdir -p "$D424/$tree/.claude/jit-context/tools/00-manual"
+    for d in 00-manual 10-auto 20-grouped 30-crosscutting; do
+      mkdir -p "$D424/$tree/.claude/jit-context/vocabulary/$d"
+      : > "$D424/$tree/.claude/jit-context/vocabulary/$d/$IDXNAME_424"
+    done
+    printf 'Bash\tgit push\tguard.md\tremind\t\t\n' > "$D424/$tree/.claude/jit-context/tools/00-manual/$IDXNAME_424"
+    echo "JIT-424-LIVE-BODY" > "$D424/$tree/.claude/jit-context/tools/00-manual/guard.md"
+  done
+
+  PUSH_PAYLOAD_424='{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}'
+
+  PLAIN_OUT=$(run_hook_with_pd "$PUSH_PAYLOAD_424" "$D424/plain" "$D424/plain")
+  assert_contains "#424 positive control: a plain CLAUDE_PROJECT_DIR path still fires the rule" "$PLAIN_OUT" "JIT-424-LIVE-BODY"
+
+  if [ -d "$D424/bs\\zz" ]; then
+    BS_OUT=$(run_hook_with_pd "$PUSH_PAYLOAD_424" "$D424/bs\\zz" "$D424/bs\\zz")
+    assert_contains "#424 fix: a backslash-bearing CLAUDE_PROJECT_DIR fires the SAME rule the plain path does" "$BS_OUT" "JIT-424-LIVE-BODY"
+    if [ "$BS_OUT" = "$PLAIN_OUT" ]; then
+      PASS=$((PASS + 1))
+      echo "  PASS: #424 fix: the two trees answer identically"
+    else
+      FAIL=$((FAIL + 1))
+      echo "  FAIL: #424 fix: the two trees answer identically"
+      echo "    plain: ${PLAIN_OUT:0:200}"
+      echo "    bs:    ${BS_OUT:0:200}"
+    fi
+  else
+    echo "  SKIPPED: could not create a directory containing a literal backslash on this filesystem."
+  fi
+  rm -rf "$D424"
 fi
 
 # --- Cleanup ---

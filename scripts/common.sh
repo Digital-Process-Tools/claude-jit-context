@@ -99,9 +99,11 @@ JIT_BASE="${CLAUDE_PROJECT_DIR:-${PWD:-.}}/.claude/jit-context"
 # already uses and for the same reason -- a -v value has its escapes PROCESSED, so a
 # checkout path carrying a backslash would arrive mangled and one carrying a newline is a
 # fatal awk error raised before the program runs. Nothing before #378 read this out of
-# ENVIRON, so nothing before #378 needed it exported; every hook here still builds its own
-# OWN getline paths from its own bash-side base variable, never from this one, so
-# exporting it changes nothing any existing row reads.
+# ENVIRON, so nothing before #378 needed it exported. #424 later moved
+# pre-tool-hook.sh's own tools/vocabulary getline paths onto this same ENVIRON read too
+# (they used to be built in bash and handed to awk as -v tools_base=/-v vocab_base=,
+# hitting the identical escape-processing defect on a backslash-bearing
+# CLAUDE_PROJECT_DIR), so this export is no longer read by transclusion alone.
 export JIT_BASE
 
 # --- CLAUDE_PROJECT_DIR naming a DIFFERENT worktree than $PWD (#402) ----------------
