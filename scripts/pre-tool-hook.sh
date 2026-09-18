@@ -119,8 +119,6 @@ JIT_AWK_ARGS=(
   -v vocab_layers="$JIT_VOCAB_LAYERS"
   -v state_dir="$JIT_STATE_DIR"
   -v inject_default="$JIT_INJECT"
-  -v home="$HOME"
-  -v project="${CLAUDE_PROJECT_DIR:-.}"
   -v log_tmp="$JIT_TMP"
   -v missing_bins="$JIT_MISSING_REQUIRES"
   -v status_mode="$JIT_STATUS"
@@ -160,7 +158,7 @@ function jit_json_escape(s,   k, c) {
 }
 # gsub(home "/", ...) and gsub(project "/", ...) below build their pattern by string
 # CONCATENATION, and gsub takes that result as an ERE -- awk does not know the caller
-# meant a literal prefix. home/project are -v values from the environment, not
+# meant a literal prefix. home/project are values FROM THE ENVIRONMENT, not
 # constants this repository controls: $HOME is normally metacharacter-free, but
 # CLAUDE_PROJECT_DIR is a Claude-Code-specific variable, unset under every other host,
 # and its fallback here is the single byte ".". As a regex, "." matches ANY character,
@@ -1072,15 +1070,26 @@ END {
     if (index(ptoks[pi], "/") > 0) cmd_paths = cmd_paths " " ptoks[pi]
   }
   tt = f_file_path " " cmd_paths
-  # A GUARDED gsub, not a bare one: `project` always has a byte, from the
-  # "${CLAUDE_PROJECT_DIR:-.}" fallback at the bash -v site (":-" fires on unset AND
-  # empty, so project can never be ""), but `home="$HOME"` carries no such fallback.
-  # An unset or explicitly-empty $HOME (a minimal container, a sandboxed host,
-  # `env -u HOME`) makes jit_re_lit(home) correctly return "" -- there is nothing
+  # #424 self-review (oss:auditor): home/project used to be passed in via -v, the
+  # identical escape-processing defect #424 fixed for tools_base/vocab_base above --
+  # a backslash-bearing $HOME or CLAUDE_PROJECT_DIR silently mangled BOTH the string
+  # gsub() strips below AND jit_re_lit escaping of it (jit_re_lit escapes regex
+  # metacharacters in whatever string it is HANDED; it cannot recover a backslash -v
+  # already decoded away before jit_re_lit ever saw it). Read via ENVIRON instead,
+  # same as tools_base/vocab_base -- neither needs an explicit export in the bash
+  # half above: both already arrive in this process own initial environment from
+  # Claude Code own launcher (CLAUDE_PROJECT_DIR) or the shell login environment
+  # (HOME), never assigned inside this script the way JIT_BASE is.
+  home = ENVIRON["HOME"]
+  project = (ENVIRON["CLAUDE_PROJECT_DIR"] != "" ? ENVIRON["CLAUDE_PROJECT_DIR"] : ".")
+  # A GUARDED gsub, not a bare one: project always has a byte, from the fallback to
+  # "." just above (project can never be ""), but home carries no such fallback. An
+  # unset or explicitly-empty $HOME (a minimal container, a sandboxed host,
+  # env -u HOME) makes jit_re_lit(home) correctly return "" -- there is nothing
   # to escape -- and an UNGUARDED gsub("" "/", "", tt) then degenerates to
   # gsub("/", "", tt), which deletes EVERY slash in tt rather than a leading prefix
   # that was never there. That is the identical corruption class #361 fixed for
-  # `project`, reachable from the other side of the same two lines (found in the
+  # project, reachable from the other side of the same two lines (found in the
   # self-review spawned for #362, not by the original #361 report).
   if (home != "") gsub(jit_re_lit(home) "/", "", tt)
   gsub(jit_re_lit(project) "/", "", tt)

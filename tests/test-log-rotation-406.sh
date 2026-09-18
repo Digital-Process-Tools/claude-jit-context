@@ -380,6 +380,34 @@ OUT_C6="$(CLAUDE_PROJECT_DIR="$PROJ" JIT_CONTEXT_LOG_MAX_BYTES=0 bash "$HOOK" < 
 assert_eq "C6 positive control: JIT_CONTEXT_LOG_MAX_BYTES=0, stderr stays empty" "$(cat "$TMPROOT/c6.err")" ""
 assert_contains "C6 positive control: 0 still reads as 'Automatic rotation is off', not a refusal" "$OUT_C6" "Automatic rotation is off"
 
+# oss:auditor self-review finding: the malformed-value note (C4) embeds the refused
+# JIT_CONTEXT_LOG_MAX_BYTES verbatim into the JSON systemMessage -- and this value
+# never passed jit_load_config()'s validation (it can be exported straight into the
+# environment), so it cannot be assumed quote/backslash-free the way a real byte count
+# always is. A value containing a literal '"' breaks the printf '{"systemMessage":...}'
+# shape outright if unescaped -- confirmed here by actually parsing the hook's stdout
+# as JSON, not just grepping for a substring, since a grep still finds the raw text
+# even inside now-broken JSON.
+if command -v python3 > /dev/null 2>&1; then
+  fixture c7
+  printf '%*s\n' 10000010 '' | tr ' ' 'x' >> "$LOGDIR/hooks.log"
+  HOSTILE_MAX='1"}false{"x":"'
+  OUT_C7="$(CLAUDE_PROJECT_DIR="$PROJ" JIT_CONTEXT_LOG_MAX_BYTES="$HOSTILE_MAX" bash "$HOOK" < /dev/null 2> "$TMPROOT/c7.err")"
+  printf '%s' "$OUT_C7" > "$TMPROOT/c7.out"
+  assert_eq "C7 a refused value carrying '\"': stderr stays empty" "$(cat "$TMPROOT/c7.err")" ""
+  if python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$TMPROOT/c7.out" 2> /dev/null; then
+    PASS=$((PASS + 1))
+    echo "  PASS: C7 a refused value carrying a literal quote still parses as valid JSON"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: C7 a refused value carrying a literal quote still parses as valid JSON"
+    echo "    got: ${OUT_C7:0:300}"
+  fi
+  assert_contains "C7 the escaped value is still visible in the message" "$OUT_C7" "1"
+else
+  echo "  SKIPPED: C7 needs python3 to parse the hook's JSON output; not found on PATH."
+fi
+
 echo ""
 echo "== Results: $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]
