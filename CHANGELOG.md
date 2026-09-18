@@ -7,6 +7,72 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-18
+
+### Added
+
+- **`hooks.log` rotates automatically instead of asking a human to do it by hand**
+  (#406). `session-start-hook.sh` used to detect a large log and tell a person to
+  delete or rotate it by hand — two remedies offered as equivalent when they are
+  not: delete loses the corpus `jit-misses.sh` reads, and nothing said so. Rotation is now
+  automatic, at SessionStart only (never on the per-call hot path), and it never
+  deletes: the old log becomes `hooks.log.1`, one generation kept, a second rotation
+  overwrites whatever `hooks.log.1` already held. `JIT_CONTEXT_LOG_MAX_BYTES` in
+  `config.env` controls the threshold in bytes (default 20000000); `0` means never
+  rotate, and a malformed value is refused and named the same way every other
+  `config.env` setting already is. The same variable exported into the environment
+  never passes through that validation, so the rotation itself refuses a malformed
+  value on the value it received: without that, a negative threshold silently rotated
+  on every SessionStart, which costs the previous generation after two of them.
+
+  `jit_log_write()` opens the log by path on every write, `O_APPEND`, with no
+  long-lived descriptor — confirmed, not assumed — which is what makes the rename
+  safe under a concurrent session: a writer holding the old path keeps appending
+  losslessly to the rotated-out file, and the next write anywhere reopens whatever
+  now sits at the current path.
+
+  `jit-misses.sh` reads only the current log, never a rotated generation, so a
+  rotation narrows the window its recurring-miss report covers. Rather than let that
+  read as "nothing recurs" for a reason that has nothing to do with actual usage, the
+  freshly rotated log carries a marker line naming when the rotation happened, and
+  `jit-misses.sh` reports the narrowed window explicitly whenever it sees one.
+
+### Fixed
+
+- **`scripts/host.sh`'s `gemini-cli` row carried empty/placeholder columns based on a
+  doc claim ("Gemini CLI documents none for command hooks") that turned out to be false**
+  (#252). Reading the installed gemini-cli 0.58.0 bundle found it sets `GEMINI_SESSION_ID`
+  and `GEMINI_PROJECT_DIR` (plus a `CLAUDE_PROJECT_DIR` compatibility alias) in every hook
+  process's environment, unlike Codex's documented-but-undelivered `CODEX_SESSION_ID`
+  (#288). The registry row now carries those real, source-verified values. `state` stays
+  `UNKNOWN` and `refusal_envelope` stays `refusal-not-established`: a source read is not a
+  live run, and a live-observation attempt from this change failed on this account's own
+  Gemini Code Assist auth tier before a single hook fired -- an environment limitation,
+  not a design gap, and not evidence either way about the refusal contract.
+
+- **`JIT_CONTEXT_STATUS=fired` now names a refused or fired `tools` rule too, not just the `paths` and `vocabulary` dimensions** (#391). `pre-tool-hook.sh` never carried the `systemMessage` wiring the other two hooks got in #367, on the reasoning that its composed awk program sat too close to Linux's per-argument exec() cap (#369) to afford it -- #371 later moved that program off argv entirely (a generated tempfile, read via `awk -f`), which removed the cap the exclusion was about, but the wiring itself was never added back. So a `tools` rule that fired, and a `tools` rule that REFUSED the call outright, both said nothing on `fired` mode -- the single case #368's own measurement argued was worth the most, since Claude Code delivers `systemMessage` on a refused `PreToolUse` call too, as its own event ahead of the `tool_result` error. `pre-tool-hook.sh` now builds the same `JIT : <dimension>/<layer>/<file> (<size>)` line the other two hooks already did, plus a `jit_envelope_block_sysmsg()` counterpart (common.sh) for the one shape neither of them ever needed: a refusal line reads `... — blocked`.
+
+- **`jit-doctor.sh` now flags a `CLAUDE_PROJECT_DIR` that names a different git worktree than the one the shell is actually sitting in** (#402). A worktree session whose `CLAUDE_PROJECT_DIR` still points at the main clone (or another worktree) makes every hook resolve `JIT_BASE` against that OTHER tree, silently, while every `Edit`/`Read` the agent runs lands in the worktree it thinks it is standing in -- an edit confirmed on disk can then be served back from the other tree's stale copy of the same relative path. `rebuild-tsv.sh` already refuses this shape on the WRITE side (#231); nothing on the READ side ever surfaced it, and this issue's own report could not confirm a mechanism. `jit-doctor.sh` now compares `git rev-parse --show-toplevel` on both `$PWD` and `$CLAUDE_PROJECT_DIR` and raises an `ADVISORY` (never a defect -- the exit code is unchanged) when they disagree; either side answering empty (no `git` on `PATH`, a plain non-git project directory, a `CLAUDE_PROJECT_DIR` that does not resolve) declines rather than manufacturing a false mismatch.
+
+- **`pre-tool-hook.sh` now warns, on the hot path, when `CLAUDE_PROJECT_DIR` is confirmed to name a different git worktree than the one the shell is actually sitting in** (#402). #412's `jit-doctor.sh` advisory could only ever be run by hand, after the fact, and the issue's own reopening comment said so in bold: "the mechanism was never confirmed, only made checkable." This closes that gap on both halves. The mechanism is confirmed by direct reproduction (`tests/test-pre-tool-hook.sh`, "#402"): two git worktrees carrying the same rule name with different bodies, driven through the real hook rather than the diagnostic, show that a worktree-mismatched session serves the OTHER tree's body and not the one actually on disk where the shell sits -- exactly the shape the original report suspected but could not pin down. `common.sh` gains `jit_worktree_mismatch_line()`, the same three-way check `jit-doctor.sh` already made (a confirmed mismatch speaks, an unresolvable side declines rather than guessing), and `pre-tool-hook.sh` now delivers it as a once-per-session advisory alongside whatever content it injects -- never blocking, per this repository's own "never fail hard" contract for hooks. Wired into `pre-tool-hook.sh` only, the hook this issue names; `pre-prompt-hook.sh` and `pre-path-hook.sh` share the same `JIT_BASE` resolution and the same exposure, and do not yet carry this warning.
+
+- **`jit-stats.sh` no longer cuts `matched=` at the first `)` inside a pattern, mis-reports most byte counts as `unknown`, or silently drops arguments under zsh** (#405). Every `paths` rule's `match:` opens a group, so the correlated `matched=` value was cut at character four for nearly every fired `paths` entry and rendered identically to a genuine short match; it now scans for the wrapper's own balancing close instead of the first `)`, honoring escaped and bracketed parentheses inside the pattern. The `bytes=` column collapsed "never measured this session" and "measured, approximately, from the file itself" into one `unknown` -- it now falls back to the entry's own on-disk size when the byte marker is missing, printed with a leading `~` so it is never mistaken for the exact figure. `commands/stats.md`, `commands/doctor.md` and `commands/init.md` ran `read -a` directly in their fenced bash body, a bash-only spelling that errors under zsh and silently dropped every typed argument -- the splitting now happens inside an explicit `bash -c`, regardless of which shell runs the command body.
+
+- **A dangling `hooks.log.1` symlink was silently replaced instead of refused** (#406).
+  `jit_log_rotate()`'s containment check tested whether `hooks.log.1` was a symlink only
+  *inside* a branch gated on `-e`, and `-e` follows the link -- it is false when the
+  symlink's target does not exist or does not resolve on the host. A dangling
+  `hooks.log.1` fell straight through that gate to the unconditional rename below it and
+  was overwritten just like an ordinary file, defeating the very containment #406 added.
+  Reproduced locally (not Windows-specific): symlinking `hooks.log.1` to a nonexistent
+  path and rotating destroyed the symlink every time. `-L` is now checked first and
+  unconditionally, since it is a plain `lstat` and does not care whether the target
+  exists.
+
+- **`pre-prompt-hook.sh` and `pre-path-hook.sh` now carry the same `CLAUDE_PROJECT_DIR` worktree-mismatch warning `pre-tool-hook.sh` gained in #402** (#416). #402 wired the detection into the one hook its own issue title named, and said so rather than quietly widening -- the right call for that diff, but not the whole exposure: both remaining hooks resolve `JIT_BASE` from `CLAUDE_PROJECT_DIR` the same way, so a session whose `CLAUDE_PROJECT_DIR` names a different git worktree than `$PWD` was served that other tree's vocabulary and path rules with no warning either. The helper (`jit_worktree_mismatch_line()`/`jit_worktree_notice()` in `common.sh`) was already generic; this is the wiring, plus the tests, for the other two. Dedup follows each hook's own existing precedent rather than inventing a fourth marker file: `pre-prompt-hook.sh` shares its "vocab"-keyed marker with the tool hook, exactly as its `jit-refused-config` notice already does, while `pre-path-hook.sh` keeps its own "path"-keyed marker isolated, exactly as its `config_refused`/`layers_refused` notices already do.
+
+- **`rebuild-tsv.sh` now refuses when `CLAUDE_PROJECT_DIR` is set but empty, instead of silently falling through to the current directory** (#417). `${CLAUDE_PROJECT_DIR:-}` reads `""` both when the variable was never exported (the ordinary `bash scripts/rebuild-tsv.sh` case, which must keep resolving against `$PWD`) and when something exported it as an empty string -- a caller that meant to name a tree, computed nothing, and exported the empty result anyway. The `#231` cross-tree guard's own `[ -n ... ]` precondition could not tell those two apart, so the empty-but-set case took the same silent skip as a genuine unset and reached `JIT_BASE`'s own `$PWD` fallback with zero refusal and zero note -- observed on a maintainer clone as a live test fixture (`tools/00-manual/guard.md`, a `remind`-mode rule matching `git push`) written into the real `.claude/jit-context/` and 12 real index rows lost in the same rebuild. `${CLAUDE_PROJECT_DIR+set}` now tells the two apart: an explicitly empty `CLAUDE_PROJECT_DIR` makes the index write a `FATAL` (exit 2) before it happens, and a genuinely unset one still falls through to `$PWD` exactly as before. `jit-init.sh`'s own `--base /.claude/jit-context` case (seeding at the filesystem root) used to pass this same empty spelling of `CLAUDE_PROJECT_DIR="/"` through to `rebuild-tsv.sh`; it now passes `"/"` literally so that legitimate call keeps working under the tightened guard.
+
 ## [0.10.0] - 2026-09-16
 
 ### Added
@@ -3701,7 +3767,8 @@ and publishes it.
 
 Initial internal version: tool and path rules, configured through `config.json`.
 
-[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.11.0
 [0.10.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.10.0
 [0.9.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.9.0
 [0.8.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.8.0
