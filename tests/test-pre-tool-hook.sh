@@ -1351,6 +1351,14 @@ assert_blocked "#426 Agent tool_input.prompt=tool_name cannot unname the Agent t
 OUT426D=$(run426 '{"session_id":"s426d","tool_name":"Bash","tool_input":{"command":"echo hello"}}')
 assert_not_contains "#426 control: an ordinary command is not blocked" "$OUT426D" '"decision":"block"'
 
+# Self-review finding on #426: a NESTED key merely spelled "tool_input" must not
+# hijack ti_depth away from the REAL top-level tool_input object. ti_depth may only
+# lock onto a "tool_input" key that was itself read at depth 1 -- an earlier decoy
+# nested inside some other top-level object must never claim it, or first-wins would
+# silently prefer the decoy's own command/file_path/etc. fields over the real ones.
+OUT426E=$(run426 '{"session_id":"s426e","tool_name":"Bash","weird":{"tool_input":{"command":"echo nothing-to-see"}},"tool_input":{"command":"git push origin main --force"}}')
+assert_blocked "#426 a nested key spelled tool_input cannot hijack the real one (self-review)" "$OUT426E"
+
 rm -rf "$D426"
 
 # --- Cleanup ---

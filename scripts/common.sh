@@ -2810,10 +2810,11 @@ function jit_json_fields(s, raw, fs, fe,   n, i, k) {
 # shape jit_session_key() below already uses, and for the same reason given there: the
 # runner-written value should never lose to a string an untrusted tool_input carries
 # later in the payload.
-function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth, ti_depth, pending_key, i, c, ch, txt, val, nxt, is_key) {
+function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth, ti_depth, pending_key, pending_key_depth, i, c, ch, txt, val, nxt, is_key) {
   depth = 0
   ti_depth = -1
   pending_key = ""
+  pending_key_depth = -1
   for (i = 1; i <= n; i++) {
     if (i % 2 == 1) {
       txt = raw[fs[i]]
@@ -2821,7 +2822,14 @@ function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth
         ch = substr(txt, c, 1)
         if (ch == "{") {
           depth++
-          if (pending_key == "tool_input" && ti_depth == -1) ti_depth = depth
+          # #426 self-review finding: pending_key alone names WHICH key precedes this
+          # brace, not WHERE that key itself sat. Without pending_key_depth == 1 here,
+          # any earlier key spelled "tool_input" at ANY depth -- nested three objects
+          # deep, say -- would lock ti_depth onto ITS value object, and first-wins would
+          # then silently discard the real top-level tool_input for every name the
+          # impostor also claims. Only a "tool_input" key read while depth was still 1
+          # (before this open brace bumps it) is the genuine top-level one.
+          if (pending_key == "tool_input" && pending_key_depth == 1 && ti_depth == -1) ti_depth = depth
         } else if (ch == "}") {
           if (depth == ti_depth) ti_depth = -1
           depth--
@@ -2832,15 +2840,16 @@ function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth
     # A field spanning several raw pieces -- an escaped quote inside it -- is never a
     # bare key name this loop wants and can never BE the pending key either -- the same
     # single-piece guard every dispatch loop in this file already used.
-    if (fs[i] != fe[i]) { pending_key = ""; continue }
+    if (fs[i] != fe[i]) { pending_key = ""; pending_key_depth = -1; continue }
     val = raw[fs[i]]
     is_key = 0
     if (i + 1 <= n) {
       nxt = raw[fs[i+1]]
       if (nxt ~ /^[[:space:]]*:/) is_key = 1
     }
-    if (!is_key) { pending_key = ""; continue }
+    if (!is_key) { pending_key = ""; pending_key_depth = -1; continue }
     pending_key = val
+    pending_key_depth = depth
     # The VALUE field i+2 may itself span several raw pieces -- a command carrying an
     # escaped quote, or a Write payload own file body -- and jit_field() already
     # reassembles a RANGE, so it is read over the full [fs[i+2], fe[i+2]] range rather
