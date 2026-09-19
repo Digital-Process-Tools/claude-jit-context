@@ -248,8 +248,15 @@ P="$(new_project g)"
 mkdir -p "$(state_of "$P")"
 printf 'php-coding.md\n' > "$(state_of "$P")/path-shown-sess-mine.txt"
 printf 'php-coding.md\n' > "$(state_of "$P")/path-shown-sess-theirs.txt"
-FOREIGN="/tmp/claude-hook-log-999999.tmp"
-printf 'in flight\n' > "$FOREIGN"
+G_TMPDIR="$TMP/g-foreign"
+mkdir -p "$G_TMPDIR"
+FOREIGN="$G_TMPDIR/claude-hook-log-999999.tmp"
+if [ -e "$FOREIGN" ] || [ -L "$FOREIGN" ]; then
+  echo "  FAIL: fixture path already exists before the fixture wrote it"
+  FAIL=$((FAIL + 1))
+else
+  printf 'in flight\n' > "$FOREIGN"
+fi
 OUT="$(run_session_start "$P" "sess-mine")"
 RC=$?
 assert_rc0 "session-start exits 0" "$RC"
