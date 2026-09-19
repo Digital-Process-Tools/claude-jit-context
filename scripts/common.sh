@@ -1461,6 +1461,23 @@ jit_frontmatter() {
 # shellcheck disable=SC2034
 JIT_VALID_MODE_RE='^(remind|block|once)(,(remind|block|once))*$'
 
+# A requires: value is free text out of a committed file, and jit_missing_requires()
+# below hands the accumulated list across an exec boundary as a single awk -v argument
+# (#427). A bare binary name is the only thing that column means (#203s own comment: a
+# single name, never a list), so anything else is refused outright rather than carried
+# forward at all -- the same discipline JIT_VALID_MODE_RE already applies to mode:, and
+# for the same two reasons: an unbounded or hostile value should be looked at, not
+# quietly indexed, and 255 bytes is generous for a real binary name while still bounding
+# what one row can contribute to a list that many rows share.
+# Shared between rebuild-tsv.sh, which refuses to index a tools row whose requires:
+# value does not match this, and jit_missing_requires(), which refuses to carry a
+# value that does not match this forward even out of an already-committed index --
+# the index-time refusal only protects a FUTURE rebuild by this repository own
+# maintainer; a clone reads whatever is already committed.
+# Consumed by rebuild-tsv.sh; shellcheck cannot see that from here.
+# shellcheck disable=SC2034
+JIT_VALID_REQUIRES_RE='^[A-Za-z0-9._+-]{1,255}$'
+
 # --- Invocation macros -------------------------------------------------------
 # A rule that has to fire on an INVOCATION rather than on a word carries an anchor, and
 # the anchor is the part nobody can verify by reading. Four have been wrong: the \n
@@ -2767,6 +2784,86 @@ function jit_json_fields(s, raw, fs, fe,   n, i, k) {
   fe[k] = n
   return k
 }
+# jit_hook_fields() walks the same logical fields jit_json_fields() produced, but
+# structurally rather than positionally (#426). The old dispatch loops in
+# pre-tool-hook.sh/pre-path-hook.sh/post-tool-hook.sh treated EVERY single-piece quoted
+# field at an even logical index as a candidate key and read whatever quoted field
+# followed two positions later as its value -- no check that the field actually sat at
+# key position, no check of which object it was inside. A tool_input STRING VALUE equal
+# to tool_name, command, file_path, pattern, skill or subagent_type could therefore
+# repoint the field it named, last-wins, at whatever quoted string happened to follow --
+# including tool_use_id, defeating every mode: block/require/forbid rule.
+#
+# Two structural checks close that. A string is a key only when the raw piece right
+# after its closing quote begins, after optional whitespace, with a colon --
+# jit_stop_hook_active() below already relies on exactly this check for
+# stop_hook_active. And brace depth is tracked over the STRUCTURAL (odd-logical-index)
+# fields, which are always ONE physical raw piece -- only quoted content can span an
+# escaped quote, so only even indices ever do -- never over quoted content itself. TOP
+# is populated from keys read at depth 1, the top level of the whole payload; TI is
+# populated from keys read directly inside the top-level tool_input object and nowhere
+# deeper. A tool_input value that merely spells a wanted key name is read at the wrong
+# depth, is not followed by a colon, or both -- it is never assigned to TOP or TI.
+#
+# top_wanted/ti_wanted are caller-built membership arrays (name -> 1); only names
+# present there are ever looked up. First occurrence wins for every field, the same
+# shape jit_session_key() below already uses, and for the same reason given there: the
+# runner-written value should never lose to a string an untrusted tool_input carries
+# later in the payload.
+function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth, ti_depth, pending_key, pending_key_depth, i, c, ch, txt, val, nxt, is_key) {
+  depth = 0
+  ti_depth = -1
+  pending_key = ""
+  pending_key_depth = -1
+  for (i = 1; i <= n; i++) {
+    if (i % 2 == 1) {
+      txt = raw[fs[i]]
+      for (c = 1; c <= length(txt); c++) {
+        ch = substr(txt, c, 1)
+        if (ch == "{") {
+          depth++
+          # #426 self-review finding: pending_key alone names WHICH key precedes this
+          # brace, not WHERE that key itself sat. Without pending_key_depth == 1 here,
+          # any earlier key spelled "tool_input" at ANY depth -- nested three objects
+          # deep, say -- would lock ti_depth onto ITS value object, and first-wins would
+          # then silently discard the real top-level tool_input for every name the
+          # impostor also claims. Only a "tool_input" key read while depth was still 1
+          # (before this open brace bumps it) is the genuine top-level one.
+          if (pending_key == "tool_input" && pending_key_depth == 1 && ti_depth == -1) ti_depth = depth
+        } else if (ch == "}") {
+          if (depth == ti_depth) ti_depth = -1
+          depth--
+        }
+      }
+      continue
+    }
+    # A field spanning several raw pieces -- an escaped quote inside it -- is never a
+    # bare key name this loop wants and can never BE the pending key either -- the same
+    # single-piece guard every dispatch loop in this file already used.
+    if (fs[i] != fe[i]) { pending_key = ""; pending_key_depth = -1; continue }
+    val = raw[fs[i]]
+    is_key = 0
+    if (i + 1 <= n) {
+      nxt = raw[fs[i+1]]
+      if (nxt ~ /^[[:space:]]*:/) is_key = 1
+    }
+    if (!is_key) { pending_key = ""; pending_key_depth = -1; continue }
+    pending_key = val
+    pending_key_depth = depth
+    # The VALUE field i+2 may itself span several raw pieces -- a command carrying an
+    # escaped quote, or a Write payload own file body -- and jit_field() already
+    # reassembles a RANGE, so it is read over the full [fs[i+2], fe[i+2]] range rather
+    # than requiring it be single-piece too. Only the KEY (field i, checked above) has
+    # to be one bare piece; a spoofed key candidate that itself spans an escaped quote
+    # was already rejected by that same guard before reaching this point.
+    if (i + 2 > n) continue
+    if (depth == 1) {
+      if ((val in top_wanted) && !(val in TOP)) TOP[val] = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
+    } else if (depth == ti_depth) {
+      if ((val in ti_wanted) && !(val in TI)) TI[val] = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
+    }
+  }
+}
 # --- Session identity, for the once-per-session markers ---------------------
 # Read here rather than in bash because the payload is already being parsed: a second awk
 # process per hook to fetch one field would cost more than every check in this file.
@@ -3758,18 +3855,58 @@ jit_report_keyword() {
 # `--`, not a bare name, on the presence check: a requires: value is free text out of a
 # committed file, and a value starting with a hyphen must not be read as an OPTION to the
 # `command` builtin itself.
+# #427: this list crosses an exec boundary in pre-tool-hook.sh -- handed to awk as a
+# single -v missing_bins=... argument -- and it is the one such list in this file that
+# was not byte-capped: JIT_SYMLINKS, JIT_NONFILES, JIT_CONFIG_REFUSED,
+# JIT_LAYERS_REFUSED and JIT_ENTRY_AGES all cap themselves for exactly this reason. The
+# source is a committed 00-index.tsv, so its size is chosen by whatever tree is cloned,
+# not by this machine: a requires: value a few hundred KB long, or a few hundred rows
+# each naming a distinct one, pushes the composed awk program past MAX_ARG_STRLEN /
+# ARG_MAX, execve fails, and pre-tool-hook.sh refuses -- or on an unwritable TMPDIR,
+# silently passes -- every call in the session, not just the row that named the
+# oversized value.
+JIT_MISSING_REQUIRES_MAX=4096
 jit_missing_requires() {
   # $1 tools dimension base directory, $2 space-separated layer names (JIT_TOOL_LAYERS)
-  local base="$1" layers="$2" layer tsv bin seen=" " missing=" "
+  local base="$1" layers="$2" layer tsv bin seen=" " missing=" " cut=0
   local LC_ALL=C
   for layer in $layers; do
     tsv="$base/$layer/00-index.tsv"
     [ -f "$tsv" ] || continue
     while IFS= read -r bin; do
       [ -z "$bin" ] && continue
+      # A bare binary name only -- JIT_VALID_REQUIRES_RE, the same discipline
+      # rebuild-tsv.sh applies at index time. The committed index may already carry a
+      # value that predates that check, or one from a tree this repository never
+      # indexed at all, so this is the check that actually protects a clone: refused
+      # here means never added to the seen list, never counted toward the cap below,
+      # and never handed to command -v as an argument.
+      case "$bin" in
+        *[!A-Za-z0-9._+-]*) continue ;;
+      esac
+      [ "${#bin}" -gt 255 ] && continue
       case "$seen" in *" $bin "*) continue ;; esac
       seen="$seen$bin "
       command -v -- "$bin" > /dev/null 2>&1 && continue
+      # The COUNT is not capped, only the list -- JIT_CONFIG_REFUSED's own reason: a
+      # truncated list that also under-reported would be this repository own defect
+      # class wearing a fix as a disguise. A binary dropped by the cap is simply never
+      # added to $missing, so the tools row that names it stops being treated as
+      # conditionally-bypassable (#203) and goes back to being enforced outright --
+      # the fail-closed direction, not fail-open.
+      if [ "${#missing}" -gt "$JIT_MISSING_REQUIRES_MAX" ]; then
+        if [ "$cut" = 0 ]; then
+          cut=1
+          # ONE token, no interior space: $missing is membership-tested downstream as
+          # " NAME " substrings (pre-tool-hook.sh), so a multi-word note would plant a
+          # plain word -- "cap", say -- as a false hit for any row that genuinely names
+          # a binary spelled the same. Brackets and colons are outside
+          # JIT_VALID_REQUIRES_RE, so no legitimate requires: value can ever equal this
+          # token outright either.
+          missing="${missing}[JIT-427:list-truncated-at-cap] "
+        fi
+        continue
+      fi
       missing="$missing$bin "
     done < <(LC_ALL=C awk -F "$(printf '\t')" '{ print (NF >= 7) ? $7 : "" }' "$tsv")
   done

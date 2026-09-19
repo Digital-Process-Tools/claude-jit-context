@@ -207,15 +207,17 @@ END {
   # one naming convention, not two.
   bytes_shown_file = jit_shown_file(state_dir, "bytes", raw, fs, fe, n)
   cmd = ""
-  for (i = 2; i + 2 <= n; i += 2) {
-    # A key this hook wants is quote-free, so a field spanning several raw pieces is not
-    # one; skipping it is what keeps a Write payload body from ever being reassembled.
-    if (fs[i] != fe[i]) continue
-    k = raw[fs[i]]
-    if (k == "file_path") file_path = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
-    else if (k == "path" && file_path == "") file_path = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
-    else if (k == "command") cmd = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
-  }
+  # #426: jit_hook_fields() (common.sh) reads structurally rather than positionally, so
+  # a tool_input STRING VALUE equal to file_path/path/command can never repoint the
+  # field it names -- it is read at the wrong depth, is not followed by a colon, or
+  # both. All three are read only directly inside tool_input, never from the top level.
+  ti_wanted["file_path"] = 1
+  ti_wanted["path"] = 1
+  ti_wanted["command"] = 1
+  jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI)
+  file_path = TI["file_path"]
+  if (file_path == "") file_path = TI["path"]
+  cmd = TI["command"]
 
   # --- Collect paths to match against ---
   path_count = 0

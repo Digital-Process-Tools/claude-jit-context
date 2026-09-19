@@ -220,6 +220,116 @@ assert_not_contains "no STALE report for the row this suite just rebuilt" "$DRYR
 
 rm -f "$TOOLS_DIR/rebuild-deploy.md"
 
+# =============================================
+# SECTION 5 (#427): rebuild-tsv.sh refuses to index a requires: value that is not a
+# bare binary name -- the value crosses an exec boundary at fire time (pre-tool-hook.sh
+# hands the WHOLE accumulated list to awk as one -v argument), so a malformed or
+# oversized value on ONE row is not this row's own problem alone.
+# =============================================
+echo ""
+echo "=== rebuild-tsv.sh refuses requires: with an embedded space (#427) ==="
+printf '%s\n' \
+  "---" \
+  "title: Bad requires space" \
+  "description: A requires: value that is not a bare binary name." \
+  "tool: Bash" \
+  "match: git bad-requires-space" \
+  "mode: block" \
+  "requires: not a binary name" \
+  "---" \
+  "" \
+  "BAD-REQUIRES-SPACE-BODY-MARKER" > "$TOOLS_DIR/bad-requires-space.md"
+# The refusal is expected here -- rebuild-tsv.sh exits non-zero when it skips a row --
+# so `|| true` is load-bearing under `set -e`, not decoration.
+CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REBUILD" > /dev/null 2>&1 || true
+ROW=$(grep -F "bad-requires-space.md" "$TOOLS_DIR/$TSV_NAME" || true)
+assert_not_contains "the malformed row is not indexed at all" "$ROW" "bad-requires-space.md"
+rm -f "$TOOLS_DIR/bad-requires-space.md"
+
+echo ""
+echo "=== rebuild-tsv.sh refuses requires: longer than 255 bytes (#427) ==="
+LONGREQ=$(head -c 300 /dev/zero | tr '\0' 'a')
+printf '%s\n' \
+  "---" \
+  "title: Bad requires length" \
+  "description: A requires: value past the bare-name length bound." \
+  "tool: Bash" \
+  "match: git bad-requires-length" \
+  "mode: block" \
+  "requires: $LONGREQ" \
+  "---" \
+  "" \
+  "BAD-REQUIRES-LENGTH-BODY-MARKER" > "$TOOLS_DIR/bad-requires-length.md"
+CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$REBUILD" > /dev/null 2>&1 || true
+ROW=$(grep -F "bad-requires-length.md" "$TOOLS_DIR/$TSV_NAME" || true)
+assert_not_contains "the oversized row is not indexed at all" "$ROW" "bad-requires-length.md"
+rm -f "$TOOLS_DIR/bad-requires-length.md"
+
+# =============================================
+# SECTION 6 (#427): jit_missing_requires() bounds its OWN output regardless of how
+# large the committed index already is -- this is the check that protects a CLONE, not
+# just a future rebuild by this repository own maintainer, and it has to hold even for
+# an index nothing above ever validated. Built directly, bypassing rebuild-tsv.sh
+# entirely, the same way a tree cloned before this fix would already be malformed on
+# disk.
+# =============================================
+echo ""
+echo "=== jit_missing_requires() caps its own output regardless of input size (#427) ==="
+CAP_DIR=$(mktemp -d)
+CAP_TOOLS_BASE="$CAP_DIR/tools"
+CAP_TOOLS="$CAP_TOOLS_BASE/00-manual"
+mkdir -p "$CAP_TOOLS"
+# 80 distinct, syntactically valid but never-resolving binary names, each padded to
+# ~120 bytes -- about 9.6 KB total, well past a few-KB cap, built entirely of rows a
+# bare-name check alone would accept, so this measures the CAP, not the validator.
+{
+  n=0
+  while [ "$n" -lt 80 ]; do
+    pad=$(head -c 100 /dev/zero | tr '\0' 'x')
+    printf 'Bash\tirrelevant%d\tirrelevant%d.md\tremind\t\t\tnosuchbin%d%s\n' "$n" "$n" "$n" "$pad"
+    n=$((n + 1))
+  done
+} > "$CAP_TOOLS/$TSV_NAME"
+CAP_OUT=$(
+  cd "$SCRIPT_DIR" || exit 1
+  # shellcheck source=scripts/common.sh
+  source scripts/common.sh
+  jit_missing_requires "$CAP_TOOLS_BASE" "00-manual"
+)
+CAP_LEN=${#CAP_OUT}
+if [ "$CAP_LEN" -le 4300 ]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: the accumulated list stays bounded ($CAP_LEN bytes) no matter how many rows feed it"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: the accumulated list stays bounded no matter how many rows feed it"
+  echo "    got $CAP_LEN bytes"
+fi
+assert_contains "and says plainly that it truncated" "$CAP_OUT" "JIT-427"
+rm -rf "$CAP_DIR"
+
+echo ""
+echo "=== a call unrelated to any requires: row still answers, even with a huge committed index (#427) ==="
+BIG_DIR=$(mktemp -d)
+BIG_TOOLS="$BIG_DIR/.claude/jit-context/tools/00-manual"
+BIG_VOCAB="$BIG_DIR/.claude/jit-context/vocabulary"
+mkdir -p "$BIG_TOOLS" "$BIG_VOCAB/00-manual"
+touch "$BIG_VOCAB/00-manual/$TSV_NAME"
+{
+  n=0
+  while [ "$n" -lt 80 ]; do
+    pad=$(head -c 100 /dev/zero | tr '\0' 'x')
+    printf 'Bash\tirrelevant%d\tirrelevant%d.md\tremind\t\t\tnosuchbin%d%s\n' "$n" "$n" "$n" "$pad"
+    n=$((n + 1))
+  done
+  printf 'Bash\tgit ordinary-call\tordinary.md\tblock\t\t\t\n'
+} > "$BIG_TOOLS/$TSV_NAME"
+echo "ORDINARY-CALL-BODY-MARKER" > "$BIG_TOOLS/ordinary.md"
+BIG_OUT=$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"git ordinary-call now"}}' | CLAUDE_PROJECT_DIR="$BIG_DIR" bash "$HOOK" 2> /dev/null)
+assert_blocked "the hook still answers -- a real decision, not a crash envelope" "$BIG_OUT"
+assert_contains "and the row unrelated to any requires: value still fires" "$BIG_OUT" "ORDINARY-CALL-BODY-MARKER"
+rm -rf "$BIG_DIR"
+
 echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))

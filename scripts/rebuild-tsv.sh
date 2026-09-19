@@ -492,6 +492,19 @@ build_tool_tsv() {
       continue
     fi
 
+    # #427: requires: is the one field this row can force ACROSS A DIFFERENT EXEC
+    # BOUNDARY, at fire time, in every OTHER tools row this tree indexes -- pre-tool-hook.sh
+    # collects the column from every row into one list and hands it to awk as a single
+    # -v argument. An oversized or malformed value here does not just misfire on ITS OWN
+    # row the way a bad mode: does; it can push that shared list past ARG_MAX and refuse
+    # every tool call in a session. Refused here rather than indexed, same shape as the
+    # mode: check above -- JIT_VALID_REQUIRES_RE (common.sh).
+    if [ -n "$requires" ] && ! printf '%s' "$requires" | LC_ALL=C grep -Eq "$JIT_VALID_REQUIRES_RE"; then
+      jit_unindexed "$label" "$filename" "requires: \"$(jit_report_keyword "$requires")\" is not a bare binary name -- entry skipped rather than indexed with an unverified requires:"
+      jit_rc 1
+      continue
+    fi
+
     if [ -z "$tool" ] || [ -z "$match" ]; then
       # Not `[ -z x ] || [ -z y ] && continue`: that is one AND-OR list evaluated left to
       # right, so the `&&` binds to the second test alone. It happened to behave here, and

@@ -213,39 +213,43 @@ END {
   # still written on every delivery, so #389s own Stop-hook accounting keeps reading
   # exactly the file it always has.
   agent_shown_file = jit_agent_shown_file(state_dir, "vocab", raw, fs, fe, n)
-  for (i = 2; i + 2 <= n; i += 2) {
-    # Only a field that is ONE raw piece can be a key this hook wants — every key below is
-    # quote-free — and only the matching value is ever materialised or decoded. That is
-    # what keeps a Write payload, whose tool_input.content is the whole file body, from
-    # being reassembled and walked character by character on every single tool call.
-    if (fs[i] != fe[i]) continue
-    k = raw[fs[i]]
-    if (k == "tool_name") tool_name = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
-    else if (k == "command") command = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
-    else if (k == "skill") f_skill = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
-    else if (k == "file_path") f_file_path = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
-    else if (k == "pattern") f_pattern = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
-    # #182. An Agent dispatch carries description, prompt and subagent_type and none of
-    # the four above, so `cmd` came out empty and this hook printed {} and exited 59
-    # lines before the layer loop. A `tool: Agent` rule -- including a `mode: block` one
-    # -- was written, validated, indexed, counted by every diagnostic, and inert.
-    #
-    # subagent_type ONLY, and the other two are a deliberate no. `prompt` and
-    # `description` are author-written prose, and two things go wrong with prose as a
-    # subject. It is matched by `forbid`/`require`/substring rules that were written
-    # about COMMANDS, so a prompt saying "do not run git push here" trips a deny-list
-    # rule about `git push`. And `cmd` is cut at the first ; & | or double quote (see
-    # the strip below), so a prose subject is compared as an arbitrary prefix of itself
-    # -- the #7 false-block shape, rebuilt.
-    #
-    # The cost is real too, though it is the weaker half of the argument. Measured on a
-    # two-rule tools index, 40 calls per point, interleaved, one-true-awk 20200816 on
-    # darwin 24.3.0, read out of the hook OWN timing in hooks.log rather than wall clock
-    # around the process: a 7-byte subject 91 ms median, a 4.4 KB one 97 ms, a 44 KB one
-    # 207 ms. A prompt is routinely in the second band and can reach the third.
-    # subagent_type is a bounded identifier and is always in the first.
-    else if (k == "subagent_type") f_subagent = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
-  }
+  # #426: jit_hook_fields() (common.sh) reads structurally rather than positionally, so
+  # a tool_input STRING VALUE equal to one of these names can never repoint the field it
+  # names -- it is read at the wrong depth, is not followed by a colon, or both.
+  # tool_name is read at the payload own top level; everything else only directly
+  # inside tool_input, never deeper, never from the top level itself.
+  top_wanted["tool_name"] = 1
+  ti_wanted["command"] = 1
+  ti_wanted["skill"] = 1
+  ti_wanted["file_path"] = 1
+  ti_wanted["pattern"] = 1
+  # #182. An Agent dispatch carries description, prompt and subagent_type and none of
+  # the four above, so `cmd` came out empty and this hook printed {} and exited 59
+  # lines before the layer loop. A `tool: Agent` rule -- including a `mode: block` one
+  # -- was written, validated, indexed, counted by every diagnostic, and inert.
+  #
+  # subagent_type ONLY, and the other two are a deliberate no. `prompt` and
+  # `description` are author-written prose, and two things go wrong with prose as a
+  # subject. It is matched by `forbid`/`require`/substring rules that were written
+  # about COMMANDS, so a prompt saying "do not run git push here" trips a deny-list
+  # rule about `git push`. And `cmd` is cut at the first ; & | or double quote (see
+  # the strip below), so a prose subject is compared as an arbitrary prefix of itself
+  # -- the #7 false-block shape, rebuilt.
+  #
+  # The cost is real too, though it is the weaker half of the argument. Measured on a
+  # two-rule tools index, 40 calls per point, interleaved, one-true-awk 20200816 on
+  # darwin 24.3.0, read out of the hook OWN timing in hooks.log rather than wall clock
+  # around the process: a 7-byte subject 91 ms median, a 4.4 KB one 97 ms, a 44 KB one
+  # 207 ms. A prompt is routinely in the second band and can reach the third.
+  # subagent_type is a bounded identifier and is always in the first.
+  ti_wanted["subagent_type"] = 1
+  jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI)
+  tool_name = TOP["tool_name"]
+  command = TI["command"]
+  f_skill = TI["skill"]
+  f_file_path = TI["file_path"]
+  f_pattern = TI["pattern"]
+  f_subagent = TI["subagent_type"]
 
   # Fallback chain for tool matching
   full_command = command

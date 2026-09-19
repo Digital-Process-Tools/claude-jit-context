@@ -1304,6 +1304,63 @@ else
   rm -rf "$D424"
 fi
 
+# --- #426: a tool_input STRING VALUE cannot pose as a JSON key -------------
+# The old dispatch loop treated every single-piece quoted field at an even logical
+# index as a candidate key, positionally -- no check that it sat at key position, no
+# check of which object it was inside. A tool_input value equal to "tool_name" or
+# "command" could repoint the field it named, last-wins, at whatever quoted string
+# followed -- defeating a block/require/forbid rule byte-identically to a genuine
+# non-match. Red on main before jit_hook_fields() (common.sh).
+echo ""
+echo "=== #426: tool_input value cannot repoint tool_name/command ==="
+D426=$(mktemp -d)
+T426="$D426/.claude/jit-context/tools/00-manual"
+V426="$D426/.claude/jit-context/vocabulary"
+mkdir -p "$T426" "$V426/00-manual" "$V426/10-auto" "$V426/20-grouped" "$V426/30-crosscutting"
+IDX426NAME="00-index"
+IDX426NAME="$IDX426NAME.tsv"
+for l in 00-manual 10-auto 20-grouped 30-crosscutting; do : > "$V426/$l/$IDX426NAME"; done
+printf 'Bash\tgit push\tblkpush.md\tblock\t\t\n' > "$T426/$IDX426NAME"
+echo "blocked: git push" > "$T426/blkpush.md"
+printf 'Agent\t~.*\tblkagent.md\tblock\t\t\n' >> "$T426/$IDX426NAME"
+echo "blocked: agent" > "$T426/blkagent.md"
+
+run426() {
+  echo "$1" | CLAUDE_PROJECT_DIR="$D426" bash "$HOOK" 2> /dev/null
+}
+
+# tool_input.description equal to "tool_name", followed by tool_use_id -- the shape
+# Claude Code itself serializes after tool_input -- must not unname the Bash tool.
+OUT426A=$(run426 '{"session_id":"s426a","tool_name":"Bash","tool_input":{"command":"git push origin main","description":"tool_name"},"tool_use_id":"toolu_01"}')
+assert_blocked "#426 tool_input.description=tool_name cannot unname the Bash tool" "$OUT426A"
+
+# tool_input.description equal to "command" must not repoint the matched subject away
+# from the real command.
+OUT426B=$(run426 '{"session_id":"s426b","tool_name":"Bash","tool_input":{"command":"git push origin main","description":"command"},"tool_use_id":"toolu_01"}')
+assert_blocked "#426 tool_input.description=command cannot repoint the matched subject" "$OUT426B"
+
+# Agent: a prompt equal to "tool_name" needs no trailing field at all -- the old bug
+# read the NEXT quoted field, subagent_type's own KEY NAME (not its value), into
+# tool_name, turning tool_name into the literal string "subagent_type" and defeating
+# any tool: Agent rule.
+OUT426C=$(run426 '{"session_id":"s426c","tool_name":"Agent","tool_input":{"prompt":"tool_name","subagent_type":"oss:developer"}}')
+assert_blocked "#426 Agent tool_input.prompt=tool_name cannot unname the Agent tool" "$OUT426C"
+
+# Positive control: the same fixture still passes an ordinary, unspoofed call through --
+# #426 must not become a rule that blocks everything regardless of subject.
+OUT426D=$(run426 '{"session_id":"s426d","tool_name":"Bash","tool_input":{"command":"echo hello"}}')
+assert_not_contains "#426 control: an ordinary command is not blocked" "$OUT426D" '"decision":"block"'
+
+# Self-review finding on #426: a NESTED key merely spelled "tool_input" must not
+# hijack ti_depth away from the REAL top-level tool_input object. ti_depth may only
+# lock onto a "tool_input" key that was itself read at depth 1 -- an earlier decoy
+# nested inside some other top-level object must never claim it, or first-wins would
+# silently prefer the decoy's own command/file_path/etc. fields over the real ones.
+OUT426E=$(run426 '{"session_id":"s426e","tool_name":"Bash","weird":{"tool_input":{"command":"echo nothing-to-see"}},"tool_input":{"command":"git push origin main --force"}}')
+assert_blocked "#426 a nested key spelled tool_input cannot hijack the real one (self-review)" "$OUT426E"
+
+rm -rf "$D426"
+
 # --- Cleanup ---
 rm -rf "$TEST_DIR"
 

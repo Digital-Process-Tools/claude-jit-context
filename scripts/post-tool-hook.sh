@@ -76,14 +76,20 @@ PT_PARSED="$(LC_ALL=C awk "$JIT_AWK_JSON"'
 END {
   n = jit_json_fields(input, raw, fs, fe)
   tool = ""; fp = ""; cmd = ""
-  for (i = 2; i + 2 <= n; i += 2) {
-    if (fs[i] != fe[i]) continue
-    k = raw[fs[i]]
-    if (k == "tool_name") tool = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
-    else if (k == "file_path" && fp == "") fp = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
-    else if (k == "path" && fp == "") fp = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
-    else if (k == "command" && cmd == "") cmd = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
-  }
+  # #426: jit_hook_fields() (common.sh) reads structurally rather than positionally, so
+  # a tool_input STRING VALUE equal to one of these names can never repoint the field it
+  # names -- it is read at the wrong depth, is not followed by a colon, or both.
+  # tool_name is read at the payload own top level; file_path/path/command only
+  # directly inside tool_input, never deeper, never from the top level itself.
+  top_wanted["tool_name"] = 1
+  ti_wanted["file_path"] = 1
+  ti_wanted["path"] = 1
+  ti_wanted["command"] = 1
+  jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI)
+  tool = TOP["tool_name"]
+  fp = TI["file_path"]
+  if (fp == "") fp = TI["path"]
+  cmd = TI["command"]
   if (tool !~ /^[A-Za-z_]+$/ || length(tool) > 32) tool = ""
   # A Bash payload carries no file_path at all -- its free-text subject is `command`.
   # Folded into the same third printed line as file_path/path rather than adding a
