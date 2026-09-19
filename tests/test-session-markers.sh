@@ -243,6 +243,16 @@ echo "=== G: session-start clears THIS session, and leaves every other one alone
 # one it replaced. The assertion is unchanged and still guards the same regression: this
 # hook must not sweep a shared directory by pattern. tests/test-hook-tmpfile.sh section D
 # makes the same demand of the three hooks, in the directory they actually use.
+#
+# #428: this used to plant the fixture at a hard-coded name in shared /tmp with a plain
+# `>` redirect, which follows a symlink -- a co-tenant on a shared host could pre-plant
+# a symlink there and have the target truncated on every run, while the suite still
+# reported green. The fixture now lives under this suite's own private, mode-0700
+# `mktemp -d` tree ($TMP, trapped for removal on EXIT), matching test-hook-tmpfile.sh
+# section D. A `[ -L ]`-then-write guard was tried and dropped: that check-then-act
+# pattern is the one test-hook-tmpfile.sh's own header explicitly rejects for this class
+# of hazard (a race between the check and the write), and it bought nothing here since a
+# freshly-made, private directory can never already hold the path.
 
 P="$(new_project g)"
 mkdir -p "$(state_of "$P")"
@@ -251,12 +261,7 @@ printf 'php-coding.md\n' > "$(state_of "$P")/path-shown-sess-theirs.txt"
 G_TMPDIR="$TMP/g-foreign"
 mkdir -p "$G_TMPDIR"
 FOREIGN="$G_TMPDIR/claude-hook-log-999999.tmp"
-if [ -e "$FOREIGN" ] || [ -L "$FOREIGN" ]; then
-  echo "  FAIL: fixture path already exists before the fixture wrote it"
-  FAIL=$((FAIL + 1))
-else
-  printf 'in flight\n' > "$FOREIGN"
-fi
+printf 'in flight\n' > "$FOREIGN"
 OUT="$(run_session_start "$P" "sess-mine")"
 RC=$?
 assert_rc0 "session-start exits 0" "$RC"
