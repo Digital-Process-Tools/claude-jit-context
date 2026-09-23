@@ -361,15 +361,21 @@ for BAD in abc -5 010; do
   assert_contains "C4 malformed JIT_CONTEXT_LOG_MAX_BYTES=$BAD: names the refused value" "$OUT_C4" "$BAD"
 done
 
-# Positive control: a well-formed, large max on the SAME oversized log DOES still get
-# the "rotates automatically past X MB" wording -- so C4 above is not passing merely
-# because the note branch stopped saying anything at all.
+# #434: a well-formed, large max on the SAME oversized log used to get the "rotates
+# automatically -- nothing to do" wording -- a line with no action a person could take,
+# printed on every such session. It is gone now: a log between the watch threshold and
+# a valid, non-zero JIT_CONTEXT_LOG_MAX_BYTES prints no size note at all. The negative
+# assertion here is not vacuous: C4 right above (a refused value on the identical
+# fixture) still names the refused value, and C6 below (JIT_CONTEXT_LOG_MAX_BYTES=0)
+# still prints "Automatic rotation is off" -- so this silence is the valid-value branch
+# specifically, not the note mechanism going quiet altogether.
 fixture c5
 printf '%*s\n' 10000010 '' | tr ' ' 'x' >> "$LOGDIR/hooks.log"
 OUT_C5="$(CLAUDE_PROJECT_DIR="$PROJ" JIT_CONTEXT_LOG_MAX_BYTES=20000000 bash "$HOOK" < /dev/null 2> "$TMPROOT/c5.err")"
-assert_eq "C5 positive control: well-formed large max, stderr stays empty" "$(cat "$TMPROOT/c5.err")" ""
-assert_contains "C5 positive control: still says rotation is on, correctly, at 20.0 MB" "$OUT_C5" "rotates automatically past 20.0 MB"
-assert_true "C5 positive control: below its own max, so no rotation this session" '[ ! -e "$LOGDIR/hooks.log.1" ]'
+assert_eq "C5 well-formed large max, stderr stays empty" "$(cat "$TMPROOT/c5.err")" ""
+assert_not_contains "#434 well-formed rotation-on config between threshold and max: no size note at all" "$OUT_C5" "hooks.log is"
+assert_eq "#434 well-formed rotation-on config between threshold and max: empty JSON" "$OUT_C5" "{}"
+assert_true "C5 below its own max, so no rotation this session" '[ ! -e "$LOGDIR/hooks.log.1" ]'
 
 # Positive control for C4's "off" wording, unaffected by this fix: JIT_CONTEXT_LOG_MAX_BYTES=0
 # is a real, valid value (never rotate), not a malformed one, and must still read as "off"

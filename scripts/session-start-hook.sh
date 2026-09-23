@@ -296,13 +296,14 @@ else
     # issue exists to stop giving, since delete loses the corpus jit-misses.sh reads
     # and nothing here ever said so. Rotation past JIT_CONTEXT_LOG_MAX_BYTES is now
     # automatic (jit_log_rotate(), run above, before jit-misses.sh was even called),
-    # so what is left to tell a person depends on whether rotation is even on: when it
-    # is, this reading means either the size climbed AFTER this session's own rotation
-    # check ran, or a single long session outgrew JIT_CONTEXT_LOG_MAX_BYTES within
-    # itself (rotation only runs at SessionStart, by design -- see jit_log_rotate()) --
-    # either way it says so rather than repeating advice the feature already carried
-    # out; when it is off, there genuinely is no automatic remedy, and the file is
-    # still named so a person can act.
+    # #434: when rotation is on and JIT_CONTEXT_LOG_MAX_BYTES is a valid byte count, a
+    # reading in between the watch threshold and that max carries no action -- the
+    # feature already rotated, or will at the next SessionStart -- so this case prints
+    # nothing at all now (the "rotates automatically -- nothing to do" line this used
+    # to print cost every such session a line and told the reader nothing they could
+    # act on). Only the two states that still need a person to act get a line:
+    # rotation explicitly off (JIT_CONTEXT_LOG_MAX_BYTES=0, handled below), or a value
+    # jit_log_rotate() refused, so rotation did NOT run this session.
     if [ "$JIT_CONTEXT_LOG_MAX_BYTES" = 0 ]; then
       JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. Automatic rotation is off (JIT_CONTEXT_LOG_MAX_BYTES=0) -- delete or rotate it yourself: $JIT_LOG_ESC"
     else
@@ -327,10 +328,6 @@ else
           # line is embedded in at the printf below).
           JIT_MAX_ESC="$(printf '%s' "$JIT_CONTEXT_LOG_MAX_BYTES" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
           JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. JIT_CONTEXT_LOG_MAX_BYTES=$JIT_MAX_ESC is not a byte count automatic rotation accepts, so it did NOT rotate this session -- delete or rotate it yourself: $JIT_LOG_ESC"
-          ;;
-        *)
-          JIT_ROTATE_MB="$(printf '%s' "$JIT_CONTEXT_LOG_MAX_BYTES" | LC_ALL=C awk '{ printf "%.1f", $1 / 1000000 }')"
-          JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. It rotates automatically past $JIT_ROTATE_MB MB (kept as hooks.log.1) -- nothing to do, unless this single session outgrows it before the next one starts: $JIT_LOG_ESC"
           ;;
       esac
     fi
