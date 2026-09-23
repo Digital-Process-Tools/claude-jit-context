@@ -2762,6 +2762,73 @@ function jit_fold_latin1(s,   i, p, out) {
 '
 
 # shellcheck disable=SC2034
+JIT_AWK_HEREDOC='
+# --- Shared heredoc-body stripper (#432) -------------------------------------
+# A `~` regex rule (and the plain `require:`/`forbid:` substring rules beside it in
+# pre-tool-hook.sh) is tested against the WHOLE command text, `fold_full`, which is
+# built from the raw, undecoded-of-heredocs `full_command`. A heredoc body is a
+# PAYLOAD piped to whatever the operator line names, not a command -- a word inside it
+# that a rule targets is data mentioning the word, not the command running it, and
+# refusing on it is the same false-positive shape as issue #7 (a quoted argument
+# mentioning a blocked verb), one syntax form over.
+#
+# jit_strip_heredoc_body() removes every heredoc BODY line -- and its own closing
+# delimiter line -- from a command string, in place, while leaving the operator line
+# itself untouched so a rule can still target whatever runs on that line. It is a
+# state machine over newline-split lines, not a real shell parser: it tracks at most
+# one open heredoc at a time and closes it on the first line that equals the
+# delimiter (tab-stripped first when the operator was `<<-`).
+#
+# Guarded against a here-string (`<<<word` or a quoted `<<<word`), which is NOT a
+# heredoc and opens no body: `<<<` differs from `<<DELIM` only by one more `<`, and a
+# naive `<<` scan reads the third `<` as part of the operator, extracts the quoted
+# word as a delimiter, and then finds no line that ever equals it -- silently
+# swallowing every line for the rest of the command as if it were heredoc body. The
+# guard prepends a single sentinel character to the line before matching and requires
+# a NON-`<` character immediately before the `<<`, which a third `<` can never be, so
+# `<<<` never opens.
+#
+# The quote characters the delimiter may be wrapped in are built from their codes
+# (39, 34) rather than typed literally, because this whole function lives inside a
+# bash SINGLE-quoted string and a bare apostrophe here would close it early -- see
+# jit_shown_flush() a little further down for the same rule stated about this file.
+function jit_strip_heredoc_body(s,    n, lines, i, out, in_heredoc, strip_tabs, delim, line, rest, probed, op, word, q1, q2, qclass) {
+  q1 = sprintf("%c", 39)
+  q2 = sprintf("%c", 34)
+  qclass = "[" q1 q2 "]?"
+  n = split(s, lines, "\n")
+  out = ""
+  in_heredoc = 0
+  for (i = 1; i <= n; i++) {
+    line = lines[i]
+    if (in_heredoc) {
+      rest = line
+      if (strip_tabs) sub(/^\t+/, "", rest)
+      if (rest == delim) in_heredoc = 0
+      # Body line, or its own closing delimiter line: neither is a command, so
+      # neither is appended to the output -- only the operator line above them
+      # survives.
+      continue
+    }
+    out = (i == 1) ? line : out "\n" line
+    probed = " " line
+    if (match(probed, "[^<]<<-?[ \t]*" qclass "[A-Za-z_][A-Za-z0-9_]*" qclass)) {
+      op = substr(probed, RSTART + 1, RLENGTH - 1)
+      strip_tabs = (substr(op, 1, 3) == "<<-")
+      word = op
+      sub(/^<<-?[ \t]*/, "", word)
+      gsub("[" q1 q2 "]", "", word)
+      if (word != "") {
+        delim = word
+        in_heredoc = 1
+      }
+    }
+  }
+  return out
+}
+'
+
+# shellcheck disable=SC2034
 JIT_AWK_JSON='
 function jit_trailing_backslashes(s,   c, n) {
   n = length(s); c = 0

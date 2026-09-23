@@ -123,7 +123,7 @@ JIT_AWK_ARGS=(
   -v missing_bins="$JIT_MISSING_REQUIRES"
   -v status_mode="$JIT_STATUS"
 )
-JIT_AWK_PROGRAM="$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE$JIT_AWK_ENVELOPE_SYSMSG"'
+JIT_AWK_PROGRAM="$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_FOLD$JIT_AWK_HEREDOC$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE$JIT_AWK_ENVELOPE_SYSMSG"'
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
 # entitled to reject the whole object -- which renders as this hook having had nothing to
 # say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
@@ -390,7 +390,18 @@ END {
   # dimension is folded at index time, so both sides are folded here and there is no
   # migration: a tools/00-index.tsv written by any previous version still matches.
   fold_cmd = jit_fold_latin1(tolower(cmd))
-  fold_full = jit_fold_latin1(tolower(full_command))
+  # #432: `fold_full` used to fold the RAW `full_command` -- heredoc body included --
+  # and every consumer below (the regex arm at the `~` branch, and the `require`/
+  # `forbid` substring checks) is tested against it. A heredoc body is a PAYLOAD piped
+  # to whatever the operator line names, not a command, so a word inside it that a
+  # rule targets tripped the rule on data the call never ran -- the #7 false-block
+  # shape (a word sitting inside a quoted argument) one syntax form over, this time on
+  # a `~` regex, a `require:`, or a `forbid:` alike, since all three share this one
+  # fold. jit_strip_heredoc_body() (common.sh) removes every heredoc BODY line before
+  # the fold runs, so none of the three can fire on payload text any more -- while
+  # leaving the heredoc OPERATOR line itself in place, so a rule can still target
+  # whatever command actually runs on that line.
+  fold_full = jit_fold_latin1(tolower(jit_strip_heredoc_body(full_command)))
 
   nblk = 0
   blocked = ""

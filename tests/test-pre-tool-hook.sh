@@ -46,6 +46,20 @@ printf 'Bash\t~(^|[;&|\\n] *)gh[[:space:]]+pr[[:space:]]+view\tgh-pr.md\tremind\
 printf 'Bash\tgh pr list\tgh-list.md\tremind\t--limit\t\n' >> "$TOOLS_DIR/00-index.tsv"
 echo "gh pr view rule context" > "$TOOLS_DIR/gh-pr.md"
 echo "gh pr list rule context" > "$TOOLS_DIR/gh-list.md"
+# A forbid: row for issue #432: a heredoc BODY is a payload, not a command, so a word
+# in it must not satisfy this any more than the same word sitting inside a quoted
+# commit message satisfies #7. remind (not block) so the fixture proves the row can
+# still refuse purely off its forbid column, the same shape phpunit.md above uses.
+IDX="00-index"
+IDX="$IDX.tsv"
+# match: is "hdcmd" -- a plain command word, deliberately NOT the forbidden word itself
+# -- so the row's own gate (`cmd`, truncated at the first quote or ;&| the way #7
+# needs) is satisfied by the COMMAND, and the assertions below are testing the forbid
+# column against `fold_full` and nothing else. Using the forbidden word as match: too
+# would let a `cmd` truncation ahead of it (e.g. a double-quoted here-string) hide the
+# row from itself, which is the #7 shape, not the #432 one this section drives.
+printf 'Bash\thdcmd\thd-forbid.md\tremind\t\theredocforbid\n' >> "$TOOLS_DIR/$IDX"
+echo "heredoc forbid rule context" > "$TOOLS_DIR/hd-forbid.md"
 
 # Vocabulary TSV: keyword<TAB>file
 printf 'blog\tblog.md\n' > "$VOCAB_DIR/00-manual/00-index.tsv"
@@ -408,6 +422,56 @@ echo ""
 echo "=== require: genuinely absent, still blocks ==="
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"gh pr list --search \"foo bar\""}}')
 assert_blocked "blocked when --limit really is missing" "$OUT"
+
+# =============================================
+# SECTION 4b: a heredoc BODY is not command text (issue #432)
+# =============================================
+# A payload piped to whatever the operator line names is data, not a command -- a word
+# inside it that a rule targets is the same false-positive shape #7 already fixed for a
+# quoted argument, one syntax form over. Every assertion below has a positive control in
+# the SAME fixture: the identical word placed where it genuinely runs, proving the row
+# still fires there and the negative result above is not merely "this row never fires".
+
+echo ""
+echo "=== ~ regex rule: heredoc body mentioning the pattern does not fire (issue #432) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"true <<'"'"'EOF'"'"'\ngh pr view is mentioned here only\nEOF"}}')
+assert_not_contains "heredoc body text does not reach the anchored regex rule" "$OUT" "gh pr view rule context"
+
+echo ""
+echo "=== ~ regex rule: positive control, same words as a REAL command (issue #432) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"true <<'"'"'EOF'"'"'\nirrelevant\nEOF\ngh pr view 1"}}')
+assert_contains "the anchored regex rule still fires once gh pr view is a real command" "$OUT" "gh pr view rule context"
+
+echo ""
+echo "=== forbid: heredoc body mentioning the forbidden word does not block (issue #432) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd <<'"'"'EOF'"'"'\nplease do not run heredocforbid here\nEOF"}}')
+assert_not_contains "a forbidden word inside a heredoc body does not block" "$OUT" '"decision":"block"'
+
+echo ""
+echo "=== forbid: positive control, same word as a REAL command (issue #432) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd <<'"'"'EOF'"'"'\nirrelevant\nEOF\nheredocforbid now"}}')
+assert_blocked "the forbid row still blocks once the word is a real command" "$OUT"
+
+echo ""
+echo "=== <<- strips leading tabs before matching the closing delimiter (issue #432) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd <<-'"'"'EOF'"'"'\n\theredocforbid inside a tab-indented body\n\tEOF\necho done"}}')
+assert_not_contains "a tab-indented <<- body does not block" "$OUT" '"decision":"block"'
+
+echo ""
+echo "=== <<- positive control: the word after the closing delimiter still blocks ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd <<-'"'"'EOF'"'"'\n\tirrelevant\n\tEOF\nheredocforbid now"}}')
+assert_blocked "the row after a <<- heredoc still blocks on a real command" "$OUT"
+
+echo ""
+echo "=== a here-string (<<<) is not mistaken for a heredoc (issue #432) ==="
+# <<< opens no body at all -- it differs from << by one more <. A naive << scan would
+# read the third < as the operator, treat the quoted word as a delimiter, find no line
+# that ever equals it, and silently swallow every line after it as if it were body --
+# including the real command below, which must still be reachable. hdcmd (not grep) so
+# the row's own match: gate is satisfied ahead of the quote -- #7's cmd truncation, not
+# this fix, is what a naming collision here would otherwise be testing.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd <<<\"bar\"\nheredocforbid now"}}')
+assert_blocked "a command after a here-string is still reachable" "$OUT"
 
 # =============================================
 # SECTION: awk engine matrix — multibyte paths, control characters in entries
