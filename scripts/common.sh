@@ -2788,43 +2788,114 @@ JIT_AWK_HEREDOC='
 # a NON-`<` character immediately before the `<<`, which a third `<` can never be, so
 # `<<<` never opens.
 #
-# The quote characters the delimiter may be wrapped in are built from their codes
-# (39, 34) rather than typed literally, because this whole function lives inside a
-# bash SINGLE-quoted string and a bare apostrophe here would close it early -- see
-# jit_shown_flush() a little further down for the same rule stated about this file.
-function jit_strip_heredoc_body(s,    n, lines, i, out, in_heredoc, strip_tabs, delim, line, rest, probed, op, word, q1, q2, qclass) {
+# LOOKAHEAD, not a single-pass state machine (self-review finding, #432): the first cut
+# of this function set in_heredoc the moment it saw a <<WORD-shaped operator and cleared
+# it only on a later line equal to WORD -- so a false positive (the shape appearing
+# inside an ordinary quoted string that is not a heredoc at all, e.g. echo "info:
+# <<NOTICE follows") or a genuinely malformed/truncated command with no closing line
+# left in_heredoc set for the REST OF THE STRING, silently dropping every command word
+# after it from fold_full -- a forbid:/~/block rule blinded to a real rm -rf or git push
+# --force sitting right after the false trigger, which is a worse failure than the one
+# #432 reports: nothing was blocked and nothing said so. The same shape hid a
+# CRLF-authored heredoc own real closing line from itself, since neither side of the
+# comparison stripped a trailing CR.
+#
+# So this now looks AHEAD before committing to strip anything: an operator is only
+# treated as opening a real heredoc when a later line, scanned forward from here,
+# genuinely equals its delimiter (CR-trimmed on both sides, tab-stripped first for
+# <<-). No such line anywhere in the rest of the command means no heredoc was ever
+# opened by this text -- so nothing is stripped, and the operator line own text
+# (<<NOTICE included) stays visible to whatever rule was going to see it anyway. A
+# false positive on the operator regex can now only leave MORE of the command visible
+# than a hand parser would, never less, which is the direction #432 already established
+# is safe.
+#
+# NOT stripped when the operator line names a known interpreter (self-review finding):
+# bash <<EOF / sh <<EOF / ssh host <<EOF / python3 <<EOF and the like pipe their
+# heredoc BODY to something that executes it as code -- it is the command, not a
+# payload, and the premise the rest of this function rests on ("a heredoc body is data,
+# not a command") does not hold for this one class. Stripping it anyway would let
+# bash <<EOF containing rm -rf / slip past a forbid: rm -rf row that correctly blocked a
+# bare rm -rf /, which is a NEW bypass this fix must not introduce. jit_heredoc_
+# targets_interpreter() is a denylist, the same posture the no-shell-writes-to-the-
+# index.md rule already states out loud for this codebase: it does not try to be a
+# general oracle for "does this command execute its stdin", it names the common,
+# concretely-reported cases and leaves everything else alone -- a wrapper script this
+# list has never heard of still gets its heredoc body stripped, exactly as before this
+# paragraph, which is #432 own residual rather than a regression this fix introduces.
+#
+# The quote characters the delimiter may be wrapped in -- plus the backslash a
+# backslash-DELIM operator uses to suppress expansion, the same job a quoted delimiter
+# does -- are built from their codes (39, 34, 92) rather than typed literally, because
+# this whole function lives inside a bash SINGLE-quoted string and a bare apostrophe
+# here would close it early -- see jit_shown_flush() a little further down for the same
+# rule stated about this file.
+function jit_strip_heredoc_body(s,    n, lines, i, j, out, strip_tabs, delim, line, rest, probed, op, word, q1, q2, q3, qclass, close_i) {
   q1 = sprintf("%c", 39)
   q2 = sprintf("%c", 34)
-  qclass = "[" q1 q2 "]?"
+  # TWO bytes, not one: q3 sits inside a DYNAMIC (string) regex bracket expression
+  # below, and this awk regex compiler treats a lone backslash there as an escape
+  # introducer for whatever follows -- q3 alone made the escaped closing bracket read
+  # as a literal close-bracket character rather than the class-closing bracket itself,
+  # and the whole pattern failed to compile ("nonterminated character class", caught
+  # by re-running the suite after this change -- self-review finding). Two backslash
+  # bytes let that same escape reading collapse them back to ONE literal backslash
+  # inside the class, so the real closing bracket after it closes the class as
+  # intended.
+  q3 = sprintf("%c%c", 92, 92)
+  qclass = "[" q1 q2 q3 "]?"
   n = split(s, lines, "\n")
   out = ""
-  in_heredoc = 0
-  for (i = 1; i <= n; i++) {
+  i = 1
+  while (i <= n) {
     line = lines[i]
-    if (in_heredoc) {
-      rest = line
-      if (strip_tabs) sub(/^\t+/, "", rest)
-      if (rest == delim) in_heredoc = 0
-      # Body line, or its own closing delimiter line: neither is a command, so
-      # neither is appended to the output -- only the operator line above them
-      # survives.
-      continue
-    }
-    out = (i == 1) ? line : out "\n" line
     probed = " " line
+    close_i = 0
     if (match(probed, "[^<]<<-?[ \t]*" qclass "[A-Za-z_][A-Za-z0-9_]*" qclass)) {
       op = substr(probed, RSTART + 1, RLENGTH - 1)
       strip_tabs = (substr(op, 1, 3) == "<<-")
       word = op
       sub(/^<<-?[ \t]*/, "", word)
-      gsub("[" q1 q2 "]", "", word)
-      if (word != "") {
+      gsub("[" q1 q2 q3 "]", "", word)
+      if (word != "" && !jit_heredoc_targets_interpreter(line)) {
         delim = word
-        in_heredoc = 1
+        for (j = i + 1; j <= n; j++) {
+          rest = lines[j]
+          sub(/\r$/, "", rest)
+          if (strip_tabs) sub(/^\t+/, "", rest)
+          if (rest == delim) { close_i = j; break }
+        }
       }
+    }
+    out = (out == "") ? line : out "\n" line
+    if (close_i > 0) {
+      # A genuine heredoc: everything from the line after the operator through its own
+      # closing delimiter line is BODY (or the delimiter line itself), neither of which
+      # is a command -- skip straight past it. The operator line above already went into
+      # out.
+      i = close_i + 1
+    } else {
+      i++
     }
   }
   return out
+}
+# A denylist, not an oracle -- see the comment on jit_strip_heredoc_body() above for why
+# that is the deliberate posture rather than a gap. Matched as a whole token: the line is
+# folded to lowercase and every character outside [a-z0-9_] becomes a space (so a path
+# like /usr/bin/bash reads as bash, its own token, not a substring of something longer),
+# then each denylist entry is looked up padded with spaces on both sides.
+function jit_heredoc_targets_interpreter(line,    norm, denylist, names, i, n) {
+  norm = tolower(line)
+  gsub(/[^a-z0-9_]/, " ", norm)
+  norm = " " norm " "
+  denylist = " bash sh zsh ksh dash csh tcsh fish ssh python python2 python3 perl ruby node nodejs php tclsh expect psql mysql sqlite3 mongo osascript pwsh powershell cmd bc dc xargs sudo env exec source eval docker kubectl "
+  n = split(denylist, names, " ")
+  for (i = 1; i <= n; i++) {
+    if (names[i] == "") continue
+    if (index(norm, " " names[i] " ") > 0) return 1
+  }
+  return 0
 }
 '
 

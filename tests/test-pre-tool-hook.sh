@@ -60,6 +60,15 @@ IDX="$IDX.tsv"
 # row from itself, which is the #7 shape, not the #432 one this section drives.
 printf 'Bash\thdcmd\thd-forbid.md\tremind\t\theredocforbid\n' >> "$TOOLS_DIR/$IDX"
 echo "heredoc forbid rule context" > "$TOOLS_DIR/hd-forbid.md"
+# A require: row, its OWN "hdreq" match: gate (not "hdcmd" -- sharing it would fire this
+# row, and its require:, on every other hdcmd fixture in this section too), for the
+# require/heredoc interaction section below: satisfying a require: flag by writing it
+# inside a heredoc PAYLOAD -- rather than passing it as a real argument -- is the same
+# class of bypass #432 closes for forbid:, just from the other side of the check.
+# Extending the fix to require: was flagged in self-review as an untested design choice;
+# these rows are the coverage for it.
+printf 'Bash\thdreq\thd-require.md\tremind\treqflag\t\n' >> "$TOOLS_DIR/$IDX"
+echo "heredoc require rule context" > "$TOOLS_DIR/hd-require.md"
 
 # Vocabulary TSV: keyword<TAB>file
 printf 'blog\tblog.md\n' > "$VOCAB_DIR/00-manual/00-index.tsv"
@@ -472,6 +481,73 @@ echo "=== a here-string (<<<) is not mistaken for a heredoc (issue #432) ==="
 # this fix, is what a naming collision here would otherwise be testing.
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd <<<\"bar\"\nheredocforbid now"}}')
 assert_blocked "a command after a here-string is still reachable" "$OUT"
+
+echo ""
+echo "=== self-review: a <<WORD shape inside an ordinary quoted string is not a real heredoc opener (issue #432) ==="
+# Reviewer finding: the first cut of this fix opened heredoc-stripping mode on ANY line
+# matching the operator shape, even one that never really starts a heredoc -- an ordinary
+# quoted argument that happens to contain "<<SOMEWORD" (e.g. a log message). Since no
+# later line would ever equal SOMEWORD, every line for the rest of the command was
+# silently dropped from fold_full, hiding a real command from the guard entirely -- a
+# worse failure than #432 itself, since nothing blocks and nothing says why. The fix
+# requires a GENUINE closing delimiter line, found by scanning ahead, before it strips
+# anything; short of that it must leave everything visible.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd \"info: <<NOTICE data follows\"\nheredocforbid now"}}')
+assert_blocked "a false heredoc-shaped quoted string does not hide the real command after it" "$OUT"
+
+echo ""
+echo "=== self-review: a heredoc with no genuine closing line strips nothing (issue #432) ==="
+# The general form of the case above: a truncated/malformed command whose heredoc never
+# closes must not swallow everything after the operator line -- there IS no "after" to
+# swallow correctly, so the safe reading is to leave the text as it arrived.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd <<NEVERCLOSES\nheredocforbid mentioned, never closed"}}')
+assert_blocked "an unclosed heredoc leaves its own body text visible rather than eating the rest silently" "$OUT"
+
+echo ""
+echo "=== self-review: a backslash-quoted delimiter (<<\\DELIM) is recognized too (issue #432) ==="
+# <<\EOF suppresses expansion inside the body, the same job <<'"'"'EOF'"'"' does with a
+# different spelling -- the first cut of the operator regex only accepted a single/double
+# quote before the word, so this legitimate heredoc form was not recognized at all and
+# the original #432 bug persisted for it.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd <<\\EOF\nheredocforbid mentioned only here\nEOF"}}')
+assert_not_contains "a backslash-quoted delimiter heredoc body does not block" "$OUT" '"decision":"block"'
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd <<\\EOF\nirrelevant\nEOF\nheredocforbid now"}}')
+assert_blocked "positive control: the word after a backslash-quoted-delimiter heredoc still blocks" "$OUT"
+
+echo ""
+echo "=== self-review: a heredoc piped to an interpreter is genuinely-executed code, not a payload (issue #432) ==="
+# Reviewer finding: stripping EVERY heredoc body unconditionally would let `bash <<EOF`
+# (or sh/ssh/python/...) carry a forbidden word straight past a forbid:/~/block row that
+# correctly blocks the same word as a bare command -- the heredoc body IS what runs here,
+# not data piped to a data-only command. jit_heredoc_targets_interpreter() is a denylist
+# of the common, concretely-reported cases (bash/sh/ssh/python among them); this is not
+# stripped for those targets, so the guard still sees the word.
+# "hdcmd;" prefixed onto each: the row that carries the forbid: column is selected by
+# its own match: column ("hdcmd"), tested against `cmd` -- which truncates at the first
+# `;`, so it sees only the "hdcmd" word and is unaffected by what runs after the
+# semicolon. The forbid: check itself is what this block actually exercises, against
+# fold_full, which is where the interpreter guard matters.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; bash <<EOF\nheredocforbid now\nEOF"}}')
+assert_blocked "a forbidden word inside a bash <<EOF body still blocks" "$OUT"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; ssh host <<EOF\nheredocforbid now\nEOF"}}')
+assert_blocked "a forbidden word inside an ssh <<EOF body still blocks" "$OUT"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; python3 <<EOF\nheredocforbid now\nEOF"}}')
+assert_blocked "a forbidden word inside a python3 <<EOF body still blocks" "$OUT"
+# Control: an ordinary, non-interpreter target still gets its heredoc body stripped --
+# the denylist must not swallow the fix #432 exists for.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd <<EOF\nheredocforbid mentioned only here\nEOF"}}')
+assert_not_contains "control: a non-interpreter target heredoc body still does not block" "$OUT" '"decision":"block"'
+
+echo ""
+echo "=== self-review: require: sharing the fix, both directions (issue #432) ==="
+# Extending the fix to require: (not just the ~ regex arm and forbid:) was an explicit
+# design choice, flagged as untested in self-review: satisfying a require: flag by
+# writing it inside a heredoc PAYLOAD instead of passing it as a real argument is the
+# same class of bypass #432 closes for forbid:, from the other side of the check.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdreq --reqflag now"}}')
+assert_not_contains "a require: term present as a real argument is not blocked" "$OUT" '"decision":"block"'
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdreq <<EOF\nreqflag mentioned only here\nEOF"}}')
+assert_blocked "a require: term satisfied only by heredoc-body text is still refused" "$OUT"
 
 # =============================================
 # SECTION: awk engine matrix — multibyte paths, control characters in entries
