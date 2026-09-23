@@ -114,12 +114,12 @@ PROJ2="$TMP/proj2"
 mkdir -p "$PROJ2/.claude/jit-context"
 OUT2=$(CLAUDE_PROJECT_DIR="$PROJ2" bash "$STUBDIR/session-start-hook.sh" < /dev/null 2> /dev/null)
 assert_valid_json_shape "still valid JSON-object shaped output against the stub" "$OUT2"
-assert_contains "threads the size-watch note through when nothing else fired" "$OUT2" "hooks.log is"
-assert_contains "in megabytes a person can read, not bytes (#386)" "$OUT2" "1000.0 MB"
-# #406: automatic rotation replaced the old "Delete or rotate it" instruction -- the
-# default is on, so the default-config run says rotation is already handling it
-# rather than asking a person to act by hand.
-assert_contains "#406 names the automatic remedy, not a manual instruction" "$OUT2" "It rotates automatically past"
+# #434: automatic rotation is on and JIT_CONTEXT_LOG_MAX_BYTES is unset (a well-formed,
+# valid default) -- a reading in that state carries no action, so the size-watch note
+# no longer threads through at all. B2 right below (rotation explicitly off) is the
+# positive control proving this silence is the valid-value branch, not the note
+# mechanism failing to fire altogether.
+assert_not_contains "#434 well-formed rotation-on config: no size note at all" "$OUT2" "hooks.log is"
 assert_not_contains "#406 no longer tells a person to delete or rotate it themselves" "$OUT2" "Delete or rotate it"
 assert_not_contains "#386 no issue number" "$OUT2" "#248"
 assert_not_contains "#386 no flag a person is not going to type" "$OUT2" "--tail"
