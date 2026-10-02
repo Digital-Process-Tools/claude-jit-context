@@ -136,22 +136,20 @@ check_command_body() {
   fi
 
   # C. the common case: no arguments at all (bare `/jit-context:init`, `/jit-context:doctor`).
-  # An empty ARRAY expansion (`"${arr[@]}"` on a zero-element array) is a classic `set -u`
-  # trap on bash < 4.4, and ARGUMENTS itself may be unset rather than merely empty -- both
-  # are driven, with `set -u` on so a regression here is loud instead of environment-
-  # dependent.
+  # Claude Code substitutes the body's bare $ARGUMENTS with literal text BEFORE the shell
+  # ever runs anything (#439) -- with nothing typed, that text is the empty string, never
+  # an absent token -- so the only realistic zero-argument state to drive here is ARGUMENTS
+  # literally empty, under `set -u` so a zero-element array expansion regression (a classic
+  # bash < 4.4 trap) is loud instead of environment-dependent. An entirely UNSET ARGUMENTS
+  # is deliberately not driven: that was a real runtime state under the previous
+  # "${ARGUMENTS:-}" design (a real shell variable Claude Code supplied out of band, which
+  # could in principle be absent), but it cannot occur under this one -- $ARGUMENTS is
+  # resolved to text before this script ever starts, not read from the environment at all.
   out="$(cd "$CWD" && CLAUDE_PLUGIN_ROOT="$STUB_ROOT" ARGUMENTS='' bash -u "$fence" 2>&1)"
   if grep -qF 'ARGC=0' <<< "$out"; then
     ok "commands/$name: empty \$ARGUMENTS under set -u still runs with zero extra args"
   else
     bad "commands/$name: empty \$ARGUMENTS under set -u still runs with zero extra args" "got: $out"
-  fi
-
-  out="$(cd "$CWD" && env -u ARGUMENTS CLAUDE_PLUGIN_ROOT="$STUB_ROOT" bash -u "$fence" 2>&1)"
-  if grep -qF 'ARGC=0' <<< "$out"; then
-    ok "commands/$name: unset \$ARGUMENTS under set -u still runs with zero extra args"
-  else
-    bad "commands/$name: unset \$ARGUMENTS under set -u still runs with zero extra args" "got: $out"
   fi
 
   # D. #405: a slash command's fenced body is not guaranteed to run under bash. The

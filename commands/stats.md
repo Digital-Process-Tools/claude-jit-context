@@ -6,7 +6,7 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh:*)
 Run the report and relay its output verbatim:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh --arguments-string "${ARGUMENTS:-}"
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh --arguments-string "$ARGUMENTS"
 ```
 
 `${CLAUDE_PLUGIN_ROOT}` is the same resolution `commands/doctor.md` and `commands/init.md`
@@ -15,15 +15,20 @@ that changes on every update.
 
 `jit-stats.sh` parses `--base <tree>` and `--misses-top <n>` the same way `jit-doctor.sh`
 parses `--base` -- two separate words -- so `$ARGUMENTS` genuinely carries more than one
-shell word here. The body above passes the whole string as ONE quoted argument to a
-synthetic `--arguments-string` flag rather than splitting it here (#439): a bare
+shell word here. The body above passes the whole substituted string as ONE quoted argument
+to a synthetic `--arguments-string` flag rather than splitting it here (#439): a bare
 `allowed-tools: Bash` grants every shell command, and narrowing it to one script only works
-if the body's own first words are that exact script invocation -- the previous body wrapped
-everything in an explicit `bash -c '...'`, which made the body's first word `bash -c`, not
-the script, so no grant could ever name just this script. `jit-stats.sh` now builds the
-array itself with `read -a`, which splits on spaces and never globs; quoting the value here
-is what keeps a typed value containing `*` or `?` from matching whatever files sat in the
-current directory and splicing in as extra arguments (#278).
+if the literal command text Claude is about to run is, byte for byte, the exact script
+invocation the grant names -- the previous body wrapped everything in an explicit
+`bash -c '...'`, which made the body's first word `bash -c`, not the script, so no scoped
+grant could ever match it. `jit-stats.sh` now builds the array itself with `read -a`, which
+splits that one argument on spaces and never globs. **`commands/doctor.md` carries the full
+explanation of why this had to be the bare, unbraced `$ARGUMENTS` (Claude Code's own
+pre-substitution) rather than the previous `"${ARGUMENTS:-}"` (a real shell's own runtime
+expansion, which a narrowed grant always denies, verified against a real `claude -p` run) --
+read it there once rather than three times, including the one trade-off it documents: a
+typed value containing a literal double-quote is not defended against here, bounded the same
+way #278 itself already bounded the unquoted case.**
 
 **The `read -a` now runs inside `jit-stats.sh` itself, which always runs under a real bash,
 not in whatever shell runs this command body (#405).** `read -a` is a bash-only spelling of
