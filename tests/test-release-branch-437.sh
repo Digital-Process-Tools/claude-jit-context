@@ -107,22 +107,17 @@ fi
 
 echo ""
 echo "=== check: the built tree passes the directory's own pre-submission rules ==="
-# #437: one known, pre-existing, ALREADY-FILED exception -- commands/doctor.md,
-# commands/init.md and commands/stats.md all carry `allowed-tools: Bash` (unscoped),
+# #437 shipped with one known, pre-existing exception here: commands/doctor.md,
+# commands/init.md and commands/stats.md all carried `allowed-tools: Bash` (unscoped),
 # which check_release_tree.py's ALLOWED_TOOLS_BROAD rule (ported from claude-remember's
-# #859) holds as a Policy hold rather than a block. claude-remember's own first
-# release-branch cut shipped with this exact hold present on its own commands/doctor.md
-# and fixed it in a LATER, dedicated PR (#859) rather than as part of porting the
-# tooling -- the same precedent this suite follows. Narrowing the grant correctly needs
-# verifying how Claude Code's allowed-tools pattern matches the literal `bash -c '...'`
-# wrapper these three commands use for #405 (zsh's `read -a` incompatibility); getting
-# that wrong would reintroduce a permission prompt on three everyday commands, which is
-# a user-facing regression this port must not risk guessing at. So this assertion is
-# pinned to the KNOWN offender set: new offenders still fail the suite; these three do
-# not, until a follow-up issue (tracking claude-remember's own #859) resolves them.
-_KNOWN_ALLOWED_TOOLS_HOLDS="commands/doctor.md: allowed-tools grants unrestricted shell ('Bash'): bare \`Bash\` grants every shell command
-commands/init.md: allowed-tools grants unrestricted shell ('Bash'): bare \`Bash\` grants every shell command
-commands/stats.md: allowed-tools grants unrestricted shell ('Bash'): bare \`Bash\` grants every shell command"
+# #859) holds as a Policy hold rather than a block. #439 narrowed all three grants to
+# name their own script (`Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/X.sh:*)`), moving the
+# #405 zsh-safe splitting into each script itself behind a synthetic
+# `--arguments-string` flag so the command body's first words could literally be the
+# script invocation the grant names. The pinned offender set below is now empty: any
+# allowed-tools hold that check_release_tree.py reports from here on is a genuine new
+# finding, not this already-resolved one.
+_KNOWN_ALLOWED_TOOLS_HOLDS=""
 if [ "$BUILD_RC" -eq 0 ]; then
   CHECK_OUT=$(python3 "$CHECK" "$TREE" --config "$CONFIG" 2>&1)
   CHECK_RC=$?
