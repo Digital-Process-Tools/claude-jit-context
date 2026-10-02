@@ -1,24 +1,27 @@
 #!/bin/bash
-# commands/init.md and commands/doctor.md run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/<x>.sh"
-# $ARGUMENTS` with $ARGUMENTS bare and unquoted (#278). jit-init.sh and jit-doctor.sh both
-# parse `--base DIR` as two separate words (scripts/jit-init.sh, scripts/jit-doctor.sh --
-# grep for `--base)` in either: `[ $# -ge 2 ] || need_value "$1"; BASE="$2"; shift 2`), so
-# $ARGUMENTS is genuinely meant to carry more than one shell word -- a plain `"$ARGUMENTS"`
-# would break `--base <dir>` by handing the script one combined argument instead of two.
+# commands/init.md, commands/doctor.md and commands/stats.md hand the whole typed
+# $ARGUMENTS string through to their target script as ONE quoted argument to a
+# synthetic --arguments-string flag (#439), rather than splitting it themselves inside
+# a `bash -c '...'` wrapper (#405's original fix for #278). jit-init.sh, jit-doctor.sh
+# and jit-stats.sh each do their own `--base DIR`-style parsing (grep for `--base)` in
+# any of them: `[ $# -ge 2 ] || need_value "$1"; BASE="$2"; shift 2`), so $ARGUMENTS is
+# genuinely meant to carry more than one shell word -- a plain `"$ARGUMENTS"` would
+# break `--base <dir>` by handing the script one combined argument instead of two. The
+# splitting itself now happens INSIDE each script, behind its own `--arguments-string`
+# flag, because the script is always invoked as `bash .../scripts/X.sh`, which
+# guarantees a real bash regardless of what shell is running the command body (#405) --
+# and because the body's own first words can then literally be the script invocation,
+# which is what lets the allowed-tools grant name this one script instead of holding
+# `Bash` (every shell command) or `Bash(bash -c:*)` (every bash -c invocation) (#439).
 #
-# The fix has to make that splitting explicit (an array built with `read -a`) rather than
-# lean on bash's own unquoted-expansion word-splitting, because unquoted expansion does two
-# things at once and only one of them is wanted: it splits on IFS (wanted, for --base DIR)
-# AND performs pathname (glob) expansion on the result (never wanted -- a typed value with
-# a `*` or `?` in it should reach the script as that literal text, not as however many
-# files happen to be lying around in whatever directory the command runs from). That
-# second half is the actual "admits" in #278: an unquoted `$ARGUMENTS` containing a glob
-# character silently splices in extra, unintended arguments when matching files exist,
-# and does it differently on every machine depending on what is in the cwd at the time.
-#
-# This suite extracts the real bash fence from each command file and runs it against a
-# stub CLAUDE_PLUGIN_ROOT, so it is testing the actual body Claude Code would execute, not
-# a paraphrase of it.
+# This suite tests two things separately:
+#   A. the command body itself: extracted from the real markdown fence, run against a
+#      stub CLAUDE_PLUGIN_ROOT, proving the body hands $ARGUMENTS through untouched --
+#      as one quoted word -- to `--arguments-string`, under both bash and zsh.
+#   B. the splitting contract a stub replicates from each real script's own
+#      `--arguments-string` handling: that it reaches the stub as separate words
+#      (the #278 property), that a typed glob is never expanded against the cwd, and
+#      that an empty or unset $ARGUMENTS does not crash under `set -u`.
 #
 # jit-drive: none -- ok()/bad() below are local, one-line pass/fail counters over
 # `grep -qF NEEDLE <<<"$out"` reads of a single stub-script capture each, the same shape
@@ -60,10 +63,18 @@ trap 'chmod -R u+rwX "$ROOT" 2>/dev/null; rm -rf "$ROOT"' EXIT
 STUB_ROOT="$ROOT/plugin"
 mkdir -p "$STUB_ROOT/scripts"
 
-# A stub in place of the real jit-init.sh/jit-doctor.sh: dumps every argument it received,
-# one per line, so the count and the exact text of each word is checkable.
+# A stub in place of the real jit-init.sh/jit-doctor.sh/jit-stats.sh: replicates the
+# same --arguments-string splitting contract the real scripts each carry (one quoted
+# string in, IFS=' ' read -a, spliced back onto "$@"), then dumps every resulting
+# argument, one per line, so the count and the exact text of each word is checkable.
 cat > "$STUB_ROOT/scripts/jit-init.sh" << 'STUB'
 #!/bin/bash
+set -u
+if [ "${1:-}" = "--arguments-string" ]; then
+  IFS=' ' read -r -a _split <<< "${2:-}"
+  shift 2
+  set -- "${_split[@]+"${_split[@]}"}" "$@"
+fi
 printf 'ARGC=%s\n' "$#"
 i=0
 for a in "$@"; do
@@ -82,6 +93,24 @@ mkdir -p "$CWD"
 : > "$CWD/decoy-one.txt"
 : > "$CWD/decoy-two.txt"
 
+# Claude Code substitutes the literal token $ARGUMENTS with the raw typed text as a TEXT
+# replacement in the markdown content, before the shell ever parses anything (#439) -- it
+# is not a shell-level variable expansion, which is exactly why the body quotes it with
+# SINGLE quotes rather than double: bash performs zero expansion inside single quotes, so
+# an env var named ARGUMENTS sitting outside the fence cannot stand in for this anymore
+# (a single-quoted '$ARGUMENTS' in the fence is the literal ten characters, not a variable
+# reference, to the real shell). This helper does the same literal substitution Claude
+# Code does -- plain text replacement of the fixed string "$ARGUMENTS", not shell
+# expansion -- and writes the result to its own file for each case, so each case can
+# still be run as an ordinary script. $1 the already-extracted fence file, $2 the raw
+# value to substitute, $3 the path to write the substituted fence to.
+substitute_arguments() {
+  local fence="$1" value="$2" out_path="$3" content
+  content="$(cat "$fence")"
+  content="${content//\$ARGUMENTS/$value}"
+  printf '%s\n' "$content" > "$out_path"
+}
+
 # $1 command file basename
 check_command_body() {
   local name="$1" file out
@@ -96,8 +125,12 @@ check_command_body() {
 
   echo "--- commands/$name body ---"
 
-  # A. the split case: --base carries a value as its own word.
-  out="$(cd "$CWD" && CLAUDE_PLUGIN_ROOT="$STUB_ROOT" ARGUMENTS='--base /some/project/.claude/jit-context' bash "$fence" 2>&1)"
+  # A. the split case: --base carries a value as its own word -- reaches the stub as
+  # ONE combined argument to --arguments-string; the stub's own splitting (replicated
+  # from the real script) then turns it into two.
+  local fence_a="$ROOT/fence-$name-a.sh"
+  substitute_arguments "$fence" '--base /some/project/.claude/jit-context' "$fence_a"
+  out="$(cd "$CWD" && CLAUDE_PLUGIN_ROOT="$STUB_ROOT" bash "$fence_a" 2>&1)"
   # Here-string, never a pipe: `| grep -q` exits the instant it matches and the writer on
   # the left takes SIGPIPE, which under `pipefail` reports the OPPOSITE of what was found
   # once output is long enough (#56, the reason test-cross-tree-write-231.sh does the
@@ -111,10 +144,12 @@ check_command_body() {
     bad "commands/$name: \"--base DIR\" reaches the script as two separate words" "got: $out"
   fi
 
-  # B. the splicing case (#278): a typed value carrying a bare glob must reach the script
-  # as that literal text -- not expand against whatever files happen to sit in the
-  # directory the command runs from.
-  out="$(cd "$CWD" && CLAUDE_PLUGIN_ROOT="$STUB_ROOT" ARGUMENTS='--base decoy-*' bash "$fence" 2>&1)"
+  # B. the splicing case (#278): a typed value carrying a bare glob must reach the
+  # script as that literal text -- not expand against whatever files happen to sit in
+  # the directory the command runs from.
+  local fence_b="$ROOT/fence-$name-b.sh"
+  substitute_arguments "$fence" '--base decoy-*' "$fence_b"
+  out="$(cd "$CWD" && CLAUDE_PLUGIN_ROOT="$STUB_ROOT" bash "$fence_b" 2>&1)"
   if grep -qF 'ARGC=2' <<< "$out" \
     && grep -qF 'ARG2=[decoy-*]' <<< "$out"; then
     ok "commands/$name: a typed glob is not expanded against the cwd"
@@ -122,33 +157,58 @@ check_command_body() {
     bad "commands/$name: a typed glob is not expanded against the cwd" "got: $out"
   fi
 
+  # B2. #439's own residual, driven here rather than only documented: single quotes block
+  # $(...), backticks and $VAR entirely, so a typed value carrying either must reach the
+  # script as that literal text -- split on spaces same as any other multi-word value, but
+  # never EXECUTED. This is the property that made single quotes the right choice over
+  # double (a double-quoted draft let $(...) run with no quote-breakout needed at all --
+  # see commands/doctor.md's own account). The positive half of this check is the absence
+  # of the two marker files; the word-for-word ARGn checks are the paired "it still split
+  # and reached the script, rather than silently vanishing" half #278 already established
+  # the pattern for.
+  local fence_b2="$ROOT/fence-$name-b2.sh"
+  substitute_arguments "$fence" '--base $(touch '"$ROOT"'/b2-pwned) `touch '"$ROOT"'/b2-pwned-bt` $HOME' "$fence_b2"
+  rm -f "$ROOT/b2-pwned" "$ROOT/b2-pwned-bt"
+  out="$(cd "$CWD" && CLAUDE_PLUGIN_ROOT="$STUB_ROOT" bash "$fence_b2" 2>&1)"
+  if [ ! -e "$ROOT/b2-pwned" ] && [ ! -e "$ROOT/b2-pwned-bt" ] \
+    && grep -qF 'ARGC=6' <<< "$out" \
+    && grep -qF 'ARG2=[$(touch]' <<< "$out" \
+    && grep -qF "ARG3=[$ROOT/b2-pwned)]" <<< "$out" \
+    && grep -qF 'ARG4=[`touch]' <<< "$out" \
+    && grep -qF "ARG5=[$ROOT/b2-pwned-bt\`]" <<< "$out" \
+    && grep -qF 'ARG6=[$HOME]' <<< "$out"; then
+    ok "commands/$name: a typed \$(...), backtick or \$VAR reaches the script as literal text, never executed"
+  else
+    bad "commands/$name: a typed \$(...), backtick or \$VAR reaches the script as literal text, never executed" "got: $out"
+  fi
+
   # C. the common case: no arguments at all (bare `/jit-context:init`, `/jit-context:doctor`).
-  # An empty ARRAY expansion (`"${arr[@]}"` on a zero-element array) is a classic `set -u`
-  # trap on bash < 4.4, and ARGUMENTS itself may be unset rather than merely empty -- both
-  # are driven, with `set -u` on so a regression here is loud instead of environment-
-  # dependent.
-  out="$(cd "$CWD" && CLAUDE_PLUGIN_ROOT="$STUB_ROOT" ARGUMENTS='' bash -u "$fence" 2>&1)"
+  # Claude Code substitutes the body's bare $ARGUMENTS with literal text BEFORE the shell
+  # ever runs anything (#439) -- with nothing typed, that text is the empty string, never
+  # an absent token -- so the only realistic zero-argument state to drive here is ARGUMENTS
+  # literally empty, under `set -u` so a zero-element array expansion regression (a classic
+  # bash < 4.4 trap) is loud instead of environment-dependent. An entirely UNSET ARGUMENTS
+  # is deliberately not driven: that was a real runtime state under the previous
+  # "${ARGUMENTS:-}" design (a real shell variable Claude Code supplied out of band, which
+  # could in principle be absent), but it cannot occur under this one -- $ARGUMENTS is
+  # resolved to text before this script ever starts, not read from the environment at all.
+  local fence_c="$ROOT/fence-$name-c.sh"
+  substitute_arguments "$fence" '' "$fence_c"
+  out="$(cd "$CWD" && CLAUDE_PLUGIN_ROOT="$STUB_ROOT" bash -u "$fence_c" 2>&1)"
   if grep -qF 'ARGC=0' <<< "$out"; then
     ok "commands/$name: empty \$ARGUMENTS under set -u still runs with zero extra args"
   else
     bad "commands/$name: empty \$ARGUMENTS under set -u still runs with zero extra args" "got: $out"
   fi
 
-  out="$(cd "$CWD" && env -u ARGUMENTS CLAUDE_PLUGIN_ROOT="$STUB_ROOT" bash -u "$fence" 2>&1)"
-  if grep -qF 'ARGC=0' <<< "$out"; then
-    ok "commands/$name: unset \$ARGUMENTS under set -u still runs with zero extra args"
-  else
-    bad "commands/$name: unset \$ARGUMENTS under set -u still runs with zero extra args" "got: $out"
-  fi
-
-  # D. #405: a slash command's fenced body is not guaranteed to run under
-  # bash -- if zsh is what invokes this file, `read -a` (the array-building
-  # fix for THIS issue, #278) is itself a bash-only spelling that errors
-  # `bad option: -a` under zsh, silently drops $ARGUMENTS, and reaches the
-  # stub with zero arguments instead of the two that were typed. Skipped
-  # gracefully (not silently) when no zsh is installed to run it against.
+  # D. #405: a slash command's fenced body is not guaranteed to run under bash. The
+  # body itself no longer does any `read -a` of its own (that moved into the script,
+  # which is always invoked explicitly as `bash .../scripts/X.sh` regardless of what
+  # shell runs this fenced body) -- so this now proves #405 cannot regress at the body
+  # layer at all, rather than merely surviving it. Skipped gracefully (not silently)
+  # when no zsh is installed to run it against.
   if command -v zsh > /dev/null 2>&1; then
-    out="$(cd "$CWD" && CLAUDE_PLUGIN_ROOT="$STUB_ROOT" ARGUMENTS='--base /some/project/.claude/jit-context' zsh "$fence" 2>&1)"
+    out="$(cd "$CWD" && CLAUDE_PLUGIN_ROOT="$STUB_ROOT" zsh "$fence_a" 2>&1)"
     if grep -qF 'ARGC=2' <<< "$out" \
       && grep -qF 'ARG1=[--base]' <<< "$out" \
       && grep -qF 'ARG2=[/some/project/.claude/jit-context]' <<< "$out"; then

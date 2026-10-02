@@ -1,12 +1,12 @@
 ---
 description: What fired this session, on what word, and what it cost -- the detail the Stop line's one-line total points at.
-allowed-tools: Bash
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh:*)
 ---
 
 Run the report and relay its output verbatim:
 
 ```bash
-bash -c 'IFS=" " read -r -a jit_stats_args <<< "${1:-}"; exec bash "$2/scripts/jit-stats.sh" "${jit_stats_args[@]+"${jit_stats_args[@]}"}"' _ "${ARGUMENTS:-}" "${CLAUDE_PLUGIN_ROOT}"
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh --arguments-string '$ARGUMENTS'
 ```
 
 `${CLAUDE_PLUGIN_ROOT}` is the same resolution `commands/doctor.md` and `commands/init.md`
@@ -15,19 +15,34 @@ that changes on every update.
 
 `jit-stats.sh` parses `--base <tree>` and `--misses-top <n>` the same way `jit-doctor.sh`
 parses `--base` -- two separate words -- so `$ARGUMENTS` genuinely carries more than one
-shell word here, and the array built from `read -a` makes that splitting explicit rather
-than leaning on bash's own unquoted-expansion word-splitting (#278).
+shell word here. The body above passes the whole substituted string as ONE quoted argument
+to a synthetic `--arguments-string` flag rather than splitting it here (#439): a bare
+`allowed-tools: Bash` grants every shell command, and narrowing it to one script only works
+if the literal command text Claude is about to run is, byte for byte, the exact script
+invocation the grant names -- the previous body wrapped everything in an explicit
+`bash -c '...'`, which made the body's first word `bash -c`, not the script, so no scoped
+grant could ever match it. `jit-stats.sh` now builds the array itself with `read -a`, which
+splits that one argument on spaces and never globs. **`commands/doctor.md` carries the full
+explanation of why this had to be the bare, unbraced `$ARGUMENTS` (Claude Code's own
+pre-substitution) rather than the previous `"${ARGUMENTS:-}"` (a real shell's own runtime
+expansion, which a narrowed grant always denies, verified against a real `claude -p` run) --
+read it there once rather than three times, including the one trade-off it documents: a
+typed value containing a literal single-quote is not defended against here -- a `$(...)` or
+backtick needs no quote-breakout at all under the double-quoted design this diff tried and
+rejected after a real exploit confirmed it, which is why single quotes are used instead --
+bounded the same way #278 itself already bounded the unquoted case, though wider in effect
+since it reaches unscoped shell execution rather than stray arguments.**
 
-**The `read -a` itself runs inside an explicit `bash -c`, not in whatever shell runs this
-command body (#405).** `read -a` is a bash-only spelling of the builtin -- zsh spells it
-`read -A` and errors `bad option: -a` on the bash form -- and a slash command's fenced
-`bash` body is not guaranteed to run under bash. Before this fix, that error left
-`$jit_stats_args` unset and the script below ran with **no arguments at all**: a typed
-`--misses-top 30` or `--base <tree>` was silently dropped rather than reaching the script,
-which then produced a plausible report answering a different question than the one asked.
-`ARGUMENTS` and `CLAUDE_PLUGIN_ROOT` are passed in as `$1`/`$2` (POSIX parameter expansion,
-valid in every shell that could be running this body) so the actual word-splitting always
-happens inside a real bash, regardless of what invoked it.
+**The `read -a` now runs inside `jit-stats.sh` itself, which always runs under a real bash,
+not in whatever shell runs this command body (#405).** `read -a` is a bash-only spelling of
+the builtin -- zsh spells it `read -A` and errors `bad option: -a` on the bash form -- and a
+slash command's fenced `bash` body is not guaranteed to run under bash. Before the #405 fix,
+that error left the split array unset and the script ran with **no arguments at all**: a
+typed `--misses-top 30` or `--base <tree>` was silently dropped rather than reaching the
+script, which then produced a plausible report answering a different question than the one
+asked. Invoking `bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh` explicitly, as the body
+above does, guarantees the script itself -- and therefore the `read -a` inside it -- always
+runs under bash regardless of what shell is running this fenced body.
 
 Do not summarise away any line -- relay the report exactly as printed. Three outcomes:
 
