@@ -2930,7 +2930,19 @@ function jit_heredoc_quote_states(lines, n, qin,    i, state) {
     state = jit_heredoc_line_exit_state(lines[i], state)
   }
 }
-function jit_strip_heredoc_body(s,    n, lines, i, j, out, strip_tabs, delim, line, rest, probed, op, word, prefix, q1, q2, q3, qclass, close_i, quote_in) {
+# unconditional (default 0) exists ONLY for the require: check, whose own fail-open
+# direction runs opposite to the direction forbid:/~/block need. MORE visible body
+# text is the safe default for a deny-style rule (forbid:/~/block): it can only make
+# such a rule MORE likely to correctly refuse, never less. require: is an
+# allow-only-if-present rule, so the same extra visibility makes it MORE likely to
+# be satisfied by inert payload text sitting in a heredoc body that was never a real
+# argument at all -- the same fail-open shape, just reached through the opposite
+# bias. Passing unconditional=1 strips a recognized heredoc body regardless of
+# jit_heredoc_opener_is_known_sink(), so body text can never satisfy a require:
+# column no matter what command it sits under; it does NOT skip the suppression
+# checks above, since those answer a different question (is this text a real
+# heredoc operator at all) that both callers need answered the same way.
+function jit_strip_heredoc_body(s, unconditional,    n, lines, i, j, out, strip_tabs, delim, line, rest, probed, op, word, prefix, q1, q2, q3, qclass, close_i, quote_in) {
   q1 = sprintf("%c", 39)
   q2 = sprintf("%c", 34)
   # TWO bytes, not one: q3 sits inside a DYNAMIC (string) regex bracket expression
@@ -2960,7 +2972,7 @@ function jit_strip_heredoc_body(s,    n, lines, i, j, out, strip_tabs, delim, li
         word = op
         sub(/^<<-?[ \t]*/, "", word)
         gsub("[" q1 q2 q3 "]", "", word)
-        if (word != "" && !jit_heredoc_targets_interpreter(line)) {
+        if (word != "" && (unconditional || jit_heredoc_opener_is_known_sink(line))) {
           delim = word
           for (j = i + 1; j <= n; j++) {
             rest = lines[j]
@@ -2984,32 +2996,45 @@ function jit_strip_heredoc_body(s,    n, lines, i, j, out, strip_tabs, delim, li
   }
   return out
 }
-# A denylist, not an oracle -- see the comment on jit_strip_heredoc_body() above for why
-# that is the deliberate posture rather than a gap. Matched as a whole token: the line is
-# folded to lowercase and every character outside [a-z0-9_] becomes a space (so a path
-# like /usr/bin/bash reads as bash, its own token, not a substring of something longer),
-# then each denylist entry is looked up padded with spaces on both sides.
+# ROUND 3 (coordinator review): this used to be jit_heredoc_targets_interpreter(), a
+# DENYLIST of commands that execute their heredoc body as code (bash, sh, ssh, python3,
+# source, eval, a dot-source special case for #442 repro 3, ...), not stripped for
+# those so a forbid:/require:/~ rule could still see the body. That denylist is itself
+# unbounded, and was the wrong side of this check to bound: it fails OPEN on anything
+# it has never heard of, and two review rounds on this very issue each found one more
+# way through it by construction, with no code change in between -- $SHELL <<EOF (the
+# interactive shell named by an environment variable), perl5.30 <<EOF (a versioned
+# perl binary), node18 <<EOF (a versioned node binary), awk -f - <<EOF (which can run
+# arbitrary code via system()), "$0" <<EOF (the script re-invoking itself). Every one
+# of those pipes its heredoc body to something that EXECUTES it, and every one was
+# silently stripped and hidden from a block rule by the code this comment used to
+# describe, purely because its literal spelling never matched a name on the list.
 #
-# #442 third repro: a lone `.` (dot-source) can never survive that lookup -- gsub strips
-# every character outside [a-z0-9_] to a space BEFORE the membership test runs, so a `.`
-# appended to the string below would be a token nobody could ever match. Checked directly
-# against the RAW line instead, ahead of normalization: a line beginning (optionally after
-# a command separator) with `.` followed by whitespace is the POSIX dot-command, and
-# `. script <<EOF` sources its heredoc body as code the same way `source script <<EOF`
-# already does via the string lookup two lines down. `./script.sh <<EOF` is excluded on
-# purpose -- no whitespace follows the dot there, so this does not fire on a path.
-function jit_heredoc_targets_interpreter(line,    norm, denylist, names, i, n) {
-  if (line ~ /^[ \t]*\.[ \t]/) return 1
-  if (match(line, /[;&|][ \t]*\.[ \t]/)) return 1
-  norm = tolower(line)
-  gsub(/[^a-z0-9_]/, " ", norm)
-  norm = " " norm " "
-  denylist = " bash sh zsh ksh dash csh tcsh fish ssh python python2 python3 perl ruby node nodejs php tclsh expect psql mysql sqlite3 mongo osascript pwsh powershell cmd bc dc xargs sudo env exec source eval docker kubectl "
-  n = split(denylist, names, " ")
-  for (i = 1; i <= n; i++) {
-    if (names[i] == "") continue
-    if (index(norm, " " names[i] " ") > 0) return 1
-  }
+# Inverted instead of patched further: jit_heredoc_opener_is_known_sink() is an
+# ALLOWLIST of commands whose stdin is DATA by construction -- cat/tee writing to a
+# file, the supertool this repository ships its own writes through, git commit -F -,
+# gh ... --body-file -/-F - -- and a heredoc body is stripped ONLY when the operator
+# line matches one of them. Everything else, every interpreter old or new or
+# never-yet-invented included, keeps its body visible by default. This is the
+# direction the invariant this whole file obeys actually requires: the unbounded side
+# of "strip or do not strip" has to default to "do not", because an allowlist that is
+# too SHORT only means more commands keep their heredoc body visible -- safe, if
+# noisier for issue #432 own motivating payload-is-not-a-command case -- while a
+# denylist that is too SHORT means more commands silently LOSE theirs, which is the
+# whole subject of issue #442. A command not on this list is not claimed to be safe
+# to execute; it is simply not claimed to be a payload sink either, and the function
+# answers only the question it is actually asked.
+function jit_heredoc_opener_is_known_sink(line) {
+  # cat writing to a file: the write target may be spelled before OR after the
+  # heredoc operator on the same physical line (cat > out <<EOF and cat <<EOF > out
+  # are both ordinary bash), so this checks the whole line for a > rather than just
+  # the text before the operator.
+  if (line ~ /(^|[;&|])[ \t]*cat([ \t]|$)/ && line ~ />/) return 1
+  # tee always takes its target as a plain argument, never a redirect.
+  if (line ~ /(^|[;&|])[ \t]*tee[ \t]+[^ \t;&|\n]/) return 1
+  if (line ~ /(^|[;&|])[ \t]*(\.\/)?supertool([ \t]|$)/) return 1
+  if (line ~ /(^|[;&|])[ \t]*git[ \t]+commit([ \t]|$)/ && line ~ /(^|[ \t])(-F|--file)[ \t]*-([ \t]|$)/) return 1
+  if (line ~ /(^|[;&|])[ \t]*gh([ \t]|$)/ && line ~ /(^|[ \t])(--body-file|-F)[ \t]*-([ \t]|$)/) return 1
   return 0
 }
 '

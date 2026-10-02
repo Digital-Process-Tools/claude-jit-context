@@ -401,7 +401,20 @@ END {
   # the fold runs, so none of the three can fire on payload text any more -- while
   # leaving the heredoc OPERATOR line itself in place, so a rule can still target
   # whatever command actually runs on that line.
-  fold_full = jit_fold_latin1(tolower(jit_strip_heredoc_body(full_command)))
+  #
+  # #442 round 3: require: reads a SEPARATE fold, fold_full_req, built by stripping
+  # EVERY recognized heredoc body unconditionally rather than only known payload
+  # sinks. The two rule families fail open in opposite directions: forbid:/~/block
+  # are safer the MORE text stays visible, so fold_full only strips for a command on
+  # the known-sink allowlist (jit_heredoc_opener_is_known_sink()) and otherwise
+  # leaves the body visible by default. require: is an allow-only-if-present check,
+  # so the same extra visibility would let inert heredoc-body text -- never a real
+  # argument at all -- satisfy a required flag for any command the allowlist has
+  # not named, which is the same fail-open shape reached through the opposite bias.
+  # fold_full_req closes that by never giving require: the benefit of the allowlist
+  # at all.
+  fold_full = jit_fold_latin1(tolower(jit_strip_heredoc_body(full_command, 0)))
+  fold_full_req = jit_fold_latin1(tolower(jit_strip_heredoc_body(full_command, 1)))
 
   nblk = 0
   blocked = ""
@@ -840,7 +853,7 @@ END {
           # Folded on both sides (#76): `require: validé` must be satisfied by `VALIDÉ`.
           # This half fails CLOSED when it breaks -- it refuses a command that met its
           # requirement -- which is the safer direction and still wrong.
-          if (index(fold_full, jit_fold_latin1(tolower(reqs[ri]))) == 0) {
+          if (index(fold_full_req, jit_fold_latin1(tolower(reqs[ri]))) == 0) {
             blocked = "BLOCKED: Missing required: " reqs[ri] ". " body
             if (status_mode == "fired") sys_msg_block_file = "tools/" tool_layer "/" r_file
             log_matches = log_matches sep "tool:" r_logname "(BLOCKED:" reqs[ri] ")"
