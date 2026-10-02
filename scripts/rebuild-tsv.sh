@@ -639,7 +639,11 @@ elif [ "${DYNAMIC_RULES_GENERIC_WORDS+set}" = "set" ]; then
   GENERIC_WORDS_FILE="$DYNAMIC_RULES_GENERIC_WORDS"
   GENERIC_WORDS_EXPLICIT=1
 else
-  GENERIC_WORDS_FILE="$(dirname "$0")/../data/generic-words.txt"
+  # #437: the shipped default moved from a single 1 MB file to a directory of chunks
+  # (data/generic-words/, each chunk under 256 KiB) for the Anthropic plugin
+  # directory's per-file size limit. jit_generic_words_members() (common.sh) reads
+  # either shape; a caller-configured path above may still name a single plain file.
+  GENERIC_WORDS_FILE="$(dirname "$0")/../data/generic-words"
 fi
 
 # --- Generic-word wordlist health, read ONCE for the whole run (#255, #265) ---------
@@ -713,12 +717,36 @@ elif [ ! -r "$GENERIC_WORDS_FILE" ]; then
   echo "FATAL    generic-word classifier: $GENERIC_WORDS_FILE_SAFE exists but is not readable -- every keyword this run will read as non-generic (the pre-#232 degrade), which would otherwise be silent. Fix its permissions or unset JIT_CONTEXT_GENERIC_WORDS to accept the degrade on purpose." >&2
   jit_rc 2
 else
-  GENERIC_WORDS_LINES=$(LC_ALL=C awk 'END{print NR+0}' "$GENERIC_WORDS_FILE" 2> /dev/null)
-  if [ -z "$GENERIC_WORDS_LINES" ] || [ "$GENERIC_WORDS_LINES" -eq 0 ]; then
+  # #437: GENERIC_WORDS_FILE may now be a directory of chunks rather than one file --
+  # jit_generic_words_members() (common.sh) lists whichever shape it is. Each member is
+  # checked individually (a directory can exist and be readable while one chunk inside
+  # it is not), and the line counts are summed: the "empty" FATAL below fires exactly
+  # when it used to -- zero lines total -- whether that is one empty file or a directory
+  # with no readable chunk in it.
+  GENERIC_WORDS_MEMBERS="$(jit_generic_words_members "$GENERIC_WORDS_FILE")"
+  GENERIC_WORDS_LINES=0
+  GENERIC_WORDS_UNREADABLE=""
+  if [ -n "$GENERIC_WORDS_MEMBERS" ]; then
+    while IFS= read -r _gw_member; do
+      [ -n "$_gw_member" ] || continue
+      if [ ! -r "$_gw_member" ]; then
+        GENERIC_WORDS_UNREADABLE="${GENERIC_WORDS_UNREADABLE}${GENERIC_WORDS_UNREADABLE:+, }$_gw_member"
+        continue
+      fi
+      _gw_n=$(LC_ALL=C awk 'END{print NR+0}' "$_gw_member" 2> /dev/null)
+      case "$_gw_n" in "" | *[!0-9]*) _gw_n=0 ;; esac
+      GENERIC_WORDS_LINES=$((GENERIC_WORDS_LINES + _gw_n))
+    done <<< "$GENERIC_WORDS_MEMBERS"
+  fi
+  if [ -n "$GENERIC_WORDS_UNREADABLE" ]; then
+    echo "FATAL    generic-word classifier: $GENERIC_WORDS_FILE_SAFE names a directory holding an unreadable member ($GENERIC_WORDS_UNREADABLE) -- every keyword this run will read as non-generic (the pre-#232 degrade), which would otherwise be silent. Fix its permissions or unset JIT_CONTEXT_GENERIC_WORDS to accept the degrade on purpose." >&2
+    jit_rc 2
+  elif [ "$GENERIC_WORDS_LINES" -eq 0 ]; then
     echo "FATAL    generic-word classifier: $GENERIC_WORDS_FILE_SAFE exists and is readable but is empty -- every keyword this run will read as non-generic (the pre-#232 degrade), which would otherwise be silent." >&2
     jit_rc 2
   else
     GENERIC_WORDS_OK=1
+    GENERIC_WORDS_FILES="$GENERIC_WORDS_MEMBERS"
   fi
 fi
 
@@ -1031,8 +1059,23 @@ build_vocab_tsv() {
   if [ "${#ALL_KW[@]}" -gt 0 ] && [ "$GENERIC_WORDS_OK" -eq 1 ]; then
     while IFS= read -r _vflag; do
       VERDICT_FLAGS+=("$_vflag")
-    done < <(printf '%s\n' "${ALL_KW[@]}" | LC_ALL=C awk -v wf="$GENERIC_WORDS_FILE" '
-      BEGIN { while ((getline w < wf) > 0) seen[w] = 1 }
+    done < <(printf '%s\n' "${ALL_KW[@]}" | GENERIC_WORDS_FILES="$GENERIC_WORDS_FILES" LC_ALL=C awk '
+      # #437: GENERIC_WORDS_FILE can now be several chunk files rather than one -- the
+      # list travels through ENVIRON (never -v: a -v value has its escapes PROCESSED,
+      # the same reason JIT_SYMLINKS above does not use -v either), newline-separated,
+      # from jit_generic_words_members() in common.sh. Reading every member into the
+      # SAME seen[] hash is what keeps this byte-identical to the single-file read it
+      # replaces: a keyword classifies generic iff it is a line in ANY member, exactly
+      # as it was a line of the one file before the split.
+      BEGIN {
+        n = split(ENVIRON["GENERIC_WORDS_FILES"], wfiles, "\n")
+        for (i = 1; i <= n; i++) {
+          wf = wfiles[i]
+          if (wf == "") continue
+          while ((getline w < wf) > 0) seen[w] = 1
+          close(wf)
+        }
+      }
       { print ($0 in seen) ? 1 : 0 }
     ')
     # A dead or truncated awk (review finding, #255) would otherwise leave VERDICT_FLAGS

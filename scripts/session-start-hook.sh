@@ -269,7 +269,7 @@ fi
 # (#248), the unfiltered caveat (#246) and the issue numbers were all true and all
 # addressed to the wrong reader: a person at the start of a session wants to know what
 # was found and what to do about it. The caveat is gone because jit-misses.sh now
-# filters ordinary words itself (data/generic-words.txt, same list rebuild-tsv.sh
+# filters ordinary words itself (data/generic-words/, same list rebuild-tsv.sh
 # uses); the window is still bounded, and still named in jit-misses.sh's own report
 # for anyone who runs it by hand. Two facts can still both be true -- words recur AND
 # the log is large -- and each keeps its own line, joined by \n, rather than one

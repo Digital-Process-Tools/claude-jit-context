@@ -1,5 +1,5 @@
 #!/bin/bash
-# #251: data/generic-words.txt must never carry a row that cannot survive
+# #251: data/generic-words/*.txt must never carry a row that cannot survive
 # jit_fold_latin1() -- the classifier folds a KEYWORD before comparing it against this
 # file (scripts/rebuild-tsv.sh; since #255 that comparison runs inside one batched
 # `LC_ALL=C awk` hash lookup for the whole run rather than one `grep -Fxq` per keyword,
@@ -12,6 +12,11 @@
 # JIT_AWK_FOLD's own accent table making an existing entry's fold form change underneath
 # it without anyone re-running the fold over this file.
 #
+# #437: the single file became data/generic-words/chunk-NN.txt, each under 256 KiB for
+# the Anthropic plugin directory's per-file size limit. Every check below runs over the
+# WHOLE SET of chunks, in name order -- the invariant is about the wordlist as a whole,
+# never about one chunk on its own.
+#
 # Usage: bash tests/test-generic-words-invariant.sh
 #
 # jit-drive: none -- every check below is a direct `grep -qF`/`grep -vE` against a
@@ -21,7 +26,8 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-WORDLIST="$REPO/data/generic-words.txt"
+WORDLIST_DIR="$REPO/data/generic-words"
+WORDLIST_FILES=("$WORDLIST_DIR"/*.txt)
 PASS=0
 FAIL=0
 
@@ -38,12 +44,16 @@ bad() {
 
 echo "=== the bundled wordlist itself: every data row is a bare [a-z]+ word ==="
 
-[ -f "$WORDLIST" ] || {
-  echo "FAIL: $WORDLIST does not exist"
+[ -d "$WORDLIST_DIR" ] || {
+  echo "FAIL: $WORDLIST_DIR does not exist"
+  exit 1
+}
+[ "${#WORDLIST_FILES[@]}" -gt 0 ] && [ -f "${WORDLIST_FILES[0]}" ] || {
+  echo "FAIL: $WORDLIST_DIR has no *.txt chunk"
   exit 1
 }
 
-BAD_LINES=$(LC_ALL=C grep -vE '^(#.*)?$' "$WORDLIST" | LC_ALL=C grep -vE '^[a-z]+$' || true)
+BAD_LINES=$(LC_ALL=C grep -vE '^(#.*)?$' "${WORDLIST_FILES[@]}" | LC_ALL=C sed 's/^[^:]*\.txt://' | LC_ALL=C grep -vE '^[a-z]+$' || true)
 if [ -z "$BAD_LINES" ]; then
   ok "no data row carries an accent, a digit, punctuation, whitespace or a capital"
 else
@@ -61,8 +71,8 @@ echo "=== POSITIVE CONTROL: the check above actually looks -- an accented row is
 # (a typo in the pattern, an empty file) as easily as for the right one.
 TMPD=$(mktemp -d 2> /dev/null || mktemp -d -t jitwordlist)
 trap 'rm -rf "$TMPD"' EXIT
-BAD_COPY="$TMPD/generic-words.txt"
-cp "$WORDLIST" "$BAD_COPY"
+BAD_COPY="$TMPD/chunk-00.txt"
+cp "${WORDLIST_FILES[0]}" "$BAD_COPY"
 printf 'detail\n' >> "$BAD_COPY"        # already-clean row: must NOT trip the check
 printf '\xc3\xa9quipe\n' >> "$BAD_COPY" # "équipe", accented: MUST trip the check
 
@@ -79,7 +89,7 @@ echo "=== the classifier itself: a folded keyword reaches an ASCII-folded French
 # equipe) must actually be reachable through the real matcher's own literal comparison,
 # the same LC_ALL=C grep -Fxq rebuild-tsv.sh runs.
 for w in meme detail equipe; do
-  if LC_ALL=C grep -Fxq -- "$w" "$WORDLIST"; then
+  if LC_ALL=C grep -Fxq -- "$w" "${WORDLIST_FILES[@]}"; then
     ok "\"$w\" (the #232 dead-row example) is present and reachable"
   else
     bad "\"$w\" (the #232 dead-row example) is NOT reachable via grep -Fxq"

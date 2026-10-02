@@ -265,13 +265,17 @@ assert_status "two links in each of two prompts, exit 0" "$ST" "0"
 assert_contains "counts links, not records" "$OUT" "4 link(s) stripped"
 assert_token_row "and the word around them still counts once each" "$OUT" "compare"
 
-
 # --- #386: an ordinary word is not a candidate entry -------------------------
 # `click`, `ready` and `update` recurred on the maintainer's own log and were handed to
-# a human with a note saying "judge these yourself". data/generic-words.txt is the list
+# a human with a note saying "judge these yourself". data/generic-words/ is the list
 # rebuild-tsv.sh already consults for exactly that judgement (#232); this tool now reads
 # it too. Positive control first: the specific word on the same log still gets its row,
 # so the absence below is a filter and not a tokeniser that returned nothing.
+#
+# #437: data/generic-words.txt became a directory of chunks (chunk-NN.txt, each under
+# 256 KiB). GENLIST below names the DIRECTORY -- every harness-guard grep and the
+# --generic-words override later in this file both exercise the directory-of-chunks
+# path, which is now the shipped default, rather than a single plain file.
 GEN="$TMP/generic.log"
 cat > "$GEN" << 'LOG'
 [10:00:01.001] pre-prompt 9ms | (none) [shown:1] << update the xsd schema
@@ -279,24 +283,25 @@ cat > "$GEN" << 'LOG'
 [10:00:03.001] pre-prompt 9ms | (none) [shown:1] << click ready
 [10:00:04.001] pre-prompt 9ms | (none) [shown:1] << click ready now
 LOG
-GENLIST="$SCRIPT_DIR/data/generic-words.txt"
-if [ ! -s "$GENLIST" ]; then
-  echo "  FAIL: harness guard -- $GENLIST is missing, the generic-word assertions below are vacuous"
+GENLIST="$SCRIPT_DIR/data/generic-words"
+GENLIST_CHUNKS=("$GENLIST"/*.txt)
+if [ ! -d "$GENLIST" ] || [ ! -f "${GENLIST_CHUNKS[0]}" ]; then
+  echo "  FAIL: harness guard -- $GENLIST is missing or has no chunk, the generic-word assertions below are vacuous"
   exit 1
 fi
 for w in update click ready; do
-  if ! grep -qx "$w" "$GENLIST"; then
+  if ! grep -qx "$w" "${GENLIST_CHUNKS[@]}"; then
     echo "  FAIL: harness guard -- '$w' is not in $GENLIST, the fixture no longer tests the filter"
     exit 1
   fi
 done
-if grep -qx "xsd" "$GENLIST"; then
+if grep -qx "xsd" "${GENLIST_CHUNKS[@]}"; then
   echo "  FAIL: harness guard -- 'xsd' is in $GENLIST, the positive control is gone"
   exit 1
 fi
 
 echo ""
-echo "=== #386: a recurring word that is in data/generic-words.txt is not a candidate ==="
+echo "=== #386: a recurring word that is in data/generic-words/ is not a candidate ==="
 # The suite-wide opt-out above is lifted here, and the bundled default must resolve on
 # its own -- a suite that only ever named the list by flag would never notice the
 # default path rotting.
