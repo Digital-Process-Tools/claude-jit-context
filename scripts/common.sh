@@ -3024,7 +3024,31 @@ function jit_strip_heredoc_body(s, unconditional,    n, lines, i, j, out, strip_
 # whole subject of issue #442. A command not on this list is not claimed to be safe
 # to execute; it is simply not claimed to be a payload sink either, and the function
 # answers only the question it is actually asked.
+# Coordinator finding on round 3 itself: naming a command as a payload sink is not
+# enough -- a sink on the operator line can still hand the SAME body to something
+# that executes it, by piping the sink own stdout into an interpreter, or by command/
+# process substitution reading the heredoc back as a command: cat <<EOF | bash, cat
+# <<EOF 2>/dev/null | bash (the pipe is still there, a redirect earlier on the line
+# does not change that), tee f <<EOF | sh, cat <<EOF >(bash) (>( is a PROCESS
+# SUBSTITUTION, not the plain file redirect the cat rule above is written for -- it
+# matches the bare > check in that rule too, which is exactly the hole), eval
+# "$(cat <<EOF" / bash -c "$(cat <<EOF" (command substitution feeding the body text
+# itself to a shell that runs it). None of a plain file write, tee, supertool, git
+# commit -F - or gh --body-file - ever legitimately carries a |, a $(, a backtick, a
+# >( or a <( on the SAME line as the heredoc operator, so their presence overrides
+# the allowlist unconditionally rather than being named in each sink pattern one at
+# a time -- the same posture as the comment/quote suppression above: a check that
+# can only ever turn a match into a non-match, never the reverse.
+function jit_heredoc_opener_has_danger_token(line) {
+  if (index(line, "|") > 0) return 1
+  if (index(line, "$(") > 0) return 1
+  if (index(line, "`") > 0) return 1
+  if (index(line, ">(") > 0) return 1
+  if (index(line, "<(") > 0) return 1
+  return 0
+}
 function jit_heredoc_opener_is_known_sink(line) {
+  if (jit_heredoc_opener_has_danger_token(line)) return 0
   # cat writing to a file: the write target may be spelled before OR after the
   # heredoc operator on the same physical line (cat > out <<EOF and cat <<EOF > out
   # are both ordinary bash), so this checks the whole line for a > rather than just

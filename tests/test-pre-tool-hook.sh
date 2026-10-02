@@ -580,6 +580,21 @@ OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; gh pr create
 assert_not_contains "gh --body-file - still gets its heredoc body stripped" "$OUT" '"decision":"block"'
 
 echo ""
+echo "=== issue #442 round 3b (coordinator review): a sink that also pipes/substitutes into an interpreter keeps its body visible ==="
+# Naming a command as a payload sink is not enough -- the SAME body can still reach an
+# interpreter by piping the sink own stdout onward, or via command/process substitution
+# reading the heredoc back as a command. None of these legitimately shares a line with
+# a |, a $(, a backtick, a >( or a <( at the same time as being a plain file write, so
+# their presence overrides the allowlist unconditionally (jit_heredoc_opener_has_
+# danger_token()).
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; cat <<EOF 2>/dev/null | bash\nheredocforbid mentioned only here\nEOF"}}')
+assert_blocked "cat piped into bash, with an unrelated redirect earlier on the line, still blocks" "$OUT"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit442-sink.txt <<EOF | sh\nheredocforbid mentioned only here\nEOF"}}')
+assert_blocked "tee piped into sh still blocks" "$OUT"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; cat <<EOF >(bash)\nheredocforbid mentioned only here\nEOF"}}')
+assert_blocked "cat into a >( process substitution still blocks" "$OUT"
+
+echo ""
 echo "=== self-review: require: sharing the fix, both directions (issue #432) ==="
 # Extending the fix to require: (not just the ~ regex arm and forbid:) was an explicit
 # design choice, flagged as untested in self-review: satisfying a require: flag by
