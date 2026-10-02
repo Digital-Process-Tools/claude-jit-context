@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-jit-context -- PostToolUse hook: records that a jit-context entry was EDITED.
+# jit-context -- PostToolUse hook: records that a jit-context entry was EDITED.
 #
 # #244 (part 2 of #233): the Stop hook this feeds (stop-hook.sh) needs an edit signal
 # that does not exist anywhere else in this codebase. hooks.log and the `shown` marks

@@ -1,5 +1,5 @@
 ---
-description: Diagnose claude-jit-context -- is any of this running at all, and against which tree?
+description: Diagnose jit-context -- is any of this running at all, and against which tree?
 allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-doctor.sh:*)
 ---
 
@@ -36,7 +36,7 @@ already substitutes `${CLAUDE_PLUGIN_ROOT}` -- so by the time the grant is check
 quotes around it hold a plain literal string, not open shell syntax.
 
 `${CLAUDE_PLUGIN_ROOT}` is what makes this reachable without a version number: the only
-other way to run this tool is `bash ~/.claude/plugins/cache/dpt-plugins/claude-jit-context/<version>/scripts/jit-doctor.sh`,
+other way to run this tool is `bash ~/.claude/plugins/cache/dpt-plugins/jit-context/<version>/scripts/jit-doctor.sh`,
 and that path changes on every plugin update (#202). `hooks/hooks.json` already resolves
 every hook the same way; this is the same resolution, for the one diagnostic you reach for
 when you suspect nothing is firing and do not yet know why.

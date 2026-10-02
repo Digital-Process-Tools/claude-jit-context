@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-jit-context — seed a project with the three dimensions and one starter entry.
+# jit-context — seed a project with the three dimensions and one starter entry.
 #
 # Why this exists: a fresh install matches nothing and injects nothing (#81). The hooks
 # create only the .discovery machinery — no paths/, no tools/, no vocabulary/, and no

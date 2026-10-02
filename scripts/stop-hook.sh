@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-jit-context -- Stop hook: reads back the session's own injected-vs-edited record.
+# jit-context -- Stop hook: reads back the session's own injected-vs-edited record.
 #
 # #244 (part 2 of #233): #233 asked for this and it was carried out of that PR because
 # the signal it needs did not exist. post-tool-hook.sh (also #244) is that signal now --
@@ -590,31 +590,31 @@ fi
 # rounding it into the confident part of the count. Silent when there is nothing to
 # hedge, which is every ordinary session.
 #
-# #389: the size, when known, and the pointer to claude-jit-context:stats, always --
+# #389: the size, when known, and the pointer to jit-context:stats, always --
 # the count alone was the whole of the human-facing report before this issue and
 # answered none of the three questions a reader actually has (which ones, on what
-# word, what did it cost). claude-jit-context:stats is where the detail #367 removed
+# word, what did it cost). jit-context:stats is where the detail #367 removed
 # from this line went back to. #389's own issue body spelled a shorter mnemonic that
 # resolves nowhere in this plugin (every other command here, including
 # session-start-hook.sh's own miss notice, is reachable only as
-# claude-jit-context:<name>) -- flagged during implementation and settled by the
+# jit-context:<name>) -- flagged during implementation and settled by the
 # maintainer in favour of the name that actually works.
 if [ "$JIT_STATUS" != "off" ]; then
   if [ "$JIT_TOTAL" = 1 ]; then JIT_NOUN=entry; else JIT_NOUN=entries; fi
   if [ "$JIT_SIZE_KNOWN" = 1 ]; then
     if [ "$JIT_UNKNOWN_N" -gt 0 ]; then
-      printf '{"systemMessage":"JIT : %s %s, %s this session (%s of unknown origin -- cannot tell if those are yours) + /claude-jit-context:stats for more info"}\n' \
+      printf '{"systemMessage":"JIT : %s %s, %s this session (%s of unknown origin -- cannot tell if those are yours) + /jit-context:stats for more info"}\n' \
         "$JIT_TOTAL" "$JIT_NOUN" "$JIT_SIZE_FMT" "$JIT_UNKNOWN_N"
     else
-      printf '{"systemMessage":"JIT : %s %s, %s this session + /claude-jit-context:stats for more info"}\n' \
+      printf '{"systemMessage":"JIT : %s %s, %s this session + /jit-context:stats for more info"}\n' \
         "$JIT_TOTAL" "$JIT_NOUN" "$JIT_SIZE_FMT"
     fi
   else
     if [ "$JIT_UNKNOWN_N" -gt 0 ]; then
-      printf '{"systemMessage":"JIT : %s %s this session (%s of unknown origin -- cannot tell if those are yours) + /claude-jit-context:stats for more info"}\n' \
+      printf '{"systemMessage":"JIT : %s %s this session (%s of unknown origin -- cannot tell if those are yours) + /jit-context:stats for more info"}\n' \
         "$JIT_TOTAL" "$JIT_NOUN" "$JIT_UNKNOWN_N"
     else
-      printf '{"systemMessage":"JIT : %s %s this session + /claude-jit-context:stats for more info"}\n' "$JIT_TOTAL" "$JIT_NOUN"
+      printf '{"systemMessage":"JIT : %s %s this session + /jit-context:stats for more info"}\n' "$JIT_TOTAL" "$JIT_NOUN"
     fi
   fi
 else

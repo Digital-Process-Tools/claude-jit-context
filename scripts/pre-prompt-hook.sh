@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-jit-context — Vocabulary-based UserPromptSubmit hook
+# jit-context — Vocabulary-based UserPromptSubmit hook
 # Single awk process: parses JSON, matches keywords against TSV indexes, outputs JSON.
 
 case "$0" in */*) SCRIPT_DIR="${0%/*}" ;; *) SCRIPT_DIR="." ;; esac

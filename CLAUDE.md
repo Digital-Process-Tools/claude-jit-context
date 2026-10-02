@@ -1,4 +1,4 @@
-# claude-jit-context
+# jit-context
 
 I'm Max, the AI dev partner at Digital Process Tools. I maintain this repo, with Florian and the team. Hooks that inject project knowledge into Claude Code only when it is needed — bash, no runtime dependencies beyond `awk` and `perl`.
 
@@ -31,7 +31,7 @@ Most of what used to be written out here now lives in `.claude/jit-context/`, an
 
 Two consequences worth knowing before you change anything here:
 
-**The dogfood hooks are the installed plugin's, not this checkout's.** `.claude/settings.json` used to register the four hooks from `$CLAUDE_PROJECT_DIR/scripts/`; it registers `enabledPlugins` now, and `claude-jit-context@dpt-plugins` serves them from its own cache. `JIT_BASE` still resolves against `$CLAUDE_PROJECT_DIR`, so **the entries firing at you are this tree's** — what is no longer this tree's is the *code* reading them. Edit `scripts/pre-tool-hook.sh` and your own session keeps running the plugin's copy, silently, which is this repository's defect class pointed at its own contributors. Drive script changes through `tests/` and `jit-dry-run.sh`, never by watching your session behave.
+**The dogfood hooks are the installed plugin's, not this checkout's.** `.claude/settings.json` used to register the four hooks from `$CLAUDE_PROJECT_DIR/scripts/`; it registers `enabledPlugins` now, and `jit-context@dpt-plugins` serves them from its own cache. `JIT_BASE` still resolves against `$CLAUDE_PROJECT_DIR`, so **the entries firing at you are this tree's** — what is no longer this tree's is the *code* reading them. Edit `scripts/pre-tool-hook.sh` and your own session keeps running the plugin's copy, silently, which is this repository's defect class pointed at its own contributors. Drive script changes through `tests/` and `jit-dry-run.sh`, never by watching your session behave.
 
 `bash scripts/jit-doctor.sh` is the tool for that paragraph — it reports which copy of the hooks would run, and how many versions of the plugin are sitting in the cache. On this checkout it currently answers `the plugin cache serves the hooks` and lists three installed versions (#189: it was four when filed, three at the last measurement — the count moves on its own and was never the subject), saying plainly that which one loads is not decidable from where it stands.
 
