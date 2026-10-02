@@ -66,8 +66,9 @@ jit-misses.sh -- the vocabulary this project keeps not having
                      full log (#248).
   --size-threshold N   bytes. When the log is at or past this size, the header names it
                      as a size worth attention. Default 10000000 (10MB, see #248).
-  --generic-words PATH   a one-word-per-line list; a token in it is an ordinary word
-                     and never a candidate (#386). Default data/generic-words.txt, the
+  --generic-words PATH   a one-word-per-line list, or a directory of chunk files read
+                     as if they were one (#437); a token in it is an ordinary word
+                     and never a candidate (#386). Default data/generic-words/, the
                      list rebuild-tsv.sh already uses; JIT_CONTEXT_GENERIC_WORDS or
                      DYNAMIC_RULES_GENERIC_WORDS override it when set, even to empty.
                      An empty PATH turns the filter off; a PATH that cannot be read is
