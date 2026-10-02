@@ -183,6 +183,12 @@ fired_for_prime \
   "changelog.d/70.fixed.md" \
   "docs/CHANGELOG.md.tmpl" \
   "docs/nothing-governs-this.txt" \
+  "data/generic-words/chunk-00.txt" \
+  "data/generic-words/chunk-04.txt" \
+  "data/generic-words/README.md" \
+  "data/generic-words.txt" \
+  "vendor/data/generic-words/chunk-00.txt" \
+  "notdata/generic-words/chunk-00.txt" \
   "${PRIME_SCRIPTS[@]}"
 
 # Proves the harness can see the tree at all. Without it, every assert_silent below
@@ -339,6 +345,24 @@ assert_silent "a hook script" "scripts/pre-path-hook.sh" "tests.md"
 assert_silent "the shared library" "scripts/common.sh" "tests.md"
 assert_silent "a fixture below tests/" "tests/fixtures/tree/setup.sh" "tests.md"
 assert_silent "a lookalike directory" "contests/entry.sh" "tests.md"
+
+echo ""
+echo "=== generic-words-data.md fires on a chunk file, and only a chunk file (#437, #441) ==="
+assert_fires "a chunk of the bundled wordlist" "data/generic-words/chunk-00.txt" "generic-words-data.md"
+assert_fires "a later chunk" "data/generic-words/chunk-04.txt" "generic-words-data.md"
+# The file #437 split away. It no longer exists in the tree, and a match that still
+# named it would be inert by construction (#441) -- firing on nothing real reads exactly
+# like a rule nobody wrote, the #83 shape one directory further in.
+assert_silent "the pre-#437 flat file" "data/generic-words.txt" "generic-words-data.md"
+# Documentation, not data rebuild-tsv.sh reads as a wordlist -- the entry says
+# "rebuild-tsv.sh is its only reader", which is false of this file.
+assert_silent "the split's own README" "data/generic-words/README.md" "generic-words-data.md"
+# "(^|/)" means any path ending in "data/generic-words/chunk-NN.txt" matches, by the
+# same convention hooks.md uses for "/scripts/" -- so this is NOT the lookalike; the
+# lookalike has to break the "data" boundary itself, the way "myscripts/" breaks
+# hooks.md's "/scripts/" below.
+assert_fires "nested under another directory" "vendor/data/generic-words/chunk-00.txt" "generic-words-data.md"
+assert_silent "a lookalike directory name" "notdata/generic-words/chunk-00.txt" "generic-words-data.md"
 
 echo ""
 echo "=== release.md fires on the manifest only ==="

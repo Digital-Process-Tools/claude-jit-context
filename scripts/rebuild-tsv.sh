@@ -597,10 +597,10 @@ fi
 # Bundled rather than detected, for the same determinism reason #232 gives: if the
 # verdict depended on which machine ran the rebuild, two contributors would produce
 # different TSVs from identical sources and every rebuild would show phantom diffs.
-# data/generic-words.txt (repo root, a sibling of scripts/, NOT scripts/data/ -- see
-# below) carries its own provenance note and the reason it is a hand-curated substitute
-# for the SCOWL/Dicollecte artifact #232 recommends rather than that artifact itself --
-# read it before touching this variable.
+# data/generic-words/ (repo root, a sibling of scripts/, NOT scripts/data/ -- see
+# below), a directory of chunk files since #437, carries its own provenance note and
+# the reason it is a hand-curated substitute for the SCOWL/Dicollecte artifact #232
+# recommends rather than that artifact itself -- read it before touching this variable.
 #
 # Consulted here, in rebuild-tsv.sh, and NOWHERE under scripts/*-hook.sh: the runtime
 # constraint in hooks.md is absolute, and this column is the mechanism that keeps the

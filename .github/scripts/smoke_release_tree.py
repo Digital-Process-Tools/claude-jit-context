@@ -163,13 +163,20 @@ def _env(work: Path, plugin: Path, project: Path, home: Path, fakebin: Path) -> 
     return env
 
 
-def _survivors(pgids: set, marker: str) -> list:
-    """(pid, pgid, args) of live processes in one of PGIDS or naming MARKER."""
+def _survivors(pgids: set, marker: str) -> list | None:
+    """(pid, pgid, args) of live processes in one of PGIDS or naming MARKER.
+
+    None means `ps` itself could not be run -- "could not tell" -- and must never be
+    read the same way as an empty list, which means "ps ran and found nothing" (#441).
+    An OSError here (no `ps` on PATH) used to return [] and let `_reap` declare the run
+    clean on its very first poll, with no process ever actually checked and no error
+    surfaced anywhere. The bug is latent on ubuntu-latest, which has `ps`.
+    """
     try:
         out = subprocess.run(["ps", "-A", "-o", "pid=,pgid=,args="], capture_output=True,
                              text=True, check=False).stdout
     except OSError:
-        return []
+        return None
     me = os.getpid()
     found = []
     for line in out.splitlines():
@@ -186,12 +193,21 @@ def _survivors(pgids: set, marker: str) -> list:
 
 
 def _reap(pgids: set, marker: str, linger: float, result: SmokeResult) -> None:
+    could_not_tell = ("reap: `ps` could not be run -- survivors could not be confirmed "
+                      "clean, so this smoke run is not reported clean")
     deadline = time.monotonic() + linger
     while time.monotonic() < deadline:
-        if not _survivors(pgids, marker):
+        survivors = _survivors(pgids, marker)
+        if survivors is None:
+            result.errors.append(could_not_tell)
+            return
+        if not survivors:
             return
         time.sleep(0.25)
     left = _survivors(pgids, marker)
+    if left is None:
+        result.errors.append(could_not_tell)
+        return
     for sig in (signal.SIGTERM, signal.SIGKILL):
         for pid, _pgid, args in left:
             try:
@@ -203,6 +219,9 @@ def _reap(pgids: set, marker: str, linger: float, result: SmokeResult) -> None:
         if sig == signal.SIGTERM:
             time.sleep(2)
             left = _survivors(pgids, marker)
+            if left is None:
+                result.errors.append(could_not_tell)
+                return
 
 
 def run_validate(tree: Path, mode: str, claude_bin: str | None, home: Path,
