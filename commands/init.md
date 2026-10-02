@@ -6,7 +6,7 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-init.sh:*)
 Run the seeder and relay its output verbatim:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-init.sh --arguments-string "$ARGUMENTS"
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-init.sh --arguments-string '$ARGUMENTS'
 ```
 
 **The whole typed `$ARGUMENTS` string is handed through one synthetic `--arguments-string`
@@ -35,9 +35,15 @@ before the script ever saw it (#278). The body above passes the whole substitute
 ONE quoted argument to `--arguments-string` instead; `jit-init.sh` then builds the array
 itself with `read -a`, which splits that one argument on spaces and never globs.
 
-**A typed value containing a literal double-quote is not defended against here** -- the same
-trade `commands/doctor.md` documents and bounds the same way #278 itself already bounded the
-unquoted case: the invoking user's own typed text, on their own machine.
+**A typed value containing a literal single-quote is not defended against here** -- read
+`commands/doctor.md`'s full account, which also explains why the body quotes `$ARGUMENTS`
+with single quotes rather than double: a `$(...)` or backtick inside a typed value runs
+regardless of quoting style unless single quotes (which disable all expansion) are used,
+and this was confirmed with a real exploit against the double-quoted draft before it shipped.
+The one character still live, `'`, is bounded the same way #278 itself already bounded the
+unquoted case -- the invoking user's own typed text, on their own machine -- but is a wider
+bound than #278's own, since it reaches unscoped shell execution rather than stray
+arguments.
 
 A second run over an already-seeded project **refuses rather than overwrites**, exits `1`,
 and names the file it left alone -- a copy you have since edited is not ours to replace.

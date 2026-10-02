@@ -6,7 +6,7 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-doctor.sh:*)
 Run the diagnostic and relay its output verbatim:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-doctor.sh --arguments-string "$ARGUMENTS"
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-doctor.sh --arguments-string '$ARGUMENTS'
 ```
 
 **The whole typed `$ARGUMENTS` string is handed through one synthetic `--arguments-string`
@@ -48,18 +48,42 @@ it (#278). The body above passes the whole substituted string as ONE quoted argu
 `--arguments-string` instead; `jit-doctor.sh` then builds the array itself with `read -a`,
 which splits that one argument on spaces and never globs.
 
-**A typed value containing a literal double-quote is not defended against here, and this is
-a real, narrower trade against #278's own original fix.** Because `$ARGUMENTS` is
-substituted into the body as raw text before the shell parses anything, a `"` inside a typed
-`--base` value can close the quotes early and splice in a second shell command -- confirmed
-against a real `claude -p` run with `--base foo" ; echo INJECTED #`, where the resulting
-line read `--arguments-string "--base foo" ; echo INJECTED #"` and the second `; echo`
-became genuine shell syntax rather than argument text. #278's own `"${ARGUMENTS:-}"` design
-closed exactly this by never splicing raw text into the command at all -- but that design is
-the one a narrowed grant always denies (above). This bound matches the one #278 itself
-already accepted for the unquoted case ("the value is the invoking user's own typed text, on
-their own machine"), narrowed further here to one character, and is filed rather than
-blocking this fix on the same precedent.
+**A typed value containing a literal single-quote is not defended against here, and this is
+a real trade against #278's own original fix -- read the whole of this section before
+assuming it is small.** The body quotes `$ARGUMENTS` with single quotes rather than double
+(`'$ARGUMENTS'`): a first attempt used double quotes, and a real `claude -p` run showed
+that was not merely imprecise but actively dangerous -- bash still expands
+`$(...)`, backticks and `$VAR` *inside* double quotes, with no `"` needed at all. Confirmed
+by typing `--base foo $(touch /tmp/pwned)`: Claude Code substitutes `$ARGUMENTS` with that
+raw text before the shell ever parses it, so the resulting line read `--arguments-string
+"--base foo $(touch /tmp/pwned)"` and the `$(...)` ran as a live command substitution with
+no quote-breakout required -- this is full, unscoped shell execution, not the narrow
+quote-escape #278 itself accepted. Single quotes close this and the double-quote-breakout
+case both: bash performs **zero** expansion inside single quotes, so `$(...)`, backticks,
+`$VAR` and `"` are all inert there. The one character still live is a literal `'` itself,
+which can still close the quotes early and splice a second command -- confirmed the same
+way, with `--base foo' ; touch /tmp/pwned ; echo '`.
+
+**Whether that one remaining character is actually caught at runtime is not something this
+fix controls, and saying otherwise would overstate it.** Three different things were
+observed to intervene across testing, none of them a property of this command's own code:
+Claude Code's own permission layer held a command containing unresolved `${...}` or `$?`
+syntax for approval regardless of grant ("Contains expansion"); a sandboxed test
+environment's own file-write restrictions separately caught a `$(touch ...)` writing outside
+an allowed directory; and, observed directly, an agent presented with a `'`-breakout
+argument sometimes recognized the shape as an injection attempt and refused to run it
+rather than relaying it verbatim, which is a judgment call a differently-phrased prompt may
+not trigger. None of this is a structural guarantee against the single-quote case, which is
+why it stays documented as a real, open residual. #278's own `"${ARGUMENTS:-}"` design closed
+every one of these by never splicing raw text into the command at all -- but that design is
+the one a narrowed grant always denies (above), which is the actual tension at the center of
+this issue: the injection-proof mechanism and a narrowed `allowed-tools` grant cannot both be
+had at once under Claude Code's current permission model. This is bounded the same way #278
+itself bounded its own, narrower case ("the invoking user's own typed text, on their own
+machine") -- a user splicing a command into their own typed argument on their own machine --
+but it is a materially larger bound than #278's: that one could at worst splice stray
+filenames as extra arguments, this one is unscoped shell execution for the one character
+that still breaks out.
 
 Do not summarise away any line -- relay the report exactly as printed, including its blank
 lines and its section headers. Three outcomes, and only the report itself carries which one

@@ -6,7 +6,7 @@ allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh:*)
 Run the report and relay its output verbatim:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh --arguments-string "$ARGUMENTS"
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh --arguments-string '$ARGUMENTS'
 ```
 
 `${CLAUDE_PLUGIN_ROOT}` is the same resolution `commands/doctor.md` and `commands/init.md`
@@ -27,8 +27,11 @@ explanation of why this had to be the bare, unbraced `$ARGUMENTS` (Claude Code's
 pre-substitution) rather than the previous `"${ARGUMENTS:-}"` (a real shell's own runtime
 expansion, which a narrowed grant always denies, verified against a real `claude -p` run) --
 read it there once rather than three times, including the one trade-off it documents: a
-typed value containing a literal double-quote is not defended against here, bounded the same
-way #278 itself already bounded the unquoted case.**
+typed value containing a literal single-quote is not defended against here -- a `$(...)` or
+backtick needs no quote-breakout at all under the double-quoted design this diff tried and
+rejected after a real exploit confirmed it, which is why single quotes are used instead --
+bounded the same way #278 itself already bounded the unquoted case, though wider in effect
+since it reaches unscoped shell execution rather than stray arguments.**
 
 **The `read -a` now runs inside `jit-stats.sh` itself, which always runs under a real bash,
 not in whatever shell runs this command body (#405).** `read -a` is a bash-only spelling of
