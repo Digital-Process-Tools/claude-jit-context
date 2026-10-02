@@ -1,10 +1,10 @@
 ---
 title: A hook may never fail hard
 description: The contract for the six hooks, common.sh and host.sh - every failure path exits 0 injecting nothing, no new runtime dependency, test first, and the awk traps that differ between Linux, macOS and Git Bash.
-match: (^|/)scripts/(.*-hook|common|host)\.sh$
+match: (^|/)scripts/(.*-hook|common|common-awk|host)\.sh$
 ---
 
-These eight scripts run in someone else's session, on every prompt, every tool call and session end, often before they know this plugin exists — the six hooks (`session-start-hook.sh`, `pre-prompt-hook.sh`, `pre-tool-hook.sh`, `pre-path-hook.sh`, `post-tool-hook.sh` and `stop-hook.sh`), `common.sh`, which is sourced by all six and is where every containment fix in 0.3.0 landed, and `host.sh` (#252), sourced by `common.sh` in turn and therefore inside every hook's own process the same way. Everything below applies to `common.sh` and `host.sh` verbatim; both are executed by the hooks, not beside them.
+These nine scripts run in someone else's session, on every prompt, every tool call and session end, often before they know this plugin exists — the six hooks (`session-start-hook.sh`, `pre-prompt-hook.sh`, `pre-tool-hook.sh`, `pre-path-hook.sh`, `post-tool-hook.sh` and `stop-hook.sh`), `common.sh`, which is sourced by all six and is where every containment fix in 0.3.0 landed, `host.sh` (#252), sourced by `common.sh` in turn and therefore inside every hook's own process the same way, and `common-awk.sh` (#442), sourced by `common.sh` the same way as `host.sh`: the `JIT_AWK_*` awk-program-fragment library split out of `common.sh` so it stays under the Anthropic plugin directory's 256 KiB per-file limit for the release branch. Everything below applies to `common.sh`, `host.sh` and `common-awk.sh` verbatim; all three are executed by the hooks, not beside them.
 
 `rebuild-tsv.sh`, `jit-dry-run.sh`, `jit-misses.sh` and `jit-init.sh` also live in `scripts/` and are **not** governed by this file — they never run in a stranger's session and are expected to fail loudly. See `paths/00-manual/tooling.md`.
 

@@ -37,7 +37,7 @@ fail() {
 # Sourced by other scripts, never invoked. Executable would be a lie about how they run.
 is_library() {
   case "$1" in
-    scripts/common.sh | scripts/host.sh) return 0 ;;
+    scripts/common.sh | scripts/host.sh | scripts/common-awk.sh) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -59,14 +59,22 @@ pass "git ls-files reports $COUNT tracked scripts/*.sh"
 # ever becomes an entry point, this goes red before the sweep below exempts it wrongly.
 echo "=== each allowlisted library is sourced, not invoked ==="
 
-for lib in scripts/common.sh scripts/host.sh; do
+for lib in scripts/common.sh scripts/host.sh scripts/common-awk.sh; do
   if [ ! -f "$lib" ]; then
     fail "$lib is a real file" "not found -- the allowlist names something that is gone"
     continue
   fi
 
   base="${lib#scripts/}"
-  sourced="$(grep -lE "^[[:space:]]*(\\.|source)[[:space:]]+.*${base}" scripts/*.sh 2> /dev/null | grep -cv "^${lib}$" || true)"
+  # Two shapes count as "sourced": a literal `source`/`.` line naming it directly
+  # (host.sh's own reads this way only by luck -- its sourcing variable, $_jit_host_sh,
+  # happens to differ from the literal filename at exactly one character, the dot ERE
+  # already treats as a wildcard), or the PATH-BUILDING line that feeds that indirect
+  # `source "$var"` call, which literally quotes the filename regardless of what the
+  # variable itself is later named (#442: common-awk.sh's own variable, $_jit_common_
+  # awk_sh, differs from "common-awk.sh" at the hyphen too, which the ERE does NOT
+  # treat as a wildcard, so only this second shape catches it).
+  sourced="$(grep -lE "^[[:space:]]*(\\.|source)[[:space:]]+.*${base}|=\"[^\"]*${base}\"" scripts/*.sh 2> /dev/null | grep -cv "^${lib}$" || true)"
   if [ "${sourced:-0}" -ge 1 ]; then
     pass "$lib is sourced by $sourced script(s) under scripts/"
   else

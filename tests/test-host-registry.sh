@@ -31,6 +31,11 @@ set -uo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 HOST_SH="$REPO/scripts/host.sh"
 COMMON_SH="$REPO/scripts/common.sh"
+# #442: the envelope builders (jit_envelope_block/jit_envelope_inject, JIT_AWK_ENVELOPE)
+# moved out of common.sh into common-awk.sh, split out so common.sh stays under the
+# Anthropic plugin directory's 256 KiB per-file limit. Every assert_literal_in call
+# below that used to check common.sh alone now checks both, in file-list order.
+COMMON_AWK_SH="$REPO/scripts/common-awk.sh"
 PASS=0
 FAIL=0
 
@@ -178,16 +183,23 @@ echo "=== drift guard: JIT_AWK_ENVELOPE, its awk callers, and the bash holdouts 
 # to catch. The two remaining hooks are plain bash and still hand-roll the literal
 # text (deliberately -- see common.sh), so the ORIGINAL form still applies to them.
 assert_literal_in() {
-  local desc="$1" needle_escaped="$2" needle_plain="$3" file="$4" found=0
-  grep -qF -- "$needle_escaped" "$file" 2> /dev/null && found=1
-  grep -qF -- "$needle_plain" "$file" 2> /dev/null && found=1
+  # $4... one or more files -- #442 split common.sh's envelope builders into
+  # common-awk.sh, so a needle that used to live in exactly one file may now live in
+  # either, and every call site below that cares about common.sh passes both.
+  local desc="$1" needle_escaped="$2" needle_plain="$3"
+  shift 3
+  local found=0 file
+  for file in "$@"; do
+    grep -qF -- "$needle_escaped" "$file" 2> /dev/null && found=1
+    grep -qF -- "$needle_plain" "$file" 2> /dev/null && found=1
+  done
   if [ "$found" = 1 ]; then
     PASS=$((PASS + 1))
     echo "  PASS: $desc"
   else
     FAIL=$((FAIL + 1))
     echo "  FAIL: $desc"
-    echo "    expected to find, escaped or plain, in $file:"
+    echo "    expected to find, escaped or plain, in: $*"
     echo "    $needle_escaped"
     echo "    $needle_plain"
   fi
@@ -205,7 +217,7 @@ assert_calls() {
 }
 BLOCK_SKELETON_ESC='{\"decision\":\"block\",\"reason\":\"'
 BLOCK_SKELETON_PLAIN='{"decision":"block","reason":"'
-assert_literal_in "common.sh envelope carries the block skeleton" "$BLOCK_SKELETON_ESC" "$BLOCK_SKELETON_PLAIN" "$COMMON_SH"
+assert_literal_in "common.sh envelope carries the block skeleton" "$BLOCK_SKELETON_ESC" "$BLOCK_SKELETON_PLAIN" "$COMMON_SH" "$COMMON_AWK_SH"
 # #391: pre-tool-hook.sh's print site now calls jit_envelope_block_sysmsg() (defined in
 # common.sh next to jit_envelope_block(), and falling back to it when there is no
 # systemMessage to add) rather than the bare builder directly -- so the needle moves
@@ -217,8 +229,8 @@ INJECT_HEAD_ESC='{\"hookSpecificOutput\":{\"hookEventName\":\"'
 INJECT_HEAD_PLAIN='{"hookSpecificOutput":{"hookEventName":"'
 INJECT_TAIL_ESC='\",\"additionalContext\":\"'
 INJECT_TAIL_PLAIN='","additionalContext":"'
-assert_literal_in "common.sh envelope carries the inject head" "$INJECT_HEAD_ESC" "$INJECT_HEAD_PLAIN" "$COMMON_SH"
-assert_literal_in "common.sh envelope carries the inject tail" "$INJECT_TAIL_ESC" "$INJECT_TAIL_PLAIN" "$COMMON_SH"
+assert_literal_in "common.sh envelope carries the inject head" "$INJECT_HEAD_ESC" "$INJECT_HEAD_PLAIN" "$COMMON_SH" "$COMMON_AWK_SH"
+assert_literal_in "common.sh envelope carries the inject tail" "$INJECT_TAIL_ESC" "$INJECT_TAIL_PLAIN" "$COMMON_SH" "$COMMON_AWK_SH"
 # #367 gave pre-prompt-hook.sh and pre-path-hook.sh the sysmsg-capable variant
 # (jit_envelope_inject_sysmsg) and deliberately kept pre-tool-hook.sh on the bare one,
 # reasoning it sat too close to Linux per-argument exec() cap (#369) to afford it.

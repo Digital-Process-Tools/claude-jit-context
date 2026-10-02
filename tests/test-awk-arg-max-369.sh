@@ -118,6 +118,16 @@ common_path = os.path.join(script_dir, "scripts", "common.sh")
 common_raw = open(common_path, "rb").read()
 common_text = common_raw.decode("utf-8", errors="surrogateescape")
 
+# #442: most JIT_AWK_* macros moved out of common.sh into common-awk.sh, split out so
+# common.sh stays under the Anthropic plugin directory's 256 KiB per-file limit (#437).
+# common-awk.sh is sourced by common.sh the same way host.sh already is, so a macro now
+# lives in whichever of the two files actually assigns it -- checked in that order below.
+common_awk_path = os.path.join(script_dir, "scripts", "common-awk.sh")
+common_awk_text = ""
+if os.path.isfile(common_awk_path):
+    common_awk_raw = open(common_awk_path, "rb").read()
+    common_awk_text = common_awk_raw.decode("utf-8", errors="surrogateescape")
+
 def byte_len(s):
     # #371: the file is read and decoded as UTF-8 text so string patterns can be
     # searched with re; every byte-count taken from a SLICE of that decoded string
@@ -127,19 +137,23 @@ def byte_len(s):
     return len(s.encode("utf-8", errors="surrogateescape"))
 
 def macro_len(name):
-    # NAME='...' (single-quoted bash literal), the shape every JIT_AWK_* macro in
-    # common.sh takes. Finds the FIRST assignment only -- common.sh assigns each of
-    # these exactly once, which tests/test-awk-locale-pins.sh's own reasoning about
-    # this file already relies on elsewhere.
+    # NAME='...' (single-quoted bash literal), the shape every JIT_AWK_* macro takes,
+    # in whichever of common.sh / common-awk.sh actually assigns it (#442). Finds the
+    # FIRST assignment only -- each file assigns a given macro at most once, which
+    # tests/test-awk-locale-pins.sh's own reasoning about this already relies on, and
+    # no macro is assigned in both files, so checking common.sh first and falling back
+    # to common-awk.sh cannot find the wrong one.
     marker = name + "='"
-    i = common_text.find(marker)
-    if i == -1:
-        return None
-    i += len(marker)
-    j = common_text.find("'", i)
-    if j == -1:
-        return None
-    return byte_len(common_text[i:j])
+    for source_text in (common_text, common_awk_text):
+        i = source_text.find(marker)
+        if i == -1:
+            continue
+        i += len(marker)
+        j = source_text.find("'", i)
+        if j == -1:
+            continue
+        return byte_len(source_text[i:j])
+    return None
 
 # WHICH macros a hook concatenates is read off the HOOK, not off a list kept here
 # (#299/#367 self-review, found by oss:auditor). This block used to hold a hardcoded
