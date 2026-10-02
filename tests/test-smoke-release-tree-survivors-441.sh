@@ -27,13 +27,16 @@ SMOKE="$REPO/.github/scripts/smoke_release_tree.py"
 }
 if ! command -v python3 > /dev/null 2>&1; then
   echo "SKIPPED: no python3 on PATH -- this script is not part of the hook runtime"
-  exit 0
+  exit 2
 fi
 
 OUT=$(
   python3 - "$SMOKE" << 'PY'
 import importlib.util
+import subprocess
 import sys
+import time
+import uuid
 from unittest import mock
 
 smoke_path = sys.argv[1]
@@ -72,6 +75,34 @@ if survivors == []:
 else:
     bad("a real `ps` run with nothing matching returns an empty list, not None",
         f"got: {survivors!r}")
+
+# The assertion above passes identically whether `ps` genuinely ran and parsed its
+# output, or ran and produced something this parser silently discarded line by line
+# (#441 self-review: an empty-but-vacuous positive control is the same ambiguity this
+# whole fix exists to close, one layer down). Prove the parser actually reads real `ps`
+# output by spawning a process with a unique marker in its argv and confirming
+# _survivors() finds it BY MARKER -- a result only a genuinely parsed `args` column
+# can produce.
+marker = f"jit-441-marker-{uuid.uuid4().hex}"
+proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)", marker])
+try:
+    found = []
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not found:
+        found = smoke._survivors(set(), marker)
+        if found is None:
+            break
+        if not found:
+            time.sleep(0.1)
+    if found and any(proc.pid == pid for pid, _pgid, _args in found):
+        ok("_survivors() genuinely parses `ps` output and finds a marked process by argv")
+    else:
+        bad("_survivors() genuinely parses `ps` output and finds a marked process by argv",
+            f"got: {found!r} -- the positive control above may be passing on parsed-nothing, "
+            "not on a real `ps` read")
+finally:
+    proc.kill()
+    proc.wait()
 
 # --- negative: ps cannot be run at all ---------------------------------------------
 with mock.patch.object(smoke.subprocess, "run", side_effect=OSError("no such file")):
