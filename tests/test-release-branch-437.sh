@@ -143,7 +143,16 @@ fi
 
 echo ""
 echo "=== smoke: every hook in the built tree's hooks/hooks.json exits 0 ==="
-if [ "$BUILD_RC" -eq 0 ]; then
+# smoke_release_tree.py runs each hook command through /bin/sh, as the release workflow
+# does on ubuntu-latest. A native Windows python3 has no /bin/sh (WinError 2 on every
+# hook), so on such a host nothing about the hooks can be measured here: report SKIPPED
+# and exit 2 rather than count six failures the release run would never see, and never
+# pass it as a clean run either.
+SMOKE_SKIPPED=0
+if ! python3 -c 'import os, sys; sys.exit(0 if os.path.exists("/bin/sh") else 1)' 2> /dev/null; then
+  SMOKE_SKIPPED=1
+  echo "  SKIPPED: this python3 cannot see /bin/sh, so smoke_release_tree.py cannot start a hook here -- the release workflow runs it on ubuntu-latest"
+elif [ "$BUILD_RC" -eq 0 ]; then
   SMOKE_OUT=$(python3 "$SMOKE" "$TREE" --validate auto 2>&1)
   SMOKE_RC=$?
   if [ "$SMOKE_RC" -eq 0 ]; then
@@ -163,4 +172,6 @@ fi
 
 echo ""
 echo "== Results: $PASS passed, $FAIL failed =="
-[ "$FAIL" -eq 0 ]
+[ "$FAIL" -eq 0 ] || exit 1
+[ "$SMOKE_SKIPPED" -eq 0 ] || exit 2
+exit 0
