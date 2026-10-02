@@ -9,12 +9,13 @@
 # claude-code's contract is the exact defect #252 opens with: a forbid: rule
 # reading as enforced on a host nobody watched refuse anything.
 #
-# Also guarded here: the drift between JIT_AWK_ENVELOPE (scripts/common.sh) and the
-# JSON shapes its consumers build. pre-tool-hook.sh, pre-prompt-hook.sh and
-# pre-path-hook.sh call jit_envelope_inject()/jit_envelope_block() now (#362);
-# session-start-hook.sh and stop-hook.sh are plain bash and still hand-roll the same
-# skeleton with their own printf, deliberately -- see JIT_AWK_ENVELOPE's own header
-# comment in common.sh for why no bash-side equivalent was added.
+# Also guarded here: the drift between JIT_AWK_ENVELOPE (scripts/common-awk.sh, split
+# out of common.sh at #442 so common.sh stays under the Anthropic plugin directory's
+# 256 KiB per-file limit) and the JSON shapes its consumers build. pre-tool-hook.sh,
+# pre-prompt-hook.sh and pre-path-hook.sh call jit_envelope_inject()/jit_envelope_block()
+# now (#362); session-start-hook.sh and stop-hook.sh are plain bash and still hand-roll
+# the same skeleton with their own printf, deliberately -- see JIT_AWK_ENVELOPE's own
+# header comment in common-awk.sh for why no bash-side equivalent was added.
 #
 # Usage: bash tests/test-host-registry.sh
 #

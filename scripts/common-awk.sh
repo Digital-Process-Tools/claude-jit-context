@@ -35,6 +35,10 @@
 # finds. jit_frontmatter() below still takes a single field and still returns a bare
 # value -- it passes a one-element list and strips the prefix with parameter expansion --
 # so there is exactly one implementation of the rules below and no second copy to drift.
+#
+# Consumed by jit_frontmatter_many() in common.sh (#442: shellcheck cannot trace that
+# usage across the source boundary the way it could within one file).
+# shellcheck disable=SC2034
 JIT_AWK_FRONTMATTER='
   BEGIN { nf = split(fl, want, " ") }
   /^---$/ { n++; if (n == 2) exit; next }

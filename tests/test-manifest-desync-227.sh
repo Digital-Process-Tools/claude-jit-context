@@ -54,12 +54,16 @@ IDXNAME="$IDXNAME.tsv"
 FORCED="$TMP/forced-scripts"
 mkdir -p "$FORCED"
 cp "$REPO"/scripts/*.sh "$FORCED/"
-if ! grep -q '        jit_blk_manifest_ok = 1$' "$FORCED/common.sh"; then
-  echo "  SKIPPED: common.sh's jit_split_ctx_blocks() no longer sets jit_blk_manifest_ok"
+# #442: jit_split_ctx_blocks() (JIT_AWK_BLOCKS) moved out of common.sh into common-awk.sh,
+# split out so common.sh stays under the Anthropic plugin directory's 256 KiB per-file
+# limit -- common.sh sources common-awk.sh at run time, but the patch below edits SOURCE
+# TEXT, so it has to target wherever that text now actually lives.
+if ! grep -q '        jit_blk_manifest_ok = 1$' "$FORCED/common-awk.sh"; then
+  echo "  SKIPPED: common-awk.sh's jit_split_ctx_blocks() no longer sets jit_blk_manifest_ok"
   echo "           on the line this suite patches -- it may have been reshaped."
   exit 2
 fi
-perl -0777 -pi -e 's/(        jit_blk_manifest_ok = 1\n)/$1        jit_blk_manifest_ok = 0  # test-forced desync, #227\n/' "$FORCED/common.sh"
+perl -0777 -pi -e 's/(        jit_blk_manifest_ok = 1\n)/$1        jit_blk_manifest_ok = 0  # test-forced desync, #227\n/' "$FORCED/common-awk.sh"
 
 build_project() {
   local base="$1"
