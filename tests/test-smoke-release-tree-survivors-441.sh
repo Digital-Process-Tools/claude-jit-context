@@ -83,9 +83,22 @@ else:
 # output by spawning a process with a unique marker in its argv and confirming
 # _survivors() finds it BY MARKER -- a result only a genuinely parsed `args` column
 # can produce.
+SKIPPED = 0
 marker = f"jit-441-marker-{uuid.uuid4().hex}"
-proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)", marker])
+# A native Windows python3 (no /bin/sh visible to it, the same probe
+# test-release-branch-437.sh uses) spawns a native process that the MSYS `ps` on
+# PATH cannot list by argv, so this control cannot be measured there. The smoke
+# script itself only runs on ubuntu-latest. Report SKIPPED, never PASS.
+import os
+if not os.path.exists("/bin/sh"):
+    SKIPPED += 1
+    print("  SKIPPED: this python3 cannot see /bin/sh (native Windows); its processes are "
+          "invisible to the MSYS `ps`, so the argv control cannot be measured here")
+    proc = None
+else:
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)", marker])
 try:
+  if proc is not None:
     found = []
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline and not found:
@@ -101,8 +114,9 @@ try:
             f"got: {found!r} -- the positive control above may be passing on parsed-nothing, "
             "not on a real `ps` read")
 finally:
-    proc.kill()
-    proc.wait()
+    if proc is not None:
+        proc.kill()
+        proc.wait()
 
 # --- negative: ps cannot be run at all ---------------------------------------------
 with mock.patch.object(smoke.subprocess, "run", side_effect=OSError("no such file")):
@@ -138,7 +152,7 @@ else:
 print("========================")
 print(f"  {PASS}/{PASS + FAIL} passed, {FAIL} failed")
 print("========================")
-sys.exit(0 if FAIL == 0 else 1)
+sys.exit(1 if FAIL else (2 if SKIPPED else 0))
 PY
 )
 RC=$?
