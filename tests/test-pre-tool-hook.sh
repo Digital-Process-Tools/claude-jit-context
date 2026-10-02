@@ -69,6 +69,13 @@ echo "heredoc forbid rule context" > "$TOOLS_DIR/hd-forbid.md"
 # these rows are the coverage for it.
 printf 'Bash\thdreq\thd-require.md\tremind\treqflag\t\n' >> "$TOOLS_DIR/$IDX"
 echo "heredoc require rule context" > "$TOOLS_DIR/hd-require.md"
+# A genuine `mode: block` ~ regex row for issue #442 -- matched directly against
+# fold_full (the "~" arm bypasses the ordinary match:-against-fold_cmd gate the
+# other rows above use), with no require:/forbid: column involved at all. This is
+# the exact shape #442 reports as failing open: a heredoc stripper permissive
+# enough to hide real command text from it.
+printf 'Bash\t~heredocblock\thd-block.md\tblock\t\t\n' >> "$TOOLS_DIR/$IDX"
+echo "heredoc block rule context" > "$TOOLS_DIR/hd-block.md"
 
 # Vocabulary TSV: keyword<TAB>file
 printf 'blog\tblog.md\n' > "$VOCAB_DIR/00-manual/00-index.tsv"
@@ -548,6 +555,49 @@ OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdreq --reqflag now
 assert_not_contains "a require: term present as a real argument is not blocked" "$OUT" '"decision":"block"'
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdreq <<EOF\nreqflag mentioned only here\nEOF"}}')
 assert_blocked "a require: term satisfied only by heredoc-body text is still refused" "$OUT"
+
+# =============================================
+# SECTION 4c: a heredoc stripper permissive enough to fail a mode: block rule open
+# (issue #442)
+# =============================================
+# Three shapes where jit_strip_heredoc_body() treated text as a real heredoc BODY
+# (and so stripped it from fold_full before the hd-block.md rule above ever saw it)
+# even though no real heredoc was ever opened, or the heredoc genuinely runs as
+# code rather than carrying payload data. All three were blocked before #432 and
+# must be blocked again. Each negative has a positive control in the same fixture,
+# proving the row can fire at all and the negative result is not "this row never
+# fires" (the same discipline section 4b already uses).
+
+echo ""
+echo "=== positive control: heredocblock alone blocks, no heredoc involved (issue #442) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"heredocblock command"}}')
+assert_blocked "the block row fires on a bare command" "$OUT"
+
+echo ""
+echo "=== repro 1: a <<WORD shape inside an ordinary quoted echo argument is not a real opener (issue #442) ==="
+# echo "<<EOF" never redirects anything -- the whole <<EOF text is the quoted
+# argument being printed. The operator regex has no quote tracking and matched it
+# anyway, and a later unrelated EOF line then closed it, hiding the real command
+# between them from fold_full entirely.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"echo \"<<EOF\"\nheredocblock command\nEOF"}}')
+assert_blocked "a quoted <<EOF argument does not hide the command that follows it" "$OUT"
+
+echo ""
+echo "=== repro 2: a <<WORD shape on a comment line is not a real opener (issue #442) ==="
+# The entire line is a shell comment -- nothing on it, <<EOF included, is ever
+# executed -- so it can never open a real heredoc. The operator regex had no
+# comment awareness either and matched it the same way.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"# <<EOF\nheredocblock command\nEOF"}}')
+assert_blocked "a <<EOF shape on a comment line does not hide the command that follows it" "$OUT"
+
+echo ""
+echo "=== repro 3: a dot-sourced heredoc is executed code, not a payload (issue #442) ==="
+# `. /dev/stdin <<EOF` is the POSIX dot-command sourcing its own heredoc body --
+# the body IS the command, the same reason bash/sh/python3 already sit in
+# jit_heredoc_targets_interpreter()s denylist, but a lone `.` cannot survive that
+# lookup (it is stripped to a space by the normalization ahead of it).
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":". /dev/stdin <<EOF\nheredocblock command\nEOF"}}')
+assert_blocked "a dot-sourced heredoc body still blocks" "$OUT"
 
 # =============================================
 # SECTION: awk engine matrix — multibyte paths, control characters in entries

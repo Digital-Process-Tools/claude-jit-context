@@ -2830,7 +2830,51 @@ JIT_AWK_HEREDOC='
 # this whole function lives inside a bash SINGLE-quoted string and a bare apostrophe
 # here would close it early -- see jit_shown_flush() a little further down for the same
 # rule stated about this file.
-function jit_strip_heredoc_body(s,    n, lines, i, j, out, strip_tabs, delim, line, rest, probed, op, word, q1, q2, q3, qclass, close_i) {
+# #442: self-review found the lookahead above crosses two further false positives,
+# both leaving stripping too aggressive in the UNSAFE direction (the invariant this
+# function obeys: an imperfect stripper may only ever leave MORE text visible to a
+# rule than a real shell parser would, never less):
+#
+#   1. A line that is entirely a shell comment can never open a real heredoc -- the
+#      whole line, <<WORD included, is text the shell never executes -- yet the
+#      operator regex has no comment awareness and matches one anyway (# <<EOF,
+#      #442 second repro). Skipped outright, before the operator match even runs:
+#      a comment line can only ever make stripping MORE conservative, never less.
+#
+#   2. The operator scan has no quote tracking either, so echo "<<EOF" (#442 first
+#      repro) reads as a real opener even though the <<EOF text sits inside an
+#      ordinary double-quoted argument the shell never treats as a redirection at
+#      all. jit_heredoc_opener_is_quoted() answers whether the characters BEFORE
+#      the matched << on this same line leave an odd (open) single- or double-quote
+#      state -- a small state machine, not a parser, tracking at most one open
+#      quote kind at a time and mirroring real shell escaping: backslash escapes
+#      the next character outside quotes and inside double quotes, and does
+#      nothing special inside single quotes. Its only effect on the outcome is to
+#      turn a match into a non-match, i.e. to suppress stripping -- a wrong
+#      verdict in either direction can only leave this function at least as
+#      conservative as if the check were absent, never less.
+function jit_heredoc_opener_is_quoted(prefix,    i, c, state, n, q1, q2, bs) {
+  q1 = sprintf("%c", 39)
+  q2 = sprintf("%c", 34)
+  bs = sprintf("%c", 92)
+  state = 0
+  n = length(prefix)
+  for (i = 1; i <= n; i++) {
+    c = substr(prefix, i, 1)
+    if (state == 0) {
+      if (c == q1) state = 1
+      else if (c == q2) state = 2
+      else if (c == bs) i++
+    } else if (state == 1) {
+      if (c == q1) state = 0
+    } else if (state == 2) {
+      if (c == bs) i++
+      else if (c == q2) state = 0
+    }
+  }
+  return (state != 0)
+}
+function jit_strip_heredoc_body(s,    n, lines, i, j, out, strip_tabs, delim, line, rest, probed, op, word, prefix, q1, q2, q3, qclass, close_i) {
   q1 = sprintf("%c", 39)
   q2 = sprintf("%c", 34)
   # TWO bytes, not one: q3 sits inside a DYNAMIC (string) regex bracket expression
@@ -2851,19 +2895,22 @@ function jit_strip_heredoc_body(s,    n, lines, i, j, out, strip_tabs, delim, li
     line = lines[i]
     probed = " " line
     close_i = 0
-    if (match(probed, "[^<]<<-?[ \t]*" qclass "[A-Za-z_][A-Za-z0-9_]*" qclass)) {
-      op = substr(probed, RSTART + 1, RLENGTH - 1)
-      strip_tabs = (substr(op, 1, 3) == "<<-")
-      word = op
-      sub(/^<<-?[ \t]*/, "", word)
-      gsub("[" q1 q2 q3 "]", "", word)
-      if (word != "" && !jit_heredoc_targets_interpreter(line)) {
-        delim = word
-        for (j = i + 1; j <= n; j++) {
-          rest = lines[j]
-          sub(/\r$/, "", rest)
-          if (strip_tabs) sub(/^\t+/, "", rest)
-          if (rest == delim) { close_i = j; break }
+    if (!(line ~ /^[ \t]*#/) && match(probed, "[^<]<<-?[ \t]*" qclass "[A-Za-z_][A-Za-z0-9_]*" qclass)) {
+      prefix = substr(probed, 1, RSTART)
+      if (!jit_heredoc_opener_is_quoted(prefix)) {
+        op = substr(probed, RSTART + 1, RLENGTH - 1)
+        strip_tabs = (substr(op, 1, 3) == "<<-")
+        word = op
+        sub(/^<<-?[ \t]*/, "", word)
+        gsub("[" q1 q2 q3 "]", "", word)
+        if (word != "" && !jit_heredoc_targets_interpreter(line)) {
+          delim = word
+          for (j = i + 1; j <= n; j++) {
+            rest = lines[j]
+            sub(/\r$/, "", rest)
+            if (strip_tabs) sub(/^\t+/, "", rest)
+            if (rest == delim) { close_i = j; break }
+          }
         }
       }
     }
@@ -2885,7 +2932,18 @@ function jit_strip_heredoc_body(s,    n, lines, i, j, out, strip_tabs, delim, li
 # folded to lowercase and every character outside [a-z0-9_] becomes a space (so a path
 # like /usr/bin/bash reads as bash, its own token, not a substring of something longer),
 # then each denylist entry is looked up padded with spaces on both sides.
+#
+# #442 third repro: a lone `.` (dot-source) can never survive that lookup -- gsub strips
+# every character outside [a-z0-9_] to a space BEFORE the membership test runs, so a `.`
+# appended to the string below would be a token nobody could ever match. Checked directly
+# against the RAW line instead, ahead of normalization: a line beginning (optionally after
+# a command separator) with `.` followed by whitespace is the POSIX dot-command, and
+# `. script <<EOF` sources its heredoc body as code the same way `source script <<EOF`
+# already does via the string lookup two lines down. `./script.sh <<EOF` is excluded on
+# purpose -- no whitespace follows the dot there, so this does not fire on a path.
 function jit_heredoc_targets_interpreter(line,    norm, denylist, names, i, n) {
+  if (line ~ /^[ \t]*\.[ \t]/) return 1
+  if (match(line, /[;&|][ \t]*\.[ \t]/)) return 1
   norm = tolower(line)
   gsub(/[^a-z0-9_]/, " ", norm)
   norm = " " norm " "
