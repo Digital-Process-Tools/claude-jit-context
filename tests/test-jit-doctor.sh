@@ -877,6 +877,44 @@ else
   fi
 fi
 
+# =====================================================================================
+echo ""
+echo "=== #439: --arguments-string, the REAL script's own end of the split, not a stub ==="
+# tests/test-arguments-splicing-278.sh already drives commands/doctor.md's markdown
+# fence against a STUB jit-doctor.sh that reimplements this same splitting contract --
+# useful for proving the body hands $ARGUMENTS through untouched, but it never calls
+# THIS file. This is the other half: the actual `if [ "${1:-}" = "--arguments-string" ]`
+# block added to jit-doctor.sh itself, driven here exactly as commands/doctor.md's body
+# now invokes it -- one combined, quoted string, flag included.
+ST=0
+run_doctor --arguments-string "--base $HEALTHY" || ST=$?
+assert_exit "--arguments-string '--base DIR' reaches the same healthy-tree exit 0 as --base DIR" 0 "$ST"
+assert_has "--arguments-string '--base DIR' resolves JIT_BASE from the split value" "$OUT" "$HEALTHY"
+assert_has "...and names the command line as the source, same as a direct --base" "$OUT" "--base on the command line"
+
+# The common case: a bare slash-command invocation with nothing typed substitutes
+# $ARGUMENTS to an empty string (never an absent token -- see
+# tests/test-arguments-splicing-278.sh's own comment on why), so the realistic
+# zero-argument call is --arguments-string with an empty value, not no flag at all.
+# CLAUDE_PROJECT_DIR is set explicitly to the known-healthy fixture rather than left
+# unset, so the expected exit code here is exact rather than "0 or 2 depending on
+# wherever this suite happens to be run from".
+: > "$OUT"
+: > "$ERR"
+ST=0
+env -u CLAUDE_PLUGIN_ROOT "CLAUDE_PROJECT_DIR=$TMP/healthy" "HOME=$TMP/home" \
+  bash "$DOCTOR" --arguments-string "" > "$OUT" 2> "$ERR" || ST=$?
+assert_exit "--arguments-string '' falls through to CLAUDE_PROJECT_DIR, same as no args" 0 "$ST"
+assert_has "...and resolves JIT_BASE from it, not from a stray split word" "$OUT" "$HEALTHY"
+
+# An unknown flag SPLIT OUT of the arguments-string must refuse exactly like an unknown
+# flag typed directly -- this is the one path that could silently swallow a typo instead
+# of refusing it, since it goes through an extra `read -a` + `set --` hop first.
+ST=0
+run_doctor --arguments-string "--nope" || ST=$?
+assert_has "an unknown flag reached via --arguments-string is refused, not swallowed" "$ERR" "unknown argument"
+assert_exit "...with the same exit 2 a direct unknown flag gets" 2 "$ST"
+
 echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))
