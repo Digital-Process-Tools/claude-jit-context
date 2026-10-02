@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -260,10 +261,32 @@ def run_validate(tree: Path, mode: str, claude_bin: str | None, home: Path,
 
 
 def _only_reserved_name_error(output: str) -> bool:
-    """True only when the validator reported exactly one error, the reserved name."""
-    errors = [line for line in output.splitlines() if line.strip().startswith("❯")]
-    return (len(errors) == 1 and "is reserved" in errors[0]
-            and "Found 1 error" in output)
+    """True only when the validator reported exactly one error, the reserved name.
+
+    Errors and warnings both print as `❯` bullets, each under its own "Found N
+    error(s)" / "Found N warning(s)" heading, and the validator prints one such block
+    per file it checks. So only bullets under an ERROR heading count, and the totals
+    of every error heading are summed (#448: the v0.12.0 run printed 1 error and 6
+    warnings, and counting every bullet read 7 errors).
+    """
+    error_bullets: list[str] = []
+    stated_errors = 0
+    in_errors = False
+    for line in output.splitlines():
+        text = line.strip()
+        m = re.match(r"^\S*\s*Found (\d+) (error|warning)s?:?$", text)
+        if m:
+            in_errors = m.group(2) == "error"
+            if in_errors:
+                stated_errors += int(m.group(1))
+            continue
+        if text.startswith("Validat"):
+            in_errors = False
+            continue
+        if in_errors and text.startswith("❯"):
+            error_bullets.append(text)
+    return (stated_errors == 1 and len(error_bullets) == 1
+            and "is reserved" in error_bullets[0])
 
 
 def run_smoke(tree: Path, validate: str = "auto", claude_bin: str | None = None,

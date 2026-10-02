@@ -84,6 +84,27 @@ r = run("clean", "\u2714 Validation passed\n", 0)
 check("a passing validate passes", r.ok, f"errors: {r.errors!r}")
 check("with no warning", not any("::warning::" in n for n in r.notes), f"notes: {r.notes!r}")
 
+# #448: the real v0.12.0 output. Warnings are also `❯` bullets, under their own
+# heading, and counting every bullet read this as 7 errors.
+WARN = ("  ❯ hooks.Stop: Shell command uses ${CLAUDE_PLUGIN_ROOT} without quotes: "
+        "bash ${CLAUDE_PLUGIN_ROOT}/scripts/stop-hook.sh.\n")
+V012 = ("Validating plugin manifest: /tmp/release-tree/.claude-plugin/plugin.json\n\n"
+        "✘ Found 1 error:\n\n  ❯ name: Plugin name \"claude-jit-context\" is reserved: "
+        "it passes as one of Anthropic's own.\n\n"
+        "Validating hooks: /tmp/release-tree/hooks/hooks.json\n\n"
+        "⚠ Found 6 warnings:\n\n" + WARN * 6 + "\n✘ Validation failed\n")
+r = run("v012", V012, 1)
+check("#448: reserved name plus 6 warnings (the real v0.12.0 output) stays ok", r.ok,
+      f"errors: {r.errors!r}")
+check("#448: and still warns", any("::warning::" in n for n in r.notes), f"notes: {r.notes!r}")
+
+r = run("twofiles", "Validating plugin manifest: x\n\n✘ Found 1 error:\n\n"
+        "  ❯ name: Plugin name \"claude-x\" is reserved.\n\n"
+        "Validating hooks: y\n\n✘ Found 1 error:\n\n  ❯ hooks.Stop: invalid\n\n"
+        "✘ Validation failed\n", 1)
+check("#448: a second error in another file's block still fails", not r.ok,
+      f"errors: {r.errors!r}")
+
 print(f"== Results: {PASS} passed, {FAIL} failed ==")
 sys.exit(1 if FAIL else 0)
 PY
