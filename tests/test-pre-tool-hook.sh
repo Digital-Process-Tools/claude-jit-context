@@ -614,6 +614,18 @@ echo "=== repro 4 control: a genuine heredoc opener is not suppressed by an unre
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd '"'"'#not a comment'"'"' <<EOF\nheredocforbid mentioned only here\nEOF"}}')
 assert_not_contains "a # inside a quoted argument does not suppress a real heredoc opener" "$OUT" '"decision":"block"'
 
+echo ""
+echo "=== repro 5: a single-quoted argument spanning several lines still hides a later <<WORD on the line that closes it (issue #442 self-review) ==="
+# Reviewer finding: a single-quoted argument can open on one physical line and
+# close two lines later -- the quote is still genuinely open on every line in
+# between, so a <<WORD shape on one of those in-between lines is not a real
+# heredoc opener either, the same reasoning as the same-line case, just spread
+# across lines. x='<newline><<EOF<newline>literal data' actually assigns x and
+# runs heredocblock command as a separate, real command on the line after the
+# quote closes -- verified by hand with bash -c on the literal payload.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"x='"'"'\n<<EOF\nliteral data'"'"'\nheredocblock command\nEOF"}}')
+assert_blocked "a <<EOF shape on a line still inside a multi-line single-quoted argument does not hide the command that follows it" "$OUT"
+
 # =============================================
 # SECTION: awk engine matrix — multibyte paths, control characters in entries
 # =============================================
@@ -649,6 +661,7 @@ P442_R1='{"tool_name":"Bash","tool_input":{"command":"echo \"<<EOF\"\nheredocblo
 P442_R2='{"tool_name":"Bash","tool_input":{"command":"# <<EOF\nheredocblock command\nEOF"}}'
 P442_R3='{"tool_name":"Bash","tool_input":{"command":". /dev/stdin <<EOF\nheredocblock command\nEOF"}}'
 P442_R4='{"tool_name":"Bash","tool_input":{"command":"true # <<EOF\nheredocblock command\nEOF"}}'
+P442_R5='{"tool_name":"Bash","tool_input":{"command":"x='"'"'\n<<EOF\nliteral data'"'"'\nheredocblock command\nEOF"}}'
 for eng in $ENGINES; do
   OUT=$(run_hook_engine "$eng" "$P442_CONTROL")
   assert_blocked "#442 positive control blocks under $eng" "$OUT"
@@ -660,6 +673,8 @@ for eng in $ENGINES; do
   assert_blocked "#442 repro 3 (dot-source) blocks under $eng" "$OUT"
   OUT=$(run_hook_engine "$eng" "$P442_R4")
   assert_blocked "#442 repro 4 (trailing comment) blocks under $eng" "$OUT"
+  OUT=$(run_hook_engine "$eng" "$P442_R5")
+  assert_blocked "#442 repro 5 (multi-line single-quoted argument) blocks under $eng" "$OUT"
 done
 
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string; a strict parser is entitled

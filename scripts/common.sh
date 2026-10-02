@@ -2860,11 +2860,20 @@ JIT_AWK_HEREDOC='
 # outcome is to turn a match into a non-match, i.e. to suppress stripping -- a
 # wrong verdict in either direction can only leave this function at least as
 # conservative as if the check were absent, never less.
-function jit_heredoc_opener_is_suppressed(prefix,    i, c, state, n, q1, q2, bs) {
+#
+# state0 is NOT always 0: reviewer finding on #442 -- a single-quoted argument can
+# legitimately span several physical lines (an assignment opening a single quote on
+# one line, closed only two lines later), and the quote it opens is still open on
+# every line in between, including a line whose own <<WORD shape would otherwise
+# read as a real operator. jit_heredoc_quote_states() below computes, once per call
+# to jit_strip_heredoc_body(), the quote state carried INTO each line from every
+# line before it, and that is what state0 is here -- this function itself still
+# only looks at the one line it is handed.
+function jit_heredoc_opener_is_suppressed(prefix, state0,    i, c, state, n, q1, q2, bs) {
   q1 = sprintf("%c", 39)
   q2 = sprintf("%c", 34)
   bs = sprintf("%c", 92)
-  state = 0
+  state = state0
   n = length(prefix)
   for (i = 1; i <= n; i++) {
     c = substr(prefix, i, 1)
@@ -2882,7 +2891,46 @@ function jit_heredoc_opener_is_suppressed(prefix,    i, c, state, n, q1, q2, bs)
   }
   return (state != 0)
 }
-function jit_strip_heredoc_body(s,    n, lines, i, j, out, strip_tabs, delim, line, rest, probed, op, word, prefix, q1, q2, q3, qclass, close_i) {
+# The exit state of ONE whole line, given the state it was entered with -- the building
+# block jit_heredoc_quote_states() below calls once per line to chain them. A `#` only
+# starts a comment (break, nothing after it on this line can change the state) when state
+# is already 0 at the point it is reached; inside an open quote a `#` is literal text, the
+# same posture jit_heredoc_opener_is_suppressed() above already takes.
+function jit_heredoc_line_exit_state(line, state0,    i, c, len, q1, q2, bs, state) {
+  q1 = sprintf("%c", 39)
+  q2 = sprintf("%c", 34)
+  bs = sprintf("%c", 92)
+  state = state0
+  len = length(line)
+  for (i = 1; i <= len; i++) {
+    c = substr(line, i, 1)
+    if (state == 0) {
+      if (c == q1) state = 1
+      else if (c == q2) state = 2
+      else if (c == "#") break
+      else if (c == bs) i++
+    } else if (state == 1) {
+      if (c == q1) state = 0
+    } else if (state == 2) {
+      if (c == bs) i++
+      else if (c == q2) state = 0
+    }
+  }
+  return state
+}
+# Fills in[i] (1-indexed) with the quote state the whole text carries INTO line i, by
+# replaying every line before it through jit_heredoc_line_exit_state() in order. A plain
+# forward pass, computed once per jit_strip_heredoc_body() call rather than per operator
+# match, since it depends only on the lines before the one being tested, never on where
+# a later match happens to land.
+function jit_heredoc_quote_states(lines, n, qin,    i, state) {
+  state = 0
+  for (i = 1; i <= n; i++) {
+    qin[i] = state
+    state = jit_heredoc_line_exit_state(lines[i], state)
+  }
+}
+function jit_strip_heredoc_body(s,    n, lines, i, j, out, strip_tabs, delim, line, rest, probed, op, word, prefix, q1, q2, q3, qclass, close_i, quote_in) {
   q1 = sprintf("%c", 39)
   q2 = sprintf("%c", 34)
   # TWO bytes, not one: q3 sits inside a DYNAMIC (string) regex bracket expression
@@ -2897,6 +2945,7 @@ function jit_strip_heredoc_body(s,    n, lines, i, j, out, strip_tabs, delim, li
   q3 = sprintf("%c%c", 92, 92)
   qclass = "[" q1 q2 q3 "]?"
   n = split(s, lines, "\n")
+  jit_heredoc_quote_states(lines, n, quote_in)
   out = ""
   i = 1
   while (i <= n) {
@@ -2905,7 +2954,7 @@ function jit_strip_heredoc_body(s,    n, lines, i, j, out, strip_tabs, delim, li
     close_i = 0
     if (match(probed, "[^<]<<-?[ \t]*" qclass "[A-Za-z_][A-Za-z0-9_]*" qclass)) {
       prefix = substr(probed, 1, RSTART)
-      if (!jit_heredoc_opener_is_suppressed(prefix)) {
+      if (!jit_heredoc_opener_is_suppressed(prefix, quote_in[i])) {
         op = substr(probed, RSTART + 1, RLENGTH - 1)
         strip_tabs = (substr(op, 1, 3) == "<<-")
         word = op
