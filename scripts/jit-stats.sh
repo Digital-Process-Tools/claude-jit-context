@@ -1,0 +1,394 @@
+#!/bin/bash
+# claude-jit-context -- what fired this session, on what word, and what it cost (#389).
+#
+# The Stop line (scripts/stop-hook.sh) carries a total and, when every fired entry's
+# byte record agrees, a size -- and nothing else. This is where the detail #367
+# deliberately pulled off that line goes back to: which entries, which dimension and
+# layer, the word or pattern that matched, the bytes each one cost, and what keeps
+# missing (scripts/jit-misses.sh).
+#
+# A DELIBERATE, HAND-RUN diagnostic, not a hook -- paths/00-manual/tooling.md's
+# contract, not hooks.md's: fail loudly, exit codes carry meaning, never silently
+# guess. See that entry before changing this file.
+#
+# THE SESSION IT REPORTS IS A HEURISTIC, not a fact, and this prints that up front on
+# every run rather than once in a comment nobody sees at the point it matters. A slash
+# command's own bash body has no access to the JSON payload's session_id -- that field
+# only ever reaches a hook, over stdin, never a command run by a person. So this picks
+# the SESSION SUFFIX of the most recently modified marker file under
+# JIT_BASE/.discovery/state/ (vocab-shown-<k>.txt, path-shown-<k>.txt or
+# bytes-shown-<k>.txt) and reports on that suffix's whole trio. On a project with one
+# active session this is exactly right; on a shared checkout with several concurrent
+# sessions it can report the wrong one, and this says so rather than pretending
+# certainty it does not have.
+#
+# Exit: 0 a report was produced (which may say "nothing fired yet") | 1 the tree
+#       exists but no session state could be found at all | 2 could not evaluate --
+#       no JIT_BASE, no state directory, or the marker files could not be read.
+#
+# Usage: bash scripts/jit-stats.sh [--base DIR] [--misses-top N]
+
+case "$0" in */*) SCRIPT_DIR="${0%/*}" ;; *) SCRIPT_DIR="." ;; esac
+MISSES_TOP=20
+
+# commands/stats.md hands the whole typed $ARGUMENTS string through this one
+# synthetic flag instead of splitting it in the command body's own `bash -c`
+# (#405's fix). That wrapper made the body's first word `bash -c`, which the
+# Anthropic directory holds as unscoped shell access no matter what follows
+# it, so the allowed-tools grant could never narrow to this script (#439).
+# Splitting happens HERE instead, under the bash this script always runs
+# under -- #405 only mattered when the splitting ran in whatever shell
+# happened to execute the command body, which was never guaranteed to be bash.
+if [ "${1:-}" = "--arguments-string" ]; then
+  [ $# -ge 2 ] || {
+    echo "jit-stats.sh: --arguments-string needs a value" >&2
+    exit 2
+  }
+  IFS=' ' read -r -a _jit_stats_split_args <<< "${2:-}"
+  shift 2
+  set -- "${_jit_stats_split_args[@]+"${_jit_stats_split_args[@]}"}" "$@"
+fi
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --base)
+      [ $# -ge 2 ] || {
+        echo "jit-stats.sh: --base needs a value" >&2
+        exit 2
+      }
+      JIT_BASE_OVERRIDE="$2"
+      shift 2
+      ;;
+    --misses-top)
+      [ $# -ge 2 ] || {
+        echo "jit-stats.sh: --misses-top needs a value" >&2
+        exit 2
+      }
+      MISSES_TOP="$2"
+      shift 2
+      ;;
+    *)
+      echo "jit-stats.sh: unknown argument: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
+[ -n "${JIT_BASE_OVERRIDE:-}" ] && JIT_BASE="$JIT_BASE_OVERRIDE"
+
+if [ ! -d "$JIT_BASE" ]; then
+  echo "jit-stats.sh: no jit-context tree at $JIT_BASE" >&2
+  exit 2
+fi
+
+STATE_DIR="$JIT_BASE/.discovery/state"
+LOG_FILE="$JIT_BASE/.discovery/logs/hooks.log"
+
+if [ ! -d "$STATE_DIR" ]; then
+  echo "JIT stats: no session state at all -- nothing has fired yet, or the state directory could not be created (see jit-doctor.sh)"
+  exit 1
+fi
+
+# The newest of the three marker kinds, by mtime, names the session this reports on.
+# `ls -t` rather than `find -newer`: every candidate is a plain file this hook already
+# sits beside, so no traversal is needed, and `ls -t`'s own tie-break (name order) is
+# stable rather than filesystem-timestamp-resolution-dependent.
+NEWEST=""
+for _js_f in "$STATE_DIR"/vocab-shown-*.txt "$STATE_DIR"/path-shown-*.txt "$STATE_DIR"/bytes-shown-*.txt; do
+  [ -f "$_js_f" ] && [ ! -L "$_js_f" ] || continue
+  if [ -z "$NEWEST" ] || [ "$_js_f" -nt "$NEWEST" ]; then NEWEST="$_js_f"; fi
+done
+unset _js_f
+
+if [ -z "$NEWEST" ]; then
+  echo "JIT stats: no marker files under $STATE_DIR -- nothing has fired yet this session"
+  exit 1
+fi
+
+SESSION_KEY="$(basename "$NEWEST")"
+SESSION_KEY="${SESSION_KEY#vocab-shown-}"
+SESSION_KEY="${SESSION_KEY#path-shown-}"
+SESSION_KEY="${SESSION_KEY#bytes-shown-}"
+SESSION_KEY="${SESSION_KEY%.txt}"
+
+echo "JIT stats -- session key: $SESSION_KEY (the most recently written marker file; a heuristic, not the true session id -- see this file's own header)"
+echo ""
+
+VOCAB_FILE="$STATE_DIR/vocab-shown-$SESSION_KEY.txt"
+PATH_FILE="$STATE_DIR/path-shown-$SESSION_KEY.txt"
+BYTES_FILE="$STATE_DIR/bytes-shown-$SESSION_KEY.txt"
+
+# One byte lookup, built once: "<key><TAB><n>" lines, NL-joined, same shape
+# stop-hook.sh already reads back -- see #389.
+BYTES_RAW=""
+if [ -f "$BYTES_FILE" ] && [ ! -L "$BYTES_FILE" ]; then
+  while IFS= read -r _jb || [ -n "$_jb" ]; do
+    [ -n "$_jb" ] || continue
+    BYTES_RAW="$BYTES_RAW${BYTES_RAW:+$JIT_NL}$_jb"
+  done < "$BYTES_FILE"
+  unset _jb
+fi
+
+# Three states, not two (#405): the marker records the file PLUS the
+# per-match injection header ("# JIT Context: <name> (matched: <pattern>)",
+# variable-length), so it is the exact cost -- but a majority of a real
+# session's rows can carry no marker at all, most often because the entry
+# fired before this session's byte accounting started recording (an upgrade
+# mid-session is the case the issue measured). `bytes=unknown` on all of
+# those collapses "never measured" and "measured, approximately, from the
+# file itself" into one word. When the marker is missing but the entry's own
+# file is right there and readable, its on-disk size is within the marker's
+# own measured 80-121-byte margin (the header's own overhead) -- close enough
+# to be useful, and printed with a leading "~" so it is never mistaken for
+# the exact figure. A caller with no path to offer (dim/layer not resolved --
+# a legacy bare shown-mark) gets no fallback and stays "unknown", honestly.
+bytes_for() {
+  local key="$1" path="$2" needle rest n
+  if [ -n "$BYTES_RAW" ]; then
+    needle="$JIT_NL$key$(printf '\t')"
+    case "$JIT_NL$BYTES_RAW$JIT_NL" in
+      *"$needle"*)
+        # #389 self-review: stripped through the SAME NL-anchored needle the
+        # existence check above just proved is present, never through the bare
+        # "<key><TAB>" text alone -- an unanchored strip can land inside an
+        # unrelated, earlier line whose own longer key happens to end with this
+        # key's text immediately before a tab, and silently return that line's
+        # byte count instead (see scripts/stop-hook.sh's identical fix).
+        rest="${JIT_NL}${BYTES_RAW}${JIT_NL}"
+        rest="${rest#*"$needle"}"
+        rest="${rest%%$JIT_NL*}"
+        case "$rest" in
+          '' | *[!0-9]*) : ;;
+          *)
+            printf '%s' "$rest"
+            return 0
+            ;;
+        esac
+        ;;
+    esac
+  fi
+  if [ -n "$path" ] && [ -f "$path" ] && [ ! -L "$path" ]; then
+    n="$(wc -c < "$path" 2> /dev/null)"
+    n="${n//[[:space:]]/}"
+    case "$n" in
+      '' | *[!0-9]*) ;;
+      *)
+        printf '~%s' "$n"
+        return 0
+        ;;
+    esac
+  fi
+  printf ''
+  return 0
+}
+
+# The word or pattern that matched is not in the marker files at all -- only
+# hooks.log carries it, one physical line per hook invocation, unconditional
+# (paths/00-manual/hooks.md). Correlated here by grepping the entry's own basename
+# out of the log's "layer:file(pattern)" token; best-effort for the same reason the
+# session key above is -- hooks.log carries no session id column either.
+# The wrapper is "layer:file(" + PATTERN + ")", built once in pre-tool-hook.sh /
+# pre-path-hook.sh with a fixed literal "(" and ")" around whatever the rule's
+# own `match:` ERE happens to be (#405). PATTERN is untrusted committed text
+# that can itself open groups -- "(^|/)(agents/...)$" is the common shape for
+# any `paths` rule -- so the wrapper's own closing ")" is NOT the first ")" in
+# the tail; it is the one that brings a running paren count back to the depth
+# it started at. Cutting at the first ")" (the previous behaviour) reported
+# "(^|/" for nearly every `paths` rule and rendered identically to a genuine
+# short match -- see the issue for the full measurement.
+#
+# Bracket expressions ([)] is a literal ")", not a group) and a backslash
+# escape (\) is a literal ")" too) are both tracked so a pattern that legally
+# contains either is not cut inside it either -- the issue's own test list
+# names both. This is not a full ERE parser: bracket-expression edge cases
+# POSIX itself treats specially (a bare "]" immediately after "[" or "[^" is
+# literal) are the only ones handled; nothing here needs to be, since the
+# input is always a committed `match:` value, never attacker-controlled at
+# a boundary this correlation's own failure mode (a report, not a decision)
+# would make dangerous.
+jit_stats_extract_wrapped() {
+  local s="$1" depth=0 in_bracket=0 bracket_first=0 i=0 len ch out=""
+  len=${#s}
+  while [ "$i" -lt "$len" ]; do
+    ch="${s:$i:1}"
+    if [ "$in_bracket" -eq 1 ]; then
+      if [ "$bracket_first" -eq 1 ]; then
+        if [ "$ch" = '^' ]; then
+          :
+        else
+          bracket_first=0
+        fi
+      elif [ "$ch" = ']' ]; then
+        in_bracket=0
+      fi
+      out="$out$ch"
+      i=$((i + 1))
+      continue
+    fi
+    if [ "$ch" = '\' ]; then
+      out="$out$ch${s:$((i + 1)):1}"
+      i=$((i + 2))
+      continue
+    elif [ "$ch" = '[' ]; then
+      in_bracket=1
+      bracket_first=1
+      out="$out$ch"
+      i=$((i + 1))
+      continue
+    elif [ "$ch" = '(' ]; then
+      depth=$((depth + 1))
+      out="$out$ch"
+    elif [ "$ch" = ')' ]; then
+      if [ "$depth" -eq 0 ]; then
+        printf '%s' "$out"
+        return 0
+      fi
+      depth=$((depth - 1))
+      out="$out$ch"
+    else
+      out="$out$ch"
+    fi
+    i=$((i + 1))
+  done
+  # No balancing close found -- a malformed or truncated token. Print nothing
+  # rather than the partial scan, the same "blank means could not tell"
+  # posture the header above match_for() already states for this whole
+  # correlation.
+  printf ''
+  return 1
+}
+
+match_for() {
+  # #389 self-review, second pass: the first fix narrowed the needle from a
+  # bare ":$file(" to "<layer>:<file>(" but two things about it were still
+  # wrong, both caught by re-review after the first fix landed.
+  #
+  # ONE. `tools` log tokens are never "<layer>:<file>(" at all -- every tools
+  # site (pre-tool-hook.sh) writes the FIXED literal prefix "tool:" regardless
+  # of which layer the rule lives in ("tool:" r_logname "(" r_match ")"), and
+  # a `rule:`-prefixed legacy shown-mark (a hook from before #299, possibly
+  # still firing earlier in a session that spans an upgrade) never carried a
+  # layer to begin with. Requiring layer for every dimension silently zeroed
+  # out `tools` correlation entirely. `tools` now searches "tool:<file>("
+  # instead, and does not require a layer at all.
+  #
+  # TWO. Even the narrower "<layer>:<file>(" needle was still an UNANCHORED
+  # substring search within one log line, so a real layer name that happens
+  # to be a suffix of a DIFFERENT one ("00-manual" inside "sub-00-manual")
+  # could still borrow that other entry's token. hooks.log's own field
+  # separator is exactly what jit_log_write()'s callers already build
+  # log_matches with -- ", " between tokens, and "| " ahead of the first one
+  # -- so this now splits the line on that separator and requires the needle
+  # to be a PREFIX of one whole token, never a substring landing mid-token.
+  # That is a real anchor, the same kind of guarantee bytes_for() above gets
+  # from $JIT_NL: a token boundary a crafted or coincidental key can be a
+  # substring of, but can never BE without actually starting there.
+  local dim="$1" layer="$2" file="$3" needle line rest tok
+  [ -f "$LOG_FILE" ] && [ ! -L "$LOG_FILE" ] || {
+    printf ''
+    return 0
+  }
+  case "$dim" in
+    tools) needle="tool:$file(" ;;
+    paths | vocabulary)
+      [ -n "$layer" ] || {
+        printf ''
+        return 0
+      }
+      needle="$layer:$file("
+      ;;
+    *)
+      printf ''
+      return 0
+      ;;
+  esac
+  line="$(LC_ALL=C grep -F -- "$needle" "$LOG_FILE" 2> /dev/null | tail -1)"
+  [ -n "$line" ] || {
+    printf ''
+    return 0
+  }
+  rest="${line#*"| "}"
+  IFS=',' read -r -a _js_toks <<< "$rest"
+  for tok in "${_js_toks[@]+"${_js_toks[@]}"}"; do
+    tok="${tok# }"
+    case "$tok" in
+      "$needle"*)
+        tok="${tok#"$needle"}"
+        case "$tok" in
+          *')'*)
+            jit_stats_extract_wrapped "$tok"
+            return 0
+            ;;
+        esac
+        ;;
+    esac
+  done
+  printf ''
+  return 0
+}
+N_SHOWN=0
+for MF in "$VOCAB_FILE" "$PATH_FILE"; do
+  [ -f "$MF" ] && [ ! -L "$MF" ] || continue
+  while IFS= read -r LN || [ -n "$LN" ]; do
+    case "$LN" in
+      '') continue ;;
+      jit-refused-* | jit-no-subject) continue ;;
+    esac
+    DIM=""
+    LAYER=""
+    NAME=""
+    case "$LN" in
+      loc:*)
+        REST="${LN#loc:}"
+        DIM="${REST%%:*}"
+        REST="${REST#*:}"
+        case "$REST" in
+          *:*)
+            LAYER="${REST%%:*}"
+            NAME="${REST#*:}"
+            ;;
+          *) continue ;;
+        esac
+        ;;
+      rule:*)
+        DIM="tools"
+        NAME="${LN#rule:}"
+        ;;
+      */* | *\\*) continue ;;
+      *) NAME="$LN" ;;
+    esac
+    N_SHOWN=$((N_SHOWN + 1))
+    # The fallback path bytes_for() may fall back to reads a real file off
+    # disk, so NAME and LAYER go through the SAME accepted-name guard the
+    # report line below uses to print them -- never the raw log/marker text
+    # -- before they are allowed to become a filesystem path component
+    # (#405; see jit_report_name()'s own comment in common.sh on why the
+    # name is attacker-chosen text).
+    B_PATH=""
+    if [ -n "$LAYER" ] && [ -n "$NAME" ]; then
+      case "$DIM" in
+        paths | vocabulary)
+          if [ "$(jit_report_name "$NAME")" != "$JIT_NAME_WITHHELD" ] \
+            && [ "$(jit_report_name "$LAYER")" != "$JIT_NAME_WITHHELD" ]; then
+            B_PATH="$JIT_BASE/$DIM/$LAYER/$NAME"
+          fi
+          ;;
+      esac
+    fi
+    B="$(bytes_for "$LN" "$B_PATH")"
+    M="$(match_for "$DIM" "$LAYER" "$NAME")"
+    printf '%s\n' "$(jit_report_name "$NAME")  dim=${DIM:-unknown} layer=${LAYER:-unknown} bytes=${B:-unknown} matched=${M:-unknown}"
+  done < "$MF"
+done
+
+if [ "$N_SHOWN" -eq 0 ]; then
+  echo "(nothing fired for this session key)"
+fi
+
+echo ""
+echo "--- recurring misses (scripts/jit-misses.sh) ---"
+bash "$SCRIPT_DIR/jit-misses.sh" --log "$LOG_FILE" --top "$MISSES_TOP"
+
+exit 0

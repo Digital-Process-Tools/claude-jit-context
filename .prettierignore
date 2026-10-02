@@ -1,0 +1,12 @@
+# Markdown is hand-formatted here -- the tables in CLAUDE.md, the README and every
+# jit-context entry are aligned by hand and prettier reflows them.
+*.md
+
+# Generated. rebuild-tsv.sh is the only writer of an index, and CHANGELOG.md is
+# assembled by .oss/assemble_changelog.py.
+*.tsv
+CHANGELOG.md
+
+# Owned by the oss plugin and rewritten wholesale by /oss:scaffold --apply.
+.oss/
+.github/workflows/oss-changelog.yml

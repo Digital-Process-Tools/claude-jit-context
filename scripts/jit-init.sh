@@ -1,0 +1,290 @@
+#!/bin/bash
+# claude-jit-context — seed a project with the three dimensions and one starter entry.
+#
+# Why this exists: a fresh install matches nothing and injects nothing (#81). The hooks
+# create only the .discovery machinery — no paths/, no tools/, no vocabulary/, and no
+# entries — so the first-run experience is "install it, and nothing happens", and the one
+# question a new user is guaranteed to ask is the one the plugin could answer with its own
+# mechanism, at the moment they ask it.
+#
+# This copies ONE vocabulary entry into the project, explicitly, on request. The file is
+# then the user's: theirs to edit, theirs to delete. Nothing is shipped into a repository
+# unasked, and no hook reads a rule from outside the project directory.
+#
+# Usage:
+#   bash scripts/jit-init.sh                     # seed ./.claude/jit-context
+#   bash scripts/jit-init.sh --base DIR          # seed DIR, which must end in
+#                                                #   /.claude/jit-context
+#
+# Exit: 0 seeded, and the index rebuilt so the entry is live | 1 refused — the entry is
+#       already there and a copy you edited is not ours to replace, or the rebuild did
+#       not complete and the entry is on disk and inert | 2 could not evaluate: a bad
+#       argument, a --base that is not a <project>/.claude/jit-context path, a symbolic
+#       link at or below .claude, an install with no template to copy, or a directory
+#       that could not be created.
+#
+# --base is resolved before anything is written, so what it prints is the physical
+# location of the files and not the spelling you handed it: a link above .claude is
+# followed and reported, `..` is folded. A link at or below .claude is refused instead —
+# the hooks will not read an entry through one, so seeding past it is a dead rule.
+#
+# This is tooling, not a hook. It is run deliberately, by a person, and it fails loudly —
+# the opposite of scripts/*-hook.sh, which must never fail at all. See
+# .claude/jit-context/paths/00-manual/tooling.md.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# common.sh is deliberately NOT sourced, for the reason jit-misses.sh does not source it
+# either: it mkdir -p's the log directory under $CLAUDE_PROJECT_DIR at load time, which is
+# not necessarily the project being seeded here. A tool that creates a directory in a
+# third place on the way to creating one where you asked is a tool whose receipt lies.
+TEMPLATE_ROOT="$SCRIPT_DIR/../templates/jit-context"
+SEED_REL="vocabulary/00-manual/writing-rules.md"
+
+BASE="$PWD/.claude/jit-context"
+
+usage() {
+  # The header block, to the first non-comment line. Read structurally rather than as a
+  # line range: jit-dry-run.sh pins '2,31p', and a line added above that range truncates
+  # its --help with nothing to say so.
+  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
+  exit "${1:-0}"
+}
+
+# A known flag missing its value needs the same loud refusal an UNKNOWN flag already
+# got. `${2:-}` supplies an empty string and then `shift 2` FAILS -- there is nothing to
+# shift -- and under `set -uo pipefail` with no `-e` a failed shift is not fatal: $1
+# never advances and the loop below spins forever. Measured at e800067, `jit-init.sh
+# --base` ran to exit 124 under `timeout 5` having written zero bytes to either stream.
+#
+# That is the exact inverse of this tool contract (paths/00-manual/tooling.md): fail
+# loudly, on stderr, with a non-zero status. A hang says nothing at all, and the caller
+# is usually an agent that then burns its whole timeout against no output. #114.
+#
+# The check belongs here and not in a wrapper, because the failing `shift 2` is the
+# mechanism. jit-misses.sh has had need_value() since it was written; this is that.
+need_value() {
+  echo "SKIPPED: $1 needs a value" >&2
+  echo "         Run with --help for the accepted flags. Nothing was written." >&2
+  exit 2
+}
+
+# commands/init.md hands the whole typed $ARGUMENTS string through this one
+# synthetic flag instead of splitting it in the command body's own `bash -c`
+# (#405's fix). That wrapper made the body's first word `bash -c`, which the
+# Anthropic directory holds as unscoped shell access no matter what follows
+# it, so the allowed-tools grant could never narrow to this script (#439).
+# Splitting happens HERE instead, under the bash this script always runs
+# under -- #405 only mattered when the splitting ran in whatever shell
+# happened to execute the command body, which was never guaranteed to be bash.
+if [ "${1:-}" = "--arguments-string" ]; then
+  [ $# -ge 2 ] || need_value "$1"
+  IFS=' ' read -r -a _jit_init_split_args <<< "${2:-}"
+  shift 2
+  set -- "${_jit_init_split_args[@]+"${_jit_init_split_args[@]}"}" "$@"
+fi
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --base)
+      [ $# -ge 2 ] || need_value "$1"
+      BASE="$2"
+      shift 2
+      ;;
+    -h | --help) usage 0 ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage 2
+      ;;
+  esac
+done
+
+BASE="${BASE%/}"
+
+# Resolved to an absolute path BEFORE the suffix is stripped. mkdir and cp are perfectly
+# happy with a relative --base, but the project dir below is derived by removing
+# /.claude/jit-context from the end, and `.claude/jit-context` has no leading slash to
+# strip against: the derivation yields nothing, rebuild-tsv.sh resolves JIT_BASE from an
+# empty $CLAUDE_PROJECT_DIR, and the entry lands in one tree while its index is built in
+# another. A seeded rule that can never fire, reported as success.
+#
+# A Windows drive path (C:/x, C:\x) is already absolute and must not be prefixed. Git Bash
+# is a CI leg here, and $PWD/C:/x is not a path on any platform.
+case "$BASE" in
+  /* | ?:/* | ?:\\*) ;;
+  *) BASE="$PWD/$BASE" ;;
+esac
+
+case "$BASE" in
+  */.claude/jit-context) PROJECT="${BASE%/.claude/jit-context}" ;;
+  *)
+    echo "SKIPPED: --base must end in /.claude/jit-context — the hooks resolve rules from" >&2
+    echo "         <project>/.claude/jit-context and nowhere else, so seeding any other" >&2
+    echo "         directory would write entries that can never fire. Got: $BASE" >&2
+    exit 2
+    ;;
+esac
+
+# The receipt has to name the place the file is at. mkdir and cp both follow a symbolic
+# link in silence, so `--base .../sym/link/.claude/jit-context` wrote into the link's
+# target while "seeded <path>" named the link, and so did the CLAUDE_PROJECT_DIR printed
+# at the end for the reader to copy (#99). `..` was never folded either.
+#
+# The split with the refusal below is not a compromise between two remedies; it is where
+# the hooks already draw the line. AT OR BELOW .claude a link is REFUSED, because the
+# hooks refuse to read an entry through one (#13, #27, #45) — seeding past it writes a
+# rule that can never fire. ABOVE .claude a link is FOLLOWED and REPORTED TRUTHFULLY:
+# pointing --base anywhere on the disk is this tool's entire job, /tmp is a link to
+# /private/tmp on every Mac and a bind mount is one in every container, and nothing
+# downstream reads the project directory as anything but a directory.
+#
+# There is no realpath on macOS and no new dependency is allowed here, so: walk up to the
+# deepest component that exists, resolve THAT with `cd -P`, and fold `.` and `..` in what
+# is left over. What is left over does not exist yet, so it cannot contain a link — which
+# is the only reason folding it textually is sound.
+resolve_dir() {
+  # $1: an absolute path that need not exist. Prints its physical location. A value with
+  # no `/` in it at all is printed back unchanged, which is what the one caller wants:
+  # PROJECT is the empty string for `--base /.claude/jit-context`, and turning that into
+  # `/` would rebuild BASE as `//.claude/jit-context`, whose leading `//` POSIX leaves to
+  # the implementation. Do not call this with a relative path.
+  local head="$1" tail="" phys out c
+  while [ ! -d "$head" ]; do
+    case "$head" in */*) ;; *) break ;; esac # "C:" on Git Bash, or a bare word
+    tail="${head##*/}${tail:+/}$tail"
+    head="${head%/*}"
+    [ -n "$head" ] || head="/"
+  done
+  if [ -d "$head" ]; then
+    # A directory that exists but cannot be entered leaves the path unresolved rather
+    # than aborting here: mkdir under it is about to fail anyway, and that failure is
+    # already an exit 2 naming the directory.
+    phys="$(CDPATH='' cd -P "$head" 2> /dev/null && pwd -P)"
+    [ -n "$phys" ] && head="$phys"
+  fi
+  if [ -z "$tail" ]; then
+    printf '%s\n' "$head"
+    return 0
+  fi
+  out="${head%/}"
+  local IFS=/
+  set -f
+  for c in $tail; do
+    case "$c" in
+      '' | .) ;;
+      ..) out="${out%/*}" ;;
+      *) out="$out/$c" ;;
+    esac
+  done
+  set +f
+  [ -n "$out" ] || out="/"
+  printf '%s\n' "$out"
+}
+
+# Command substitution, so the IFS and `set -f` above stay inside the subshell.
+PROJECT="$(resolve_dir "$PROJECT")"
+BASE="$PROJECT/.claude/jit-context"
+
+SEED="$BASE/$SEED_REL"
+TEMPLATE="$TEMPLATE_ROOT/$SEED_REL"
+
+if [ ! -f "$TEMPLATE" ]; then
+  echo "SKIPPED: no entry to seed — $TEMPLATE is missing." >&2
+  echo "         That is an incomplete install, not an empty project. Nothing was written." >&2
+  exit 2
+fi
+
+# A linked component AT OR BELOW .claude is refused rather than followed. Two things are
+# wrong with following one: the write lands outside the tree you named while "seeded
+# <path>" stays a receipt for a file somewhere else, and — the half that resolution
+# cannot repair — the hooks refuse to read an entry through a link (#13, #27, #45), so
+# whatever is seeded past it is a rule that can never fire.
+#
+# EVERY component from .claude down, not just the two nearest the project root: a linked
+# `vocabulary/` or `vocabulary/00-manual/` put the entry and its whole index outside the
+# tree while the receipt still named a path inside it, which is worse than the escape.
+# mkdir -p follows a link silently and cp writes through one, so neither of them can be
+# the check.
+#
+# Everything ABOVE .claude has already been resolved, not refused (#99) — see the block
+# above for why that boundary is the hooks' boundary and not an arbitrary one.
+LINKED=""
+for part in "$PROJECT/.claude" "$BASE"; do
+  [ -L "$part" ] && LINKED="$part"
+done
+for dim in vocabulary paths tools; do
+  [ -L "$BASE/$dim" ] && LINKED="$BASE/$dim"
+  [ -L "$BASE/$dim/00-manual" ] && LINKED="$BASE/$dim/00-manual"
+done
+if [ -n "$LINKED" ]; then
+  echo "SKIPPED: $LINKED is a symbolic link. Writing through it would put entries outside" >&2
+  echo "         the tree you named. Nothing was written." >&2
+  exit 2
+fi
+
+# Refuse BEFORE creating anything, so a re-run against an edited copy is inert in every
+# respect rather than only in the copy.
+if [ -e "$SEED" ] || [ -L "$SEED" ]; then
+  echo "REFUSED: $SEED_REL is already there." >&2
+  echo "         $SEED" >&2
+  echo "         A copy you edited is not ours to replace. Delete it first if you want the" >&2
+  echo "         shipped text back, or leave it alone — it is your file now." >&2
+  echo "         Nothing was created and nothing was changed by this run." >&2
+  exit 1
+fi
+
+for dim in vocabulary paths tools; do
+  if ! mkdir -p "$BASE/$dim/00-manual"; then
+    echo "SKIPPED: could not create $BASE/$dim/00-manual — nothing was seeded." >&2
+    exit 2
+  fi
+done
+
+if ! cp "$TEMPLATE" "$SEED"; then
+  echo "SKIPPED: could not write $SEED — nothing was seeded." >&2
+  exit 2
+fi
+
+echo "seeded  $SEED"
+
+# An entry that has not been indexed is inert, and inert in silence — which is the very
+# trap the entry just written is about. Leaving the rebuild to the reader would ship that
+# trap as the first thing the plugin ever does.
+REBUILD="$SCRIPT_DIR/rebuild-tsv.sh"
+if [ ! -f "$REBUILD" ]; then
+  echo "SKIPPED: $REBUILD is missing, so the index was not rebuilt and the entry just" >&2
+  echo "         written cannot fire. Run rebuild-tsv.sh yourself." >&2
+  exit 2
+fi
+
+# ${PROJECT:-/}, not "$PROJECT": PROJECT is the empty string for `--base
+# /.claude/jit-context` (resolve_dir()'s own comment above), and rebuild-tsv.sh now
+# refuses an EXPLICITLY EMPTY CLAUDE_PROJECT_DIR outright (#417) -- it cannot tell "this
+# caller means the filesystem root" from "some caller's interpolated variable never
+# resolved". "/" is what PROJECT actually names here, so pass that literally rather than
+# the empty spelling of it; the alternative was this exact call silently indexing
+# whatever $PWD happened to be instead of "/" (the same #417 shape, wrong tree, no
+# refusal) any time this script was invoked from somewhere other than "/".
+CPD="${PROJECT:-/}"
+if ! CLAUDE_PROJECT_DIR="$CPD" bash "$REBUILD" > /dev/null 2>&1; then
+  echo "REFUSED: rebuild-tsv.sh did not complete, so the entry is on disk and inert." >&2
+  echo "         Run it yourself and read what it says:" >&2
+  echo "           CLAUDE_PROJECT_DIR=$CPD bash $REBUILD" >&2
+  exit 1
+fi
+
+echo "indexed $BASE/vocabulary/00-manual/00-index.tsv"
+echo ""
+echo "It fires on a prompt about writing entries, and on nothing else. Drive it both ways:"
+echo "  bash $SCRIPT_DIR/jit-dry-run.sh --base $BASE --prompt \"how do I write a jit entry\""
+echo ""
+echo "Then write your own beside it, and rebuild:"
+# $CPD, not $PROJECT: the same #417 substitution as the export and the refusal-branch
+# hint above -- $PROJECT is the empty string in the root-seed case, and a reader who
+# copy-pasted "CLAUDE_PROJECT_DIR= bash ..." from here would hit rebuild-tsv.sh's own new
+# refusal for an explicitly-empty CLAUDE_PROJECT_DIR on the very command this line exists
+# to hand them.
+echo "  CLAUDE_PROJECT_DIR=$CPD bash $REBUILD"
+exit 0
