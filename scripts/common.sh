@@ -2838,22 +2838,29 @@ JIT_AWK_HEREDOC='
 #   1. A line that is entirely a shell comment can never open a real heredoc -- the
 #      whole line, <<WORD included, is text the shell never executes -- yet the
 #      operator regex has no comment awareness and matches one anyway (# <<EOF,
-#      #442 second repro). Skipped outright, before the operator match even runs:
-#      a comment line can only ever make stripping MORE conservative, never less.
+#      #442 second repro). Self-review while fixing #442 found the same gap for a
+#      TRAILING comment on an otherwise real command line (true # <<EOF): the
+#      shell never executes anything from an unquoted # to end of line either,
+#      heredoc operator included. Both shapes are caught by the same scan, below,
+#      rather than two separate checks -- a comment line is just the case where
+#      the unquoted # is the very first character.
 #
 #   2. The operator scan has no quote tracking either, so echo "<<EOF" (#442 first
 #      repro) reads as a real opener even though the <<EOF text sits inside an
 #      ordinary double-quoted argument the shell never treats as a redirection at
-#      all. jit_heredoc_opener_is_quoted() answers whether the characters BEFORE
-#      the matched << on this same line leave an odd (open) single- or double-quote
-#      state -- a small state machine, not a parser, tracking at most one open
-#      quote kind at a time and mirroring real shell escaping: backslash escapes
-#      the next character outside quotes and inside double quotes, and does
-#      nothing special inside single quotes. Its only effect on the outcome is to
-#      turn a match into a non-match, i.e. to suppress stripping -- a wrong
-#      verdict in either direction can only leave this function at least as
-#      conservative as if the check were absent, never less.
-function jit_heredoc_opener_is_quoted(prefix,    i, c, state, n, q1, q2, bs) {
+#      all.
+#
+# jit_heredoc_opener_is_suppressed() answers both at once: scanning the characters
+# BEFORE the matched << on this same line, it returns true the moment it finds
+# either an UNQUOTED # (comment reached before the operator) or ends the scan with
+# an odd (open) single- or double-quote state. A small state machine, not a
+# parser, tracking at most one open quote kind at a time and mirroring real shell
+# escaping: backslash escapes the next character outside quotes and inside double
+# quotes, and does nothing special inside single quotes. Its only effect on the
+# outcome is to turn a match into a non-match, i.e. to suppress stripping -- a
+# wrong verdict in either direction can only leave this function at least as
+# conservative as if the check were absent, never less.
+function jit_heredoc_opener_is_suppressed(prefix,    i, c, state, n, q1, q2, bs) {
   q1 = sprintf("%c", 39)
   q2 = sprintf("%c", 34)
   bs = sprintf("%c", 92)
@@ -2864,6 +2871,7 @@ function jit_heredoc_opener_is_quoted(prefix,    i, c, state, n, q1, q2, bs) {
     if (state == 0) {
       if (c == q1) state = 1
       else if (c == q2) state = 2
+      else if (c == "#") return 1
       else if (c == bs) i++
     } else if (state == 1) {
       if (c == q1) state = 0
@@ -2895,9 +2903,9 @@ function jit_strip_heredoc_body(s,    n, lines, i, j, out, strip_tabs, delim, li
     line = lines[i]
     probed = " " line
     close_i = 0
-    if (!(line ~ /^[ \t]*#/) && match(probed, "[^<]<<-?[ \t]*" qclass "[A-Za-z_][A-Za-z0-9_]*" qclass)) {
+    if (match(probed, "[^<]<<-?[ \t]*" qclass "[A-Za-z_][A-Za-z0-9_]*" qclass)) {
       prefix = substr(probed, 1, RSTART)
-      if (!jit_heredoc_opener_is_quoted(prefix)) {
+      if (!jit_heredoc_opener_is_suppressed(prefix)) {
         op = substr(probed, RSTART + 1, RLENGTH - 1)
         strip_tabs = (substr(op, 1, 3) == "<<-")
         word = op

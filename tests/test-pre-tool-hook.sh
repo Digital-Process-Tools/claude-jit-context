@@ -599,6 +599,21 @@ echo "=== repro 3: a dot-sourced heredoc is executed code, not a payload (issue 
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":". /dev/stdin <<EOF\nheredocblock command\nEOF"}}')
 assert_blocked "a dot-sourced heredoc body still blocks" "$OUT"
 
+echo ""
+echo "=== repro 4: a <<WORD shape after a trailing comment on a real command line is not a real opener (issue #442 self-review) ==="
+# true # <<EOF is a real command (true) followed by a trailing comment -- nothing
+# from the unquoted # onward, <<EOF included, is ever executed, the same reasoning
+# as repro 2's whole-line comment, just not anchored at column 1.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"true # <<EOF\nheredocblock command\nEOF"}}')
+assert_blocked "a <<EOF shape after a trailing comment does not hide the command that follows it" "$OUT"
+
+echo ""
+echo "=== repro 4 control: a genuine heredoc opener is not suppressed by an unrelated earlier # (issue #442 self-review) ==="
+# The # here sits inside a single-quoted argument, not a real comment start -- the
+# suppression scan must track quote state before it ever treats a bare # as one.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd '"'"'#not a comment'"'"' <<EOF\nheredocforbid mentioned only here\nEOF"}}')
+assert_not_contains "a # inside a quoted argument does not suppress a real heredoc opener" "$OUT" '"decision":"block"'
+
 # =============================================
 # SECTION: awk engine matrix — multibyte paths, control characters in entries
 # =============================================
@@ -621,6 +636,31 @@ done
 run_hook_engine() {
   echo "$2" | PATH="$ENGINE_BIN/$1:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2> /dev/null
 }
+
+echo ""
+echo "=== issue #442: every repro plus its positive control blocks on every awk engine on this machine ==="
+# jit_heredoc_opener_is_suppressed() is a character-by-character state machine --
+# exactly the shape this file has previously seen diverge across awk engines
+# (#14, #68, #76 elsewhere in this same file) -- so it gets the same per-engine
+# treatment as the control-character assertions below it, not just the default
+# $PATH awk section 4c already ran it against.
+P442_CONTROL='{"tool_name":"Bash","tool_input":{"command":"heredocblock command"}}'
+P442_R1='{"tool_name":"Bash","tool_input":{"command":"echo \"<<EOF\"\nheredocblock command\nEOF"}}'
+P442_R2='{"tool_name":"Bash","tool_input":{"command":"# <<EOF\nheredocblock command\nEOF"}}'
+P442_R3='{"tool_name":"Bash","tool_input":{"command":". /dev/stdin <<EOF\nheredocblock command\nEOF"}}'
+P442_R4='{"tool_name":"Bash","tool_input":{"command":"true # <<EOF\nheredocblock command\nEOF"}}'
+for eng in $ENGINES; do
+  OUT=$(run_hook_engine "$eng" "$P442_CONTROL")
+  assert_blocked "#442 positive control blocks under $eng" "$OUT"
+  OUT=$(run_hook_engine "$eng" "$P442_R1")
+  assert_blocked "#442 repro 1 (quoted echo) blocks under $eng" "$OUT"
+  OUT=$(run_hook_engine "$eng" "$P442_R2")
+  assert_blocked "#442 repro 2 (comment line) blocks under $eng" "$OUT"
+  OUT=$(run_hook_engine "$eng" "$P442_R3")
+  assert_blocked "#442 repro 3 (dot-source) blocks under $eng" "$OUT"
+  OUT=$(run_hook_engine "$eng" "$P442_R4")
+  assert_blocked "#442 repro 4 (trailing comment) blocks under $eng" "$OUT"
+done
 
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string; a strict parser is entitled
 # to reject the whole object, which renders as the hook having said nothing.
