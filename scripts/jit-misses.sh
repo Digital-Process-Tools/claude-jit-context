@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-jit-context -- report the vocabulary this project keeps not having.
+# jit-context -- report the vocabulary this project keeps not having.
 #
 # pre-prompt-hook.sh already logs every prompt with the entries it matched, or the literal
 # `(none)`. A `(none)` that repeats on the same words is a measured record of what the team

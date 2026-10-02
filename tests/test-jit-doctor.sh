@@ -298,6 +298,65 @@ assert_has "a settings file mentioning neither declines" "$OUT" "cannot tell"
 # verdict it cannot support.
 assert_has "the method behind the verdict is stated" "$OUT" "textual"
 
+# #452: the plugin is now `jit-context`; `claude-jit-context` is the former name, and a
+# marketplace `renames` entry rewrites the key on the user's machine only once they have
+# updated. Both must read as an install, or doctor says "cannot tell" about a working one.
+NEWPROJ="$TMP/newnameproj"
+mkdir -p "$NEWPROJ/.claude/jit-context"
+cat > "$NEWPROJ/.claude/settings.json" << 'JSON'
+{
+  "enabledPlugins": {
+    "jit-context@dpt-plugins": true
+  }
+}
+JSON
+mk_tree "$NEWPROJ/.claude/jit-context"
+ST=0
+run_doctor --base "$NEWPROJ/.claude/jit-context" || ST=$?
+assert_has "#452: the new name in enabledPlugins names the plugin cache" "$OUT" "the plugin cache"
+
+NEWOFF="$TMP/newnameoff"
+mkdir -p "$NEWOFF/.claude/jit-context"
+cat > "$NEWOFF/.claude/settings.json" << 'JSON'
+{
+  "enabledPlugins": {
+    "jit-context@dpt-plugins": false
+  }
+}
+JSON
+mk_tree "$NEWOFF/.claude/jit-context"
+ST=0
+run_doctor --base "$NEWOFF/.claude/jit-context" || ST=$?
+assert_lacks "#452: the new name turned off is not an install" "$OUT" "the plugin cache"
+
+# A different plugin whose name merely ENDS in jit-context is not this one.
+LOOKPROJ="$TMP/lookalikeproj"
+mkdir -p "$LOOKPROJ/.claude/jit-context"
+cat > "$LOOKPROJ/.claude/settings.json" << 'JSON'
+{
+  "enabledPlugins": {
+    "my-jit-context@elsewhere": true
+  }
+}
+JSON
+mk_tree "$LOOKPROJ/.claude/jit-context"
+ST=0
+run_doctor --base "$LOOKPROJ/.claude/jit-context" || ST=$?
+assert_lacks "#452: a lookalike plugin name is not this plugin" "$OUT" "the plugin cache"
+
+# Both cache directory names are copies of this plugin: an install from before the rename
+# sits under the old one, a fresh install under the new one.
+for _d in "dpt-plugins/claude-jit-context/0.12.0" "dpt-plugins/jit-context/0.13.0"; do
+  mkdir -p "$TMP/home/.claude/plugins/cache/$_d/.claude-plugin"
+  printf '{ "name": "x", "version": "%s" }\n' "${_d##*/}" > "$TMP/home/.claude/plugins/cache/$_d/.claude-plugin/plugin.json"
+done
+ST=0
+run_doctor --base "$HEALTHY" || ST=$?
+assert_has "#452: a cache copy under the old name is listed" "$OUT" "claude-jit-context/0.12.0"
+assert_has "#452: a cache copy under the new name is listed" "$OUT" "/jit-context/0.13.0"
+assert_has "#452: and two copies are named as two" "$OUT" "2 copies are installed"
+rm -rf "$TMP/home/.claude/plugins/cache"
+
 # =====================================================================================
 echo ""
 echo "=== thresholds print their own provenance ==="

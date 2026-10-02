@@ -1,9 +1,9 @@
-Third-party notices for claude-jit-context
+Third-party notices for jit-context
 ===========================================
 
 This file exists solely to satisfy the notice and attribution terms carried
 by third-party data bundled in this repository. It changes nothing about
-claude-jit-context's own terms, which remain exactly as stated in LICENSE.
+jit-context's own terms, which remain exactly as stated in LICENSE.
 
 The bundled data is `data/generic-words/` (#251, split into chunks under
 256 KiB each by #437 -- see that directory's own README.md), a combined
@@ -88,7 +88,7 @@ record.
 No modifications to the Covered Software's content are distributed beyond
 this filtering and folding, and none are claimed as this project's own.
 
-This file does not itself alter claude-jit-context's own LICENSE, and is
+This file does not itself alter jit-context's own LICENSE, and is
 not altered by it. LICENSE condition 6 is what defers to the terms named
 here: conditions 1 and 2 do not reach the third-party files listed above,
 and where the terms named here grant rights those conditions would

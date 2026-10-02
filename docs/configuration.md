@@ -1,6 +1,6 @@
 # Configuration
 
-_Part of [claude-jit-context](../README.md). Full reference, not the getting-started arc._
+_Part of [jit-context](../README.md). Full reference, not the getting-started arc._
 
 Optional, in `.claude/jit-context/config.env`:
 

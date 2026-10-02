@@ -1,11 +1,11 @@
 {
-  "name": "claude-jit-context-dev",
+  "name": "jit-context-dev",
   "interface": {
     "displayName": "Digital Process Tools plugins"
   },
   "plugins": [
     {
-      "name": "claude-jit-context",
+      "name": "jit-context",
       "source": {
         "source": "local",
         "path": "./"

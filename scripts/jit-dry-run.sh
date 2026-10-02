@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-jit-context — lint and dry-run one tree's rules.
+# jit-context — lint and dry-run one tree's rules.
 #
 # Why this exists: JIT_BASE resolves against $CLAUDE_PROJECT_DIR (common.sh), so rules
 # are always loaded from the session's project dir and never from the current directory.

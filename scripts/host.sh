@@ -1,7 +1,7 @@
 #!/bin/bash
 # scripts/host.sh -- the host descriptor registry (#252).
 #
-# `claude-jit-context` runs under Claude Code today. This is the table a second and
+# `jit-context` runs under Claude Code today. This is the table a second and
 # third host become entries in, instead of a second and third fork of every hook -- the
 # shape #252 asked for, sized against the `remember` plugin's own prior art rather than
 # invented from scratch: `pipeline/host.py` at 0.24.0 is a frozen four-field dataclass
@@ -18,7 +18,7 @@
 # plugin exists to prevent elsewhere -- a `forbid:` rule that reads as enforced forever
 # while doing nothing. So every row below carries an ENVELOPE contract (what an inject
 # looks like, what a refusal looks like, whether refusal exists at all) and a STATE
-# distinguishing "claude-jit-context has been run here and this is what was seen" from
+# distinguishing "jit-context has been run here and this is what was seen" from
 # "this row exists so a fourth host is a table entry, not a guess dressed as one."
 #
 # Bash 3.2 (macOS, and Git Bash) has no associative arrays -- the same constraint
@@ -38,7 +38,7 @@
 #                        is documented
 #   4  plugin_root_var   the var(s) this host sets for the plugin install dir
 #                        (comma-separated, precedence order), or ""
-#   5  state             OBSERVED or UNKNOWN -- has claude-jit-context ITSELF been run
+#   5  state             OBSERVED or UNKNOWN -- has jit-context ITSELF been run
 #                        under this host and watched fire. Never set to OBSERVED on
 #                        the strength of another plugin's observation: remember 0.24.0
 #                        watched Codex fire its own INJECT-ONLY hooks, which was never

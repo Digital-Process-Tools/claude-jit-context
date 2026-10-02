@@ -86,7 +86,7 @@ assert_contains "carries the actual count" "$OUT" "x3"
 # issue number, no flag. #246's "not filtered for ordinary words" caveat is gone because
 # jit-misses.sh now filters them itself (data/generic-words/, #437); `deploy` is in that
 # list and must not be offered, `preprod` is not and must.
-assert_contains "names the skill that writes the entry" "$OUT" "/claude-jit-context:vocabulary"
+assert_contains "names the skill that writes the entry" "$OUT" "/jit-context:vocabulary"
 assert_contains "and the setting that turns the line off" "$OUT" "JIT_CONTEXT_MISSES=off"
 assert_not_contains "#386 no issue number in a line a person reads" "$OUT" "#2"
 assert_not_contains "#386 no window either" "$OUT" "line(s) of the log"

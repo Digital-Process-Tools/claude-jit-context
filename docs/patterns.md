@@ -1,6 +1,6 @@
 # Patterns are awk, not PCRE
 
-_Part of [claude-jit-context](../README.md). Full reference, not the getting-started arc._
+_Part of [jit-context](../README.md). Full reference, not the getting-started arc._
 
 Every regex — a `paths` `match`, and a `tools` `match` prefixed with `~` — is compiled by
 **awk**, so it is a POSIX ERE. PCRE shorthand classes do not exist there, and the failure

@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-jit-context -- what fired this session, on what word, and what it cost (#389).
+# jit-context -- what fired this session, on what word, and what it cost (#389).
 #
 # The Stop line (scripts/stop-hook.sh) carries a total and, when every fired entry's
 # byte record agrees, a size -- and nothing else. This is where the detail #367

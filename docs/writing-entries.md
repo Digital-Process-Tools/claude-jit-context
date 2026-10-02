@@ -1,6 +1,6 @@
 # Writing an entry
 
-_Part of [claude-jit-context](../README.md). Full reference, not the getting-started arc._
+_Part of [jit-context](../README.md). Full reference, not the getting-started arc._
 
 Every entry is a markdown file with YAML frontmatter, in `00-manual/`. The frontmatter is the only structured part; the body is free-form and goes into context as written, unless the project has opted in to [`summary` mode](../README.md#what-a-match-costs) or the body itself uses `{{dimension/layer/file.md}}` transclusion to pull another entry in (`.claude/jit-context/paths/00-manual/entries.md`).
 

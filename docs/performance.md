@@ -1,6 +1,6 @@
 # Performance
 
-_Part of [claude-jit-context](../README.md). Full reference, not the getting-started arc._
+_Part of [jit-context](../README.md). Full reference, not the getting-started arc._
 
 Every hook is a **single `awk` process**. Frontmatter is parsed at build time into TSV, so the runtime path is a flat file scan with no JSON parsing, no `jq`, and no subprocess per rule. Typical hook time is 30–110 ms, which matters because these run on _every_ prompt and _every_ tool call.
 
