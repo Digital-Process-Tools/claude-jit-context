@@ -11,7 +11,7 @@
 #
 # Usage: bash tests/test-hook-command-quoting-450.sh
 #
-# jit-drive: all -- every hook command in hooks/hooks.json is run once, unchanged.
+# jit-drive: none -- this suite defines no assertion helper; it runs each hooks.json command once
 
 set -uo pipefail
 
