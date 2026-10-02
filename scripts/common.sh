@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shared functions for claude-jit-context hooks and pipeline scripts.
+# Shared functions for jit-context hooks and pipeline scripts.
 # Source this at the top of every script: source "$(dirname "$0")/common.sh"
 
 # --- Splitting a path, without forking to do it (#307-follow-on) ---------------------

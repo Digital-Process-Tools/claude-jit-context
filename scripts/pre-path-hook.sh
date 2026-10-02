@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-jit-context — Path-based PreToolUse hook
+# jit-context — Path-based PreToolUse hook
 # One awk program: parses JSON, matches file path against TSV patterns, outputs JSON.
 # Supports Read/Edit/Write/Glob/Grep (file_path/path) AND Bash (command field).
 # The program runs TWICE for a Bash command whose tokens name real files -- once to extract

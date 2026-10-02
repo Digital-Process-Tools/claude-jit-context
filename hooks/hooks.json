@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/session-start-hook.sh"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start-hook.sh\""
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/pre-prompt-hook.sh"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/pre-prompt-hook.sh\""
           }
         ]
       }
@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/pre-tool-hook.sh"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/pre-tool-hook.sh\""
           }
         ]
       },
@@ -34,7 +34,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/pre-path-hook.sh"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/pre-path-hook.sh\""
           }
         ]
       }
@@ -45,7 +45,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/post-tool-hook.sh"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/post-tool-hook.sh\""
           }
         ]
       }
@@ -55,7 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/stop-hook.sh"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/stop-hook.sh\""
           }
         ]
       }

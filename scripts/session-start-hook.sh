@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-jit-context — SessionStart hook
+# jit-context — SessionStart hook
 # Clears this session "once" markers so entries fire fresh, and ages out the ones no
 # session will come back for. Patterns: vocab (pre-prompt, pre-tool), path (pre-path).
 #
@@ -281,7 +281,7 @@ if [ "$JIT_STATUS" = "off" ]; then
 else
   JIT_LINES=""
   if [ -n "$JIT_RECUR" ] && [ "$JIT_MISSES" != "off" ]; then
-    JIT_LINES="JIT : you use these words a lot and no entry matches them: $JIT_RECUR. Write one with /claude-jit-context:vocabulary <word>, or turn this off with JIT_CONTEXT_MISSES=off in .claude/jit-context/config.env"
+    JIT_LINES="JIT : you use these words a lot and no entry matches them: $JIT_RECUR. Write one with /jit-context:vocabulary <word>, or turn this off with JIT_CONTEXT_MISSES=off in .claude/jit-context/config.env"
   elif [ -n "$JIT_SKIP_REASON" ] && [ "$JIT_MISSES" != "off" ]; then
     JIT_LINES="JIT : recurring words could not be evaluated ($JIT_SKIP_REASON)"
   fi

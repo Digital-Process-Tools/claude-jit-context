@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-jit-context -- is any of this running at all, and against which tree?
+# jit-context -- is any of this running at all, and against which tree?
 #
 # The other four tools under scripts/ answer three good questions: can this pattern be
 # honoured (jit-dry-run.sh), what does a match cost (rebuild-tsv.sh), what does the agent
@@ -279,7 +279,10 @@ scan_settings() {
   # `cannot tell`, which is the whole reason that verdict is a first-class one.
   enab=0
   if LC_ALL=C awk '/"enabledPlugins"[[:space:]]*:/ { found = 1 } END { exit !found }' "$f"; then
-    enab=$(LC_ALL=C awk '/"claude-jit-context(@[^"]*)?"[[:space:]]*:[[:space:]]*true/ { n++ } END { print n + 0 }' "$f")
+    # #452: `jit-context` is the name, `claude-jit-context` the former one. A marketplace
+    # `renames` entry rewrites the key only once the user has updated, so both are this
+    # plugin. Anchored on the opening quote, so `my-jit-context` is not.
+    enab=$(LC_ALL=C awk '/"(claude-)?jit-context(@[^"]*)?"[[:space:]]*:[[:space:]]*true/ { n++ } END { print n + 0 }' "$f")
   fi
   hooksline=$(LC_ALL=C awk '/(pre-prompt|pre-tool|pre-path|session-start)-hook[.]sh/ { n++ } END { print n + 0 }' "$f")
   cacheline=$(LC_ALL=C awk '/(pre-prompt|pre-tool|pre-path|session-start)-hook[.]sh/ && (/CLAUDE_PLUGIN_ROOT/ || /plugins\/cache/) { n++ } END { print n + 0 }' "$f")
@@ -350,7 +353,11 @@ if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
   note_cache "$CLAUDE_PLUGIN_ROOT"
 fi
 if [ -n "${HOME:-}" ]; then
-  for _c in "$HOME"/.claude/plugins/cache/*/claude-jit-context \
+  # #452: the cache directory is named after the plugin, so an install from before the
+  # rename and one after it sit under different names. Both are copies of this plugin.
+  for _c in "$HOME"/.claude/plugins/cache/*/jit-context \
+    "$HOME"/.claude/plugins/cache/*/jit-context/* \
+    "$HOME"/.claude/plugins/cache/*/claude-jit-context \
     "$HOME"/.claude/plugins/cache/*/claude-jit-context/*; do
     [ -d "$_c/.claude-plugin" ] && note_cache "$_c"
   done

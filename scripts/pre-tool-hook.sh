@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-jit-context — PreToolUse hook
+# jit-context — PreToolUse hook
 # Single awk process: parses JSON, scans tool + vocab TSVs, outputs JSON.
 # Bash wrapper only handles timing (2 perl calls) and log writing.
 

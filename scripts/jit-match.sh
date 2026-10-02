@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude-jit-context -- "which entries does this text call for?", answerable from outside
+# jit-context -- "which entries does this text call for?", answerable from outside
 # a session (#205).
 #
 # A headless run (`claude -p`) sends exactly one prompt, usually built from paths rather

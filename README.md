@@ -1,6 +1,6 @@
-# claude-jit-context
+# jit-context
 
-![claude-jit-context — know more, carry less](https://raw.githubusercontent.com/Digital-Process-Tools/claude-jit-context/main/docs/jit-context.png)
+![jit-context — know more, carry less](https://raw.githubusercontent.com/Digital-Process-Tools/claude-jit-context/main/docs/jit-context.png)
 
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-d97757)](#from-our-marketplace-recommended)
 [![Codex](https://img.shields.io/badge/Codex-plugin-000000)](#codex)
@@ -8,7 +8,7 @@
 [![Shell](https://img.shields.io/badge/bash-3.2%2B-blue)](https://www.gnu.org/software/bash/)
 [![OS](https://img.shields.io/badge/tested%20on-Linux%20%7C%20macOS%20%7C%20Windows-blue)](https://github.com/Digital-Process-Tools/claude-jit-context/actions/workflows/tests.yml)
 [![License](https://img.shields.io/badge/license-Community-brightgreen)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.12.0-orange)](.claude-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-0.13.0-orange)](.claude-plugin/plugin.json)
 
 **Your agent should know what your team knows.**
 
@@ -18,7 +18,7 @@ Claude Code does not have your vocabulary. So you re-explain it — every sessio
 
 The usual fix is `.claude/rules/`, or a `CLAUDE.md` that keeps growing. It works right up until it does not: every file loads at session start, every session, whether or not that session goes anywhere near the code it describes. So you keep the rules file small. So the vocabulary stays in people's heads.
 
-claude-jit-context takes the ceiling off. Knowledge moves behind pattern matching, and arrives at the moment it applies: the migration note loads when someone opens a migration. The billing gotcha loads when the prompt says billing. A session that never touches PHP never pays for the PHP conventions.
+jit-context takes the ceiling off. Knowledge moves behind pattern matching, and arrives at the moment it applies: the migration note loads when someone opens a migration. The billing gotcha loads when the prompt says billing. A session that never touches PHP never pays for the PHP conventions.
 
 **Know more. Carry less.** Everything else that saves context makes the agent dumber — trim the rules, drop the conventions, summarize the docs. This is the one lever that cuts what is *resident* without cutting what is *known*.
 
@@ -98,7 +98,7 @@ A codebase accumulates this way faster than anyone expects. That is why pillar o
 
 ```
 /plugin marketplace add Digital-Process-Tools/claude-marketplace
-/plugin install claude-jit-context@dpt-plugins
+/plugin install jit-context@dpt-plugins
 ```
 
 To update later:
@@ -115,7 +115,7 @@ The same hooks, from a separate catalogue. Claude Code reads `.claude-plugin/mar
 
 ```
 codex plugin marketplace add Digital-Process-Tools/codex-marketplace
-codex plugin add claude-jit-context@dpt-plugins
+codex plugin add jit-context@dpt-plugins
 ```
 
 **Then trust the hooks, or none of this runs.** Codex skips an untrusted hook the way it skips a hook that is not there: no warning, no non-zero exit, no transcript line, the tool call simply proceeds. So the symptom is that nothing happens, and nothing happening is also what a rule that does not match looks like. Count them before you debug a rule — six is the number for this plugin:
