@@ -84,7 +84,7 @@ assert_contains "carries the actual repeated token" "$OUT" "preprod"
 assert_contains "carries the actual count" "$OUT" "x3"
 # #386: one report, two actions a person can take, and nothing else -- no window, no
 # issue number, no flag. #246's "not filtered for ordinary words" caveat is gone because
-# jit-misses.sh now filters them itself (data/generic-words.txt); `deploy` is in that
+# jit-misses.sh now filters them itself (data/generic-words/, #437); `deploy` is in that
 # list and must not be offered, `preprod` is not and must.
 assert_contains "names the skill that writes the entry" "$OUT" "/claude-jit-context:vocabulary"
 assert_contains "and the setting that turns the line off" "$OUT" "JIT_CONTEXT_MISSES=off"

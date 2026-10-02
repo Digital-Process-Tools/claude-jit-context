@@ -4412,3 +4412,34 @@ jit_awk_dispatch() {
     "$empty_fn" "$JIT_AWK_CAPTURE_RC"
   fi
 }
+
+# --- The generic-word list: one plain file, or a directory of chunks (#437) --------
+# The shipped data/generic-words.txt (1,027,699 bytes, 103,843 lines) was split into
+# data/generic-words/chunk-NN.txt, each comfortably under 256 KiB, for the Anthropic
+# plugin directory's rule that holds any non-image file of that size or more --
+# concatenating the chunks in name order reproduces the original file byte for byte;
+# nothing was reordered or deduplicated. rebuild-tsv.sh's own default now names the
+# DIRECTORY; a caller-configured JIT_CONTEXT_GENERIC_WORDS / DYNAMIC_RULES_GENERIC_WORDS
+# may still name either a single plain file (unchanged) or a directory, read the same
+# chunked way.
+#
+# Prints one member path per line, sorted by name -- callers split this on a newline
+# (ENVIRON, never -v: see JIT_SYMLINKS above for why a newline-bearing value travels
+# that way). Prints nothing for an empty PATH or one that is neither a file nor a
+# directory; the caller's own existence/readability checks still see that absence and
+# report it loudly -- this function never swallows it.
+jit_generic_words_members() {
+  local path="$1" f
+  [ -n "$path" ] || return 0
+  if [ -f "$path" ]; then
+    printf '%s\n' "$path"
+    return 0
+  fi
+  if [ -d "$path" ]; then
+    for f in "$path"/*.txt; do
+      [ -f "$f" ] || continue
+      printf '%s\n' "$f"
+    done | LC_ALL=C sort
+  fi
+  return 0
+}

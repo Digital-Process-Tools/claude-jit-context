@@ -249,21 +249,60 @@ if [ "$GENERIC_WORDS_SET" -eq 0 ]; then
     # No dirname fork -- session-start-hook.sh runs this on every session and
     # tests/test-fork-count.sh counts the hook's whole process tree, this child included.
     case "$0" in */*) _JIT_MISSES_DIR="${0%/*}" ;; *) _JIT_MISSES_DIR="." ;; esac
-    GENERIC_WORDS="$_JIT_MISSES_DIR/../data/generic-words.txt"
+    # #437: the shipped default moved from a single 1 MB file to a directory of chunks
+    # (data/generic-words/, each chunk under 256 KiB) for the Anthropic plugin
+    # directory's per-file size limit. _jit_misses_generic_members() below reads
+    # either shape; --generic-words PATH / JIT_CONTEXT_GENERIC_WORDS /
+    # DYNAMIC_RULES_GENERIC_WORDS may still name a single plain file, unchanged.
+    GENERIC_WORDS="$_JIT_MISSES_DIR/../data/generic-words"
   fi
 fi
+# #437: GENERIC_WORDS may now name a directory of chunks rather than one plain file.
+# This script deliberately does not source common.sh (see the header), so this is a
+# byte-identical COPY of jit_generic_words_members() there rather than a shared call --
+# same convention this file already keeps for jit_fold_latin1() below. Prints one
+# member path per line, sorted by name; nothing for an empty/missing/non-file,
+# non-directory path.
+_jit_misses_generic_members() {
+  _jgm_path="$1"
+  [ -n "$_jgm_path" ] || return 0
+  if [ -f "$_jgm_path" ]; then
+    printf '%s\n' "$_jgm_path"
+    return 0
+  fi
+  if [ -d "$_jgm_path" ]; then
+    for _jgm_f in "$_jgm_path"/*.txt; do
+      [ -f "$_jgm_f" ] || continue
+      printf '%s\n' "$_jgm_f"
+    done | LC_ALL=C sort
+  fi
+  return 0
+}
+GENERIC_MEMBERS="$(_jit_misses_generic_members "$GENERIC_WORDS")"
 GENERIC_STATE=ok
 if [ -z "$GENERIC_WORDS" ]; then
   GENERIC_STATE=off
-elif [ ! -f "$GENERIC_WORDS" ] || [ ! -r "$GENERIC_WORDS" ]; then
+elif [ -z "$GENERIC_MEMBERS" ]; then
   GENERIC_STATE=missing
+else
+  while IFS= read -r _gw_member; do
+    [ -n "$_gw_member" ] || continue
+    if [ ! -r "$_gw_member" ]; then
+      GENERIC_STATE=missing
+      break
+    fi
+  done <<< "$GENERIC_MEMBERS"
 fi
-# awk reads the list as a first input file, told apart from the log by FILENAME rather
-# than FNR==NR -- an empty list would otherwise make the log's own first file "the
-# list". A list in the `missing`/`off` state is simply not passed, so FILENAME never
-# matches and the branch is dead by construction rather than by a flag.
-GENERIC_ARG=""
-[ "$GENERIC_STATE" = ok ] && GENERIC_ARG="$GENERIC_WORDS"
+# awk reads each member as an input file ahead of the log, told apart from the log by
+# FILENAME (isgenericfile[], not FNR==NR) -- an empty list would otherwise make the
+# log's own first file "the list". A list in the `missing`/`off` state contributes no
+# ARGV entry at all, so the branch is dead by construction rather than by a flag.
+# ENVIRON (never -v, same reason rebuild-tsv.sh gives at GENERIC_WORDS_FILES): a -v
+# value has its escapes processed, and this is newline-separated.
+GENERIC_ARG_FILES_ENV=""
+if [ "$GENERIC_STATE" = ok ]; then
+  GENERIC_ARG_FILES_ENV="$GENERIC_MEMBERS"
+fi
 
 # LC_ALL=C, for the same reason the three hooks pin it (#68) and one that is specific to
 # this tool: the file it reads is one THE HOOKS WROTE, and they truncate the prompt copy at
@@ -322,6 +361,14 @@ GENERIC_ARG=""
 # accepting the pipe unconditionally.
 JIT_MISSES_AWK_PROG='
 BEGIN {
+  # #437: GENERIC_ARG_FILES_ENV is a newline-separated list of member paths (one file,
+  # or every chunk of a directory -- see _jit_misses_generic_members() above), read
+  # through ENVIRON rather than -v for the same reason rebuild-tsv.sh gives at
+  # GENERIC_WORDS_FILES: a -v value has its escapes PROCESSED. Each member becomes an
+  # ARGV entry (see the invocation below) and this just tells them apart from the log
+  # by exact path, the same way the old single-genfile FILENAME test did.
+  ngf = split(ENVIRON["GENERIC_ARG_FILES_ENV"], genfiles, "\n")
+  for (gfi = 1; gfi <= ngf; gfi++) if (genfiles[gfi] != "") isgenericfile[genfiles[gfi]] = 1
   # Filler that two prompts can share without sharing a subject. Deliberately short and
   # visible: it is the only part of the grouping rule that is a matter of taste, and a
   # word missing from here costs a noisy row, never a silent one.
@@ -342,7 +389,7 @@ BEGIN {
 
 # #386: the generic wordlist, one lowercase token per line, "#" lines and blanks
 # ignored -- the same read rebuild-tsv.sh does. Keyed on FILENAME, never FNR==NR.
-genfile != "" && FILENAME == genfile {
+(FILENAME in isgenericfile) {
   if ($0 == "" || substr($0, 1, 1) == "#") next
   generic[$0] = 1
   next
@@ -549,7 +596,7 @@ END {
   # #386: which of the three wordlist states held, always, so a person can tell a
   # filtered report from one that could not filter. Counted as occurrences set aside,
   # the same unit `set aside` above already uses.
-  if (genstate == "ok") printf "  %d generic word(s) set aside (%s)\n", setaside_generic, genfile
+  if (genstate == "ok") printf "  %d generic word(s) set aside (%s)\n", setaside_generic, genname
   else if (genstate == "off") printf "  generic words not filtered (--generic-words \"\")\n"
   else printf "  generic words NOT filtered -- the list cannot be read: %s\n", genname
 
@@ -587,13 +634,22 @@ END {
   exit 0
 }
 '
+# #437: GENERIC_ARG_FILES, an array, replaces the old single-path GENERIC_ARG --
+# every member (one file, or every chunk of a directory) becomes its own ARGV entry
+# ahead of the log, read by the BEGIN/isgenericfile[] block above via ENVIRON. Empty
+# when the list is off or missing, contributing no ARGV entry at all, same as before.
+GENERIC_ARG_FILES=()
+if [ -n "$GENERIC_ARG_FILES_ENV" ]; then
+  while IFS= read -r _gw_member; do
+    [ -n "$_gw_member" ] && GENERIC_ARG_FILES+=("$_gw_member")
+  done <<< "$GENERIC_ARG_FILES_ENV"
+fi
 if [ -n "$TAIL" ]; then
   # `-` is stdin. FILENAME is "-" (gawk) or "" (one-true-awk) there, and neither is ever
-  # the list's path, so the FILENAME branch stays exact. ${GENERIC_ARG:+"$GENERIC_ARG"}
-  # contributes no argument at all when the list is off or missing.
-  _JIT_MISSES_OUT=$(LC_ALL=C tail -n "$TAIL" -- "$LOG" | LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" -v bounded=1 -v tailn="$TAIL" -v logbytes="$LOGBYTES" -v threshold="$SIZE_THRESHOLD" -v genfile="$GENERIC_ARG" -v genstate="$GENERIC_STATE" -v genname="$GENERIC_WORDS" "$JIT_MISSES_AWK_PROG" ${GENERIC_ARG:+"$GENERIC_ARG"} -)
+  # one of the list's paths, so the isgenericfile[] branch stays exact.
+  _JIT_MISSES_OUT=$(LC_ALL=C tail -n "$TAIL" -- "$LOG" | GENERIC_ARG_FILES_ENV="$GENERIC_ARG_FILES_ENV" LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" -v bounded=1 -v tailn="$TAIL" -v logbytes="$LOGBYTES" -v threshold="$SIZE_THRESHOLD" -v genstate="$GENERIC_STATE" -v genname="$GENERIC_WORDS" "$JIT_MISSES_AWK_PROG" "${GENERIC_ARG_FILES[@]}" -)
 else
-  _JIT_MISSES_OUT=$(LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" -v bounded=0 -v tailn=0 -v logbytes="$LOGBYTES" -v threshold="$SIZE_THRESHOLD" -v genfile="$GENERIC_ARG" -v genstate="$GENERIC_STATE" -v genname="$GENERIC_WORDS" "$JIT_MISSES_AWK_PROG" ${GENERIC_ARG:+"$GENERIC_ARG"} "$LOG")
+  _JIT_MISSES_OUT=$(GENERIC_ARG_FILES_ENV="$GENERIC_ARG_FILES_ENV" LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" -v bounded=0 -v tailn=0 -v logbytes="$LOGBYTES" -v threshold="$SIZE_THRESHOLD" -v genstate="$GENERIC_STATE" -v genname="$GENERIC_WORDS" "$JIT_MISSES_AWK_PROG" "${GENERIC_ARG_FILES[@]}" "$LOG")
 fi
 _JIT_MISSES_RC=$?
 

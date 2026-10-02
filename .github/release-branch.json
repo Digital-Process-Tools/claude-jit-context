@@ -1,0 +1,29 @@
+{
+  "_about": "Config for .github/scripts/{build,check,smoke}_release_tree.py (#437, ported from claude-remember's #851). The `release` branch is what the Anthropic plugin directory fetches; main keeps everything. See docs/releasing.md (ported from claude-remember's docs/releasing.md 'Reusing this in another plugin repository' section).",
+  "repo": "Digital-Process-Tools/claude-jit-context",
+  "default_branch": "main",
+  "_deny_why": "Deny-list, not allow-list: a path forgotten here ships and is caught loudly by the size/count check; a path forgotten in an allow-list would vanish from users' installs silently. Entry ending in '/' = directory prefix, otherwise an exact path. Every entry here was checked against what hooks/hooks.json, scripts/*.sh and .claude-plugin/plugin.json actually load at runtime before being added (#437) -- see each entry's own comment in the PR/issue for the reasoning; summarised: tests/docs/.github/.oss/.agents/outbound are dev-or-maintainer-loop tooling the plugin's own runtime never opens, changelog.d/trap.d are fragments folded or curated elsewhere, .claude/ is this repo's OWN dogfood use of the plugin rather than the plugin's shipped content, and the dotfile configs are this repository's contributor tooling.",
+  "deny": [
+    ".agents/",
+    ".claude/",
+    ".github/",
+    ".oss/",
+    "changelog.d/",
+    "docs/",
+    "outbound/",
+    "tests/",
+    "trap.d/",
+    ".oss.json",
+    ".supertool.json",
+    "CLAUDE.md",
+    "CONTRIBUTING.md"
+  ],
+  "_budget_why": "max_file_bytes and max_files are the directory's own rules (pre-submission checklist, 'Files in the plugin folder'); images and fonts are exempt from the per-file limit. max_total_bytes (3 MiB) is this repository's own ceiling, matching claude-remember's -- the shipped tree here measures about 2.1 MB (#437), comfortably under it.",
+  "budget": {
+    "max_file_bytes": 262144,
+    "max_files": 512,
+    "max_total_bytes": 3145728
+  },
+  "changelog": "CHANGELOG.md",
+  "rewrite_links": true
+}
