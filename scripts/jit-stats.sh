@@ -30,6 +30,25 @@
 
 case "$0" in */*) SCRIPT_DIR="${0%/*}" ;; *) SCRIPT_DIR="." ;; esac
 MISSES_TOP=20
+
+# commands/stats.md hands the whole typed $ARGUMENTS string through this one
+# synthetic flag instead of splitting it in the command body's own `bash -c`
+# (#405's fix). That wrapper made the body's first word `bash -c`, which the
+# Anthropic directory holds as unscoped shell access no matter what follows
+# it, so the allowed-tools grant could never narrow to this script (#439).
+# Splitting happens HERE instead, under the bash this script always runs
+# under -- #405 only mattered when the splitting ran in whatever shell
+# happened to execute the command body, which was never guaranteed to be bash.
+if [ "${1:-}" = "--arguments-string" ]; then
+  [ $# -ge 2 ] || {
+    echo "jit-stats.sh: --arguments-string needs a value" >&2
+    exit 2
+  }
+  IFS=' ' read -r -a _jit_stats_split_args <<< "${2:-}"
+  shift 2
+  set -- "${_jit_stats_split_args[@]+"${_jit_stats_split_args[@]}"}" "$@"
+fi
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --base)

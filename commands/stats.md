@@ -1,12 +1,12 @@
 ---
 description: What fired this session, on what word, and what it cost -- the detail the Stop line's one-line total points at.
-allowed-tools: Bash
+allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh:*)
 ---
 
 Run the report and relay its output verbatim:
 
 ```bash
-bash -c 'IFS=" " read -r -a jit_stats_args <<< "${1:-}"; exec bash "$2/scripts/jit-stats.sh" "${jit_stats_args[@]+"${jit_stats_args[@]}"}"' _ "${ARGUMENTS:-}" "${CLAUDE_PLUGIN_ROOT}"
+bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh --arguments-string "${ARGUMENTS:-}"
 ```
 
 `${CLAUDE_PLUGIN_ROOT}` is the same resolution `commands/doctor.md` and `commands/init.md`
@@ -15,19 +15,26 @@ that changes on every update.
 
 `jit-stats.sh` parses `--base <tree>` and `--misses-top <n>` the same way `jit-doctor.sh`
 parses `--base` -- two separate words -- so `$ARGUMENTS` genuinely carries more than one
-shell word here, and the array built from `read -a` makes that splitting explicit rather
-than leaning on bash's own unquoted-expansion word-splitting (#278).
+shell word here. The body above passes the whole string as ONE quoted argument to a
+synthetic `--arguments-string` flag rather than splitting it here (#439): a bare
+`allowed-tools: Bash` grants every shell command, and narrowing it to one script only works
+if the body's own first words are that exact script invocation -- the previous body wrapped
+everything in an explicit `bash -c '...'`, which made the body's first word `bash -c`, not
+the script, so no grant could ever name just this script. `jit-stats.sh` now builds the
+array itself with `read -a`, which splits on spaces and never globs; quoting the value here
+is what keeps a typed value containing `*` or `?` from matching whatever files sat in the
+current directory and splicing in as extra arguments (#278).
 
-**The `read -a` itself runs inside an explicit `bash -c`, not in whatever shell runs this
-command body (#405).** `read -a` is a bash-only spelling of the builtin -- zsh spells it
-`read -A` and errors `bad option: -a` on the bash form -- and a slash command's fenced
-`bash` body is not guaranteed to run under bash. Before this fix, that error left
-`$jit_stats_args` unset and the script below ran with **no arguments at all**: a typed
-`--misses-top 30` or `--base <tree>` was silently dropped rather than reaching the script,
-which then produced a plausible report answering a different question than the one asked.
-`ARGUMENTS` and `CLAUDE_PLUGIN_ROOT` are passed in as `$1`/`$2` (POSIX parameter expansion,
-valid in every shell that could be running this body) so the actual word-splitting always
-happens inside a real bash, regardless of what invoked it.
+**The `read -a` now runs inside `jit-stats.sh` itself, which always runs under a real bash,
+not in whatever shell runs this command body (#405).** `read -a` is a bash-only spelling of
+the builtin -- zsh spells it `read -A` and errors `bad option: -a` on the bash form -- and a
+slash command's fenced `bash` body is not guaranteed to run under bash. Before the #405 fix,
+that error left the split array unset and the script ran with **no arguments at all**: a
+typed `--misses-top 30` or `--base <tree>` was silently dropped rather than reaching the
+script, which then produced a plausible report answering a different question than the one
+asked. Invoking `bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh` explicitly, as the body
+above does, guarantees the script itself -- and therefore the `read -a` inside it -- always
+runs under bash regardless of what shell is running this fenced body.
 
 Do not summarise away any line -- relay the report exactly as printed. Three outcomes:
 
