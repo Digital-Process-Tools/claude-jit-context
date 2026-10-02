@@ -665,8 +665,12 @@ for ENG in $ENGINES; do
   src172() {
     # Comment lines are dropped: the block inside the program names classes in prose, and a
     # check that could not tell the prose from the regex would fail on the fixed code.
+    #
+    # #442: JIT_AWK_FRONTMATTER moved out of common.sh into common-awk.sh (split so
+    # common.sh stays under the Anthropic plugin directory's 256 KiB per-file limit);
+    # jit_frontmatter() itself, the bash wrapper around it, stayed in common.sh.
     {
-      awk '/^JIT_AWK_FRONTMATTER=/, /^.$/' "$SCRIPTS/common.sh"
+      awk '/^JIT_AWK_FRONTMATTER=/, /^.$/' "$SCRIPTS/common-awk.sh"
       awk '/^jit_frontmatter\(\) \{/, /^\}/' "$SCRIPTS/common.sh"
     } | awk '$0 !~ /^[ \t]*#/' > "$OUT" 2> /dev/null
   }

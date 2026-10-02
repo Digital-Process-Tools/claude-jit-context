@@ -69,6 +69,13 @@ echo "heredoc forbid rule context" > "$TOOLS_DIR/hd-forbid.md"
 # these rows are the coverage for it.
 printf 'Bash\thdreq\thd-require.md\tremind\treqflag\t\n' >> "$TOOLS_DIR/$IDX"
 echo "heredoc require rule context" > "$TOOLS_DIR/hd-require.md"
+# A genuine `mode: block` ~ regex row for issue #442 -- matched directly against
+# fold_full (the "~" arm bypasses the ordinary match:-against-fold_cmd gate the
+# other rows above use), with no require:/forbid: column involved at all. This is
+# the exact shape #442 reports as failing open: a heredoc stripper permissive
+# enough to hide real command text from it.
+printf 'Bash\t~heredocblock\thd-block.md\tblock\t\t\n' >> "$TOOLS_DIR/$IDX"
+echo "heredoc block rule context" > "$TOOLS_DIR/hd-block.md"
 
 # Vocabulary TSV: keyword<TAB>file
 printf 'blog\tblog.md\n' > "$VOCAB_DIR/00-manual/00-index.tsv"
@@ -443,7 +450,7 @@ assert_blocked "blocked when --limit really is missing" "$OUT"
 
 echo ""
 echo "=== ~ regex rule: heredoc body mentioning the pattern does not fire (issue #432) ==="
-OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"true <<'"'"'EOF'"'"'\ngh pr view is mentioned here only\nEOF"}}')
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"cat > /tmp/jit442-sink.txt <<'"'"'EOF'"'"'\ngh pr view is mentioned here only\nEOF"}}')
 assert_not_contains "heredoc body text does not reach the anchored regex rule" "$OUT" "gh pr view rule context"
 
 echo ""
@@ -453,7 +460,10 @@ assert_contains "the anchored regex rule still fires once gh pr view is a real c
 
 echo ""
 echo "=== forbid: heredoc body mentioning the forbidden word does not block (issue #432) ==="
-OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd <<'"'"'EOF'"'"'\nplease do not run heredocforbid here\nEOF"}}')
+# cat redirecting to a file (not the bare hdcmd stand-in) -- issue #442 round 3
+# requires a REAL known payload sink before a body is treated as data rather than
+# command text; hdcmd; prefixed on so the forbid rows own match: gate still fires.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; cat > /tmp/jit442-sink.txt <<'"'"'EOF'"'"'\nplease do not run heredocforbid here\nEOF"}}')
 assert_not_contains "a forbidden word inside a heredoc body does not block" "$OUT" '"decision":"block"'
 
 echo ""
@@ -463,7 +473,7 @@ assert_blocked "the forbid row still blocks once the word is a real command" "$O
 
 echo ""
 echo "=== <<- strips leading tabs before matching the closing delimiter (issue #432) ==="
-OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd <<-'"'"'EOF'"'"'\n\theredocforbid inside a tab-indented body\n\tEOF\necho done"}}')
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; cat > /tmp/jit442-sink.txt <<-'"'"'EOF'"'"'\n\theredocforbid inside a tab-indented body\n\tEOF\necho done"}}')
 assert_not_contains "a tab-indented <<- body does not block" "$OUT" '"decision":"block"'
 
 echo ""
@@ -509,34 +519,80 @@ echo "=== self-review: a backslash-quoted delimiter (<<\\DELIM) is recognized to
 # different spelling -- the first cut of the operator regex only accepted a single/double
 # quote before the word, so this legitimate heredoc form was not recognized at all and
 # the original #432 bug persisted for it.
-OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd <<\\EOF\nheredocforbid mentioned only here\nEOF"}}')
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; cat > /tmp/jit442-sink.txt <<\\EOF\nheredocforbid mentioned only here\nEOF"}}')
 assert_not_contains "a backslash-quoted delimiter heredoc body does not block" "$OUT" '"decision":"block"'
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd <<\\EOF\nirrelevant\nEOF\nheredocforbid now"}}')
 assert_blocked "positive control: the word after a backslash-quoted-delimiter heredoc still blocks" "$OUT"
 
 echo ""
-echo "=== self-review: a heredoc piped to an interpreter is genuinely-executed code, not a payload (issue #432) ==="
-# Reviewer finding: stripping EVERY heredoc body unconditionally would let `bash <<EOF`
-# (or sh/ssh/python/...) carry a forbidden word straight past a forbid:/~/block row that
-# correctly blocks the same word as a bare command -- the heredoc body IS what runs here,
-# not data piped to a data-only command. jit_heredoc_targets_interpreter() is a denylist
-# of the common, concretely-reported cases (bash/sh/ssh/python among them); this is not
-# stripped for those targets, so the guard still sees the word.
-# "hdcmd;" prefixed onto each: the row that carries the forbid: column is selected by
-# its own match: column ("hdcmd"), tested against `cmd` -- which truncates at the first
-# `;`, so it sees only the "hdcmd" word and is unaffected by what runs after the
-# semicolon. The forbid: check itself is what this block actually exercises, against
-# fold_full, which is where the interpreter guard matters.
+echo "=== issue #442 round 3: an arbitrary command NOT on the sink allowlist no longer gets its heredoc body stripped ==="
+# Reviewer finding that drove the round-3 redesign: jit_heredoc_targets_interpreter()
+# (bash/sh/ssh/python3/... denylisted as executors, everything else stripped) fails
+# open on anything it has never heard of -- $SHELL <<EOF, perl5.30 <<EOF, node18 <<EOF,
+# awk -f - <<EOF (which can run arbitrary code via system()), "$0" <<EOF -- each pipes
+# its body to something that EXECUTES it, and each slipped through unnoticed because
+# its literal spelling never matched a denylist entry. Inverted to an ALLOWLIST of
+# known payload sinks (jit_heredoc_opener_is_known_sink()): a heredoc body is stripped
+# ONLY when the operator line is a recognized sink, so an unknown command -- bash and
+# the five bypasses above alike -- keeps its body visible by default. "hdcmd;" prefixed
+# on so the forbid rows own match: gate still fires regardless of what runs after it.
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; bash <<EOF\nheredocforbid now\nEOF"}}')
 assert_blocked "a forbidden word inside a bash <<EOF body still blocks" "$OUT"
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; ssh host <<EOF\nheredocforbid now\nEOF"}}')
 assert_blocked "a forbidden word inside an ssh <<EOF body still blocks" "$OUT"
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; python3 <<EOF\nheredocforbid now\nEOF"}}')
 assert_blocked "a forbidden word inside a python3 <<EOF body still blocks" "$OUT"
-# Control: an ordinary, non-interpreter target still gets its heredoc body stripped --
-# the denylist must not swallow the fix #432 exists for.
+# The five concrete bypasses a denylist of interpreter names could never have named --
+# none of these is spelled "bash", "python3" or any other fixed string a denylist could
+# enumerate in advance, and the old design stripped every one of their bodies silently.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; $SHELL <<EOF\nheredocforbid now\nEOF"}}')
+assert_blocked "a forbidden word inside a \$SHELL <<EOF body still blocks" "$OUT"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; perl5.30 <<EOF\nheredocforbid now\nEOF"}}')
+assert_blocked "a forbidden word inside a perl5.30 <<EOF body still blocks" "$OUT"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; node18 <<EOF\nheredocforbid now\nEOF"}}')
+assert_blocked "a forbidden word inside a node18 <<EOF body still blocks" "$OUT"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; awk -f - <<EOF\nheredocforbid now\nEOF"}}')
+assert_blocked "a forbidden word inside an awk -f - <<EOF body still blocks" "$OUT"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; \"$0\" <<EOF\nheredocforbid now\nEOF"}}')
+assert_blocked "a forbidden word inside a \"\$0\" <<EOF body still blocks" "$OUT"
+# Plain control: an ordinary, arbitrary non-sink command -- no longer gets its heredoc
+# body stripped either, the inverted default this whole round exists for.
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd <<EOF\nheredocforbid mentioned only here\nEOF"}}')
-assert_not_contains "control: a non-interpreter target heredoc body still does not block" "$OUT" '"decision":"block"'
+assert_blocked "an arbitrary non-sink command no longer gets its heredoc body stripped" "$OUT"
+
+echo ""
+echo "=== issue #442 round 3: a real payload sink still gets its heredoc body stripped (#432 own motivating case) ==="
+# The other half of the invariant: the allowlist must not be so narrow that #432's own
+# motivating case -- a heredoc body genuinely written to a file, never executed -- stops
+# working. cat/tee writing to a file and this repository own supertool are all real,
+# concretely-used sinks.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; cat > /tmp/jit442-sink.txt <<EOF\nheredocforbid mentioned only here\nEOF"}}')
+assert_not_contains "cat redirecting to a file still gets its heredoc body stripped" "$OUT" '"decision":"block"'
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; cat <<EOF > /tmp/jit442-sink.txt\nheredocforbid mentioned only here\nEOF"}}')
+assert_not_contains "cat with the redirect AFTER the heredoc operator still gets its body stripped" "$OUT" '"decision":"block"'
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit442-sink.txt <<EOF\nheredocforbid mentioned only here\nEOF"}}')
+assert_not_contains "tee writing to a file still gets its heredoc body stripped" "$OUT" '"decision":"block"'
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; supertool '"'"'paste:@-'"'"' <<EOF\nheredocforbid mentioned only here\nEOF"}}')
+assert_not_contains "supertool still gets its heredoc body stripped" "$OUT" '"decision":"block"'
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; git commit -F - <<EOF\nheredocforbid mentioned only here\nEOF"}}')
+assert_not_contains "git commit -F - still gets its heredoc body stripped" "$OUT" '"decision":"block"'
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; gh pr create --body-file - <<EOF\nheredocforbid mentioned only here\nEOF"}}')
+assert_not_contains "gh --body-file - still gets its heredoc body stripped" "$OUT" '"decision":"block"'
+
+echo ""
+echo "=== issue #442 round 3b (coordinator review): a sink that also pipes/substitutes into an interpreter keeps its body visible ==="
+# Naming a command as a payload sink is not enough -- the SAME body can still reach an
+# interpreter by piping the sink own stdout onward, or via command/process substitution
+# reading the heredoc back as a command. None of these legitimately shares a line with
+# a |, a $(, a backtick, a >( or a <( at the same time as being a plain file write, so
+# their presence overrides the allowlist unconditionally (jit_heredoc_opener_has_
+# danger_token()).
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; cat <<EOF 2>/dev/null | bash\nheredocforbid mentioned only here\nEOF"}}')
+assert_blocked "cat piped into bash, with an unrelated redirect earlier on the line, still blocks" "$OUT"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit442-sink.txt <<EOF | sh\nheredocforbid mentioned only here\nEOF"}}')
+assert_blocked "tee piped into sh still blocks" "$OUT"
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; cat <<EOF >(bash)\nheredocforbid mentioned only here\nEOF"}}')
+assert_blocked "cat into a >( process substitution still blocks" "$OUT"
 
 echo ""
 echo "=== self-review: require: sharing the fix, both directions (issue #432) ==="
@@ -548,6 +604,78 @@ OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdreq --reqflag now
 assert_not_contains "a require: term present as a real argument is not blocked" "$OUT" '"decision":"block"'
 OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdreq <<EOF\nreqflag mentioned only here\nEOF"}}')
 assert_blocked "a require: term satisfied only by heredoc-body text is still refused" "$OUT"
+
+# =============================================
+# SECTION 4c: a heredoc stripper permissive enough to fail a mode: block rule open
+# (issue #442)
+# =============================================
+# Three shapes where jit_strip_heredoc_body() treated text as a real heredoc BODY
+# (and so stripped it from fold_full before the hd-block.md rule above ever saw it)
+# even though no real heredoc was ever opened, or the heredoc genuinely runs as
+# code rather than carrying payload data. All three were blocked before #432 and
+# must be blocked again. Each negative has a positive control in the same fixture,
+# proving the row can fire at all and the negative result is not "this row never
+# fires" (the same discipline section 4b already uses).
+
+echo ""
+echo "=== positive control: heredocblock alone blocks, no heredoc involved (issue #442) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"heredocblock command"}}')
+assert_blocked "the block row fires on a bare command" "$OUT"
+
+echo ""
+echo "=== repro 1: a <<WORD shape inside an ordinary quoted echo argument is not a real opener (issue #442) ==="
+# echo "<<EOF" never redirects anything -- the whole <<EOF text is the quoted
+# argument being printed. The operator regex has no quote tracking and matched it
+# anyway, and a later unrelated EOF line then closed it, hiding the real command
+# between them from fold_full entirely.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"echo \"<<EOF\"\nheredocblock command\nEOF"}}')
+assert_blocked "a quoted <<EOF argument does not hide the command that follows it" "$OUT"
+
+echo ""
+echo "=== repro 2: a <<WORD shape on a comment line is not a real opener (issue #442) ==="
+# The entire line is a shell comment -- nothing on it, <<EOF included, is ever
+# executed -- so it can never open a real heredoc. The operator regex had no
+# comment awareness either and matched it the same way.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"# <<EOF\nheredocblock command\nEOF"}}')
+assert_blocked "a <<EOF shape on a comment line does not hide the command that follows it" "$OUT"
+
+echo ""
+echo "=== repro 3: a dot-sourced heredoc is executed code, not a payload (issue #442) ==="
+# `. /dev/stdin <<EOF` is the POSIX dot-command sourcing its own heredoc body --
+# the body IS the command, the same reason bash/sh/python3 already sit in
+# jit_heredoc_targets_interpreter()s denylist, but a lone `.` cannot survive that
+# lookup (it is stripped to a space by the normalization ahead of it).
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":". /dev/stdin <<EOF\nheredocblock command\nEOF"}}')
+assert_blocked "a dot-sourced heredoc body still blocks" "$OUT"
+
+echo ""
+echo "=== repro 4: a <<WORD shape after a trailing comment on a real command line is not a real opener (issue #442 self-review) ==="
+# true # <<EOF is a real command (true) followed by a trailing comment -- nothing
+# from the unquoted # onward, <<EOF included, is ever executed, the same reasoning
+# as repro 2's whole-line comment, just not anchored at column 1.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"true # <<EOF\nheredocblock command\nEOF"}}')
+assert_blocked "a <<EOF shape after a trailing comment does not hide the command that follows it" "$OUT"
+
+echo ""
+echo "=== repro 4 control: a genuine heredoc opener is not suppressed by an unrelated earlier # (issue #442 self-review) ==="
+# The # here sits inside a single-quoted argument, not a real comment start -- the
+# suppression scan must track quote state before it ever treats a bare # as one. cat
+# (a real sink, issue #442 round 3) rather than hdcmd, or this would no longer strip
+# regardless of what the suppression scan decides.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; cat '"'"'#not a comment'"'"' > /tmp/jit442-sink.txt <<EOF\nheredocforbid mentioned only here\nEOF"}}')
+assert_not_contains "a # inside a quoted argument does not suppress a real heredoc opener" "$OUT" '"decision":"block"'
+
+echo ""
+echo "=== repro 5: a single-quoted argument spanning several lines still hides a later <<WORD on the line that closes it (issue #442 self-review) ==="
+# Reviewer finding: a single-quoted argument can open on one physical line and
+# close two lines later -- the quote is still genuinely open on every line in
+# between, so a <<WORD shape on one of those in-between lines is not a real
+# heredoc opener either, the same reasoning as the same-line case, just spread
+# across lines. x='<newline><<EOF<newline>literal data' actually assigns x and
+# runs heredocblock command as a separate, real command on the line after the
+# quote closes -- verified by hand with bash -c on the literal payload.
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"x='"'"'\n<<EOF\nliteral data'"'"'\nheredocblock command\nEOF"}}')
+assert_blocked "a <<EOF shape on a line still inside a multi-line single-quoted argument does not hide the command that follows it" "$OUT"
 
 # =============================================
 # SECTION: awk engine matrix — multibyte paths, control characters in entries
@@ -571,6 +699,43 @@ done
 run_hook_engine() {
   echo "$2" | PATH="$ENGINE_BIN/$1:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR" bash "$HOOK" 2> /dev/null
 }
+
+echo ""
+echo "=== issue #442: every repro plus its positive control blocks on every awk engine on this machine ==="
+# jit_heredoc_opener_is_suppressed() is a character-by-character state machine --
+# exactly the shape this file has previously seen diverge across awk engines
+# (#14, #68, #76 elsewhere in this same file) -- so it gets the same per-engine
+# treatment as the control-character assertions below it, not just the default
+# $PATH awk section 4c already ran it against.
+P442_CONTROL='{"tool_name":"Bash","tool_input":{"command":"heredocblock command"}}'
+P442_R1='{"tool_name":"Bash","tool_input":{"command":"echo \"<<EOF\"\nheredocblock command\nEOF"}}'
+P442_R2='{"tool_name":"Bash","tool_input":{"command":"# <<EOF\nheredocblock command\nEOF"}}'
+P442_R3='{"tool_name":"Bash","tool_input":{"command":". /dev/stdin <<EOF\nheredocblock command\nEOF"}}'
+P442_R4='{"tool_name":"Bash","tool_input":{"command":"true # <<EOF\nheredocblock command\nEOF"}}'
+P442_R5='{"tool_name":"Bash","tool_input":{"command":"x='"'"'\n<<EOF\nliteral data'"'"'\nheredocblock command\nEOF"}}'
+# Round 3: a non-sink command the old interpreter denylist would have silently
+# stripped (it is spelled nothing like bash/sh/python3/...), and the other side of
+# the invariant -- a real payload sink (tee writing to a file) must still strip.
+P442_R6_NODE='{"tool_name":"Bash","tool_input":{"command":"node18 <<EOF\nheredocblock command\nEOF"}}'
+P442_R6_TEE='{"tool_name":"Bash","tool_input":{"command":"tee /tmp/jit442-sink.txt <<EOF\nheredocblock command\nEOF"}}'
+for eng in $ENGINES; do
+  OUT=$(run_hook_engine "$eng" "$P442_CONTROL")
+  assert_blocked "#442 positive control blocks under $eng" "$OUT"
+  OUT=$(run_hook_engine "$eng" "$P442_R1")
+  assert_blocked "#442 repro 1 (quoted echo) blocks under $eng" "$OUT"
+  OUT=$(run_hook_engine "$eng" "$P442_R2")
+  assert_blocked "#442 repro 2 (comment line) blocks under $eng" "$OUT"
+  OUT=$(run_hook_engine "$eng" "$P442_R3")
+  assert_blocked "#442 repro 3 (dot-source) blocks under $eng" "$OUT"
+  OUT=$(run_hook_engine "$eng" "$P442_R4")
+  assert_blocked "#442 repro 4 (trailing comment) blocks under $eng" "$OUT"
+  OUT=$(run_hook_engine "$eng" "$P442_R5")
+  assert_blocked "#442 repro 5 (multi-line single-quoted argument) blocks under $eng" "$OUT"
+  OUT=$(run_hook_engine "$eng" "$P442_R6_NODE")
+  assert_blocked "#442 round 3: node18 (non-sink) still blocks under $eng" "$OUT"
+  OUT=$(run_hook_engine "$eng" "$P442_R6_TEE")
+  assert_not_contains "#442 round 3: tee (real sink) still strips its body under $eng" "$OUT" '"decision":"block"'
+done
 
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string; a strict parser is entitled
 # to reject the whole object, which renders as the hook having said nothing.

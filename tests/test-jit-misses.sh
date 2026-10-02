@@ -460,7 +460,9 @@ fold_table() {
     }' "$1"
 }
 T_MISSES=$(fold_table "$MISSES")
-T_COMMON=$(fold_table "$SCRIPT_DIR/scripts/common.sh")
+# #442: the fold table (JIT_AWK_FOLD) moved out of common.sh into common-awk.sh, split out
+# so common.sh stays under the Anthropic plugin directory's 256 KiB per-file limit.
+T_COMMON=$(fold_table "$SCRIPT_DIR/scripts/common-awk.sh")
 # Positive control. Without it a regex that stops matching either file reports the two
 # empty strings as equal -- a green that means the assertion no longer reads anything.
 if [ -z "$T_MISSES" ] || [ -z "$T_COMMON" ]; then

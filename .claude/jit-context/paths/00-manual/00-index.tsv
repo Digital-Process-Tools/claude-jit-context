@@ -1,7 +1,7 @@
 (^|/)CHANGELOG\.md$	changelog.md
 (^|/)(\.claude|examples|templates)/jit-context/.*\.md$	entries.md
 (^|/)data/generic-words/chunk-[0-9]+[.]txt$	generic-words-data.md
-(^|/)scripts/(.*-hook|common|host)\.sh$	hooks.md
+(^|/)scripts/(.*-hook|common|common-awk|host)\.sh$	hooks.md
 \.(claude|codex)-plugin/plugin\.json$	release.md
 (^|/)tests/[^/]*\.sh$	tests.md
 (^|/)scripts/(rebuild-tsv|jit-dry-run|jit-misses|jit-init|jit-doctor|jit-match|jit-stats)\.sh$	tooling.md
