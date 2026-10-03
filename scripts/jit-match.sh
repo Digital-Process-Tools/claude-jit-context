@@ -250,6 +250,7 @@ fi
 # the same -- only the hook child sees them.
 jit_match_run_hook() {
   (
+    # shellcheck disable=SC2163  # kv is NAME=VALUE, exported as written
     for kv in "${HOOK_ENV[@]}"; do export "$kv"; done
     bash "$SCRIPT_DIR/pre-prompt-hook.sh"
   )

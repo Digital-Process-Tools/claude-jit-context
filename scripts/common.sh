@@ -1220,6 +1220,7 @@ jit_cfg_check_value() {
 # name, never `printf -v "$name"` with a name read from config.env -- the directory
 # validator reads that as the hook sourcing the file (the bare `.` it listed).
 # tests/test-config-assign-461.sh fails on a setting read anywhere with no arm here.
+# shellcheck disable=SC2034  # read by the hooks that source this file
 jit_cfg_assign() {
   if [ "$1" = DVSI_AUTONOMOUS_VOCAB_PATHS ]; then
     DVSI_AUTONOMOUS_VOCAB_PATHS="$2"
