@@ -216,18 +216,18 @@ if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
     # fact than having checked and found agreement.
     advise "cannot tell whether CLAUDE_PROJECT_DIR names a different git worktree than the one this shell is sitting in -- git is not on PATH, so this check (#402) could not run."
   else
-    PWD_TOPLEVEL="$(git rev-parse --show-toplevel 2> /dev/null)"
+    CWD_TOPLEVEL="$(git rev-parse --show-toplevel 2> /dev/null)"
     CPD_TOPLEVEL="$(cd "$CLAUDE_PROJECT_DIR" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)"
-    if [ -z "$PWD_TOPLEVEL" ] || [ -z "$CPD_TOPLEVEL" ]; then
+    if [ -z "$CWD_TOPLEVEL" ] || [ -z "$CPD_TOPLEVEL" ]; then
       UNRESOLVED=""
-      [ -z "$PWD_TOPLEVEL" ] && UNRESOLVED="the working directory"
+      [ -z "$CWD_TOPLEVEL" ] && UNRESOLVED="the working directory"
       if [ -z "$CPD_TOPLEVEL" ]; then
         [ -n "$UNRESOLVED" ] && UNRESOLVED="$UNRESOLVED and "
         UNRESOLVED="${UNRESOLVED}CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR)"
       fi
       advise "cannot tell whether CLAUDE_PROJECT_DIR names a different git worktree than the one this shell is sitting in -- $UNRESOLVED is not inside a git worktree git can resolve, so this check (#402) could not run."
-    elif [ "$PWD_TOPLEVEL" != "$CPD_TOPLEVEL" ]; then
-      advise "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $CPD_TOPLEVEL) names a DIFFERENT git worktree than the one this shell is sitting in ($PWD -- git worktree $PWD_TOPLEVEL). Every hook resolves JIT_BASE from CLAUDE_PROJECT_DIR, never from \$PWD -- an edit made in the tree you are sitting in can be served back from the OTHER tree copy of the same relative path, silently (#402)."
+    elif [ "$CWD_TOPLEVEL" != "$CPD_TOPLEVEL" ]; then
+      advise "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $CPD_TOPLEVEL) names a DIFFERENT git worktree than the one this shell is sitting in ($PWD -- git worktree $CWD_TOPLEVEL). Every hook resolves JIT_BASE from CLAUDE_PROJECT_DIR, never from \$PWD -- an edit made in the tree you are sitting in can be served back from the OTHER tree copy of the same relative path, silently (#402)."
     fi
   fi
 fi
