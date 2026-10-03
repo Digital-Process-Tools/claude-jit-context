@@ -1042,7 +1042,7 @@ jit_load_config() {
     line="${line%"$JIT_CFG_CR"}"
     while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
     case "$line" in
-      '' | '#'*) continue ;;
+      '' | \#*) continue ;;
       # `export KEY=VALUE` was valid while this file was sourced, so it stays valid.
       # The export itself is a no-op now: the hooks read these as shell variables.
       export[[:space:]]*)
@@ -1091,7 +1091,7 @@ jit_load_config() {
             # Anything after the closing quote that is not a comment is ambiguous, so it
             # is refused rather than guessed at. Guessing is how a value goes quietly
             # wrong, which is the one outcome this whole function is written to avoid.
-            '' | '#'*) value="${rest%%"$q"*}" ;;
+            '' | \#*) value="${rest%%"$q"*}" ;;
             *) reason="trailing text after the closing quote" ;;
           esac
           ;;
