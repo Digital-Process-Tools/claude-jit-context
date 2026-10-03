@@ -473,8 +473,8 @@ function jit_fold_latin1(s,   i, p, out) {
   if (first == "/" || first == "<") { aside++; next }
   considered++
 
-  # A pasted link is a machine address, not prose. Left in, `https://github.com/org/
-  # repo/pull/54` becomes the tokens `https`, `github`, `com`, `pull`, `org` and `repo`,
+  # A pasted link is a machine address, not prose. Left in, a scheme-anchored
+  # pull-request link becomes the tokens making up its scheme, host and path,
   # and three pastes of the SAME link outrank every word a person actually typed, so the
   # headline advice becomes "write vocabulary/00-manual/com.md". None of those was ever
   # a word in the prompt, which is why this is a tokeniser rule and not a stop-list: a
