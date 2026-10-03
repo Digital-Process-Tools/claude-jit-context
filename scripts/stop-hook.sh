@@ -239,6 +239,14 @@ jit_config_name_ok() {
   case "$1" in DVSI_?*) return 0 ;; esac
   return 1
 }
+jit_cfg_ltrim() {
+  JIT_CFG_T="$1"
+  while [ "$JIT_CFG_T" != "${JIT_CFG_T#[[:space:]]}" ]; do JIT_CFG_T="${JIT_CFG_T#[[:space:]]}"; done
+}
+jit_cfg_rtrim() {
+  JIT_CFG_T="$1"
+  while [ "$JIT_CFG_T" != "${JIT_CFG_T%[[:space:]]}" ]; do JIT_CFG_T="${JIT_CFG_T%[[:space:]]}"; done
+}
 jit_load_config() {
   local LC_ALL=C
   local file="$1" line cfg_name value reason q rest tail lineno=0
@@ -249,8 +257,8 @@ jit_load_config() {
     case "$line" in
       '' | \#*) continue ;;
       [e]xport[[:space:]]*)
-        line="${line#[e]xport}"
-        while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+        jit_cfg_ltrim "${line#[e]xport}"
+        line="$JIT_CFG_T"
         ;;
     esac
     reason=""
@@ -278,7 +286,8 @@ jit_load_config() {
       case "$rest" in
         *"$q"*)
           tail="${rest#*"$q"}"
-          while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
+          jit_cfg_ltrim "$tail"
+          tail="$JIT_CFG_T"
           case "$tail" in
             '' | \#*) value="${rest%%"$q"*}" ;;
             *) reason="trailing text after the closing quote" ;;
@@ -290,7 +299,8 @@ jit_load_config() {
       case "$value" in
         *[[:space:]]#*) value="${value%%[[:space:]]#*}" ;;
       esac
-      while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
+      jit_cfg_rtrim "$value"
+      value="$JIT_CFG_T"
     fi
     if [ -n "$reason" ]; then
       jit_config_refuse "$lineno" "$reason"
