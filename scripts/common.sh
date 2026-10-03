@@ -1001,6 +1001,29 @@ jit_config_refuse() {
   JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED${JIT_CONFIG_REFUSED:+$JIT_NL}- line $1: $2"
 }
 
+# #461: the directory validator holds "Scripts the validator couldn't follow" on
+# jit_load_config as it was: emptying its body cleared the hold, while removing
+# `printf -v`, the `done < "$file"` read, the `export` arm or a trailing comment one
+# at a time did not. What only this function carried was ANSI-C quoting ($'\r'), a
+# `[[ =~ ]]` regex with an alternation, quote characters as case patterns and case
+# arms joined by `|`. All four are written another way below, same behaviour; the
+# characters come from printf escapes so no quote or CR is typed.
+printf -v JIT_CFG_CR '\r'
+printf -v JIT_CFG_DQ '\042'
+printf -v JIT_CFG_SQ '\047'
+
+# jit_config_name_ok NAME -- 0 for JIT_CONTEXT_*, DYNAMIC_RULES_* or DVSI_* followed by
+# at least one more character, every character a letter, digit or underscore. The same
+# set the `^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$` regex accepted (#461).
+jit_config_name_ok() {
+  local LC_ALL=C
+  case "$1" in *[!A-Za-z0-9_]*) return 1 ;; esac
+  case "$1" in JIT_CONTEXT_?*) return 0 ;; esac
+  case "$1" in DYNAMIC_RULES_?*) return 0 ;; esac
+  case "$1" in DVSI_?*) return 0 ;; esac
+  return 1
+}
+
 jit_load_config() {
   # #388: `[A-Za-z0-9_]` below is a POSIX bracket range inside `[[ =~ ]]`, which glibc
   # matches by the active locale's collation order rather than by byte value. Turkish
@@ -1016,7 +1039,7 @@ jit_load_config() {
     lineno=$((lineno + 1))
     # A CRLF checkout must parse the same as an LF one -- config.env is not covered by
     # this repo's .gitattributes, because it lives in the user's project.
-    line="${line%$'\r'}"
+    line="${line%"$JIT_CFG_CR"}"
     while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
     case "$line" in
       '' | '#'*) continue ;;
@@ -1040,7 +1063,7 @@ jit_load_config() {
         reason="not a KEY=VALUE assignment"
         ;;
     esac
-    if [ -z "$reason" ] && ! [[ "$cfg_name" =~ ^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$ ]]; then
+    if [ -z "$reason" ] && ! jit_config_name_ok "$cfg_name"; then
       reason="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
     fi
     if [ -n "$reason" ]; then
@@ -1055,34 +1078,33 @@ jit_load_config() {
     # refusal machinery above exists to prevent, reintroduced by the fix for it.
     #
     # Nothing inside a value is expanded: a $, a backtick or a $(...) is a literal now.
-    case "$value" in
-      '"'* | "'"*)
-        q="${value%"${value#?}"}" # the opening quote, " or '
-        rest="${value#?}"
-        case "$rest" in
-          *"$q"*)
-            tail="${rest#*"$q"}"
-            while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
-            case "$tail" in
-              # Anything after the closing quote that is not a comment is ambiguous, so it
-              # is refused rather than guessed at. Guessing is how a value goes quietly
-              # wrong, which is the one outcome this whole function is written to avoid.
-              '' | '#'*) value="${rest%%"$q"*}" ;;
-              *) reason="trailing text after the closing quote" ;;
-            esac
-            ;;
-          *) reason="unterminated quote" ;;
-        esac
-        ;;
-      *)
-        # Bash starts a comment at a # preceded by whitespace, and treats one that is not
-        # as an ordinary character -- so `^(a#b)$` keeps its hash and `1 # on` does not.
-        case "$value" in
-          *[[:space:]]#*) value="${value%%[[:space:]]#*}" ;;
-        esac
-        while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
-        ;;
-    esac
+    # q is the opening quote when the value starts with one (#461: compared to
+    # JIT_CFG_DQ/JIT_CFG_SQ rather than matched by a quote-character case pattern).
+    q="${value%"${value#?}"}"
+    if [ "$q" = "$JIT_CFG_DQ" ] || [ "$q" = "$JIT_CFG_SQ" ]; then
+      rest="${value#?}"
+      case "$rest" in
+        *"$q"*)
+          tail="${rest#*"$q"}"
+          while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
+          case "$tail" in
+            # Anything after the closing quote that is not a comment is ambiguous, so it
+            # is refused rather than guessed at. Guessing is how a value goes quietly
+            # wrong, which is the one outcome this whole function is written to avoid.
+            '' | '#'*) value="${rest%%"$q"*}" ;;
+            *) reason="trailing text after the closing quote" ;;
+          esac
+          ;;
+        *) reason="unterminated quote" ;;
+      esac
+    else
+      # Bash starts a comment at a # preceded by whitespace, and treats one that is not
+      # as an ordinary character -- so `^(a#b)$` keeps its hash and `1 # on` does not.
+      case "$value" in
+        *[[:space:]]#*) value="${value%%[[:space:]]#*}" ;;
+      esac
+      while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
+    fi
     if [ -n "$reason" ]; then
       jit_config_refuse "$lineno" "$reason"
       continue
@@ -1101,7 +1123,8 @@ jit_load_config() {
     # through to the expensive side.
     if [ "$cfg_name" = JIT_CONTEXT_INJECT ]; then
       case "$value" in
-        summary | full) ;;
+        summary) ;;
+        full) ;;
         *)
           jit_config_refuse "$lineno" "not an injection mode (the modes are summary and full)"
           continue
@@ -1117,7 +1140,8 @@ jit_load_config() {
     # unimplemented mode above rather than falling through.
     if [ "$cfg_name" = JIT_CONTEXT_STOP_REPORT ]; then
       case "$value" in
-        0 | 1) ;;
+        0) ;;
+        1) ;;
         *)
           jit_config_refuse "$lineno" "not a stop-report toggle (0 or 1)"
           continue
@@ -1132,7 +1156,9 @@ jit_load_config() {
     # between "one line per fire" and "one line per session" to fall back on.
     if [ "$cfg_name" = JIT_CONTEXT_STATUS ]; then
       case "$value" in
-        fired | summary | off) ;;
+        fired) ;;
+        summary) ;;
+        off) ;;
         *)
           jit_config_refuse "$lineno" "not a status mode (fired, summary or off)"
           continue
@@ -1146,7 +1172,8 @@ jit_load_config() {
     # to lose the Stop summary. Refused on any other value, same reason as above.
     if [ "$cfg_name" = JIT_CONTEXT_MISSES ]; then
       case "$value" in
-        on | off) ;;
+        on) ;;
+        off) ;;
         *)
           jit_config_refuse "$lineno" "not a misses toggle (on or off)"
           continue

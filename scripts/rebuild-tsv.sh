@@ -1095,8 +1095,11 @@ build_vocab_tsv() {
     fi
   fi
 
-  local _ei
-  for _ei in "${!ENTRY_FILENAME[@]}"; do
+  local _ei _entries_n=${#ENTRY_FILENAME[@]}
+  # #461: a counted loop, not `"${!ENTRY_FILENAME[@]}"`. The array is filled densely
+  # from 0 (the append above), so the indices are the same; the directory validator
+  # reads any `${!` as an environment variable named at run time.
+  for ((_ei = 0; _ei < _entries_n; _ei++)); do
     local _efile="${ENTRY_FILENAME[$_ei]}" _estart="${ENTRY_START[$_ei]}" _ecount="${ENTRY_COUNT[$_ei]}"
     local _entry_rows=() _kw_generic=0 _j _ekw _everdict
     for ((_j = _estart; _j < _estart + _ecount; _j++)); do

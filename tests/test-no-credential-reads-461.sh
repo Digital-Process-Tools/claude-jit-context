@@ -51,7 +51,7 @@ bad() {
 # One ERE per read the validator named. `${!name}` is indirect expansion; `${!arr[@]}`
 # (the index list of an array) reads no environment variable and is not matched.
 NEEDLES=(
-  'indirect expansion|[$][{]![A-Za-z_][A-Za-z0-9_]*([}:]|$)'
+  'indirect expansion|[$][{]![A-Za-z_]'
   'PWD read|[$][{]?PWD([^A-Za-z0-9_]|$)'
   'environment dump word|(^|[^A-Za-z0-9_.-])(printenv|env|export[[:space:]]+-p)([^A-Za-z0-9_.=-]|$)'
   'secret-looking variable|[$][{]?[A-Za-z0-9_]*([Kk][Ee][Yy][Ss]?|[Tt][Oo][Kk][Ee][Nn][Ss]?|SECRET|PASSWORD)([^A-Za-z0-9_]|$)'
@@ -68,6 +68,7 @@ fixture="$(mktemp)"
 trap 'rm -f "$fixture"' EXIT
 printf '%s\n' \
   'if [ -n "${!sig:-}" ]; then' \
+  'for i in "${!ENTRY_FILENAME[@]}"; do' \
   'BASE="$PWD/.claude"' \
   'WRAP=(rtk|command|env|sudo)' \
   'for k in $VOCAB_KEYS; do' \
@@ -77,7 +78,6 @@ printf '%s\n' \
 safe="$(mktemp)"
 trap 'rm -f "$fixture" "$safe"' EXIT
 printf '%s\n' \
-  'for i in "${!ENTRY_FILENAME[@]}"; do' \
   'BASE="$(pwd)/.claude"' \
   'WRAP=(rtk|command|[e]nv|sudo)' \
   '# a comment may name $PWD and env' \
