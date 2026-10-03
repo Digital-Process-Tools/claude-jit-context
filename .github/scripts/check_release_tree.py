@@ -603,6 +603,12 @@ _TYPED_HEREDOC_OP_RE = re.compile(r"(?<!<)<<(?!<)")
 # in some states -- which is why no `\"` at all is the rule, not "none in this spot".
 _ESCAPED_QUOTE = '\\"'
 _HOOK_SCRIPT_RE = re.compile(r"scripts/[^/]+-hook\.sh")
+# #461, eighth trigger: a `*/*` glob as a case pattern in a hook. Bisected on
+# stop-hook.sh (2026-10-04): the fired-marks read loop held with `*/*)` arms
+# (release-preview-t12) and cleared with them spelled `*yq*` (release-preview-t13).
+# Like the escaped quote, the same shape clears in post-tool-hook.sh, so none at all.
+# Test with `[ "${x#*/}" = "$x" ]` instead.
+_SLASH_GLOB_PATTERN_RE = re.compile(r'(^|\bin\s+|\|\s*)[^\s"$|()]*\*/\*[^\s|()]*\s*[|)]')
 _NAMED_SCRIPT_PATH_RE = re.compile(r"scripts/[A-Za-z0-9_-]+\.sh")
 _RUNTIME_COMMAND_RE = re.compile(r'^\s*"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?"?(\s|[^\s=]*\)\s*(;;)?\s*$)')
 
@@ -656,6 +662,10 @@ def _check_no_cross_script_loading(files: dict, kinds: dict, off: list) -> None:
                 off.append(f"{rel}:{n}: an escaped quote in a hook -- write it \\042 "
                            f"(awk) or single-quote the string -- "
                            f"COMMAND_SCRIPT_NOT_FOLLOWED: {line.strip()[:80]!r}")
+            if _HOOK_SCRIPT_RE.fullmatch(rel) and _SLASH_GLOB_PATTERN_RE.search(stripped):
+                off.append(f"{rel}:{n}: a `*/*` case pattern in a hook -- test with "
+                           f"${{x#*/}} instead -- COMMAND_SCRIPT_NOT_FOLLOWED: "
+                           f"{line.strip()[:80]!r}")
             if _TYPED_HEREDOC_OP_RE.search(line):
                 off.append(f"{rel}:{n}: types a `<<` the directory validator cannot place -- "
                            f"UNPINNED_NPX (blocks): {line.strip()[:80]!r}")

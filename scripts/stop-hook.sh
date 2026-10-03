@@ -216,6 +216,10 @@ JIT_FIRED_CLASS=() # Y (00-manual, known), N (another layer, known), U (bare, un
 # re-derived from JIT_FIRED_IDS, because that string is NL-joined and this is read
 # back by exact value, not by position.
 JIT_FIRED_RAWID=()
+# #461: a name holding `/` or a backslash is refused by tests, not by `*/*` and `*\\*`
+# case patterns -- the directory validator read the `*/*` arms of this loop as the hook
+# naming a further file (release-preview-t12 held, t13 cleared).
+printf -v _jit_bs '\134'
 for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
   [ -f "$_jit_mf" ] && [ ! -L "$_jit_mf" ] || continue
   while IFS= read -r _jit_line || [ -n "$_jit_line" ]; do
@@ -240,9 +244,9 @@ for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
           *:*)
             _jit_layer="${_jit_rest%%:*}"
             _jit_name="${_jit_rest#*:}"
-            case "$_jit_name" in
-              '' | */* | *\\*) continue ;;
-            esac
+            [ -n "$_jit_name" ] \
+              && [ "${_jit_name#*/}" = "$_jit_name" ] \
+              && [ "${_jit_name#*"$_jit_bs"}" = "$_jit_name" ] || continue
             # Self-review finding: the NAME was checked and the two components the
             # CLASSIFICATION is read off were not, so "loc::00-manual:foo.md" -- an
             # empty dimension, which no writer here can produce but a hand-edited or
@@ -286,14 +290,16 @@ for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
       # honest reading of a key that never carried a layer.
       rule:*)
         _jit_name="${_jit_line#rule:}"
-        case "$_jit_name" in
-          '' | */* | *\\* | *:*) continue ;;
-        esac
+        [ -n "$_jit_name" ] \
+          && [ "${_jit_name#*/}" = "$_jit_name" ] \
+          && [ "${_jit_name#*"$_jit_bs"}" = "$_jit_name" ] \
+          && [ "${_jit_name#*:}" = "$_jit_name" ] || continue
         _jit_dim="tools"
         _jit_class="U"
         ;;
-      */* | *\\*) continue ;;
       *)
+        [ "${_jit_line#*/}" = "$_jit_line" ] \
+          && [ "${_jit_line#*"$_jit_bs"}" = "$_jit_line" ] || continue
         _jit_name="$_jit_line"
         _jit_class="U"
         ;;
@@ -314,7 +320,7 @@ for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
     JIT_FIRED_N=$((JIT_FIRED_N + 1))
   done < "$_jit_mf"
 done
-unset _jit_mf _jit_line _jit_dim _jit_layer _jit_class _jit_rest _jit_name
+unset _jit_mf _jit_line _jit_dim _jit_layer _jit_class _jit_rest _jit_name _jit_bs
 
 # Nothing fired this session at all -- there is no injected-vs-edited comparison to
 # make, which is not the same claim as "nothing was edited" and gets no message either
