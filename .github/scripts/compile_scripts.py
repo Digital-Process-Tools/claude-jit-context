@@ -191,20 +191,25 @@ def wrap_as_function(name: str, body: str) -> str:
 
 
 def inline_subprocess_call(script: str, call_text: str, func_name: str,
-                            func_body: str, script_path: str) -> str:
+                            func_body: str, script_path: str,
+                            count: int = 1) -> str:
     if call_text not in script:
         raise CompileError(
             f"{script_path}: subprocess call {call_text!r} not found -- "
             "update _SUBPROCESS_CALLS in compile_scripts.py")
     wrapper = wrap_as_function(func_name, _drop_shebang(func_body))
-    out = script.replace(call_text, func_name, 1)
-    # Insert the wrapper right after the shebang line so it is defined before
-    # every use, including an earlier call site than the one just rewritten.
-    m = _SHEBANG_RE.match(out)
-    if not m:
-        raise CompileError(f"{script_path}: no shebang line to insert the wrapper after")
-    insert_at = m.end()
-    return out[:insert_at] + wrapper + "\n\n" + out[insert_at:]
+    # Defined immediately before the FIRST call site, never after the
+    # shebang: jit-init.sh's own usage() reads its own header comment block
+    # off "$0" at call time (see _usage_structural_end_line below), and a
+    # multi-thousand-line wrapper inserted ahead of line 1 pushes that whole
+    # header past the point a FIXED protect_until was computed against,
+    # leaving it unprotected from strip_comments() even though nothing about
+    # the header itself changed -- reproduced empirically (#461) before this
+    # was changed from "after the shebang" to "before the call site".
+    idx = script.index(call_text)
+    line_start = script.rfind("\n", 0, idx) + 1  # 0 if call_text is on line 1
+    script = script[:line_start] + wrapper + "\n" + script[line_start:]
+    return script.replace(call_text, func_name, count)
 
 
 # -- step 4: comment / blank-line stripping ----------------------------------
@@ -335,10 +340,36 @@ def strip_comments(text: str, protect_until: int = 0) -> str:
 # always well after M in both files, so inlining never shifts this range.
 _USAGE_SED_RE = re.compile(r"sed -n '\d+,(\d+)p' " + chr(34) + r"\$0" + chr(34))
 
+# jit-init.sh's own usage() reads structurally instead of by a fixed line
+# range ("Read structurally rather than as a line range: jit-dry-run.sh pins
+# '2,31p', and a line added above that range truncates its --help with
+# nothing to say" -- its own comment): `awk 'NR > 1 && /^#/ {print} NR > 1
+# {exit}' "$0"` prints every comment line from line 2 until the first
+# non-comment line. Comment-stripping that header is just as fragile to this
+# shape as to a fixed sed range -- it removes exactly the lines usage() reads
+# -- so it needs the same protection, computed by scanning for where the
+# ORIGINAL file's own leading comment block actually ends.
+_USAGE_STRUCTURAL_RE = re.compile(r"NR > 1 && /\^#/")
+
+
+def _usage_structural_end_line(original_script_text: str) -> int:
+    if not _USAGE_STRUCTURAL_RE.search(original_script_text):
+        return 0
+    lines = original_script_text.split("\n")
+    end = 1  # line 1 (the shebang) is never part of what usage() prints
+    for i in range(1, len(lines)):
+        if lines[i].startswith("#"):
+            end = i + 1  # 1-indexed
+            continue
+        break
+    return end
+
 
 def _usage_sed_end_line(original_script_text: str) -> int:
     m = _USAGE_SED_RE.search(original_script_text)
-    return int(m.group(1)) if m else 0
+    if m:
+        return int(m.group(1))
+    return _usage_structural_end_line(original_script_text)
 
 
 # -- driver -------------------------------------------------------------------
@@ -402,6 +433,30 @@ def compile_scripts(contents: dict[str, bytes]) -> dict[str, bytes]:
             current = inline_subprocess_call(current, call_text, func_name, lib_body, path)
         compiled[path] = current
 
+    # jit-dry-run.sh drives three of the hooks directly, with a sample payload
+    # on stdin, to answer "what would this rule do" (report_hook(), its own
+    # name for the pattern) -- and jit-match.sh drives pre-prompt-hook.sh the
+    # same way to cross-check a vocabulary match. Both calls are LEFT AS A
+    # SUBPROCESS, deliberately, for two reasons rather than one:
+    #
+    # 1. Neither call site is on the directory's own COMMAND_SCRIPT_NOT_FOLLOWED
+    #    path. That scan is breadth-first from a registered command (hooks.json,
+    #    commands/*.md), and neither jit-dry-run.sh nor jit-match.sh is named by
+    #    either -- confirmed by reading both at #461 -- so it never walks into
+    #    this call at all.
+    # 2. Inlining it anyway blows the OTHER budget the same checklist enforces:
+    #    jit-dry-run.sh would have to carry pre-tool-hook.sh, pre-path-hook.sh
+    #    AND pre-prompt-hook.sh's full compiled bodies (roughly 76+72+64 KB) on
+    #    top of its own ~89 KB, past the 256 KiB per-file limit on its own --
+    #    measured at 305104 bytes when this was tried. Solving a hold that does
+    #    not apply here by tripping a different one that always does is not a
+    #    fix.
+    #
+    # The target of each call is itself fully self-contained (every hook in
+    # COMPILED_SCRIPTS above), so this is a real subprocess at a real,
+    # always-present sibling path -- the same shape jit-init.sh/rebuild-tsv.sh
+    # and session-start-hook.sh/jit-misses.sh used to be, not a dangling
+    # reference to a file the release tree no longer carries.
     out = dict(contents)
     for path in COMPILED_SCRIPTS:
         protect_until = _usage_sed_end_line(text(path))
