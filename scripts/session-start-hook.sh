@@ -91,7 +91,7 @@ JIT_NONFILES_MAX=4096
 JIT_NL="
 "
 jit_scan_symlinks() {
-  local base="$1" f parent rel found=0
+  local base="$1" f parent rel rel2 found=0
   JIT_SYMLINKS="$JIT_NL"
   JIT_SYMLINKS_ALL=""
   JIT_NONFILES="$JIT_NL"
@@ -119,15 +119,14 @@ jit_scan_symlinks() {
     fi
     if [ ! -f "$f" ] && [ -e "$f" ] && [ "$f" != "$base" ]; then
       rel="${f#"$base"/}"
-      case "$rel" in
-        */*/*)
-          JIT_NONFILES="$JIT_NONFILES$f$JIT_NL"
-          if [ "${#JIT_NONFILES}" -gt "$JIT_NONFILES_MAX" ]; then
-            JIT_NONFILES="$JIT_NL"
-            JIT_NONFILES_ALL=1
-          fi
-          ;;
-      esac
+      rel2="${rel#*/}"
+      if [ "$rel2" != "$rel" ] && [ "${rel2#*/}" != "$rel2" ]; then
+        JIT_NONFILES="$JIT_NONFILES$f$JIT_NL"
+        if [ "${#JIT_NONFILES}" -gt "$JIT_NONFILES_MAX" ]; then
+          JIT_NONFILES="$JIT_NL"
+          JIT_NONFILES_ALL=1
+        fi
+      fi
     fi
     [ "$found" = 1 ] || continue
     [ "$f" != "$base" ] || continue
@@ -1541,7 +1540,8 @@ if [ "$GENERIC_WORDS_SET" -eq 0 ]; then
   elif [ "${DYNAMIC_RULES_GENERIC_WORDS+set}" = "set" ]; then
     GENERIC_WORDS="$DYNAMIC_RULES_GENERIC_WORDS"
   else
-    case "$0" in */*) _JIT_MISSES_DIR="${0%/*}" ;; *) _JIT_MISSES_DIR="." ;; esac
+    _JIT_MISSES_DIR="${0%/*}"
+    [ "$_JIT_MISSES_DIR" != "$0" ] || _JIT_MISSES_DIR="."
     GENERIC_WORDS="$_JIT_MISSES_DIR/../data/generic-words"
   fi
 fi

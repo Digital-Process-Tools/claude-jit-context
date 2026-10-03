@@ -120,7 +120,7 @@ JIT_NONFILES_MAX=4096
 JIT_NL="
 "
 jit_scan_symlinks() {
-  local base="$1" f parent rel found=0
+  local base="$1" f parent rel rel2 found=0
   JIT_SYMLINKS="$JIT_NL"
   JIT_SYMLINKS_ALL=""
   JIT_NONFILES="$JIT_NL"
@@ -148,15 +148,14 @@ jit_scan_symlinks() {
     fi
     if [ ! -f "$f" ] && [ -e "$f" ] && [ "$f" != "$base" ]; then
       rel="${f#"$base"/}"
-      case "$rel" in
-        */*/*)
-          JIT_NONFILES="$JIT_NONFILES$f$JIT_NL"
-          if [ "${#JIT_NONFILES}" -gt "$JIT_NONFILES_MAX" ]; then
-            JIT_NONFILES="$JIT_NL"
-            JIT_NONFILES_ALL=1
-          fi
-          ;;
-      esac
+      rel2="${rel#*/}"
+      if [ "$rel2" != "$rel" ] && [ "${rel2#*/}" != "$rel2" ]; then
+        JIT_NONFILES="$JIT_NONFILES$f$JIT_NL"
+        if [ "${#JIT_NONFILES}" -gt "$JIT_NONFILES_MAX" ]; then
+          JIT_NONFILES="$JIT_NL"
+          JIT_NONFILES_ALL=1
+        fi
+      fi
     fi
     [ "$found" = 1 ] || continue
     [ "$f" != "$base" ] || continue

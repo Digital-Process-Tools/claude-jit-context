@@ -91,7 +91,7 @@ JIT_NONFILES_MAX=4096
 JIT_NL="
 "
 jit_scan_symlinks() {
-  local base="$1" f parent rel found=0
+  local base="$1" f parent rel rel2 found=0
   JIT_SYMLINKS="$JIT_NL"
   JIT_SYMLINKS_ALL=""
   JIT_NONFILES="$JIT_NL"
@@ -119,15 +119,14 @@ jit_scan_symlinks() {
     fi
     if [ ! -f "$f" ] && [ -e "$f" ] && [ "$f" != "$base" ]; then
       rel="${f#"$base"/}"
-      case "$rel" in
-        */*/*)
-          JIT_NONFILES="$JIT_NONFILES$f$JIT_NL"
-          if [ "${#JIT_NONFILES}" -gt "$JIT_NONFILES_MAX" ]; then
-            JIT_NONFILES="$JIT_NL"
-            JIT_NONFILES_ALL=1
-          fi
-          ;;
-      esac
+      rel2="${rel#*/}"
+      if [ "$rel2" != "$rel" ] && [ "${rel2#*/}" != "$rel2" ]; then
+        JIT_NONFILES="$JIT_NONFILES$f$JIT_NL"
+        if [ "${#JIT_NONFILES}" -gt "$JIT_NONFILES_MAX" ]; then
+          JIT_NONFILES="$JIT_NL"
+          JIT_NONFILES_ALL=1
+        fi
+      fi
     fi
     [ "$found" = 1 ] || continue
     [ "$f" != "$base" ] || continue
@@ -1492,6 +1491,7 @@ JIT_FIRED_DIM=()
 JIT_FIRED_LAYER=()
 JIT_FIRED_CLASS=() # Y (00-manual, known), N (another layer, known), U (bare, unknown)
 JIT_FIRED_RAWID=()
+printf -v _jit_bs '\134'
 for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
   [ -f "$_jit_mf" ] && [ ! -L "$_jit_mf" ] || continue
   while IFS= read -r _jit_line || [ -n "$_jit_line" ]; do
@@ -1511,9 +1511,9 @@ for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
           *:*)
             _jit_layer="${_jit_rest%%:*}"
             _jit_name="${_jit_rest#*:}"
-            case "$_jit_name" in
-              '' | */* | *\\*) continue ;;
-            esac
+            [ -n "$_jit_name" ] \
+              && [ "${_jit_name#*/}" = "$_jit_name" ] \
+              && [ "${_jit_name#*"$_jit_bs"}" = "$_jit_name" ] || continue
             case "$_jit_dim" in
               '' | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
                 _jit_dim=""
@@ -1538,14 +1538,16 @@ for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
         ;;
       rule:*)
         _jit_name="${_jit_line#rule:}"
-        case "$_jit_name" in
-          '' | */* | *\\* | *:*) continue ;;
-        esac
+        [ -n "$_jit_name" ] \
+          && [ "${_jit_name#*/}" = "$_jit_name" ] \
+          && [ "${_jit_name#*"$_jit_bs"}" = "$_jit_name" ] \
+          && [ "${_jit_name#*:}" = "$_jit_name" ] || continue
         _jit_dim="tools"
         _jit_class="U"
         ;;
-      */* | *\\*) continue ;;
       *)
+        [ "${_jit_line#*/}" = "$_jit_line" ] \
+          && [ "${_jit_line#*"$_jit_bs"}" = "$_jit_line" ] || continue
         _jit_name="$_jit_line"
         _jit_class="U"
         ;;
@@ -1566,7 +1568,7 @@ for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
     JIT_FIRED_N=$((JIT_FIRED_N + 1))
   done < "$_jit_mf"
 done
-unset _jit_mf _jit_line _jit_dim _jit_layer _jit_class _jit_rest _jit_name
+unset _jit_mf _jit_line _jit_dim _jit_layer _jit_class _jit_rest _jit_name _jit_bs
 if [ "$JIT_FIRED_N" -eq 0 ]; then
   echo '{}'
   exit 0

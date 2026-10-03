@@ -248,7 +248,9 @@ if [ "$GENERIC_WORDS_SET" -eq 0 ]; then
   else
     # No dirname fork -- session-start-hook.sh runs this on every session and
     # tests/test-fork-count.sh counts the hook's whole process tree, this child included.
-    case "$0" in */*) _JIT_MISSES_DIR="${0%/*}" ;; *) _JIT_MISSES_DIR="." ;; esac
+    # #461: not a `*/*` case pattern (check_release_tree.py, the eighth trigger).
+    _JIT_MISSES_DIR="${0%/*}"
+    [ "$_JIT_MISSES_DIR" != "$0" ] || _JIT_MISSES_DIR="."
     # #437: the shipped default moved from a single 1 MB file to a directory of chunks
     # (data/generic-words/, each chunk under 256 KiB) for the Anthropic plugin
     # directory's per-file size limit. _jit_misses_generic_members() below reads
