@@ -1388,7 +1388,7 @@ _log_hook() {
   local dropped head
   if [ "${#matches}" -gt "$JIT_LOG_MATCHES_MAX" ]; then
     head="${matches:0:$JIT_LOG_MATCHES_MAX}"
-    case "$head" in *", "*) head="${head%, *}, " ;; esac
+    [ "${head%, *}" = "$head" ] || head="${head%, *}, "
     dropped=$((${#matches} - ${#head}))
     matches="${head}[+$dropped bytes not listed here, and the item before this marker may be a fragment; this line is capped at ${JIT_LOG_MATCHES_MAX} bytes -- the jit-dry-run tool prints the whole tree]"
   fi

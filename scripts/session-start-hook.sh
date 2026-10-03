@@ -1798,9 +1798,11 @@ else
   if [ -z "$JIT_SKIP_REASON" ]; then
     JIT_SKIP_REASON="jit-misses.sh exited $MISSES_RC"
   fi
-  case "$JIT_SKIP_REASON" in
-    "no such file"* | "the file is empty"* | "hooks.log was rotated"*) JIT_SKIP_REASON="" ;;
-  esac
+  if [ "${JIT_SKIP_REASON#no such file}" != "$JIT_SKIP_REASON" ] \
+    || [ "${JIT_SKIP_REASON#the file is empty}" != "$JIT_SKIP_REASON" ] \
+    || [ "${JIT_SKIP_REASON#hooks.log was rotated}" != "$JIT_SKIP_REASON" ]; then
+    JIT_SKIP_REASON=""
+  fi
   if [ -n "$JIT_SKIP_REASON" ]; then
     JIT_SKIP_REASON="$(printf '%s' "$JIT_SKIP_REASON" | LC_ALL=C awk '{ gsub(/\\/, "\134\134"); gsub(/"/, "\134\042"); print }')"
   fi

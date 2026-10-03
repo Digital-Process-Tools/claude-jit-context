@@ -1407,13 +1407,10 @@ if [ -z "$PT_FP" ] || [ -z "$PT_RUN_ID" ] || [ -z "$JIT_STATE_DIR" ]; then
   exit 0
 fi
 if [ "$PT_TOOL" = "Bash" ]; then
-  case "$PT_FP" in
-    *"/.claude/jit-context/"*) ;;
-    *)
-      echo '{}'
-      exit 0
-      ;;
-  esac
+  if [ "${PT_FP#*/.claude/jit-context/}" = "$PT_FP" ]; then
+    echo '{}'
+    exit 0
+  fi
   if LC_ALL=C printf '%s' "$PT_FP" | grep -Eq \
     '(^|[;&|])[[:space:]]*(sed|perl)([[:space:]][^;&|]*)?[[:space:]](-[a-z]*i|--in-place)[^;&|]*|(^|[;&|])[[:space:]]*tee([[:space:]]|$)|(^|[;&|])[[:space:]]*supertool[[:space:]]+.(edit|paste|git-commit):'; then
     :
@@ -1441,13 +1438,10 @@ case "$PT_FP" in
     exit 0
     ;;
 esac
-case "$PT_FP" in
-  *"/.claude/jit-context/"*) ;;
-  *)
-    echo '{}'
-    exit 0
-    ;;
-esac
+if [ "${PT_FP#*/.claude/jit-context/}" = "$PT_FP" ]; then
+  echo '{}'
+  exit 0
+fi
 jit_pt_canon_dir() {
   local head="$1" tail="" phys
   while [ ! -d "$head" ]; do
