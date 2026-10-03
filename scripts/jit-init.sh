@@ -1831,9 +1831,9 @@ build_vocab_tsv() {
       | VOCAB_KEYWORD_BLACKLIST="$VOCAB_KEYWORD_BLACKLIST" \
         VOCAB_KEYWORD_BLACKLIST_OK="$VOCAB_KEYWORD_BLACKLIST_OK" LC_ALL=C awk '
         {
-          n = split($0, toks, ",")
+          n = split($0, segs, ",")
           for (i = 1; i <= n; i++) {
-            raw = toks[i]
+            raw = segs[i]
             gsub(/^[[:space:]]+/, "", raw)
             gsub(/[[:space:]]+$/, "", raw)
             # Normalize IDENTICALLY to the matcher (pre-prompt-hook.sh): lowercase, then
@@ -1841,7 +1841,7 @@ build_vocab_tsv() {
             # authored with dots/slashes ("ops.deploy", "security/dast") would
             # otherwise be DEAD -- the matcher strips those from the prompt, so a dotted
             # keyword can never match.
-            kw = tolower(toks[i])
+            kw = tolower(segs[i])
             gsub(/[^a-z0-9 -]/, " ", kw)
             gsub(/ +/, " ", kw)
             gsub(/^ +/, "", kw)

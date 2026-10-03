@@ -1592,10 +1592,10 @@ TREE_INJECT="$(
 )"
 PAT_MEMO=""
 ENT_MEMO=""
-PAT_NL="
+RX_NL="
 "
 idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name column, layer dir
-  local tsv="$1" pcol="$2" need="$3" ncol="$4" dir="$5" out pats n i start line k
+  local tsv="$1" pcol="$2" need="$3" ncol="$4" dir="$5" out rx_list n i start line k
   out="$(JIT_DIR="$dir" LC_ALL=C awk -F'\t' -v pc="$pcol" -v need="$need" -v nc="$ncol" \
     "$JIT_AWK_GUARD$JIT_AWK_ENTRY"'
     {
@@ -1613,74 +1613,74 @@ idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name colum
       }
     }' "$tsv" 2> /dev/null)"
   [ -n "$out" ] || return 0
-  PAT_MEMO="$PAT_MEMO$PAT_NL$out"
-  ENT_MEMO="$ENT_MEMO$PAT_NL$out"
+  PAT_MEMO="$PAT_MEMO$RX_NL$out"
+  ENT_MEMO="$ENT_MEMO$RX_NL$out"
   [ "$pcol" -gt 0 ] || return 0
-  pats=""
+  rx_list=""
   while IFS= read -r line; do
     case "$line" in
       "why	"*)
         line="${line#why	}"
-        pats="$pats${line%%	*}$PAT_NL"
+        rx_list="$rx_list${line%%	*}$RX_NL"
         ;;
     esac
   done <<< "$out"
-  pats="${pats%"$PAT_NL"}"
-  [ -n "$pats" ] || return 0
+  rx_list="${rx_list%"$RX_NL"}"
+  [ -n "$rx_list" ] || return 0
   n=0
-  while IFS= read -r line; do n=$((n + 1)); done <<< "$pats"
+  while IFS= read -r line; do n=$((n + 1)); done <<< "$rx_list"
   start=1
   while [ "$start" -le "$n" ]; do
     i=$(LC_ALL=C awk -v from="$start" '
-      { pat[NR] = $0 }
+      { rx[NR] = $0 }
       END {
         for (k = from; k <= NR; k++) {
-          if (match("", pat[k])) x = 1
+          if (match("", rx[k])) x = 1
           printf "ok %d\n", k
           fflush()
         }
-      }' <<< "$pats" 2> /dev/null | LC_ALL=C awk 'END { print (NR ? $2 : 0) }')
+      }' <<< "$rx_list" 2> /dev/null | LC_ALL=C awk 'END { print (NR ? $2 : 0) }')
     [ -n "$i" ] || i=0
     k=0
     while IFS= read -r line; do
       k=$((k + 1))
       [ "$k" -ge "$start" ] || continue
       if [ "$k" -le "$i" ]; then
-        PAT_MEMO="$PAT_MEMO${PAT_NL}engine	$line	accepted"
+        PAT_MEMO="$PAT_MEMO${RX_NL}engine	$line	accepted"
       elif [ "$k" -eq $((i + 1)) ]; then
-        PAT_MEMO="$PAT_MEMO${PAT_NL}engine	$line	rejected"
+        PAT_MEMO="$PAT_MEMO${RX_NL}engine	$line	rejected"
         break
       fi
-    done <<< "$pats"
+    done <<< "$rx_list"
     [ "$i" -ge "$n" ] && break
     start=$((i + 2))
   done
 }
 pat_memo_get() { # VAR, kind (why|engine), pattern
-  local _probe="$PAT_NL$2	$3	" _rest
+  local _probe="$RX_NL$2	$3	" _rest
   case "$PAT_MEMO" in
     *"$_probe"*)
       _rest="${PAT_MEMO#*"$_probe"}"
-      printf -v "$1" '%s' "${_rest%%"$PAT_NL"*}"
+      printf -v "$1" '%s' "${_rest%%"$RX_NL"*}"
       ;;
     *) return 1 ;;
   esac
 }
 check_pattern() {
-  local label="$1" file="$2" pat="$3" why engine hint="" disp
+  local label="$1" file="$2" rx="$3" why engine hint="" disp
   disp="$(jit_report_name "$file")"
   local memo_why="" memo_engine="" memo_hit=0
-  if pat_memo_get memo_why why "$pat" && pat_memo_get memo_engine engine "$pat"; then
+  if pat_memo_get memo_why why "$rx" && pat_memo_get memo_engine engine "$rx"; then
     memo_hit=1
   fi
   if [ "$memo_hit" = 1 ]; then
     why="$memo_why"
   else
-    why="$(LC_ALL=C JIT_PAT="$pat" awk "$JIT_AWK_GUARD"'BEGIN { print jit_bad_pattern(ENVIRON["JIT_PAT"]) }')"
+    why="$(LC_ALL=C JIT_RX="$rx" awk "$JIT_AWK_GUARD"'BEGIN { print jit_bad_pattern(ENVIRON["JIT_RX"]) }')"
   fi
   if { [ "$memo_hit" = 1 ] && [ "$memo_engine" = accepted ]; } \
     || { [ "$memo_hit" != 1 ] \
-      && LC_ALL=C JIT_PAT="$pat" awk 'BEGIN { if (match("", ENVIRON["JIT_PAT"])) x = 1 }' > /dev/null 2>&1; }; then
+      && LC_ALL=C JIT_RX="$rx" awk 'BEGIN { if (match("", ENVIRON["JIT_RX"])) x = 1 }' > /dev/null 2>&1; }; then
     engine="accepted"
   elif [ -n "$why" ]; then
     engine="rejected by the local awk — refused before match() is reached, so no other row is lost"
@@ -1699,7 +1699,7 @@ check_pattern() {
     REFUSED=$((REFUSED + 1))
     printf 'REFUSED  %-18s %-30s %s%s\n' "$label" "$disp" "$why" "$hint"
     printf '         %-18s %-30s engine: %s\n' "" "" "$engine"
-    print_untrusted "$pat"
+    print_untrusted "$rx"
     return 1
   else
     printf 'ok       %-18s %-30s engine: %s\n' "$label" "$disp" "$engine"
@@ -1707,11 +1707,11 @@ check_pattern() {
   return 0
 }
 check_paths_fragment() {
-  local label="$1" file="$2" pat="$3" disp
+  local label="$1" file="$2" rx="$3" disp
   disp="$(jit_report_name "$file")"
-  LC_ALL=C JIT_PAT="$pat" awk '
+  LC_ALL=C JIT_RX="$rx" awk '
     BEGIN {
-      p = ENVIRON["JIT_PAT"]
+      p = ENVIRON["JIT_RX"]
       gsub(/\\./, "", p)
       gsub(/\[[^]]*\]/, "", p)
       exit((index(p, "/") || index(p, "^") || index(p, "$")) ? 0 : 1)
@@ -1719,16 +1719,16 @@ check_paths_fragment() {
   WARNED=$((WARNED + 1))
   printf 'WARN     %-18s %-30s names a name, not a place — no /, ^ or $, so it fires wherever that name occurs\n' "$label" "$disp"
   printf '         %-18s %-30s fine if you meant it; otherwise anchor it with ^ or a parent directory\n' "" ""
-  print_untrusted "$pat"
+  print_untrusted "$rx"
   return 1
 }
 jit_scan_symlinks "$BASE"
 ent_memo_get() { # VAR, name
-  local _probe="${PAT_NL}ent	$2	" _rest
+  local _probe="${RX_NL}ent	$2	" _rest
   case "$ENT_MEMO" in
     *"$_probe"*)
       _rest="${ENT_MEMO#*"$_probe"}"
-      printf -v "$1" '%s' "${_rest%%"$PAT_NL"*}"
+      printf -v "$1" '%s' "${_rest%%"$RX_NL"*}"
       ;;
     *) return 1 ;;
   esac
@@ -1807,9 +1807,9 @@ check_index_current() {
     if [ "$idx_cache_for" != "$dir" ]; then
       idx_cache_for="$dir"
       idx_cache=""
-      [ -f "$dir/00-index.tsv" ] && idx_cache="$PAT_NL$(< "$dir/00-index.tsv")$PAT_NL"
+      [ -f "$dir/00-index.tsv" ] && idx_cache="$RX_NL$(< "$dir/00-index.tsv")$RX_NL"
     fi
-    if [ "${idx_cache#*"$PAT_NL$row$PAT_NL"}" = "$idx_cache" ]; then
+    if [ "${idx_cache#*"$RX_NL$row$RX_NL"}" = "$idx_cache" ]; then
       STALE=$((STALE + 1))
       disp="$(jit_report_name "$name")"
       printf 'STALE    %-18s %-30s frontmatter and index disagree — this rule is not the one running\n' "$label" "$disp"

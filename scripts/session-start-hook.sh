@@ -1559,11 +1559,11 @@ function jit_fold_latin1(s,   i, p, out) {
   gsub(/[^a-z0-9 -]/, " ", norm)
   gsub(/  +/, " ", norm)
   sub(/^ /, "", norm); sub(/ $/, "", norm)
-  n = split(norm, tok, " ")
+  n = split(norm, seg, " ")
   if (truncated && n > 1) n--
   delete seen
   for (i = 1; i <= n; i++) {
-    t = tok[i]
+    t = seg[i]
     gsub(/^-+/, "", t); gsub(/-+$/, "", t)
     if (length(t) < 3) continue
     if (t ~ /^[0-9-]+$/) continue
@@ -1685,9 +1685,9 @@ if [ "$MISSES_RC" = 0 ]; then
       if (n !~ /^[0-9]+$/) next
       tail = substr(rest, xi + 1)
       if (substr(tail, 1, 2) != "  ") next
-      tok = substr(tail, 3)
-      if (tok == "") next
-      out = out (out == "" ? "" : ", ") "\\\"" tok "\\\" x" n
+      seg = substr(tail, 3)
+      if (seg == "") next
+      out = out (out == "" ? "" : ", ") "\\\"" seg "\\\" x" n
       c++
       if (c >= top) exit
     }

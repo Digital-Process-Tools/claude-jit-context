@@ -1778,14 +1778,14 @@ jit_path_awk() {
 jit_path_awk 0
 JIT_CAND_VALUE=""
 jit_cand_ok() {
-  local tok="$1" rest comp pre=""
+  local seg="$1" rest comp pre=""
   JIT_CAND_VALUE=""
-  case "$tok" in
+  case "$seg" in
     "" | /*) return 1 ;;
     *\\*) return 1 ;;
     .. | ../* | */../* | */..) return 1 ;;
   esac
-  rest="$tok"
+  rest="$seg"
   while [ "$rest" != "${rest#*/}" ]; do
     comp="${rest%%/*}"
     rest="${rest#*/}"
@@ -1794,13 +1794,13 @@ jit_cand_ok() {
     if [ -L "$JIT_PROJECT/$pre" ]; then return 1; fi
     pre="$pre/"
   done
-  if [ -L "$JIT_PROJECT/$tok" ]; then return 1; fi
-  if [ -d "$JIT_PROJECT/$tok" ]; then
-    case "$tok" in */) JIT_CAND_VALUE="$tok" ;; *) JIT_CAND_VALUE="$tok/" ;; esac
+  if [ -L "$JIT_PROJECT/$seg" ]; then return 1; fi
+  if [ -d "$JIT_PROJECT/$seg" ]; then
+    case "$seg" in */) JIT_CAND_VALUE="$seg" ;; *) JIT_CAND_VALUE="$seg/" ;; esac
     return 0
   fi
-  [ -f "$JIT_PROJECT/$tok" ] || return 1
-  JIT_CAND_VALUE="$tok"
+  [ -f "$JIT_PROJECT/$seg" ] || return 1
+  JIT_CAND_VALUE="$seg"
   return 0
 }
 JIT_CANDIDATES=""

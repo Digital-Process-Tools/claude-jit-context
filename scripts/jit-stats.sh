@@ -1390,7 +1390,7 @@ jit_stats_extract_wrapped() {
   return 1
 }
 match_for() {
-  local dim="$1" layer="$2" file="$3" needle line rest tok
+  local dim="$1" layer="$2" file="$3" needle line rest seg
   [ -f "$LOG_FILE" ] && [ ! -L "$LOG_FILE" ] || {
     printf ''
     return 0
@@ -1416,13 +1416,13 @@ match_for() {
   }
   rest="${line#*"| "}"
   IFS=',' read -r -a _js_toks <<< "$rest"
-  for tok in "${_js_toks[@]+"${_js_toks[@]}"}"; do
-    tok="${tok# }"
-    if [[ "$tok" == "$needle"* ]]; then
-      tok="${tok#"$needle"}"
-      case "$tok" in
+  for seg in "${_js_toks[@]+"${_js_toks[@]}"}"; do
+    seg="${seg# }"
+    if [[ "$seg" == "$needle"* ]]; then
+      seg="${seg#"$needle"}"
+      case "$seg" in
         *')'*)
-          jit_stats_extract_wrapped "$tok"
+          jit_stats_extract_wrapped "$seg"
           return 0
           ;;
       esac
@@ -1760,11 +1760,11 @@ function jit_fold_latin1(s,   i, p, out) {
   gsub(/[^a-z0-9 -]/, " ", norm)
   gsub(/  +/, " ", norm)
   sub(/^ /, "", norm); sub(/ $/, "", norm)
-  n = split(norm, tok, " ")
+  n = split(norm, seg, " ")
   if (truncated && n > 1) n--
   delete seen
   for (i = 1; i <= n; i++) {
-    t = tok[i]
+    t = seg[i]
     gsub(/^-+/, "", t); gsub(/-+$/, "", t)
     if (length(t) < 3) continue
     if (t ~ /^[0-9-]+$/) continue
