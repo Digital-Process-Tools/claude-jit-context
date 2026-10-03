@@ -228,6 +228,14 @@ jit_config_refuse() {
   fi
   JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED${JIT_CONFIG_REFUSED:+$JIT_NL}- line $1: $2"
 }
+jit_config_name_ok() {
+  local LC_ALL=C
+  case "$1" in *[!A-Za-z0-9_]*) return 1 ;; esac
+  case "$1" in JIT_CONTEXT_?*) return 0 ;; esac
+  case "$1" in DYNAMIC_RULES_?*) return 0 ;; esac
+  case "$1" in DVSI_?*) return 0 ;; esac
+  return 1
+}
 jit_load_config() {
   local LC_ALL=C
   local file="$1" line cfg_name value reason q rest tail lineno=0
@@ -255,7 +263,7 @@ jit_load_config() {
         reason="not a KEY=VALUE assignment"
         ;;
     esac
-    if [ -z "$reason" ] && ! [[ "$cfg_name" =~ ^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$ ]]; then
+    if [ -z "$reason" ] && ! jit_config_name_ok "$cfg_name"; then
       reason="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
     fi
     if [ -n "$reason" ]; then
