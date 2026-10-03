@@ -222,15 +222,18 @@ else
   # unreadable, not a regular file, a log that is not this tool's log at all, one with
   # records but none from pre-prompt -- means jit-misses.sh tried and could not, and that
   # is the case #247 is about: it says so instead of reading as "nothing recurs".
-  case "$JIT_SKIP_REASON" in
-    # #406: a log that was just rotated (by THIS session, above, or an earlier one)
-    # and has no records yet is the same ordinary shape as a brand new project -- not
-    # "something is wrong", just "no data since the last thing that cleared it". Older
-    # records are still on disk in hooks.log.1; jit-misses.sh names that explicitly in
-    # its own SKIPPED reason, read back here, so this silencing does not depend on
-    # this file re-deriving what "rotated" means.
-    "no such file"* | "the file is empty"* | "hooks.log was rotated"*) JIT_SKIP_REASON="" ;;
-  esac
+  # #406: a log that was just rotated (by THIS session, above, or an earlier one)
+  # and has no records yet is the same ordinary shape as a brand new project -- not
+  # "something is wrong", just "no data since the last thing that cleared it". Older
+  # records are still on disk in hooks.log.1; jit-misses.sh names that explicitly in
+  # its own SKIPPED reason, read back here, so this silencing does not depend on
+  # this file re-deriving what "rotated" means.
+  # #461: prefix tests, not a case pattern holding quoted literals (the ninth trigger).
+  if [ "${JIT_SKIP_REASON#no such file}" != "$JIT_SKIP_REASON" ] \
+    || [ "${JIT_SKIP_REASON#the file is empty}" != "$JIT_SKIP_REASON" ] \
+    || [ "${JIT_SKIP_REASON#hooks.log was rotated}" != "$JIT_SKIP_REASON" ]; then
+    JIT_SKIP_REASON=""
+  fi
   if [ -n "$JIT_SKIP_REASON" ]; then
     # The reason is prose jit-misses.sh chose, not a token restricted to [a-z0-9-] like
     # JIT_RECUR's, so it is escaped for the JSON string it lands inside -- a literal

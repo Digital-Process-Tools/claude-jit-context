@@ -1822,7 +1822,9 @@ _log_hook() {
     # of confident sentence this repository keeps catching itself writing. Making it true
     # would mean a separator no item can contain, which is a change at all 33 append sites
     # inside awk rather than here.
-    case "$head" in *", "*) head="${head%, *}, " ;; esac
+    # #461: an expansion test, not a case pattern holding a quoted literal (`*", "*)`), which
+    # the directory validator holds on (check_release_tree.py, the ninth trigger).
+    [ "${head%, *}" = "$head" ] || head="${head%, *}, "
     # AFTER the back-up, and that ordering is the whole point. Computed against the ceiling
     # instead, the count omits the partial item the back-up just discarded -- so the line
     # would under-report by up to one entry name while reading as exact. That is the defect

@@ -609,6 +609,12 @@ _HOOK_SCRIPT_RE = re.compile(r"scripts/[^/]+-hook\.sh")
 # Like the escaped quote, the same shape clears in post-tool-hook.sh, so none at all.
 # Test with `[ "${x#*/}" = "$x" ]` instead.
 _SLASH_GLOB_PATTERN_RE = re.compile(r'(^|\bin\s+|\|\s*)[^\s"$|()]*\*/\*[^\s|()]*\s*[|)]')
+# #461, ninth trigger: a quoted literal inside a case pattern (`*", "*)`,
+# `"no such file"*)`). Bisected on pre-prompt-hook.sh (2026-10-04): the cut with
+# _log_hook's `case "$head" in *", "*)` line held (release-preview-p5) and cleared
+# without that one line (release-preview-p7). A quoted VARIABLE in a pattern
+# (`*"$JIT_NL$x$JIT_NL"*)`) clears in stop-hook.sh, so only a literal is refused.
+_QUOTED_LITERAL_PATTERN_RE = re.compile(r'(^|\bin\s+|\|\s*)[^\s"$|()]*"[^"$]+"[^\s|()]*\s*[|)]')
 _NAMED_SCRIPT_PATH_RE = re.compile(r"scripts/[A-Za-z0-9_-]+\.sh")
 _RUNTIME_COMMAND_RE = re.compile(r'^\s*"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?"?(\s|[^\s=]*\)\s*(;;)?\s*$)')
 
@@ -665,6 +671,11 @@ def _check_no_cross_script_loading(files: dict, kinds: dict, off: list) -> None:
             if _HOOK_SCRIPT_RE.fullmatch(rel) and _SLASH_GLOB_PATTERN_RE.search(stripped):
                 off.append(f"{rel}:{n}: a `*/*` case pattern in a hook -- test with "
                            f"${{x#*/}} instead -- COMMAND_SCRIPT_NOT_FOLLOWED: "
+                           f"{line.strip()[:80]!r}")
+            if (_HOOK_SCRIPT_RE.fullmatch(rel) and not stripped.startswith(("[", "if ", "printf", "echo"))
+                    and _QUOTED_LITERAL_PATTERN_RE.search(stripped)):
+                off.append(f"{rel}:{n}: a quoted literal in a case pattern in a hook -- test "
+                           f"with ${{x#text}} instead -- COMMAND_SCRIPT_NOT_FOLLOWED: "
                            f"{line.strip()[:80]!r}")
             if _TYPED_HEREDOC_OP_RE.search(line):
                 off.append(f"{rel}:{n}: types a `<<` the directory validator cannot place -- "
