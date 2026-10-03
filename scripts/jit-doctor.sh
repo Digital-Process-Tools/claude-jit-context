@@ -512,19 +512,19 @@ THRESH_FROM=""
 read_threshold() {
   # $1 raw value, $2 line number, $3 key name. Sets THRESH_VALUE and THRESH_FROM on
   # acceptance; appends to THRESH_REFUSED and returns 1 otherwise.
-  local raw="$1" line="$2" key="$3"
+  local raw="$1" line="$2" setting="$3"
   THRESH_VALUE=""
   THRESH_FROM=""
   [ -n "$raw" ] || return 1
   case "$raw" in
     '' | *[!0-9]*)
-      THRESH_REFUSED="$THRESH_REFUSED  $(printf '%-20s %s' "" "$key is not a whole number -- refused, the default stands")
+      THRESH_REFUSED="$THRESH_REFUSED  $(printf '%-20s %s' "" "$setting is not a whole number -- refused, the default stands")
 "
       return 1
       ;;
   esac
   if [ "$raw" -lt 1 ]; then
-    THRESH_REFUSED="$THRESH_REFUSED  $(printf '%-20s %s' "" "$key is not a whole number above zero -- refused, the default stands")
+    THRESH_REFUSED="$THRESH_REFUSED  $(printf '%-20s %s' "" "$setting is not a whole number above zero -- refused, the default stands")
 "
     return 1
   fi
@@ -700,11 +700,11 @@ for _dim in tools paths vocabulary; do
       # however often it had actually matched: an absence produced by this tool, reported
       # as an absence in the world, in the section written to end exactly that.
       case "$_dim" in
-        tools) _key="tool:$_name" ;;
-        *) _key="$_layer:$_name" ;;
+        tools) _entry_id="tool:$_name" ;;
+        *) _entry_id="$_layer:$_name" ;;
       esac
-      case "$_key" in *"$JIT_NL"*) _key="<unnameable>" ;; esac
-      ENTRY_IDS[$ENTRY_N]="$_key"
+      case "$_entry_id" in *"$JIT_NL"*) _entry_id="<unnameable>" ;; esac
+      ENTRY_IDS[$ENTRY_N]="$_entry_id"
       ENTRY_LABEL[$ENTRY_N]="$_dim/$_safe"
       ENTRY_NAME[$ENTRY_N]="$(jit_report_name "$_name")"
       ENTRY_BYTES[$ENTRY_N]=$(LC_ALL=C awk 'END { print n + 0 } { n += length($0) + 1 }' "$_md")

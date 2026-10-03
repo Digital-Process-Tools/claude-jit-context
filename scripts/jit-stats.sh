@@ -145,9 +145,9 @@ fi
 # the exact figure. A caller with no path to offer (dim/layer not resolved --
 # a legacy bare shown-mark) gets no fallback and stays "unknown", honestly.
 bytes_for() {
-  local key="$1" path="$2" needle rest n
+  local ident="$1" path="$2" needle rest n
   if [ -n "$BYTES_RAW" ]; then
-    needle="$JIT_NL$key$(printf '\t')"
+    needle="$JIT_NL$ident$(printf '\t')"
     case "$JIT_NL$BYTES_RAW$JIT_NL" in
       *"$needle"*)
         # #389 self-review: stripped through the SAME NL-anchored needle the

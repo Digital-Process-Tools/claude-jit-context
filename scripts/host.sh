@@ -417,7 +417,7 @@ jit_all_tool_aliases() {
 # word-split, the same shape jit_scan_layers() already hands back for its own
 # space-separated layer list.
 jit_canonical_tool() {
-  local aliases="${1:-}" raw="${2:-}" entry key vals
+  local aliases="${1:-}" raw="${2:-}" entry alias_name vals
   [ -n "$aliases" ] && [ -n "$raw" ] || {
     printf '%s\n' "$raw"
     return 0
@@ -426,8 +426,8 @@ jit_canonical_tool() {
   IFS=','
   for entry in $aliases; do
     IFS="$old_ifs"
-    key="${entry%%=*}"
-    [ "$key" = "$raw" ] || continue
+    alias_name="${entry%%=*}"
+    [ "$alias_name" = "$raw" ] || continue
     vals="${entry#*=}"
     printf '%s\n' "${vals//;/ }"
     return 0

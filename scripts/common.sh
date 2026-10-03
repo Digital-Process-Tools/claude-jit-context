@@ -1011,7 +1011,7 @@ jit_load_config() {
   # reads a value in a way that wants the caller's collation (every value check below is
   # a literal `case` match, never a range).
   local LC_ALL=C
-  local file="$1" line key value reason q rest tail lineno=0
+  local file="$1" line cfg_name value reason q rest tail lineno=0
   while IFS= read -r line || [ -n "$line" ]; do
     lineno=$((lineno + 1))
     # A CRLF checkout must parse the same as an LF one -- config.env is not covered by
@@ -1031,16 +1031,16 @@ jit_load_config() {
     reason=""
     case "$line" in
       *=*)
-        key="${line%%=*}"
+        cfg_name="${line%%=*}"
         value="${line#*=}"
         ;;
       *)
-        key=""
+        cfg_name=""
         value=""
         reason="not a KEY=VALUE assignment"
         ;;
     esac
-    if [ -z "$reason" ] && ! [[ "$key" =~ ^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$ ]]; then
+    if [ -z "$reason" ] && ! [[ "$cfg_name" =~ ^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$ ]]; then
       reason="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
     fi
     if [ -n "$reason" ]; then
@@ -1099,7 +1099,7 @@ jit_load_config() {
     # A project that writes it today is refused and told so, rather than getting a mode
     # nobody implemented, or worse, getting `full` because an unrecognised value fell
     # through to the expensive side.
-    if [ "$key" = JIT_CONTEXT_INJECT ]; then
+    if [ "$cfg_name" = JIT_CONTEXT_INJECT ]; then
       case "$value" in
         summary | full) ;;
         *)
@@ -1115,7 +1115,7 @@ jit_load_config() {
     # reported as an unknown key. Only 0 and 1 are implemented; anything else must not
     # silently read as either value, the same reason JIT_CONTEXT_INJECT refuses an
     # unimplemented mode above rather than falling through.
-    if [ "$key" = JIT_CONTEXT_STOP_REPORT ]; then
+    if [ "$cfg_name" = JIT_CONTEXT_STOP_REPORT ]; then
       case "$value" in
         0 | 1) ;;
         *)
@@ -1130,7 +1130,7 @@ jit_load_config() {
     # Refused the same way and for the same reason: a setting that reads as applied and
     # silently is not is this repository own defect class, and there is no safe guess
     # between "one line per fire" and "one line per session" to fall back on.
-    if [ "$key" = JIT_CONTEXT_STATUS ]; then
+    if [ "$cfg_name" = JIT_CONTEXT_STATUS ]; then
       case "$value" in
         fired | summary | off) ;;
         *)
@@ -1144,7 +1144,7 @@ jit_load_config() {
     # the way to make it stop, so it has to exist, and it is narrower than
     # JIT_CONTEXT_STATUS=off on purpose: a person tired of that one line has not asked
     # to lose the Stop summary. Refused on any other value, same reason as above.
-    if [ "$key" = JIT_CONTEXT_MISSES ]; then
+    if [ "$cfg_name" = JIT_CONTEXT_MISSES ]; then
       case "$value" in
         on | off) ;;
         *)
@@ -1167,7 +1167,7 @@ jit_load_config() {
     # which -- and naming the line is cheaper than guessing right. Note `[[ 9 -ge 010 ]]`
     # IS octal, so the reading changes with the test operator; refusing the value means
     # that difference can never quietly become a behaviour change.
-    if [ "$key" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
+    if [ "$cfg_name" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
       case "$value" in
         0) ;;
         [1-9]*)
@@ -1184,7 +1184,7 @@ jit_load_config() {
           ;;
       esac
     fi
-    printf -v "$key" '%s' "$value"
+    printf -v "$cfg_name" '%s' "$value"
   done < "$file"
 }
 
@@ -1394,10 +1394,10 @@ jit_frontmatter_many() { # VAR, entry file, field...
 # in jit-dry-run.sh tests the OUTPUT variable with `[ -n "$var" ]` instead -- so a
 # nonzero miss bought nothing and was one `set -e` away from being a landmine.
 jit_fm_get() { # VAR, memo, field
-  local _key="$JIT_FM_NL$3	" _rest
+  local _probe="$JIT_FM_NL$3	" _rest
   case "$2" in
-    *"$_key"*)
-      _rest="${2#*"$_key"}"
+    *"$_probe"*)
+      _rest="${2#*"$_probe"}"
       printf -v "$1" '%s' "${_rest%%"$JIT_FM_NL"*}"
       ;;
     *) printf -v "$1" '%s' "" ;;

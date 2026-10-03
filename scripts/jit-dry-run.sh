@@ -601,10 +601,10 @@ idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name colum
 # Parameter expansion only. No awk, no grep, no command substitution: a fork here would be
 # one per row, which is exactly what idx_prime() just spent one process to avoid.
 pat_memo_get() { # VAR, kind (why|engine), pattern
-  local _key="$PAT_NL$2	$3	" _rest
+  local _probe="$PAT_NL$2	$3	" _rest
   case "$PAT_MEMO" in
-    *"$_key"*)
-      _rest="${PAT_MEMO#*"$_key"}"
+    *"$_probe"*)
+      _rest="${PAT_MEMO#*"$_probe"}"
       printf -v "$1" '%s' "${_rest%%"$PAT_NL"*}"
       ;;
     *) return 1 ;;
@@ -791,10 +791,10 @@ ent_memo_get() { # VAR, name
   # idx_prime() writes every record as "<kind><TAB><value><TAB><verdict>" -- "ent" for
   # this one, exactly like pat_memo_get()'s "why"/"engine" -- so the needle has to open
   # on "ent<TAB>", not on a bare newline, or it can never match a record at all (#346).
-  local _key="${PAT_NL}ent	$2	" _rest
+  local _probe="${PAT_NL}ent	$2	" _rest
   case "$ENT_MEMO" in
-    *"$_key"*)
-      _rest="${ENT_MEMO#*"$_key"}"
+    *"$_probe"*)
+      _rest="${ENT_MEMO#*"$_probe"}"
       printf -v "$1" '%s' "${_rest%%"$PAT_NL"*}"
       ;;
     *) return 1 ;;
