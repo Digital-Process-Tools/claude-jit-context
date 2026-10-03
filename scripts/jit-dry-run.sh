@@ -80,15 +80,15 @@ jit_host_sig_set() {
   esac
 }
 jit_host_detect() {
-  local name sigs sig old_ifs
-  while IFS='|' read -r name sigs _ _ _ _ _; do
+  local name hostvars hostvar old_ifs
+  while IFS='|' read -r name hostvars _ _ _ _ _; do
     [ -n "$name" ] || continue
-    [ -n "$sigs" ] || continue
+    [ -n "$hostvars" ] || continue
     old_ifs="$IFS"
     IFS=','
-    for sig in $sigs; do
+    for hostvar in $hostvars; do
       IFS="$old_ifs"
-      if jit_host_sig_set "$sig"; then
+      if jit_host_sig_set "$hostvar"; then
         printf '%s\n' "$name"
         return 0
       fi
@@ -486,7 +486,7 @@ JIT_AWK_ENTRY='
 function jit_row_id(layer, rown) {
   return layer " row " rown
 }
-function jit_entry_age(key,   raw, n, i, ln, tp) {
+function jit_entry_age(ident,   raw, n, i, ln, tp) {
   if (!jit_age_loaded) {
     jit_age_loaded = 1
     raw = ENVIRON["JIT_ENTRY_AGES"]
@@ -501,7 +501,7 @@ function jit_entry_age(key,   raw, n, i, ln, tp) {
       }
     }
   }
-  if (key in jit_age) return jit_age[key]
+  if (ident in jit_age) return jit_age[ident]
   return ""
 }
 function jit_log_text(s) {
@@ -758,7 +758,7 @@ function jit_transclude_expand_line(line, depth,   trimmed, out, i, n, start, en
   }
   return out
 }
-function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, key, val, nread, r) {
+function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, ident, val, nread, r) {
   e["body"] = ""; e["title"] = ""; e["desc"] = ""
   e["mode"] = def; e["fm"] = 0; e["badmode"] = 0; e["read"] = 0; e["injseen"] = 0
   e["pin"] = 0
@@ -785,15 +785,15 @@ function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, key, val,
     }
     if (nfm != 1) continue
     if (index(ln, ":") == 0) continue
-    key = substr(ln, 1, index(ln, ":") - 1)
-    if (key ~ /[^A-Za-z0-9_-]/) continue
+    ident = substr(ln, 1, index(ln, ":") - 1)
+    if (ident ~ /[^A-Za-z0-9_-]/) continue
     val = substr(ln, index(ln, ":") + 1)
     sub(/^[[:space:]]+/, "", val)
     sub(/[[:space:]]+$/, "", val)
     if (val ~ /^"[^"]*"$/) val = substr(val, 2, length(val) - 2)
-    if (key == "title") { if (e["title"] == "") e["title"] = val }
-    else if (key == "description") { if (e["desc"] == "") e["desc"] = val }
-    else if (key == "inject" && !e["injseen"]) {
+    if (ident == "title") { if (e["title"] == "") e["title"] = val }
+    else if (ident == "description") { if (e["desc"] == "") e["desc"] = val }
+    else if (ident == "inject" && !e["injseen"]) {
       e["injseen"] = 1
       gsub(/[[:space:]]/, "", val)
       val = tolower(val)
@@ -986,10 +986,10 @@ function jit_json_fields(s, raw, fs, fe,   n, i, k) {
   fe[k] = n
   return k
 }
-function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth, ti_depth, pending_key, pending_key_depth, i, c, ch, txt, val, nxt, is_key) {
+function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth, ti_depth, pending_ident, pending_key_depth, i, c, ch, txt, val, nxt, is_ident) {
   depth = 0
   ti_depth = -1
-  pending_key = ""
+  pending_ident = ""
   pending_key_depth = -1
   for (i = 1; i <= n; i++) {
     if (i % 2 == 1) {
@@ -998,7 +998,7 @@ function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth
         ch = substr(txt, c, 1)
         if (ch == "{") {
           depth++
-          if (pending_key == "tool_input" && pending_key_depth == 1 && ti_depth == -1) ti_depth = depth
+          if (pending_ident == "tool_input" && pending_key_depth == 1 && ti_depth == -1) ti_depth = depth
         } else if (ch == "}") {
           if (depth == ti_depth) ti_depth = -1
           depth--
@@ -1006,15 +1006,15 @@ function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth
       }
       continue
     }
-    if (fs[i] != fe[i]) { pending_key = ""; pending_key_depth = -1; continue }
+    if (fs[i] != fe[i]) { pending_ident = ""; pending_key_depth = -1; continue }
     val = raw[fs[i]]
-    is_key = 0
+    is_ident = 0
     if (i + 1 <= n) {
       nxt = raw[fs[i+1]]
-      if (nxt ~ /^[[:space:]]*:/) is_key = 1
+      if (nxt ~ /^[[:space:]]*:/) is_ident = 1
     }
-    if (!is_key) { pending_key = ""; pending_key_depth = -1; continue }
-    pending_key = val
+    if (!is_ident) { pending_ident = ""; pending_key_depth = -1; continue }
+    pending_ident = val
     pending_key_depth = depth
     if (i + 2 > n) continue
     if (depth == 1) {
@@ -1076,9 +1076,9 @@ function jit_shown_load(file, set,   line) {
   if (file == "") return
   while ((getline line < file) > 0) set[line] = 1
 }
-function jit_shown_mark(file, key) {
+function jit_shown_mark(file, ident) {
   if (file == "") return
-  JIT_MARKS = JIT_MARKS file "\t" key "\n"
+  JIT_MARKS = JIT_MARKS file "\t" ident "\n"
 }
 function jit_loc_key(dim, layer, file) {
   return "loc:" dim ":" layer ":" file
@@ -1882,7 +1882,7 @@ for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; 
   jit_path_dir tsv_dir "$tsv"
   idx_prime "$tsv" 0 0 2 "$tsv_dir"
   v_rown=0
-  while IFS=$'\t' read -r _v_key v_file _rest; do
+  while IFS=$'\t' read -r _v_ident v_file _rest; do
     v_rown=$((v_rown + 1))
     [ -n "${v_file:-}" ] || continue
     VOCAB_LISTED=$((VOCAB_LISTED + 1))
@@ -1958,7 +1958,7 @@ WHOLE=0
 NODESC=0
 WHOLE_LINES=""
 list_whole() {
-  local dir="$1" label="$2" md name inj raw_inj eff why size desc pin
+  local dir="$1" label="$2" md name inj raw_inj eff why size desc is_fixed
   [ -d "$dir" ] || return 0
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -1977,20 +1977,20 @@ list_whole() {
     fi
     jit_fm_get desc "$lw_fm" description
     why=""
-    pin=0
+    is_fixed=0
     _fm_first=""
     IFS= read -r _fm_first 2> /dev/null < "$md"
     if [ "$_fm_first" != "---" ]; then
       eff=full
-      pin=1
+      is_fixed=1
       why="no frontmatter, so there is nothing to summarise"
     elif [ "$inj" = full ]; then
       eff=full
-      pin=1
+      is_fixed=1
       why="inject: full in this entry"
     elif [ "$inj" = summary ]; then
       eff=summary
-      pin=1
+      is_fixed=1
     else
       eff="$TREE_INJECT"
       if [ -n "$inj" ]; then
@@ -2003,7 +2003,7 @@ list_whole() {
       fi
       [ -z "$why" ] && why="the project default"
     fi
-    if [ -z "$desc" ] && [ "$pin$eff" != "1full" ]; then NODESC=$((NODESC + 1)); fi
+    if [ -z "$desc" ] && [ "$is_fixed$eff" != "1full" ]; then NODESC=$((NODESC + 1)); fi
     if [ "$eff" = full ]; then
       size=$(($(wc -c 2> /dev/null < "$md")))
       WHOLE=$((WHOLE + 1))
@@ -2141,10 +2141,10 @@ END {
   ctx = ""; rtext = ""
   for (i = 1; i + 2 <= n; i++) {
     if (fs[i] != fe[i]) continue
-    key = jit_field(raw, fs[i], fe[i])
-    if (key == "additionalContext" && ctx == "") {
+    ident = jit_field(raw, fs[i], fe[i])
+    if (ident == "additionalContext" && ctx == "") {
       ctx = jit_unescape_blocks(jit_field(raw, fs[i+2], fe[i+2]))
-    } else if (key == "reason" && rtext == "") {
+    } else if (ident == "reason" && rtext == "") {
       rtext = jit_unescape_blocks(jit_field(raw, fs[i+2], fe[i+2]))
     }
   }

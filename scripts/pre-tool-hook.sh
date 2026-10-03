@@ -62,15 +62,15 @@ jit_host_sig_set() {
   esac
 }
 jit_host_detect() {
-  local name sigs sig old_ifs
-  while IFS='|' read -r name sigs _ _ _ _ _; do
+  local name hostvars hostvar old_ifs
+  while IFS='|' read -r name hostvars _ _ _ _ _; do
     [ -n "$name" ] || continue
-    [ -n "$sigs" ] || continue
+    [ -n "$hostvars" ] || continue
     old_ifs="$IFS"
     IFS=','
-    for sig in $sigs; do
+    for hostvar in $hostvars; do
       IFS="$old_ifs"
-      if jit_host_sig_set "$sig"; then
+      if jit_host_sig_set "$hostvar"; then
         printf '%s\n' "$name"
         return 0
       fi
@@ -513,7 +513,7 @@ JIT_AWK_ENTRY='
 function jit_row_id(layer, rown) {
   return layer " row " rown
 }
-function jit_entry_age(key,   raw, n, i, ln, tp) {
+function jit_entry_age(ident,   raw, n, i, ln, tp) {
   if (!jit_age_loaded) {
     jit_age_loaded = 1
     raw = ENVIRON["JIT_ENTRY_AGES"]
@@ -528,7 +528,7 @@ function jit_entry_age(key,   raw, n, i, ln, tp) {
       }
     }
   }
-  if (key in jit_age) return jit_age[key]
+  if (ident in jit_age) return jit_age[ident]
   return ""
 }
 function jit_log_text(s) {
@@ -785,7 +785,7 @@ function jit_transclude_expand_line(line, depth,   trimmed, out, i, n, start, en
   }
   return out
 }
-function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, key, val, nread, r) {
+function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, ident, val, nread, r) {
   e["body"] = ""; e["title"] = ""; e["desc"] = ""
   e["mode"] = def; e["fm"] = 0; e["badmode"] = 0; e["read"] = 0; e["injseen"] = 0
   e["pin"] = 0
@@ -812,15 +812,15 @@ function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, key, val,
     }
     if (nfm != 1) continue
     if (index(ln, ":") == 0) continue
-    key = substr(ln, 1, index(ln, ":") - 1)
-    if (key ~ /[^A-Za-z0-9_-]/) continue
+    ident = substr(ln, 1, index(ln, ":") - 1)
+    if (ident ~ /[^A-Za-z0-9_-]/) continue
     val = substr(ln, index(ln, ":") + 1)
     sub(/^[[:space:]]+/, "", val)
     sub(/[[:space:]]+$/, "", val)
     if (val ~ /^"[^"]*"$/) val = substr(val, 2, length(val) - 2)
-    if (key == "title") { if (e["title"] == "") e["title"] = val }
-    else if (key == "description") { if (e["desc"] == "") e["desc"] = val }
-    else if (key == "inject" && !e["injseen"]) {
+    if (ident == "title") { if (e["title"] == "") e["title"] = val }
+    else if (ident == "description") { if (e["desc"] == "") e["desc"] = val }
+    else if (ident == "inject" && !e["injseen"]) {
       e["injseen"] = 1
       gsub(/[[:space:]]/, "", val)
       val = tolower(val)
@@ -1013,10 +1013,10 @@ function jit_json_fields(s, raw, fs, fe,   n, i, k) {
   fe[k] = n
   return k
 }
-function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth, ti_depth, pending_key, pending_key_depth, i, c, ch, txt, val, nxt, is_key) {
+function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth, ti_depth, pending_ident, pending_key_depth, i, c, ch, txt, val, nxt, is_ident) {
   depth = 0
   ti_depth = -1
-  pending_key = ""
+  pending_ident = ""
   pending_key_depth = -1
   for (i = 1; i <= n; i++) {
     if (i % 2 == 1) {
@@ -1025,7 +1025,7 @@ function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth
         ch = substr(txt, c, 1)
         if (ch == "{") {
           depth++
-          if (pending_key == "tool_input" && pending_key_depth == 1 && ti_depth == -1) ti_depth = depth
+          if (pending_ident == "tool_input" && pending_key_depth == 1 && ti_depth == -1) ti_depth = depth
         } else if (ch == "}") {
           if (depth == ti_depth) ti_depth = -1
           depth--
@@ -1033,15 +1033,15 @@ function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth
       }
       continue
     }
-    if (fs[i] != fe[i]) { pending_key = ""; pending_key_depth = -1; continue }
+    if (fs[i] != fe[i]) { pending_ident = ""; pending_key_depth = -1; continue }
     val = raw[fs[i]]
-    is_key = 0
+    is_ident = 0
     if (i + 1 <= n) {
       nxt = raw[fs[i+1]]
-      if (nxt ~ /^[[:space:]]*:/) is_key = 1
+      if (nxt ~ /^[[:space:]]*:/) is_ident = 1
     }
-    if (!is_key) { pending_key = ""; pending_key_depth = -1; continue }
-    pending_key = val
+    if (!is_ident) { pending_ident = ""; pending_key_depth = -1; continue }
+    pending_ident = val
     pending_key_depth = depth
     if (i + 2 > n) continue
     if (depth == 1) {
@@ -1103,9 +1103,9 @@ function jit_shown_load(file, set,   line) {
   if (file == "") return
   while ((getline line < file) > 0) set[line] = 1
 }
-function jit_shown_mark(file, key) {
+function jit_shown_mark(file, ident) {
   if (file == "") return
-  JIT_MARKS = JIT_MARKS file "\t" key "\n"
+  JIT_MARKS = JIT_MARKS file "\t" ident "\n"
 }
 function jit_loc_key(dim, layer, file) {
   return "loc:" dim ":" layer ":" file
@@ -1548,14 +1548,14 @@ function jit_re_lit(s,    i, c, out, special) {
   }
   return out
 }
-function jit_expand_tool_alias(aliases, raw,    n, entries, i, eq, key) {
+function jit_expand_tool_alias(aliases, raw,    n, entries, i, eq, ident) {
   if (aliases == "" || raw == "") return raw
   n = split(aliases, entries, ",")
   for (i = 1; i <= n; i++) {
     eq = index(entries[i], "=")
     if (eq == 0) continue
-    key = substr(entries[i], 1, eq - 1)
-    if (key != raw) continue
+    ident = substr(entries[i], 1, eq - 1)
+    if (ident != raw) continue
     gsub(/;/, " ", entries[i])
     return raw " " substr(entries[i], eq + 1)  # union, not replace (#364)
   }
@@ -1677,11 +1677,11 @@ END {
       } else {
         if (index(fold_cmd, jit_fold_latin1(tolower(r_match))) == 0) continue
       }
-      key = ""
+      ident = ""
       hushed = 0
       if (index(r_modes, "once") > 0) {
-        key = jit_loc_key("tools", tool_layer, r_file)
-        if ((key in agent_shown) || (key in held)) {
+        ident = jit_loc_key("tools", tool_layer, r_file)
+        if ((ident in agent_shown) || (ident in held)) {
           if (!can_refuse) continue
           hushed = 1
         }
@@ -1692,7 +1692,7 @@ END {
       why = ""
       if (file_why != "") {
         body = "(the text of this rule was not delivered: " file_why ")"
-        key = ""
+        ident = ""
       } else {
         rpath = tools_dir "/" r_file
         if (jit_entry_load(rpath, inject_default, keepbody, ent)) {
@@ -1708,11 +1708,11 @@ END {
         refused = jit_refuse_add(refused, jit_row_id(tool_label, rown) r_kind ": " why)
         log_matches = log_matches sep "refused:" jit_log_name(r_file, tool_label, rown, why) "(" why ")"
         sep = ", "
-        key = ""
+        ident = ""
       }
       if (keepbody && body ~ /^[[:space:]]*$/) {
         body = "(the text of this rule was not delivered: the entry file has no text)"
-        key = ""
+        ident = ""
       }
       if (requires_missing && would_refuse) {
         degrade_note = "[jit] This rule would normally refuse this call, but `" r_requires "` was not found on PATH, so it has degraded to advisory instead of blocking. Install `" r_requires "` to restore enforcement."
@@ -1755,11 +1755,11 @@ END {
       if (content != "" && blocked == "" && !hushed) {
         log_adv = log_adv asep "tool:" r_logname "(" r_match ")" jit_inject_tag(ent)
         asep = ", "
-        if (key != "") { held[key] = 1; hold_n++ }
+        if (ident != "") { held[ident] = 1; hold_n++ }
         if (ent["mode"] == "full" && why == "" && body !~ /^[[:space:]]*$/) adv_header = header
         else adv_header = "# JIT Context: " jit_clip(r_header_name, 255) " (matched: " jit_clip(r_match, 160) ")"
         nblk++; blk[nblk] = adv_header "\n" content
-        if (key != "") held_bytes[key] = length(adv_header "\n" content)
+        if (ident != "") held_bytes[ident] = length(adv_header "\n" content)
         if (status_mode == "fired") sys_msg = sys_msg (sys_msg != "" ? "\n" : "") "JIT : tools/" tool_layer "/" r_file " (" jit_fmt_bytes(length(adv_header "\n" content)) ")"
       }
     }

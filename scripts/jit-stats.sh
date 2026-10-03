@@ -67,15 +67,15 @@ jit_host_sig_set() {
   esac
 }
 jit_host_detect() {
-  local name sigs sig old_ifs
-  while IFS='|' read -r name sigs _ _ _ _ _; do
+  local name hostvars hostvar old_ifs
+  while IFS='|' read -r name hostvars _ _ _ _ _; do
     [ -n "$name" ] || continue
-    [ -n "$sigs" ] || continue
+    [ -n "$hostvars" ] || continue
     old_ifs="$IFS"
     IFS=','
-    for sig in $sigs; do
+    for hostvar in $hostvars; do
       IFS="$old_ifs"
-      if jit_host_sig_set "$sig"; then
+      if jit_host_sig_set "$hostvar"; then
         printf '%s\n' "$name"
         return 0
       fi
@@ -473,7 +473,7 @@ JIT_AWK_ENTRY='
 function jit_row_id(layer, rown) {
   return layer " row " rown
 }
-function jit_entry_age(key,   raw, n, i, ln, tp) {
+function jit_entry_age(ident,   raw, n, i, ln, tp) {
   if (!jit_age_loaded) {
     jit_age_loaded = 1
     raw = ENVIRON["JIT_ENTRY_AGES"]
@@ -488,7 +488,7 @@ function jit_entry_age(key,   raw, n, i, ln, tp) {
       }
     }
   }
-  if (key in jit_age) return jit_age[key]
+  if (ident in jit_age) return jit_age[ident]
   return ""
 }
 function jit_log_text(s) {
@@ -745,7 +745,7 @@ function jit_transclude_expand_line(line, depth,   trimmed, out, i, n, start, en
   }
   return out
 }
-function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, key, val, nread, r) {
+function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, ident, val, nread, r) {
   e["body"] = ""; e["title"] = ""; e["desc"] = ""
   e["mode"] = def; e["fm"] = 0; e["badmode"] = 0; e["read"] = 0; e["injseen"] = 0
   e["pin"] = 0
@@ -772,15 +772,15 @@ function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, key, val,
     }
     if (nfm != 1) continue
     if (index(ln, ":") == 0) continue
-    key = substr(ln, 1, index(ln, ":") - 1)
-    if (key ~ /[^A-Za-z0-9_-]/) continue
+    ident = substr(ln, 1, index(ln, ":") - 1)
+    if (ident ~ /[^A-Za-z0-9_-]/) continue
     val = substr(ln, index(ln, ":") + 1)
     sub(/^[[:space:]]+/, "", val)
     sub(/[[:space:]]+$/, "", val)
     if (val ~ /^"[^"]*"$/) val = substr(val, 2, length(val) - 2)
-    if (key == "title") { if (e["title"] == "") e["title"] = val }
-    else if (key == "description") { if (e["desc"] == "") e["desc"] = val }
-    else if (key == "inject" && !e["injseen"]) {
+    if (ident == "title") { if (e["title"] == "") e["title"] = val }
+    else if (ident == "description") { if (e["desc"] == "") e["desc"] = val }
+    else if (ident == "inject" && !e["injseen"]) {
       e["injseen"] = 1
       gsub(/[[:space:]]/, "", val)
       val = tolower(val)
@@ -973,10 +973,10 @@ function jit_json_fields(s, raw, fs, fe,   n, i, k) {
   fe[k] = n
   return k
 }
-function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth, ti_depth, pending_key, pending_key_depth, i, c, ch, txt, val, nxt, is_key) {
+function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth, ti_depth, pending_ident, pending_key_depth, i, c, ch, txt, val, nxt, is_ident) {
   depth = 0
   ti_depth = -1
-  pending_key = ""
+  pending_ident = ""
   pending_key_depth = -1
   for (i = 1; i <= n; i++) {
     if (i % 2 == 1) {
@@ -985,7 +985,7 @@ function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth
         ch = substr(txt, c, 1)
         if (ch == "{") {
           depth++
-          if (pending_key == "tool_input" && pending_key_depth == 1 && ti_depth == -1) ti_depth = depth
+          if (pending_ident == "tool_input" && pending_key_depth == 1 && ti_depth == -1) ti_depth = depth
         } else if (ch == "}") {
           if (depth == ti_depth) ti_depth = -1
           depth--
@@ -993,15 +993,15 @@ function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth
       }
       continue
     }
-    if (fs[i] != fe[i]) { pending_key = ""; pending_key_depth = -1; continue }
+    if (fs[i] != fe[i]) { pending_ident = ""; pending_key_depth = -1; continue }
     val = raw[fs[i]]
-    is_key = 0
+    is_ident = 0
     if (i + 1 <= n) {
       nxt = raw[fs[i+1]]
-      if (nxt ~ /^[[:space:]]*:/) is_key = 1
+      if (nxt ~ /^[[:space:]]*:/) is_ident = 1
     }
-    if (!is_key) { pending_key = ""; pending_key_depth = -1; continue }
-    pending_key = val
+    if (!is_ident) { pending_ident = ""; pending_key_depth = -1; continue }
+    pending_ident = val
     pending_key_depth = depth
     if (i + 2 > n) continue
     if (depth == 1) {
@@ -1063,9 +1063,9 @@ function jit_shown_load(file, set,   line) {
   if (file == "") return
   while ((getline line < file) > 0) set[line] = 1
 }
-function jit_shown_mark(file, key) {
+function jit_shown_mark(file, ident) {
   if (file == "") return
-  JIT_MARKS = JIT_MARKS file "\t" key "\n"
+  JIT_MARKS = JIT_MARKS file "\t" ident "\n"
 }
 function jit_loc_key(dim, layer, file) {
   return "loc:" dim ":" layer ":" file
@@ -1821,13 +1821,13 @@ END {
   else if (genstate == "off") printf "  generic words not filtered (--generic-words \"\")\n"
   else printf "  generic words NOT filtered -- the list cannot be read: %s\n", genname
   nk = 0
-  for (t in cnt) if (cnt[t] >= min) { nk++; keys[nk] = t }
+  for (t in cnt) if (cnt[t] >= min) { nk++; idents[nk] = t }
   for (i = 2; i <= nk; i++) {
-    k = keys[i]; j = i - 1
-    while (j >= 1 && (cnt[keys[j]] < cnt[k] || (cnt[keys[j]] == cnt[k] && keys[j] > k))) {
-      keys[j+1] = keys[j]; j--
+    k = idents[i]; j = i - 1
+    while (j >= 1 && (cnt[idents[j]] < cnt[k] || (cnt[idents[j]] == cnt[k] && idents[j] > k))) {
+      idents[j+1] = idents[j]; j--
     }
-    keys[j+1] = k
+    idents[j+1] = k
   }
   if (nk == 0) {
     printf "  ok -- no token is shared by %d or more of them; nothing here is a repeated gap\n", min
@@ -1838,7 +1838,7 @@ END {
   printf "\n  recurring misses -- prompts sharing a content word, most-missed first:\n\n"
   shown = 0
   for (i = 1; i <= nk && shown < top; i++) {
-    t = keys[i]
+    t = idents[i]
     printf "  %dx  %s\n", cnt[t], t
     for (j = 1; j <= exn[t]; j++) printf "        %s\n", ex[t, j]
     if (cnt[t] > exn[t]) printf "        ... and %d more\n", cnt[t] - exn[t]
