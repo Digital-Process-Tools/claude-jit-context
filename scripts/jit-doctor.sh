@@ -596,7 +596,7 @@ echo ""
 JIT_LAYERS_REFUSED=""
 JIT_LAYERS_REFUSED_N=0
 
-ENTRY_KEY=()
+ENTRY_IDS=()
 ENTRY_LABEL=()
 ENTRY_NAME=()
 ENTRY_BYTES=()
@@ -687,7 +687,7 @@ for _dim in tools paths vocabulary; do
         *) _key="$_layer:$_name" ;;
       esac
       case "$_key" in *"$JIT_NL"*) _key="<unnameable>" ;; esac
-      ENTRY_KEY[$ENTRY_N]="$_key"
+      ENTRY_IDS[$ENTRY_N]="$_key"
       ENTRY_LABEL[$ENTRY_N]="$_dim/$_safe"
       ENTRY_NAME[$ENTRY_N]="$(jit_report_name "$_name")"
       ENTRY_BYTES[$ENTRY_N]=$(LC_ALL=C awk 'END { print n + 0 } { n += length($0) + 1 }' "$_md")
@@ -745,7 +745,7 @@ echo ""
 # associative array -- macOS ships bash 3.2 and does not have them.
 FIRED=()
 if [ "$LOG_STATE" = present ] && [ "$ENTRY_N" -gt 0 ]; then
-  _counts=$(printf '%s\n' "${ENTRY_KEY[@]}" | LC_ALL=C awk '
+  _counts=$(printf '%s\n' "${ENTRY_IDS[@]}" | LC_ALL=C awk '
     FNR == NR { order[++nk] = $0; next }
     {
       p = index($0, " | ")
