@@ -173,7 +173,7 @@ function jit_json_escape(s,   k, c) {
 # character by character rather than gsub-on-gsub, so escaping this awk functions own
 # output is never itself a place a metacharacter could leak back in.
 function jit_re_lit(s,    i, c, out, special) {
-  special = "\\.^$*+?()[]{}|"
+  special = "\134.^$*+?()[]{}|"
   out = ""
   for (i = 1; i <= length(s); i++) {
     c = substr(s, i, 1)
@@ -1276,7 +1276,7 @@ END {
           # comment there.
           vage = (layer ~ /00-manual/) ? jit_entry_age(layer "/" vfile) : ""
           vh = "# Vocabulary: " vfile " (matched: " vmatch[vfile] (vage != "" ? " · last edited " vage "d ago" : "") ")"
-          if (layer ~ /00-manual/) vh = vh "\\n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
+          if (layer ~ /00-manual/) vh = vh "\134n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
           log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent) (generic_only ? ":generic-only" : "")
           sep = ", "
           nblk++; blk[nblk] = vh "\n" vc

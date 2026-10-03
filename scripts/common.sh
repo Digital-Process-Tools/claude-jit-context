@@ -2346,11 +2346,10 @@ jit_missing_requires() {
       # indexed at all, so this is the check that actually protects a clone: refused
       # here means never added to the seen list, never counted toward the cap below,
       # and never handed to command -v as an argument.
-      case "$bin" in
-        *[!A-Za-z0-9._+-]*) continue ;;
-      esac
+      # #461: expansion tests, not case patterns inside this read loop.
+      [ -z "${bin//[A-Za-z0-9._+-]/}" ] || continue
       [ "${#bin}" -gt 255 ] && continue
-      case "$seen" in *" $bin "*) continue ;; esac
+      [ "${seen/ $bin /}" = "$seen" ] || continue
       seen="$seen$bin "
       command -v -- "$bin" > /dev/null 2>&1 && continue
       # The COUNT is not capped, only the list -- JIT_CONFIG_REFUSED's own reason: a
