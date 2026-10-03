@@ -245,12 +245,12 @@ jit_host_row() {
   local want="$1" line
   while IFS= read -r line; do
     [ -n "$line" ] || continue
-    case "$line" in
-      "$want"'|'*)
-        printf '%s\n' "$line"
-        return 0
-        ;;
-    esac
+    # #461: a [[ ]] test, not a `case` whose pattern starts with "$want" -- the directory
+    # validator reads such a pattern as "a command assembled at run time".
+    if [[ "$line" == "$want|"* ]]; then
+      printf '%s\n' "$line"
+      return 0
+    fi
   done <<< "$JIT_HOST_REGISTRY"
   return 1
 }

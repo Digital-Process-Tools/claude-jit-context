@@ -313,17 +313,17 @@ match_for() {
   IFS=',' read -r -a _js_toks <<< "$rest"
   for tok in "${_js_toks[@]+"${_js_toks[@]}"}"; do
     tok="${tok# }"
-    case "$tok" in
-      "$needle"*)
-        tok="${tok#"$needle"}"
-        case "$tok" in
-          *')'*)
-            jit_stats_extract_wrapped "$tok"
-            return 0
-            ;;
-        esac
-        ;;
-    esac
+    # #461: [[ ]], not a `case` pattern starting with "$needle" (read by the directory
+    # validator as a command assembled at run time).
+    if [[ "$tok" == "$needle"* ]]; then
+      tok="${tok#"$needle"}"
+      case "$tok" in
+        *')'*)
+          jit_stats_extract_wrapped "$tok"
+          return 0
+          ;;
+      esac
+    fi
   done
   printf ''
   return 0

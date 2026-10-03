@@ -376,13 +376,12 @@ else
   PT_FP_CANON="$PT_FP_DIR_CANON"
 fi
 
-case "$PT_FP_CANON" in
-  "$JIT_BASE_CANON"/*) ;;
-  *)
-    echo '{}'
-    exit 0
-    ;;
-esac
+# #461: [[ ]], not a `case` pattern starting with "$JIT_BASE_CANON" (read by the directory
+# validator as a command assembled at run time).
+if [[ "$PT_FP_CANON" != "$JIT_BASE_CANON"/* ]]; then
+  echo '{}'
+  exit 0
+fi
 
 # `[ -L ]` before the write, the same guard jit_shown_apply() applies to the `shown`
 # marks: awk cannot lstat, and although this write never goes through awk, a marker name

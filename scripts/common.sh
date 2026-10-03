@@ -2514,12 +2514,26 @@ jit_awk_dispatch() {
   if [ "$JIT_AWK_CAPTURE_RC" -eq 0 ] 2> /dev/null; then
     printf '%s' "$JIT_AWK_CAPTURE_OUT"
   elif [ "$JIT_AWK_CAPTURE_RC" -gt 128 ] 2> /dev/null; then
-    "$crash_fn" "$JIT_AWK_CAPTURE_RC"
+    _jit_awk_handler "$crash_fn" "$JIT_AWK_CAPTURE_RC"
   elif [ -n "$JIT_AWK_CAPTURE_OUT" ]; then
     printf '%s' "$JIT_AWK_CAPTURE_OUT"
   else
-    "$empty_fn" "$JIT_AWK_CAPTURE_RC"
+    _jit_awk_handler "$empty_fn" "$JIT_AWK_CAPTURE_RC"
   fi
+}
+# #461: the handlers are called by name through this explicit table, never as `"$fn" args`.
+# The directory validator reads a command whose name is a variable as "a command assembled
+# at run time" it cannot follow. A name not listed here returns 127, as calling an unknown
+# command did.
+_jit_awk_handler() {
+  case "$1" in
+    jit_path_awk_could_not_evaluate) jit_path_awk_could_not_evaluate "$2" ;;
+    jit_path_awk_ordinary_empty) jit_path_awk_ordinary_empty "$2" ;;
+    jit_awk_crash_sysmsg) jit_awk_crash_sysmsg "$2" ;;
+    jit_awk_empty_ok) jit_awk_empty_ok "$2" ;;
+    jit_awk_crash_block) jit_awk_crash_block "$2" ;;
+    *) return 127 ;;
+  esac
 }
 
 # --- The generic-word list: one plain file, or a directory of chunks (#437) --------

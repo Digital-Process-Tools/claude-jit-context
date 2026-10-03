@@ -597,6 +597,7 @@ _ALLOWED_CROSS_SCRIPT_CALLS = frozenset({
 
 _TYPED_HEREDOC_OP_RE = re.compile(r"(?<!<)<<(?!<)")
 _NAMED_SCRIPT_PATH_RE = re.compile(r"scripts/[A-Za-z0-9_-]+\.sh")
+_RUNTIME_COMMAND_RE = re.compile(r'^\s*"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?"?(\s|[^\s=]*\)\s*(;;)?\s*$)')
 
 
 def _check_no_cross_script_loading(files: dict, kinds: dict, off: list) -> None:
@@ -633,6 +634,12 @@ def _check_no_cross_script_loading(files: dict, kinds: dict, off: list) -> None:
             if _NAMED_SCRIPT_PATH_RE.search(line):
                 off.append(f"{rel}:{n}: names another script by path -- "
                            f"COMMAND_SCRIPT_NOT_FOLLOWED: {line.strip()[:80]!r}")
+            # #461: "a command assembled at run time" -- the directory validator read both a
+            # `"$fn" args` call and a `case` pattern opening with "$var" as one.
+            if _RUNTIME_COMMAND_RE.match(line):
+                off.append(f"{rel}:{n}: a command or case pattern named by a variable -- "
+                           f"MCP_FORWARDS_CREDENTIAL_ENV / COMMAND_SCRIPT_NOT_FOLLOWED: "
+                           f"{line.strip()[:80]!r}")
             if _TYPED_HEREDOC_OP_RE.search(line):
                 off.append(f"{rel}:{n}: types a `<<` the directory validator cannot place -- "
                            f"UNPINNED_NPX (blocks): {line.strip()[:80]!r}")
