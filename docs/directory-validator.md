@@ -88,10 +88,36 @@ them was kept:
 - a `while` loop nested in a case arm, moved into helper functions
 - `printf -v`, the `done < "$file"` read, the `jit_config_refuse` calls, one at a time
 
-Not bisected yet: the triggers after `jit_load_config` in the same hook (the full hooks
-hold with every rewrite above), and the bare `.` in the hold's file list, which first
-appears with lines 377-456. Each probe costs a validation, and the portal rate-limits
-after a handful in a few minutes: plan the next round, do not stream it.
+**Found by delta debugging (2026-10-03, 21:15-21:30).** Start from a small passing
+variant and a small failing one that differ by a few lines, then keep one element of
+the difference at a time. `zE` (the read loop: counter, CR strip, trim, `'' | \#*)`
+arm) clears; `zD` is `zE` plus the four-line `export` arm and holds. Then:
+
+| variant | `zE` plus | result |
+| --- | --- | --- |
+| `k1` | the pattern line `export[[:space:]]*)` alone, body `:` | holds |
+| `k2` | `line="${line#export}"` alone, under a neutral pattern | clears |
+| `k3` | the nested `while` trim alone, under a neutral pattern | clears |
+| `k4` | `[e]xport[[:space:]]*)` -- no `export` word, class kept | holds |
+| `k5` | `export*)` -- the word kept, no class | clears |
+| `zG` | three more `line="${line%x}"` operations | clears |
+
+**Confirmed: a case pattern holding a POSIX class (`[[:space:]]`) is enough to hold the
+script** -- one line, on a base that clears without it. The same class inside an
+expansion (`${line#[[:space:]]}`, in `zE` itself) does not. The word `export` is not
+the trigger (`k4`, `k5`), nor the count of operations on a value read from the file (`zG`).
+`tests/test-no-class-case-patterns-461.sh` is the guard.
+
+It is not the only trigger: with both class arms of `jit_load_config` rewritten, the
+function still held (`al383`), so an earlier round read the fix as refuted. **With
+several triggers, removing one changes nothing you can see: find a small failing set
+first, then shrink it.** That is what single-construct removal from the full function could
+never show, and why eleven guesses in a row were each "refuted".
+
+Not bisected yet: the bare `.` in the hold's file list, which first appears with lines
+377-456 of `post-tool-hook.sh`, and anything after `jit_load_config`. Each probe costs a
+validation, and the portal rate-limits after a handful in a few minutes: plan the next
+round, do not stream it.
 
 **Bisect with truncated hooks.** The validator reads scripts without running them, so a
 hook cut after N lines (at a point where the prefix still parses, then `echo '{}'`) is
