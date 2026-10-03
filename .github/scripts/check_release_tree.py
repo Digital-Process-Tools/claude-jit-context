@@ -636,7 +636,12 @@ def _check_no_cross_script_loading(files: dict, kinds: dict, off: list) -> None:
                            f"COMMAND_SCRIPT_NOT_FOLLOWED: {line.strip()[:80]!r}")
             # #461: "a command assembled at run time" -- the directory validator read both a
             # `"$fn" args` call and a `case` pattern opening with "$var" as one.
-            if _RUNTIME_COMMAND_RE.match(line):
+            # A continuation line (the previous one ends in a backslash) carries arguments,
+            # and an assignment-shaped line is data (perl or awk inside a quoted program).
+            prev = text.splitlines()[n - 2] if n > 1 else ""
+            if (_RUNTIME_COMMAND_RE.match(line)
+                    and not prev.rstrip().endswith("\\")
+                    and not re.match(r"\s*\$\w+\s*=", line)):
                 off.append(f"{rel}:{n}: a command or case pattern named by a variable -- "
                            f"MCP_FORWARDS_CREDENTIAL_ENV / COMMAND_SCRIPT_NOT_FOLLOWED: "
                            f"{line.strip()[:80]!r}")
