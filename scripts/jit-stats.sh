@@ -262,39 +262,21 @@ jit_config_refuse() {
   fi
   JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED${JIT_CONFIG_REFUSED:+$JIT_NL}- line $1: $2"
 }
-printf -v JIT_CFG_CR '\r'
-printf -v JIT_CFG_DQ '\042'
-printf -v JIT_CFG_SQ '\047'
-jit_config_name_ok() {
-  local LC_ALL=C
-  case "$1" in *[!A-Za-z0-9_]*) return 1 ;; esac
-  case "$1" in JIT_CONTEXT_?*) return 0 ;; esac
-  case "$1" in DYNAMIC_RULES_?*) return 0 ;; esac
-  case "$1" in DVSI_?*) return 0 ;; esac
-  return 1
-}
-jit_cfg_ltrim() {
-  JIT_CFG_T="$1"
-  while [ "$JIT_CFG_T" != "${JIT_CFG_T#[[:space:]]}" ]; do JIT_CFG_T="${JIT_CFG_T#[[:space:]]}"; done
-}
-jit_cfg_rtrim() {
-  JIT_CFG_T="$1"
-  while [ "$JIT_CFG_T" != "${JIT_CFG_T%[[:space:]]}" ]; do JIT_CFG_T="${JIT_CFG_T%[[:space:]]}"; done
-}
 jit_load_config() {
   local LC_ALL=C
   local file="$1" line cfg_name value reason q rest tail lineno=0
   while IFS= read -r line || [ -n "$line" ]; do
     lineno=$((lineno + 1))
-    line="${line%"$JIT_CFG_CR"}"
+    line="${line%$'\r'}"
     while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
     case "$line" in
-      '' | \#*) continue ;;
-      [e]xport[[:space:]]*)
-        jit_cfg_ltrim "${line#[e]xport}"
-        line="$JIT_CFG_T"
-        ;;
+      '' | '#'*) continue ;;
     esac
+    rest="${line#export}"
+    if [ "$rest" != "$line" ] && [ "${rest#[[:space:]]}" != "$rest" ]; then
+      line="$rest"
+      while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+    fi
     reason=""
     case "$line" in
       *=*)
@@ -307,43 +289,41 @@ jit_load_config() {
         reason="not a KEY=VALUE assignment"
         ;;
     esac
-    if [ -z "$reason" ] && ! jit_config_name_ok "$cfg_name"; then
+    if [ -z "$reason" ] && ! [[ "$cfg_name" =~ ^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$ ]]; then
       reason="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
     fi
     if [ -n "$reason" ]; then
       jit_config_refuse "$lineno" "$reason"
       continue
     fi
-    q="${value%"${value#?}"}"
-    if [ "$q" = "$JIT_CFG_DQ" ] || [ "$q" = "$JIT_CFG_SQ" ]; then
-      rest="${value#?}"
-      case "$rest" in
-        *"$q"*)
-          tail="${rest#*"$q"}"
-          jit_cfg_ltrim "$tail"
-          tail="$JIT_CFG_T"
-          case "$tail" in
-            '' | \#*) value="${rest%%"$q"*}" ;;
-            *) reason="trailing text after the closing quote" ;;
-          esac
-          ;;
-        *) reason="unterminated quote" ;;
-      esac
-    else
-      case "$value" in
-        *[[:space:]]#*) value="${value%%[[:space:]]#*}" ;;
-      esac
-      jit_cfg_rtrim "$value"
-      value="$JIT_CFG_T"
-    fi
+    case "$value" in
+      '"'* | "'"*)
+        q="${value%"${value#?}"}" # the opening quote, " or '
+        rest="${value#?}"
+        case "$rest" in
+          *"$q"*)
+            tail="${rest#*"$q"}"
+            while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
+            case "$tail" in
+              '' | '#'*) value="${rest%%"$q"*}" ;;
+              *) reason="trailing text after the closing quote" ;;
+            esac
+            ;;
+          *) reason="unterminated quote" ;;
+        esac
+        ;;
+      *)
+        value="${value%%[[:space:]]#*}"
+        while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
+        ;;
+    esac
     if [ -n "$reason" ]; then
       jit_config_refuse "$lineno" "$reason"
       continue
     fi
     if [ "$cfg_name" = JIT_CONTEXT_INJECT ]; then
       case "$value" in
-        summary) ;;
-        full) ;;
+        summary | full) ;;
         *)
           jit_config_refuse "$lineno" "not an injection mode (the modes are summary and full)"
           continue
@@ -352,8 +332,7 @@ jit_load_config() {
     fi
     if [ "$cfg_name" = JIT_CONTEXT_STOP_REPORT ]; then
       case "$value" in
-        0) ;;
-        1) ;;
+        0 | 1) ;;
         *)
           jit_config_refuse "$lineno" "not a stop-report toggle (0 or 1)"
           continue
@@ -362,9 +341,7 @@ jit_load_config() {
     fi
     if [ "$cfg_name" = JIT_CONTEXT_STATUS ]; then
       case "$value" in
-        fired) ;;
-        summary) ;;
-        off) ;;
+        fired | summary | off) ;;
         *)
           jit_config_refuse "$lineno" "not a status mode (fired, summary or off)"
           continue
@@ -373,8 +350,7 @@ jit_load_config() {
     fi
     if [ "$cfg_name" = JIT_CONTEXT_MISSES ]; then
       case "$value" in
-        on) ;;
-        off) ;;
+        on | off) ;;
         *)
           jit_config_refuse "$lineno" "not a misses toggle (on or off)"
           continue
@@ -877,7 +853,7 @@ function jit_heredoc_opener_is_suppressed(prefix, state0,    i, c, state, n, q1,
     if (state == 0) {
       if (c == q1) state = 1
       else if (c == q2) state = 2
-      else if (c == "\043") return 1
+      else if (c == "#") return 1
       else if (c == bs) i++
     } else if (state == 1) {
       if (c == q1) state = 0
@@ -899,7 +875,7 @@ function jit_heredoc_line_exit_state(line, state0,    i, c, len, q1, q2, bs, sta
     if (state == 0) {
       if (c == q1) state = 1
       else if (c == q2) state = 2
-      else if (c == "\043") break
+      else if (c == "#") break
       else if (c == bs) i++
     } else if (state == 1) {
       if (c == q1) state = 0
@@ -1178,7 +1154,7 @@ function jit_split_ctx_blocks(ctx,   nl_pos, header, body_rest, hn, hf, declared
       body_rest = substr(ctx, nl_pos + 1)
       hn = split(header, hf, " ")
       declared_n = hf[3] + 0
-      if (hn == 3 + declared_n && declared_n >= 0 && hf[1] == "\043" && hf[2] == "JIT-CTX-BLOCKS") {
+      if (hn == 3 + declared_n && declared_n >= 0 && hf[1] == "#" && hf[2] == "JIT-CTX-BLOCKS") {
         jit_blk_manifest_ok = 1
         pos = 1
         for (bi = 1; bi <= declared_n; bi++) {
@@ -1727,7 +1703,7 @@ BEGIN {
   for (i in sw) stop[sw[i]] = 1
 }
 (FILENAME in isgenericfile) {
-  if ($0 == "" || substr($0, 1, 1) == "\043") next
+  if ($0 == "" || substr($0, 1, 1) == "#") next
   generic[$0] = 1
   next
 }
