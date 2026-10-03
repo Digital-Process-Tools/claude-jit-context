@@ -84,8 +84,8 @@ JIT_PATH_PROG=$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_B
 # and skips the code point the engine cannot represent -- without that skip, index(s, "")
 # returns 1 and gsub would be handed an empty regex, which matches at every position.
 function jit_json_escape(s,   k, c) {
-  gsub(/\\/, "\\\\", s)
-  gsub(/"/, "\\\"", s)
+  gsub(/\\/, "\134\134", s)
+  gsub(/"/, "\134\042", s)
   gsub(/\t/, "\\t", s)
   gsub(/\n/, "\\n", s)
   gsub(/\r/, "\\r", s)
@@ -152,7 +152,7 @@ function jit_cand_tokens(c, out,   nt, tk, i, t, project, plen, k) {
     # An option is not a path. Its VALUE still is: `=` is a separator above, so
     # --file=src/x.php arrives here as two tokens and the second one survives.
     if (substr(t, 1, 1) == "-") continue
-    if (index(t, "\\") > 0) continue
+    if (index(t, "\134") > 0) continue
     # one-true-awk truncates the record at a NUL and never sees one; gawk carries it.
     if (length(jit_nul) == 1 && index(t, jit_nul) > 0) continue
     if (jit_cand_ctl(t)) continue

@@ -1568,8 +1568,8 @@ json_quote() {
     o = ""
     for (i = 1; i <= length($0); i++) {
       c = substr($0, i, 1)
-      if (c == "\\") o = o "\\\\"
-      else if (c == "\"") o = o "\\\""
+      if (c == "\134") o = o "\134\134"
+      else if (c == "\042") o = o "\134\042"
       else if (c == "\t") o = o "\\t"
       else o = o c
     }

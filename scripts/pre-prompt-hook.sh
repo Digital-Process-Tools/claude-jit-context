@@ -108,8 +108,8 @@ jit_awk_capture awk \
 # and skips the code point the engine cannot represent -- without that skip, index(s, "")
 # returns 1 and gsub would be handed an empty regex, which matches at every position.
 function jit_json_escape(s,   k, c) {
-  gsub(/\\/, "\\\\", s)
-  gsub(/"/, "\\\"", s)
+  gsub(/\\/, "\134\134", s)
+  gsub(/"/, "\134\042", s)
   gsub(/\t/, "\\t", s)
   gsub(/\n/, "\\n", s)
   gsub(/\r/, "\\r", s)

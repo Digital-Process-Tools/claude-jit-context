@@ -189,7 +189,7 @@ if [ "$MISSES_RC" = 0 ]; then
       if (substr(tail, 1, 2) != "  ") next
       seg = substr(tail, 3)
       if (seg == "") next
-      out = out (out == "" ? "" : ", ") "\\\"" seg "\\\" x" n
+      out = out (out == "" ? "" : ", ") "\134\042" seg "\134\042 x" n
       c++
       if (c >= top) exit
     }
@@ -236,7 +236,7 @@ else
     # JIT_RECUR's, so it is escaped for the JSON string it lands inside -- a literal
     # backslash or double quote would otherwise break the surrounding object, and a hook
     # must never fail hard on a string it did not choose the shape of.
-    JIT_SKIP_REASON="$(printf '%s' "$JIT_SKIP_REASON" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
+    JIT_SKIP_REASON="$(printf '%s' "$JIT_SKIP_REASON" | LC_ALL=C awk '{ gsub(/\\/, "\134\134"); gsub(/"/, "\134\042"); print }')"
   fi
 fi
 
@@ -258,7 +258,7 @@ if [ -n "$JIT_SIZE_NOTE" ]; then
   # Prose jit-misses.sh chose, so it is escaped the same way JIT_SKIP_REASON is above --
   # a literal backslash or double quote would otherwise break the JSON string it lands
   # inside, and a hook must never fail hard on a string it did not choose the shape of.
-  JIT_SIZE_NOTE="$(printf '%s' "$JIT_SIZE_NOTE" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
+  JIT_SIZE_NOTE="$(printf '%s' "$JIT_SIZE_NOTE" | LC_ALL=C awk '{ gsub(/\\/, "\134\134"); gsub(/"/, "\134\042"); print }')"
 fi
 
 # #386: one report, one action, nothing else. The line before this read "recurring
@@ -291,7 +291,7 @@ else
     # file jit-misses.sh just read, so the action names the file to act on. The bytes
     # were already JSON-escaped above; the path is escaped here for the same reason.
     JIT_MB="$(printf '%s' "$JIT_SIZE_NOTE" | LC_ALL=C awk '{ printf "%.1f", $1 / 1000000 }')"
-    JIT_LOG_ESC="$(printf '%s' "$LOG_FILE" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
+    JIT_LOG_ESC="$(printf '%s' "$LOG_FILE" | LC_ALL=C awk '{ gsub(/\\/, "\134\134"); gsub(/"/, "\134\042"); print }')"
     # #406: this line used to say "Delete or rotate it" -- the exact instruction this
     # issue exists to stop giving, since delete loses the corpus jit-misses.sh reads
     # and nothing here ever said so. Rotation past JIT_CONTEXT_LOG_MAX_BYTES is now
@@ -326,7 +326,7 @@ else
           # always is. Escaped the same way $LOG_FILE is escaped into JIT_LOG_ESC just
           # above (a literal " or \\ in the value would otherwise break the JSON this
           # line is embedded in at the printf below).
-          JIT_MAX_ESC="$(printf '%s' "$JIT_CONTEXT_LOG_MAX_BYTES" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
+          JIT_MAX_ESC="$(printf '%s' "$JIT_CONTEXT_LOG_MAX_BYTES" | LC_ALL=C awk '{ gsub(/\\/, "\134\134"); gsub(/"/, "\134\042"); print }')"
           JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. JIT_CONTEXT_LOG_MAX_BYTES=$JIT_MAX_ESC is not a byte count automatic rotation accepts, so it did NOT rotate this session -- delete or rotate it yourself: $JIT_LOG_ESC"
           ;;
       esac

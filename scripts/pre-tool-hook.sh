@@ -143,8 +143,8 @@ JIT_AWK_PROGRAM="$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AW
 # and skips the code point the engine cannot represent -- without that skip, index(s, "")
 # returns 1 and gsub would be handed an empty regex, which matches at every position.
 function jit_json_escape(s,   k, c) {
-  gsub(/\\/, "\\\\", s)
-  gsub(/"/, "\\\"", s)
+  gsub(/\\/, "\134\134", s)
+  gsub(/"/, "\134\042", s)
   gsub(/\t/, "\\t", s)
   gsub(/\n/, "\\n", s)
   gsub(/\r/, "\\r", s)
@@ -177,7 +177,7 @@ function jit_re_lit(s,    i, c, out, special) {
   out = ""
   for (i = 1; i <= length(s); i++) {
     c = substr(s, i, 1)
-    out = out (index(special, c) > 0 ? "\\" c : c)
+    out = out (index(special, c) > 0 ? "\134" c : c)
   }
   return out
 }
@@ -273,7 +273,7 @@ END {
   # substring rules as if it were a command, which is the false block issue #7 reports.
   cmd = full_command
   gsub(/[;&|].*/, "", cmd)
-  q = index(cmd, "\"")
+  q = index(cmd, "\042")
   if (q > 0) cmd = substr(cmd, 1, q - 1)
   gsub(/ --.*/, "", cmd)
 

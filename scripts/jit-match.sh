@@ -213,7 +213,7 @@ fi
 json_escape() {
   printf '%s' "$1" | LC_ALL=C perl -0777 -pe '
     s/\\/\\\\/g;
-    s/"/\\"/g;
+    s/"/\x5c"/g;
     s/\t/\\t/g;
     s/\r/\\r/g;
     s/\n/\\n/g;
@@ -284,8 +284,8 @@ RESULT="$(
     -v vocab_layers="$VOCAB_LAYERS" -v vocab_base="$BASE/vocabulary" \
     "$JIT_AWK_JSON$JIT_AWK_ENTRY$JIT_AWK_BLOCKS"'
 function emit_json_str(s) {
-  gsub(/\\/, "\\\\", s)
-  gsub(/"/, "\\\"", s)
+  gsub(/\\/, "\134\134", s)
+  gsub(/"/, "\134\042", s)
   gsub(/\t/, "\\t", s)
   gsub(/\n/, "\\n", s)
   gsub(/\r/, "\\r", s)
@@ -469,18 +469,18 @@ END {
     out = "{\"count\":" nmatch ",\"dropped\":" dropped ",\"matches\":["
     for (m = 1; m <= kept; m++) {
       out = out (m > 1 ? "," : "") \
-        "{\"file\":\"" emit_json_str(mname[m]) "\"" \
-        ",\"keywords\":\"" emit_json_str(mkwlist[m]) "\"" \
-        ",\"mode\":\"" mmode[m] "\"" \
+        "{\"file\":\"" emit_json_str(mname[m]) "\042" \
+        ",\"keywords\":\"" emit_json_str(mkwlist[m]) "\042" \
+        ",\"mode\":\"" mmode[m] "\042" \
         ",\"text\":\"" emit_json_str(mtext[m]) "\"}"
     }
     out = out "],\"dropped_files\":["
-    for (m = kept + 1; m <= nmatch; m++) out = out (m > kept + 1 ? "," : "") "\"" emit_json_str(mname[m]) "\""
+    for (m = kept + 1; m <= nmatch; m++) out = out (m > kept + 1 ? "," : "") "\042" emit_json_str(mname[m]) "\042"
     out = out "],\"unverifiable\":["
     for (u = 1; u <= nunverified; u++) {
       out = out (u > 1 ? "," : "") \
-        "{\"file\":\"" emit_json_str(uname[u]) "\"" \
-        ",\"keywords\":\"" emit_json_str(ukwlist[u]) "\"" \
+        "{\"file\":\"" emit_json_str(uname[u]) "\042" \
+        ",\"keywords\":\"" emit_json_str(ukwlist[u]) "\042" \
         ",\"text\":\"" emit_json_str(utext[u]) "\"}"
     }
     out = out "]}"
