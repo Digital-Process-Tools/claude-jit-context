@@ -2877,7 +2877,6 @@ curious
 curiously
 curiste
 curium
-curl
 curled
 curling
 curls
@@ -20139,7 +20138,6 @@ frutti
 fry
 frying
 ft
-ftp
 fucale
 fuchsia
 fuchsien

@@ -84,6 +84,28 @@ for shipped in scripts/common.sh hooks/hooks.json .claude-plugin/plugin.json REA
 done
 
 echo ""
+echo "=== #459: the README logo image is rewritten off raw.githubusercontent.com ==="
+# The directory validator holds MCP_FORWARDS_CREDENTIAL_ENV on a README that spells
+# the host raw.githubusercontent.com (it used to, for every markdown image). The
+# rewrite now stays on the same github.com host every other link uses, with a
+# ?raw=true suffix for the raw bytes.
+if [ "$BUILD_RC" -eq 0 ] && [ -f "$TREE/README.md" ]; then
+  if grep -q 'raw\.githubusercontent\.com' "$TREE/README.md"; then
+    bad "the built README.md still spells raw.githubusercontent.com"
+  else
+    ok "the built README.md does not spell raw.githubusercontent.com"
+  fi
+  if grep -qE 'https://github\.com/[^)]+\.png\?raw=true' "$TREE/README.md"; then
+    ok "the logo image rewrites to a github.com blob URL with ?raw=true"
+  else
+    bad "the logo image did not rewrite to the expected github.com ...png?raw=true form" \
+      "$(grep -n '\.png' "$TREE/README.md" || true)"
+  fi
+else
+  bad "README.md rewrite check skipped -- the build above did not produce a tree"
+fi
+
+echo ""
 echo "=== #437: every generic-word chunk in the built tree is under 256 KiB ==="
 if [ -d "$TREE/data/generic-words" ]; then
   CHUNK_N=0

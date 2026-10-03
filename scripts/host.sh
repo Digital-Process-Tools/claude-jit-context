@@ -251,9 +251,7 @@ jit_host_row() {
         return 0
         ;;
     esac
-  done << JIT_HOST_ROW_EOF
-$JIT_HOST_REGISTRY
-JIT_HOST_ROW_EOF
+  done <<< "$JIT_HOST_REGISTRY"
   return 1
 }
 
@@ -278,9 +276,7 @@ jit_host_detect() {
       fi
     done
     IFS="$old_ifs"
-  done << JIT_HOST_DETECT_EOF
-$JIT_HOST_REGISTRY
-JIT_HOST_DETECT_EOF
+  done <<< "$JIT_HOST_REGISTRY"
   printf 'unknown\n'
   return 0
 }

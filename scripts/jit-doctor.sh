@@ -61,37 +61,36 @@ BASE=""
 BASE_FROM=""
 
 usage() {
-  cat << 'EOF'
-jit-doctor.sh -- is any of this running at all, and against which tree?
-
-  bash scripts/jit-doctor.sh [--base DIR]
-
-  --base DIR   the entry tree to judge. Default: $CLAUDE_PROJECT_DIR/.claude/jit-context,
-               which is what the hooks read (with CLAUDE_PROJECT_DIR unset it falls
-               back to the current directory).
-  --help       this text.
-
-What it reports
-
-  tree         JIT_BASE as resolved, and what it resolved from
-  hooks        which copy of the hooks would run -- the plugin cache, this checkout,
-               BOTH, or `cannot tell`, which is a real answer and not a failure
-  config.env   present or not, its refused lines, and the effective injection mode
-  thresholds   the two ADVISORY thresholds and WHERE EACH CAME FROM, so a mistyped
-               JIT_CONTEXT_DOCTOR_* key reads as a default rather than as a setting
-  dimensions   per layer: entries, whether the matcher loads it, whether an index is
-               there, and whether an entry is newer than it
-  hook log     never ran, ran recently, or ran a while ago -- three states, not two
-  advisory     short keywords, fat entries, entries with no record in the log
-
-Outcomes
-
-  ok, exit 0        nothing inert. ADVISORY findings do not move this.
-  defect, exit 1    a layer holds entries and no index: those rules cannot fire.
-  SKIPPED, exit 2   the tree could not be evaluated. The reason is named, on stderr.
-
-It reads and prints. It writes no entry and no index.
-EOF
+  printf '%s\n' \
+    'jit-doctor.sh -- is any of this running at all, and against which tree?' \
+    '' \
+    '  bash scripts/jit-doctor.sh [--base DIR]' \
+    '' \
+    '  --base DIR   the entry tree to judge. Default: $CLAUDE_PROJECT_DIR/.claude/jit-context,' \
+    '               which is what the hooks read (with CLAUDE_PROJECT_DIR unset it falls' \
+    '               back to the current directory).' \
+    '  --help       this text.' \
+    '' \
+    'What it reports' \
+    '' \
+    '  tree         JIT_BASE as resolved, and what it resolved from' \
+    '  hooks        which copy of the hooks would run -- the plugin cache, this checkout,' \
+    '               BOTH, or `cannot tell`, which is a real answer and not a failure' \
+    '  config.env   present or not, its refused lines, and the effective injection mode' \
+    '  thresholds   the two ADVISORY thresholds and WHERE EACH CAME FROM, so a mistyped' \
+    '               JIT_CONTEXT_DOCTOR_* key reads as a default rather than as a setting' \
+    '  dimensions   per layer: entries, whether the matcher loads it, whether an index is' \
+    '               there, and whether an entry is newer than it' \
+    '  hook log     never ran, ran recently, or ran a while ago -- three states, not two' \
+    '  advisory     short keywords, fat entries, entries with no record in the log' \
+    '' \
+    'Outcomes' \
+    '' \
+    '  ok, exit 0        nothing inert. ADVISORY findings do not move this.' \
+    '  defect, exit 1    a layer holds entries and no index: those rules cannot fire.' \
+    '  SKIPPED, exit 2   the tree could not be evaluated. The reason is named, on stderr.' \
+    '' \
+    'It reads and prints. It writes no entry and no index.'
 }
 
 # A valued flag with no value is refused in the loop, not left to `shift 2`. Under
@@ -438,9 +437,7 @@ elif [ -f "$CFG" ]; then
       max=*) TREE_MAX="${_l#max=}" ;;
       min=*) TREE_MIN="${_l#min=}" ;;
     esac
-  done << EOF
-$_cfg
-EOF
+  done <<< "$_cfg"
   case "$CFG_REFUSED_N" in '' | *[!0-9]*) CFG_REFUSED_N=0 ;; esac
 
   # A second, tiny pass for PROVENANCE and for the typo case. jit_load_config() reports
@@ -769,9 +766,7 @@ if [ "$LOG_STATE" = present ] && [ "$ENTRY_N" -gt 0 ]; then
   while IFS= read -r _c; do
     FIRED[$_i]="$_c"
     _i=$((_i + 1))
-  done << EOF
-$_counts
-EOF
+  done <<< "$_counts"
   unset _counts _i _c
 fi
 

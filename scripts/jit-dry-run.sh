@@ -424,9 +424,7 @@ elif [ -f "$BASE/config.env" ]; then
       [ -n "$_cl" ] || continue
       CONFIG_REFUSED=$((CONFIG_REFUSED + 1))
       printf 'REFUSED  %-18s %-30s %s\n' "config.env" "" "${_cl#- }"
-    done << CONFIG_EOF
-$CONFIG_LINES
-CONFIG_EOF
+    done <<< "$CONFIG_LINES"
     printf '         %-18s %-30s those lines do not take effect — the hooks read this file as plain KEY=VALUE\n' "" ""
   else
     printf 'ok       %-18s %-30s every line honoured\n' "config.env" ""
@@ -1246,9 +1244,7 @@ check_row_bytes() {
     if [ -n "$file" ]; then disp="$(jit_report_name "$file")"; else disp="row $rown"; fi
     printf 'REFUSED  %-18s %-30s %s\n' "$label" "$disp" "$why"
     printf '         %-18s %-30s the hooks refuse this row and name it as "%s row %s"\n' "" "" "$label" "$rown"
-  done << EOF
-$rows
-EOF
+  done <<< "$rows"
 }
 
 for tsv in "$BASE"/tools/*/00-index.tsv; do

@@ -217,8 +217,9 @@ END {
   # through untouched, self-review caught it) followed by a run of non-whitespace.
   # Masked to a single space BEFORE the CamelCase split and the flatten below, so its
   # path/query segments never become free-floating vocabulary tokens -- a paste of
-  # "https://docs.dp.tools/sync/" must not fire a generic `sync` entry that has
-  # nothing to do with the page. `message` itself (and the `msg` log copy above) is
+  # a documentation page URL whose path ends in a word like "sync" must not fire a
+  # generic `sync` entry that has nothing to do with the page. `message` itself (and
+  # the `msg` log copy above) is
   # untouched; only the copy the vocabulary subject is built from is masked, so the
   # hook log still shows what the user actually typed.
   #
