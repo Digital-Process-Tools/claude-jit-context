@@ -380,6 +380,30 @@ jit_cfg_check_value() {
   fi
   return 0
 }
+jit_cfg_assign() {
+  if [ "$1" = DVSI_AUTONOMOUS_VOCAB_PATHS ]; then DVSI_AUTONOMOUS_VOCAB_PATHS="$2"; return 0; fi
+  if [ "$1" = DYNAMIC_RULES_CHECKOUT_WINDOW_S ]; then DYNAMIC_RULES_CHECKOUT_WINDOW_S="$2"; return 0; fi
+  if [ "$1" = DYNAMIC_RULES_COLLISION_BYTES ]; then DYNAMIC_RULES_COLLISION_BYTES="$2"; return 0; fi
+  if [ "$1" = DYNAMIC_RULES_GENERIC_WORDS ]; then DYNAMIC_RULES_GENERIC_WORDS="$2"; return 0; fi
+  if [ "$1" = DYNAMIC_RULES_KEYWORD_BLACKLIST ]; then DYNAMIC_RULES_KEYWORD_BLACKLIST="$2"; return 0; fi
+  if [ "$1" = DYNAMIC_RULES_MODULE_PREFIX ]; then DYNAMIC_RULES_MODULE_PREFIX="$2"; return 0; fi
+  if [ "$1" = DYNAMIC_RULES_VOCAB_PATHS ]; then DYNAMIC_RULES_VOCAB_PATHS="$2"; return 0; fi
+  if [ "$1" = JIT_CONTEXT_ALLOW_CROSS_TREE ]; then JIT_CONTEXT_ALLOW_CROSS_TREE="$2"; return 0; fi
+  if [ "$1" = JIT_CONTEXT_CHECKOUT_WINDOW_S ]; then JIT_CONTEXT_CHECKOUT_WINDOW_S="$2"; return 0; fi
+  if [ "$1" = JIT_CONTEXT_COLLISION_BYTES ]; then JIT_CONTEXT_COLLISION_BYTES="$2"; return 0; fi
+  if [ "$1" = JIT_CONTEXT_DOCTOR_MAX_BYTES ]; then JIT_CONTEXT_DOCTOR_MAX_BYTES="$2"; return 0; fi
+  if [ "$1" = JIT_CONTEXT_DOCTOR_MIN_KEYWORD ]; then JIT_CONTEXT_DOCTOR_MIN_KEYWORD="$2"; return 0; fi
+  if [ "$1" = JIT_CONTEXT_GENERIC_WORDS ]; then JIT_CONTEXT_GENERIC_WORDS="$2"; return 0; fi
+  if [ "$1" = JIT_CONTEXT_INJECT ]; then JIT_CONTEXT_INJECT="$2"; return 0; fi
+  if [ "$1" = JIT_CONTEXT_KEYWORD_BLACKLIST ]; then JIT_CONTEXT_KEYWORD_BLACKLIST="$2"; return 0; fi
+  if [ "$1" = JIT_CONTEXT_LOG_MAX_BYTES ]; then JIT_CONTEXT_LOG_MAX_BYTES="$2"; return 0; fi
+  if [ "$1" = JIT_CONTEXT_MISSES ]; then JIT_CONTEXT_MISSES="$2"; return 0; fi
+  if [ "$1" = JIT_CONTEXT_MODULE_PREFIX ]; then JIT_CONTEXT_MODULE_PREFIX="$2"; return 0; fi
+  if [ "$1" = JIT_CONTEXT_STATUS ]; then JIT_CONTEXT_STATUS="$2"; return 0; fi
+  if [ "$1" = JIT_CONTEXT_STOP_REPORT ]; then JIT_CONTEXT_STOP_REPORT="$2"; return 0; fi
+  if [ "$1" = JIT_CONTEXT_VOCAB_PATHS ]; then JIT_CONTEXT_VOCAB_PATHS="$2"; return 0; fi
+  return 0
+}
 jit_load_config() {
   local file="$1" line lineno=0
   while IFS= read -r line || [ -n "$line" ]; do
@@ -388,7 +412,7 @@ jit_load_config() {
     if jit_cfg_split "$JIT_CFG_LINE" \
       && jit_cfg_unquote "$JIT_CFG_VALUE" \
       && jit_cfg_check_value "$JIT_CFG_NAME" "$JIT_CFG_VALUE"; then
-      printf -v "$JIT_CFG_NAME" '%s' "$JIT_CFG_VALUE"
+      jit_cfg_assign "$JIT_CFG_NAME" "$JIT_CFG_VALUE"
     else
       jit_config_refuse "$lineno" "$JIT_CFG_REASON"
     fi
