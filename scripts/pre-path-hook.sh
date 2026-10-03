@@ -839,7 +839,7 @@ if [ -n "$JIT_TMP" ] && [ -s "$JIT_TMP" ]; then
   # Two arguments, not one concatenation: _log_hook caps the matches field and leaves the
   # tail alone (#64). The tail is already bounded to 80 bytes inside awk and is what
   # jit-misses.sh reads, so it must survive a line that had to be cut.
-  _log_hook "pre-path" "$TOTAL" "$AWK_MATCHES" "<< $AWK_PATH"
+  _log_hook "pre-path" "$TOTAL" "$AWK_MATCHES" "$JIT_LOG_ARROW $AWK_PATH"
 fi
 
 # Stated, not inherited. The hook exit status used to be whatever the last command

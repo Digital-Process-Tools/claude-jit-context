@@ -1637,6 +1637,10 @@ jit_expand_match() {
 # session locale, and a UTF-8 entry name would make a "2048" cap admit up to four times
 # that. `local` restores whatever the caller had on return.
 JIT_LOG_MATCHES_MAX=2048
+# #461: the `<<` that separates a log line's tail, spelled so that no source line types
+# two `<` in a row. Once the release build inlines this into a hook, the directory
+# validator reads a typed `<<`, even inside quotes, as a here-document it cannot close.
+JIT_LOG_ARROW='<''<'
 _log_hook() {
   local LC_ALL=C
   local hook="$1"

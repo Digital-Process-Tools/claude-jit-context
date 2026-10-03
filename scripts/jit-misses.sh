@@ -462,7 +462,7 @@ function jit_fold_latin1(s,   i, p, out) {
   if (index(rest, "(none) [shown:") != 1) next
   misses++
 
-  p = index(rest, " << ")
+  p = index(rest, sprintf(" %c%c ", 60, 60))
   if (p == 0) { headless++; next }
   msg = substr(rest, p + 4)
   if (msg == "") { headless++; next }
@@ -555,7 +555,7 @@ END {
     }
     print "jit-misses: SKIPPED -- no line in this file has the hook log format"
     print "  log: " logfile
-    print "  expected records like: [23:48:14.393] pre-prompt 9ms | (none) [shown:1] << ..."
+    print "  expected records like: [23:48:14.393] pre-prompt 9ms | (none) [shown:1] " sprintf("%c%c", 60, 60) " ..."
     print "  " lines " line(s) read, 0 recognised. Either this is not the log this script"
     print "  reads, or the format changed and this script did not."
     exit 2

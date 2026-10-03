@@ -595,6 +595,9 @@ _ALLOWED_CROSS_SCRIPT_CALLS = frozenset({
 })
 
 
+_TYPED_HEREDOC_OP_RE = re.compile(r"(?<!<)<<(?!<)")
+
+
 def _check_no_cross_script_loading(files: dict, kinds: dict, off: list) -> None:
     for rel, data in sorted(files.items()):
         top = rel.split("/")[0]
@@ -619,6 +622,13 @@ def _check_no_cross_script_loading(files: dict, kinds: dict, off: list) -> None:
                     and not re.match(r"[A-Za-z_][A-Za-z0-9_]*=", stripped)):
                 off.append(f"{rel}:{n}: runs another scripts/ file as a subprocess -- "
                            f"COMMAND_SCRIPT_NOT_FOLLOWED: {line.strip()[:80]!r}")
+            # #461: the validator BLOCKS on any typed `<<` it cannot place, inside quotes or
+            # an awk program included ("Unpinned npx launcher", 6 findings, on a `<<` in the
+            # inlined heredoc stripper). A here-string `<<<` was not flagged. Build the
+            # operator from character codes instead (`sprintf("%c%c", 60, 60)`, `'<''<'`).
+            if _TYPED_HEREDOC_OP_RE.search(line):
+                off.append(f"{rel}:{n}: types a `<<` the directory validator cannot place -- "
+                           f"UNPINNED_NPX (blocks): {line.strip()[:80]!r}")
 
 
 def main(argv: list | None = None) -> int:

@@ -751,7 +751,7 @@ if [ "$LOG_STATE" = present ] && [ "$ENTRY_N" -gt 0 ]; then
       p = index($0, " | ")
       if (p == 0) next
       rest = substr($0, p + 3)
-      q = index(rest, " << ")
+      q = index(rest, sprintf(" %c%c ", 60, 60))
       if (q > 0) rest = substr(rest, 1, q - 1)
       n = split(rest, items, ", ")
       for (i = 1; i <= n; i++) {

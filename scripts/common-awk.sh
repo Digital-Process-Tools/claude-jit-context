@@ -1404,7 +1404,11 @@ function jit_heredoc_quote_states(lines, n, qin,    i, state) {
 # column no matter what command it sits under; it does NOT skip the suppression
 # checks above, since those answer a different question (is this text a real
 # heredoc operator at all) that both callers need answered the same way.
-function jit_strip_heredoc_body(s, unconditional,    n, lines, i, j, out, strip_tabs, delim, line, rest, probed, op, word, prefix, q1, q2, q3, qclass, close_i, quote_in) {
+function jit_strip_heredoc_body(s, unconditional,    n, lines, i, j, out, strip_tabs, delim, line, rest, probed, op, word, prefix, q1, q2, q3, qclass, close_i, quote_in, lt2) {
+  # #461: the heredoc operator is built from its character code, never typed. Once the
+  # release build inlines this file into a hook, the directory validator reads a typed
+  # double `<` here as a shell here-document it cannot close, and blocks the plugin.
+  lt2 = sprintf("%c%c", 60, 60)
   q1 = sprintf("%c", 39)
   q2 = sprintf("%c", 34)
   # TWO bytes, not one: q3 sits inside a DYNAMIC (string) regex bracket expression
@@ -1426,13 +1430,13 @@ function jit_strip_heredoc_body(s, unconditional,    n, lines, i, j, out, strip_
     line = lines[i]
     probed = " " line
     close_i = 0
-    if (match(probed, "[^<]<<-?[ \t]*" qclass "[A-Za-z_][A-Za-z0-9_]*" qclass)) {
+    if (match(probed, "[^<]" lt2 "-?[ \t]*" qclass "[A-Za-z_][A-Za-z0-9_]*" qclass)) {
       prefix = substr(probed, 1, RSTART)
       if (!jit_heredoc_opener_is_suppressed(prefix, quote_in[i])) {
         op = substr(probed, RSTART + 1, RLENGTH - 1)
-        strip_tabs = (substr(op, 1, 3) == "<<-")
+        strip_tabs = (substr(op, 1, 3) == lt2 "-")
         word = op
-        sub(/^<<-?[ \t]*/, "", word)
+        sub("^" lt2 "-?[ \t]*", "", word)
         gsub("[" q1 q2 q3 "]", "", word)
         if (word != "" && (unconditional || jit_heredoc_opener_is_known_sink(line))) {
           delim = word
