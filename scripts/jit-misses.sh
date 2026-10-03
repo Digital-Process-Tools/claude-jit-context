@@ -54,7 +54,7 @@ usage() {
   printf '%s\n' \
     'jit-misses.sh -- the vocabulary this project keeps not having' \
     '' \
-    '  bash scripts/jit-misses.sh [--log PATH] [--min N] [--top N] [--tail N] [--size-threshold N]' \
+    '  jit-misses [--log PATH] [--min N] [--top N] [--tail N] [--size-threshold N]' \
     '' \
     '  --log PATH        hook log to read. Default: $CLAUDE_PROJECT_DIR/.claude/jit-context/' \
     '                     .discovery/logs/hooks.log (CLAUDE_PROJECT_DIR defaults to .)' \
@@ -630,7 +630,7 @@ END {
   }
   if (nk > shown) printf "  ... and %d more token(s) below the cut (--top %d)\n", nk - shown, top
   print "  Each block is one candidate vocabulary entry, written by a person:"
-  print "  .claude/jit-context/vocabulary/00-manual/<name>.md, then bash scripts/rebuild-tsv.sh"
+  print "  .claude/jit-context/vocabulary/00-manual/<name>.md, then rebuild the index with the rebuild-tsv tool this plugin ships"
   exit 0
 }
 '

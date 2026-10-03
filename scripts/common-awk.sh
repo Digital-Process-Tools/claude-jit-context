@@ -610,7 +610,7 @@ function jit_refusal_notice(list, n) {
 # fatal error raised before the program runs. No layer NAME is ever in it -- the bullets
 # carry a dimension, a position in the glob and a constant reason.
 function jit_layers_notice(list, n) {
-  return "# JIT Context: " n " jit-context layer director" (n == 1 ? "y" : "ies") " could not be read, so no rule inside them ran\n" list "\nThese are directories under .claude/jit-context/<dimension>/ that exist and hold rules the matcher never opened. A layer that was never loaded and a layer whose rules never matched look identical from a session, which is why this says so. Name a layer directory with letters, digits, dot, underscore and hyphen only, and lint the tree:\n  bash scripts/jit-dry-run.sh --base <tree>/.claude/jit-context"
+  return "# JIT Context: " n " jit-context layer director" (n == 1 ? "y" : "ies") " could not be read, so no rule inside them ran\n" list "\nThese are directories under .claude/jit-context/<dimension>/ that exist and hold rules the matcher never opened. A layer that was never loaded and a layer whose rules never matched look identical from a session, which is why this says so. Name a layer directory with letters, digits, dot, underscore and hyphen only, and lint the tree with the jit-dry-run tool this plugin ships, --base <tree>/.claude/jit-context"
 }
 # The third state for a TOOL rather than for a row or a layer (#182). The two above
 # report rules the matcher read; this reports rules the matcher never reached, because
@@ -654,7 +654,7 @@ function jit_config_notice(list, n) {
 # every other notice in this file follows.
 function jit_worktree_notice(line) {
   return "# JIT Context: CLAUDE_PROJECT_DIR names a different git worktree than this shell is sitting in\n" line \
-    "\nEvery hook resolves rules from CLAUDE_PROJECT_DIR, never from $PWD -- content injected below (or on any call in this session) can be served from the copy in the OTHER tree, silently (#402). Run: bash scripts/jit-doctor.sh"
+    "\nEvery hook resolves rules from CLAUDE_PROJECT_DIR, never from $PWD -- content injected below (or on any call in this session) can be served from the copy in the OTHER tree, silently (#402). Run /jit-context:doctor"
 }
 '
 # --- Shared entry reader: frontmatter, body, and what gets injected ----------

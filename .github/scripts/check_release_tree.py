@@ -596,6 +596,7 @@ _ALLOWED_CROSS_SCRIPT_CALLS = frozenset({
 
 
 _TYPED_HEREDOC_OP_RE = re.compile(r"(?<!<)<<(?!<)")
+_NAMED_SCRIPT_PATH_RE = re.compile(r"scripts/[A-Za-z0-9_-]+\.sh")
 
 
 def _check_no_cross_script_loading(files: dict, kinds: dict, off: list) -> None:
@@ -626,6 +627,12 @@ def _check_no_cross_script_loading(files: dict, kinds: dict, off: list) -> None:
             # an awk program included ("Unpinned npx launcher", 6 findings, on a `<<` in the
             # inlined heredoc stripper). A here-string `<<<` was not flagged. Build the
             # operator from character codes instead (`sprintf("%c%c", 60, 60)`, `'<''<'`).
+            # #461: the validator holds on a script that "names" another one, and a
+            # help message spelling `scripts/rebuild-tsv.sh` counted as naming it. Name
+            # the tool in words instead (the call sites allow-listed above excepted).
+            if _NAMED_SCRIPT_PATH_RE.search(line):
+                off.append(f"{rel}:{n}: names another script by path -- "
+                           f"COMMAND_SCRIPT_NOT_FOLLOWED: {line.strip()[:80]!r}")
             if _TYPED_HEREDOC_OP_RE.search(line):
                 off.append(f"{rel}:{n}: types a `<<` the directory validator cannot place -- "
                            f"UNPINNED_NPX (blocks): {line.strip()[:80]!r}")

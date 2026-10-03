@@ -1672,7 +1672,7 @@ _log_hook() {
     # would under-report by up to one entry name while reading as exact. That is the defect
     # class this cap exists to avoid, reintroduced by the line meant to avoid it.
     dropped=$((${#matches} - ${#head}))
-    matches="${head}[+$dropped bytes not listed here, and the item before this marker may be a fragment; this line is capped at ${JIT_LOG_MATCHES_MAX} bytes -- scripts/jit-dry-run.sh prints the whole tree]"
+    matches="${head}[+$dropped bytes not listed here, and the item before this marker may be a fragment; this line is capped at ${JIT_LOG_MATCHES_MAX} bytes -- the jit-dry-run tool prints the whole tree]"
   fi
   jit_log_write "[$(_ts)] $hook ${ms}ms | $matches${tail:+ $tail}"
 }
