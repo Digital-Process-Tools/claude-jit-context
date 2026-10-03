@@ -1001,11 +1001,41 @@ jit_config_refuse() {
   JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED${JIT_CONFIG_REFUSED:+$JIT_NL}- line $1: $2"
 }
 
+# #461: jit_load_config is a loop over four helpers rather than one long body. The
+# directory validator held every hook ("Scripts the validator couldn't follow") while the
+# body was inline: emptying it cleared the hold, any small piece of it alone cleared, and
+# no single construct removed from it did (docs/directory-validator.md). Each helper
+# reads its input from arguments and answers through JIT_CFG_LINE / JIT_CFG_NAME /
+# JIT_CFG_VALUE / JIT_CFG_REASON, and through its status: non-zero means the line is
+# skipped (blank or comment) or refused (JIT_CFG_REASON says why).
+
+# jit_cfg_clean_line LINE -- JIT_CFG_LINE without CR, leading space or `export `; status 1
+# for a blank or comment line.
+jit_cfg_clean_line() {
+  local LC_ALL=C
+  local line="$1"
+  # A CRLF checkout must parse the same as an LF one -- config.env is not covered by
+  # this repo's .gitattributes, because it lives in the user's project.
+  line="${line%$'\r'}"
+  while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+  case "$line" in
+    '' | '#'*) return 1 ;;
+  esac
+  # `export KEY=VALUE` was valid while this file was sourced, so it stays valid.
+  # The export itself is a no-op now: the hooks read these as shell variables.
+  # #461: tested with expansions, not an `export[[:space:]]*)` case arm -- the
+  # directory validator holds every hook on a POSIX class in a case pattern.
+  local rest="${line#export}"
+  if [ "$rest" != "$line" ] && [ "${rest#[[:space:]]}" != "$rest" ]; then
+    line="$rest"
+    while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+  fi
+  JIT_CFG_LINE="$line"
+}
+
 # jit_config_name_ok NAME -- 0 for JIT_CONTEXT_*, DYNAMIC_RULES_* or DVSI_* followed by
 # at least one more character, every character a letter, digit or underscore: the set
-# `^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$` accepted. #461: case globs, not a
-# `[[ =~ ]]` regex -- the directory validator held every hook while that regex was in
-# jit_load_config (release-preview-x4).
+# `^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$` accepted, as case globs (#461).
 jit_config_name_ok() {
   local LC_ALL=C
   case "$1" in *[!A-Za-z0-9_]*) return 1 ;; esac
@@ -1015,7 +1045,9 @@ jit_config_name_ok() {
   return 1
 }
 
-jit_load_config() {
+# jit_cfg_split LINE -- JIT_CFG_NAME and JIT_CFG_VALUE; status 1 and JIT_CFG_REASON when
+# the line is not an assignment or names an unknown setting.
+jit_cfg_split() {
   # #388: `[A-Za-z0-9_]` below is a POSIX bracket range inside `[[ =~ ]]`, which glibc
   # matches by the active locale's collation order rather than by byte value. Turkish
   # collation (LC_ALL=tr_TR.UTF-8, and az_AZ) does not place I inside A..Z, so every real
@@ -1025,183 +1057,188 @@ jit_load_config() {
   # reads a value in a way that wants the caller's collation (every value check below is
   # a literal `case` match, never a range).
   local LC_ALL=C
-  local file="$1" line cfg_name value reason q rest tail lineno=0
-  while IFS= read -r line || [ -n "$line" ]; do
-    lineno=$((lineno + 1))
-    # A CRLF checkout must parse the same as an LF one -- config.env is not covered by
-    # this repo's .gitattributes, because it lives in the user's project.
-    line="${line%$'\r'}"
-    while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
-    case "$line" in
-      '' | '#'*) continue ;;
-    esac
-    # `export KEY=VALUE` was valid while this file was sourced, so it stays valid.
-    # The export itself is a no-op now: the hooks read these as shell variables.
-    # #461: tested with expansions, not an `export[[:space:]]*)` case arm -- the
-    # directory validator holds every hook on a POSIX class in a case pattern.
-    rest="${line#export}"
-    if [ "$rest" != "$line" ] && [ "${rest#[[:space:]]}" != "$rest" ]; then
-      line="$rest"
-      while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
-    fi
+  JIT_CFG_REASON=""
+  case "$1" in
+    *=*)
+      JIT_CFG_NAME="${1%%=*}"
+      JIT_CFG_VALUE="${1#*=}"
+      ;;
+    *)
+      JIT_CFG_NAME=""
+      JIT_CFG_VALUE=""
+      JIT_CFG_REASON="not a KEY=VALUE assignment"
+      return 1
+      ;;
+  esac
+  if ! jit_config_name_ok "$JIT_CFG_NAME"; then
+    JIT_CFG_REASON="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
+    return 1
+  fi
+}
 
-    reason=""
-    case "$line" in
-      *=*)
-        cfg_name="${line%%=*}"
-        value="${line#*=}"
-        ;;
-      *)
-        cfg_name=""
-        value=""
-        reason="not a KEY=VALUE assignment"
-        ;;
-    esac
-    if [ -z "$reason" ] && ! jit_config_name_ok "$cfg_name"; then
-      reason="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
-    fi
-    if [ -n "$reason" ]; then
-      jit_config_refuse "$lineno" "$reason"
-      continue
-    fi
+# jit_cfg_unquote VALUE -- JIT_CFG_VALUE with its quotes or trailing comment removed;
+# status 1 and JIT_CFG_REASON on an unterminated quote or text after the closing one.
+jit_cfg_unquote() {
+  local LC_ALL=C
+  local value="$1" reason="" q rest tail
+  # Quotes and trailing comments are handled the way `.`-sourcing handled them, because
+  # a config.env that worked before this change has to keep working. A parser that only
+  # strips a quote pair turns `KEY="src/" # default` into the value `"src/" # default`
+  # -- not refused, not reported, just quietly wrong. That is the exact failure mode the
+  # refusal machinery above exists to prevent, reintroduced by the fix for it.
+  #
+  # Nothing inside a value is expanded: a $, a backtick or a $(...) is a literal now.
+  case "$value" in
+    '"'* | "'"*)
+      q="${value%"${value#?}"}" # the opening quote, " or '
+      rest="${value#?}"
+      case "$rest" in
+        *"$q"*)
+          tail="${rest#*"$q"}"
+          while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
+          case "$tail" in
+            # Anything after the closing quote that is not a comment is ambiguous, so it
+            # is refused rather than guessed at. Guessing is how a value goes quietly
+            # wrong, which is the one outcome this whole function is written to avoid.
+            '' | '#'*) value="${rest%%"$q"*}" ;;
+            *) reason="trailing text after the closing quote" ;;
+          esac
+          ;;
+        *) reason="unterminated quote" ;;
+      esac
+      ;;
+    *)
+      # Bash starts a comment at a # preceded by whitespace, and treats one that is not
+      # as an ordinary character -- so `^(a#b)$` keeps its hash and `1 # on` does not.
+      # #461: no case arm on `*[[:space:]]#*)`; the strip alone is a no-op when
+      # there is nothing to strip.
+      value="${value%%[[:space:]]#*}"
+      while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
+      ;;
+  esac
+  JIT_CFG_VALUE="$value"
+  JIT_CFG_REASON="$reason"
+  [ -z "$reason" ]
+}
 
-    # Quotes and trailing comments are handled the way `.`-sourcing handled them, because
-    # a config.env that worked before this change has to keep working. A parser that only
-    # strips a quote pair turns `KEY="src/" # default` into the value `"src/" # default`
-    # -- not refused, not reported, just quietly wrong. That is the exact failure mode the
-    # refusal machinery above exists to prevent, reintroduced by the fix for it.
-    #
-    # Nothing inside a value is expanded: a $, a backtick or a $(...) is a literal now.
+# jit_cfg_check_value NAME VALUE -- status 1 and JIT_CFG_REASON when NAME is a setting
+# this code implements and VALUE is not one of its values.
+jit_cfg_check_value() {
+  local LC_ALL=C
+  local cfg_name="$1" value="$2"
+  JIT_CFG_REASON=""
+  # A recognised setting whose VALUE is not one this code implements is refused too, and
+  # for the same reason the unknown-key branch above exists: a setting that reads as
+  # applied and is not is this repository own defect class. JIT_CONTEXT_INJECT decides
+  # what every match puts in the model context, so getting it silently wrong is not a
+  # cosmetic miss.
+  #
+  # `gated` is the value this matters most for. It was designed on issue #1 -- a small
+  # model asked whether the entry is relevant before the body is spent -- and
+  # deliberately NOT built, pending the pull-rate data only the summary path can produce.
+  # A project that writes it today is refused and told so, rather than getting a mode
+  # nobody implemented, or worse, getting `full` because an unrecognised value fell
+  # through to the expensive side.
+  if [ "$cfg_name" = JIT_CONTEXT_INJECT ]; then
     case "$value" in
-      '"'* | "'"*)
-        q="${value%"${value#?}"}" # the opening quote, " or '
-        rest="${value#?}"
-        case "$rest" in
-          *"$q"*)
-            tail="${rest#*"$q"}"
-            while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
-            case "$tail" in
-              # Anything after the closing quote that is not a comment is ambiguous, so it
-              # is refused rather than guessed at. Guessing is how a value goes quietly
-              # wrong, which is the one outcome this whole function is written to avoid.
-              '' | '#'*) value="${rest%%"$q"*}" ;;
-              *) reason="trailing text after the closing quote" ;;
-            esac
+      summary | full) ;;
+      *)
+        JIT_CFG_REASON="not an injection mode (the modes are summary and full)"
+        return 1
+        ;;
+    esac
+  fi
+  # #300: JIT_CONTEXT_STOP_REPORT used to gate stop-hook.sh's model-facing report.
+  # #367 moved that report to systemMessage and put it behind JIT_CONTEXT_STATUS
+  # below, so this setting now gates NOTHING -- it is still parsed and refused here,
+  # unchanged, so a config.env that carries it keeps working rather than being
+  # reported as an unknown key. Only 0 and 1 are implemented; anything else must not
+  # silently read as either value, the same reason JIT_CONTEXT_INJECT refuses an
+  # unimplemented mode above rather than falling through.
+  if [ "$cfg_name" = JIT_CONTEXT_STOP_REPORT ]; then
+    case "$value" in
+      0 | 1) ;;
+      *)
+        JIT_CFG_REASON="not a stop-report toggle (0 or 1)"
+        return 1
+        ;;
+    esac
+  fi
+  # #367: JIT_CONTEXT_STATUS gates the HUMAN-facing status lines -- systemMessage, the
+  # field a person actually reads -- a different audience and a different knob from
+  # JIT_CONTEXT_STOP_REPORT above, which gates the now-legacy MODEL-facing report.
+  # Refused the same way and for the same reason: a setting that reads as applied and
+  # silently is not is this repository own defect class, and there is no safe guess
+  # between "one line per fire" and "one line per session" to fall back on.
+  if [ "$cfg_name" = JIT_CONTEXT_STATUS ]; then
+    case "$value" in
+      fired | summary | off) ;;
+      *)
+        JIT_CFG_REASON="not a status mode (fired, summary or off)"
+        return 1
+        ;;
+    esac
+  fi
+  # #386: JIT_CONTEXT_MISSES gates the one SessionStart line that names the words a
+  # project keeps typing with no entry behind them -- the line itself offers this as
+  # the way to make it stop, so it has to exist, and it is narrower than
+  # JIT_CONTEXT_STATUS=off on purpose: a person tired of that one line has not asked
+  # to lose the Stop summary. Refused on any other value, same reason as above.
+  if [ "$cfg_name" = JIT_CONTEXT_MISSES ]; then
+    case "$value" in
+      on | off) ;;
+      *)
+        JIT_CFG_REASON="not a misses toggle (on or off)"
+        return 1
+        ;;
+    esac
+  fi
+  # #406: JIT_CONTEXT_LOG_MAX_BYTES -- bytes, matching JIT_CONTEXT_COLLISION_BYTES's
+  # own convention rather than megabytes, so a person who has already learned one
+  # size setting in this file does not have to learn a second unit for the next
+  # one. "0" is a stated value meaning "never rotate", checked explicitly by
+  # jit_log_rotate() rather than falling out of a clamp -- so it has to survive
+  # here rather than being folded into the "malformed" branch below.
+  #
+  # Refused on anything but "0" or a digit string with no leading zero. The leading
+  # zero is refused for ambiguity, not for octal: `[ ]` compares in decimal, so
+  # `[ 9 -ge 010 ]` is true and "010" is read as ten today. It is still refused,
+  # because someone writing it meant either ten or eight and nothing here can tell
+  # which -- and naming the line is cheaper than guessing right. Note `[[ 9 -ge 010 ]]`
+  # IS octal, so the reading changes with the test operator; refusing the value means
+  # that difference can never quietly become a behaviour change.
+  if [ "$cfg_name" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
+    case "$value" in
+      0) ;;
+      [1-9]*)
+        case "$value" in
+          *[!0-9]*)
+            JIT_CFG_REASON="not a byte count (0, or digits with no leading zero)"
+            return 1
             ;;
-          *) reason="unterminated quote" ;;
         esac
         ;;
       *)
-        # Bash starts a comment at a # preceded by whitespace, and treats one that is not
-        # as an ordinary character -- so `^(a#b)$` keeps its hash and `1 # on` does not.
-        # #461: no case arm on `*[[:space:]]#*)`; the strip alone is a no-op when
-        # there is nothing to strip.
-        value="${value%%[[:space:]]#*}"
-        while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
+        JIT_CFG_REASON="not a byte count (0, or digits with no leading zero)"
+        return 1
         ;;
     esac
-    if [ -n "$reason" ]; then
-      jit_config_refuse "$lineno" "$reason"
-      continue
+  fi
+  return 0
+}
+
+jit_load_config() {
+  local file="$1" line lineno=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    lineno=$((lineno + 1))
+    jit_cfg_clean_line "$line" || continue
+    if jit_cfg_split "$JIT_CFG_LINE" \
+      && jit_cfg_unquote "$JIT_CFG_VALUE" \
+      && jit_cfg_check_value "$JIT_CFG_NAME" "$JIT_CFG_VALUE"; then
+      printf -v "$JIT_CFG_NAME" '%s' "$JIT_CFG_VALUE"
+    else
+      jit_config_refuse "$lineno" "$JIT_CFG_REASON"
     fi
-    # A recognised setting whose VALUE is not one this code implements is refused too, and
-    # for the same reason the unknown-key branch above exists: a setting that reads as
-    # applied and is not is this repository own defect class. JIT_CONTEXT_INJECT decides
-    # what every match puts in the model context, so getting it silently wrong is not a
-    # cosmetic miss.
-    #
-    # `gated` is the value this matters most for. It was designed on issue #1 -- a small
-    # model asked whether the entry is relevant before the body is spent -- and
-    # deliberately NOT built, pending the pull-rate data only the summary path can produce.
-    # A project that writes it today is refused and told so, rather than getting a mode
-    # nobody implemented, or worse, getting `full` because an unrecognised value fell
-    # through to the expensive side.
-    if [ "$cfg_name" = JIT_CONTEXT_INJECT ]; then
-      case "$value" in
-        summary | full) ;;
-        *)
-          jit_config_refuse "$lineno" "not an injection mode (the modes are summary and full)"
-          continue
-          ;;
-      esac
-    fi
-    # #300: JIT_CONTEXT_STOP_REPORT used to gate stop-hook.sh's model-facing report.
-    # #367 moved that report to systemMessage and put it behind JIT_CONTEXT_STATUS
-    # below, so this setting now gates NOTHING -- it is still parsed and refused here,
-    # unchanged, so a config.env that carries it keeps working rather than being
-    # reported as an unknown key. Only 0 and 1 are implemented; anything else must not
-    # silently read as either value, the same reason JIT_CONTEXT_INJECT refuses an
-    # unimplemented mode above rather than falling through.
-    if [ "$cfg_name" = JIT_CONTEXT_STOP_REPORT ]; then
-      case "$value" in
-        0 | 1) ;;
-        *)
-          jit_config_refuse "$lineno" "not a stop-report toggle (0 or 1)"
-          continue
-          ;;
-      esac
-    fi
-    # #367: JIT_CONTEXT_STATUS gates the HUMAN-facing status lines -- systemMessage, the
-    # field a person actually reads -- a different audience and a different knob from
-    # JIT_CONTEXT_STOP_REPORT above, which gates the now-legacy MODEL-facing report.
-    # Refused the same way and for the same reason: a setting that reads as applied and
-    # silently is not is this repository own defect class, and there is no safe guess
-    # between "one line per fire" and "one line per session" to fall back on.
-    if [ "$cfg_name" = JIT_CONTEXT_STATUS ]; then
-      case "$value" in
-        fired | summary | off) ;;
-        *)
-          jit_config_refuse "$lineno" "not a status mode (fired, summary or off)"
-          continue
-          ;;
-      esac
-    fi
-    # #386: JIT_CONTEXT_MISSES gates the one SessionStart line that names the words a
-    # project keeps typing with no entry behind them -- the line itself offers this as
-    # the way to make it stop, so it has to exist, and it is narrower than
-    # JIT_CONTEXT_STATUS=off on purpose: a person tired of that one line has not asked
-    # to lose the Stop summary. Refused on any other value, same reason as above.
-    if [ "$cfg_name" = JIT_CONTEXT_MISSES ]; then
-      case "$value" in
-        on | off) ;;
-        *)
-          jit_config_refuse "$lineno" "not a misses toggle (on or off)"
-          continue
-          ;;
-      esac
-    fi
-    # #406: JIT_CONTEXT_LOG_MAX_BYTES -- bytes, matching JIT_CONTEXT_COLLISION_BYTES's
-    # own convention rather than megabytes, so a person who has already learned one
-    # size setting in this file does not have to learn a second unit for the next
-    # one. "0" is a stated value meaning "never rotate", checked explicitly by
-    # jit_log_rotate() rather than falling out of a clamp -- so it has to survive
-    # here rather than being folded into the "malformed" branch below.
-    #
-    # Refused on anything but "0" or a digit string with no leading zero. The leading
-    # zero is refused for ambiguity, not for octal: `[ ]` compares in decimal, so
-    # `[ 9 -ge 010 ]` is true and "010" is read as ten today. It is still refused,
-    # because someone writing it meant either ten or eight and nothing here can tell
-    # which -- and naming the line is cheaper than guessing right. Note `[[ 9 -ge 010 ]]`
-    # IS octal, so the reading changes with the test operator; refusing the value means
-    # that difference can never quietly become a behaviour change.
-    if [ "$cfg_name" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
-      case "$value" in
-        0) ;;
-        [1-9]*)
-          case "$value" in
-            *[!0-9]*)
-              jit_config_refuse "$lineno" "not a byte count (0, or digits with no leading zero)"
-              continue
-              ;;
-          esac
-          ;;
-        *)
-          jit_config_refuse "$lineno" "not a byte count (0, or digits with no leading zero)"
-          continue
-          ;;
-      esac
-    fi
-    printf -v "$cfg_name" '%s' "$value"
   done < "$file"
 }
 
