@@ -51,6 +51,6 @@ gh release create v0.2.0 --title "..." --notes "..."
 1. **CI green on the exact commit you are about to tag** — `gh-branch:main` reports the head SHA it judged, so a stale run cannot pass for a current one.
 2. **Tag, then push the tag** — `git push` alone does not carry tags.
 3. **Create the GitHub release** against that tag, notes from the CHANGELOG section.
-4. **Add or update the entry in [`claude-marketplace`](https://github.com/Digital-Process-Tools/claude-marketplace)** — `/plugin install claude-jit-context@dpt-plugins` resolves through `.claude-plugin/marketplace.json` there, not through this repo. The README documents that install command, so until the marketplace entry exists the first instruction a new user follows fails.
+4. **Add or update the entry in [`claude-marketplace`](https://github.com/Digital-Process-Tools/claude-marketplace)** — `/plugin install jit-context@dpt-plugins` resolves through `.claude-plugin/marketplace.json` there, not through this repo. The README documents that install command, so until the marketplace entry exists the first instruction a new user follows fails.
 
 Marketplace entries name the repo, not a version — users get the default branch. A tag is therefore for humans and the changelog, not a pinning mechanism: whatever is on `main` is what installs.

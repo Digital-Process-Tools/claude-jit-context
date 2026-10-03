@@ -473,7 +473,10 @@ def bash_grant_problem(entry: str) -> str | None:
         return f"`Bash({pattern})` grants every shell command"
     # The command part: drop a trailing `:*` (prefix match) or ` *` (any args).
     cmd = re.sub(r"(:\*|\s+\*)$", "", pattern).strip()
-    words = cmd.split()
+    try:
+        words = shlex.split(cmd)
+    except ValueError:
+        words = cmd.split()
     if not words:
         return f"`Bash({pattern})` grants every shell command"
     paths = [w for w in words if "/" in w]
