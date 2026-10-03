@@ -1038,10 +1038,13 @@ jit_cfg_clean_line() {
 # `^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$` accepted, as case globs (#461).
 jit_config_name_ok() {
   local LC_ALL=C
-  case "$1" in *[!A-Za-z0-9_]*) return 1 ;; esac
-  case "$1" in JIT_CONTEXT_?*) return 0 ;; esac
-  case "$1" in DYNAMIC_RULES_?*) return 0 ;; esac
-  case "$1" in DVSI_?*) return 0 ;; esac
+  local prefix
+  [ -n "$1" ] && [ -z "${1//[A-Za-z0-9_]/}" ] || return 1
+  for prefix in JIT_CONTEXT_ DYNAMIC_RULES_ DVSI_; do
+    if [ "${1#"$prefix"}" != "$1" ] && [ -n "${1#"$prefix"}" ]; then
+      return 0
+    fi
+  done
   return 1
 }
 
@@ -1058,18 +1061,17 @@ jit_cfg_split() {
   # a literal `case` match, never a range).
   local LC_ALL=C
   JIT_CFG_REASON=""
-  case "$1" in
-    *=*)
-      JIT_CFG_NAME="${1%%=*}"
-      JIT_CFG_VALUE="${1#*=}"
-      ;;
-    *)
-      JIT_CFG_NAME=""
-      JIT_CFG_VALUE=""
-      JIT_CFG_REASON="not a KEY=VALUE assignment"
-      return 1
-      ;;
-  esac
+  # #461: no `case` on the line read from config.env -- the directory validator holds a
+  # hook on a catch-all `*)` or a class arm over such a value. `${1#*=}` is the line
+  # itself only when it carries no `=`.
+  if [ "${1#*=}" = "$1" ]; then
+    JIT_CFG_NAME=""
+    JIT_CFG_VALUE=""
+    JIT_CFG_REASON="not a KEY=VALUE assignment"
+    return 1
+  fi
+  JIT_CFG_NAME="${1%%=*}"
+  JIT_CFG_VALUE="${1#*=}"
   if ! jit_config_name_ok "$JIT_CFG_NAME"; then
     JIT_CFG_REASON="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
     return 1
@@ -1088,34 +1090,31 @@ jit_cfg_unquote() {
   # refusal machinery above exists to prevent, reintroduced by the fix for it.
   #
   # Nothing inside a value is expanded: a $, a backtick or a $(...) is a literal now.
-  case "$value" in
-    '"'* | "'"*)
-      q="${value%"${value#?}"}" # the opening quote, " or '
-      rest="${value#?}"
-      case "$rest" in
-        *"$q"*)
-          tail="${rest#*"$q"}"
-          while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
-          case "$tail" in
-            # Anything after the closing quote that is not a comment is ambiguous, so it
-            # is refused rather than guessed at. Guessing is how a value goes quietly
-            # wrong, which is the one outcome this whole function is written to avoid.
-            '' | '#'*) value="${rest%%"$q"*}" ;;
-            *) reason="trailing text after the closing quote" ;;
-          esac
-          ;;
-        *) reason="unterminated quote" ;;
-      esac
-      ;;
-    *)
-      # Bash starts a comment at a # preceded by whitespace, and treats one that is not
-      # as an ordinary character -- so `^(a#b)$` keeps its hash and `1 # on` does not.
-      # #461: no case arm on `*[[:space:]]#*)`; the strip alone is a no-op when
-      # there is nothing to strip.
-      value="${value%%[[:space:]]#*}"
-      while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
-      ;;
-  esac
+  # #461: tests, not a `case` on the value read from config.env (see jit_cfg_split).
+  q="${value%"${value#?}"}"
+  if [ "$q" = '"' ] || [ "$q" = "'" ]; then
+    rest="${value#?}"
+    if [ "${rest#*"$q"}" != "$rest" ]; then
+      tail="${rest#*"$q"}"
+      while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
+      # Anything after the closing quote that is not a comment is ambiguous, so it
+      # is refused rather than guessed at. Guessing is how a value goes quietly
+      # wrong, which is the one outcome this whole function is written to avoid.
+      if [ -z "$tail" ] || [ "${tail#\#}" != "$tail" ]; then
+        value="${rest%%"$q"*}"
+      else
+        reason="trailing text after the closing quote"
+      fi
+    else
+      reason="unterminated quote"
+    fi
+  else
+    # Bash starts a comment at a # preceded by whitespace, and treats one that is not
+    # as an ordinary character -- so `^(a#b)$` keeps its hash and `1 # on` does not.
+    # The strip is a no-op when there is nothing to strip.
+    value="${value%%[[:space:]]#*}"
+    while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
+  fi
   JIT_CFG_VALUE="$value"
   JIT_CFG_REASON="$reason"
   [ -z "$reason" ]
@@ -1140,13 +1139,10 @@ jit_cfg_check_value() {
   # nobody implemented, or worse, getting `full` because an unrecognised value fell
   # through to the expensive side.
   if [ "$cfg_name" = JIT_CONTEXT_INJECT ]; then
-    case "$value" in
-      summary | full) ;;
-      *)
-        JIT_CFG_REASON="not an injection mode (the modes are summary and full)"
-        return 1
-        ;;
-    esac
+    if [ "$value" != summary ] && [ "$value" != full ]; then
+      JIT_CFG_REASON="not an injection mode (the modes are summary and full)"
+      return 1
+    fi
   fi
   # #300: JIT_CONTEXT_STOP_REPORT used to gate stop-hook.sh's model-facing report.
   # #367 moved that report to systemMessage and put it behind JIT_CONTEXT_STATUS
@@ -1156,13 +1152,10 @@ jit_cfg_check_value() {
   # silently read as either value, the same reason JIT_CONTEXT_INJECT refuses an
   # unimplemented mode above rather than falling through.
   if [ "$cfg_name" = JIT_CONTEXT_STOP_REPORT ]; then
-    case "$value" in
-      0 | 1) ;;
-      *)
-        JIT_CFG_REASON="not a stop-report toggle (0 or 1)"
-        return 1
-        ;;
-    esac
+    if [ "$value" != 0 ] && [ "$value" != 1 ]; then
+      JIT_CFG_REASON="not a stop-report toggle (0 or 1)"
+      return 1
+    fi
   fi
   # #367: JIT_CONTEXT_STATUS gates the HUMAN-facing status lines -- systemMessage, the
   # field a person actually reads -- a different audience and a different knob from
@@ -1171,13 +1164,10 @@ jit_cfg_check_value() {
   # silently is not is this repository own defect class, and there is no safe guess
   # between "one line per fire" and "one line per session" to fall back on.
   if [ "$cfg_name" = JIT_CONTEXT_STATUS ]; then
-    case "$value" in
-      fired | summary | off) ;;
-      *)
-        JIT_CFG_REASON="not a status mode (fired, summary or off)"
-        return 1
-        ;;
-    esac
+    if [ "$value" != fired ] && [ "$value" != summary ] && [ "$value" != off ]; then
+      JIT_CFG_REASON="not a status mode (fired, summary or off)"
+      return 1
+    fi
   fi
   # #386: JIT_CONTEXT_MISSES gates the one SessionStart line that names the words a
   # project keeps typing with no entry behind them -- the line itself offers this as
@@ -1185,13 +1175,10 @@ jit_cfg_check_value() {
   # JIT_CONTEXT_STATUS=off on purpose: a person tired of that one line has not asked
   # to lose the Stop summary. Refused on any other value, same reason as above.
   if [ "$cfg_name" = JIT_CONTEXT_MISSES ]; then
-    case "$value" in
-      on | off) ;;
-      *)
-        JIT_CFG_REASON="not a misses toggle (on or off)"
-        return 1
-        ;;
-    esac
+    if [ "$value" != on ] && [ "$value" != off ]; then
+      JIT_CFG_REASON="not a misses toggle (on or off)"
+      return 1
+    fi
   fi
   # #406: JIT_CONTEXT_LOG_MAX_BYTES -- bytes, matching JIT_CONTEXT_COLLISION_BYTES's
   # own convention rather than megabytes, so a person who has already learned one
@@ -1208,21 +1195,13 @@ jit_cfg_check_value() {
   # IS octal, so the reading changes with the test operator; refusing the value means
   # that difference can never quietly become a behaviour change.
   if [ "$cfg_name" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
-    case "$value" in
-      0) ;;
-      [1-9]*)
-        case "$value" in
-          *[!0-9]*)
-            JIT_CFG_REASON="not a byte count (0, or digits with no leading zero)"
-            return 1
-            ;;
-        esac
-        ;;
-      *)
+    # "0", or a first digit 1-9 followed by digits only.
+    if [ "$value" != 0 ]; then
+      if [ "${value#[1-9]}" = "$value" ] || [ -n "${value//[0-9]/}" ]; then
         JIT_CFG_REASON="not a byte count (0, or digits with no leading zero)"
         return 1
-        ;;
-    esac
+      fi
+    fi
   fi
   return 0
 }

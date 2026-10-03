@@ -108,6 +108,32 @@ expansion (`${line#[[:space:]]}`, in `zE` itself) does not. The word `export` is
 the trigger (`k4`, `k5`), nor the count of operations on a value read from the file (`zG`).
 `tests/test-no-class-case-patterns-461.sh` is the guard.
 
+**Second trigger, same method (21:30-21:50).** With the class arms fixed, a base of the
+read loop alone (`b0`) clears, and adding the blocks of `jit_load_config` back one at a
+time puts the hold in the name/value split (`b2`). Shrinking it:
+
+| variant | content | result |
+| --- | --- | --- |
+| `d1` | `b2` without `printf -v "$cfg_name"` | holds -- not the dynamic assignment |
+| `d2` / `d3` | only the `case` split / only the name check | `d2` holds |
+| `f1` | message `KEY=VALUE` reworded | holds -- not the text |
+| `f2` | `*=*)` replaced by a neutral pattern | holds -- not that pattern |
+| `g1` / `g2` | without the two expansions / without the `*)` arm | `g1` holds, `g2` clears |
+| `h1` | the `*)` arm without its empty assignments | holds |
+| `h2` | the `*)` arm renamed `yq*)`, same body | clears |
+
+**Confirmed: a catch-all `*)` arm is enough to hold** -- but only in a `case` on the line
+read from `config.env`. The same hook has two more `*)` arms, on `"${1:-}"` (host
+detection) and on `"$s$f"` (a timestamp), and they never held. Moving the `case` into a
+helper that receives the line as `$1` did not help either (`ar404`): the value still
+comes from the file.
+
+**The rule both triggers fit: no `case` with a broad arm (`*)`, a POSIX class) over a
+value read from a file.** Write those as `[ ]` tests and expansions instead -- "no `=`"
+is `[ "${1#*=}" = "$1" ]`, "digits only" is `[ -z "${v//[0-9]/}" ]`. A narrow arm such
+as `'' | '#'*)` with no catch-all is fine (`b0`). Applied to every helper of
+`jit_load_config`; not yet validated as a whole.
+
 It is not the only trigger: with both class arms of `jit_load_config` rewritten, the
 function still held (`al383`), so an earlier round read the fix as refuted. **With
 several triggers, removing one changes nothing you can see: find a small failing set
