@@ -145,6 +145,31 @@ not.** Halving the definitions put it in `jit_cfg_unquote` alone (`u1`), on
 the scanner was splitting the script wrongly. Guard:
 `tests/test-no-lone-quote-literals-461.sh`.
 
+**Fourth and fifth triggers, in an awk program (22:30-23:00).** With the config section
+clear (`release-preview-bb469`), the `.` came back with the next block: the
+`JIT_AWK_GUARD` program, a single-quoted awk string. **The scanner reads inside awk
+programs too.** Removing either half of the function kept the hold (`bh`, `bi`), so two
+triggers again:
+
+| variant | change | result |
+| --- | --- | --- |
+| `bh` | `"\\"` and `"... \\" nx` kept, the class-element block removed | holds |
+| `bk` | the same with the backslash built by `sprintf("%c", 92)` | clears |
+| `bn` / `bo` | only the class-element test left, as `/^[:.=]$/` / `index(":.=", c)` | both hold |
+| `bp` | the three characters built by `sprintf("%c%c%c", 58, 46, 61)` | clears |
+
+- **A backslash written next to a quote** (`"\\"`, `"\\\""`, `"... \\" nx`). Write the
+  backslash and the quote as POSIX octal escapes, `"\134"` and `"\042"` -- the same
+  string in every awk (checked on BSD awk, gawk and mawk).
+- **The text `:.=`**, whether in a regex or a string. That was the bare `.` in the hold's
+  file list. Build the characters with `sprintf`.
+
+Two candidates that looked right and were not: the two-line string `JIT_FM_NL="<newline>"`
+(`aya`) and `/^"[^"]*"$/` (`be`).
+
+**Still holding after all five (`release-preview-bq`, 23:00):** the rest of the hooks,
+after `JIT_AWK_GUARD`, has not been bisected. Same method, from the `ENTRY` awk program on.
+
 Along the way, `printf -v "$name"` with a name read from config.env was replaced by
 `jit_cfg_assign` (each of the 21 settings scripts read, by literal name). That did not
 change the `.` (`av403`), so it is not a confirmed trigger; it stays because it is the
