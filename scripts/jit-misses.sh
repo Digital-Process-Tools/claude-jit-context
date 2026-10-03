@@ -291,7 +291,7 @@ else
       GENERIC_STATE=missing
       break
     fi
-  done <<< "$GENERIC_MEMBERS"
+  done < <(printf '%s\n' "$GENERIC_MEMBERS")
 fi
 # awk reads each member as an input file ahead of the log, told apart from the log by
 # FILENAME (isgenericfile[], not FNR==NR) -- an empty list would otherwise make the
@@ -642,7 +642,7 @@ GENERIC_ARG_FILES=()
 if [ -n "$GENERIC_ARG_FILES_ENV" ]; then
   while IFS= read -r _gw_member; do
     [ -n "$_gw_member" ] && GENERIC_ARG_FILES+=("$_gw_member")
-  done <<< "$GENERIC_ARG_FILES_ENV"
+  done < <(printf '%s\n' "$GENERIC_ARG_FILES_ENV")
 fi
 if [ -n "$TAIL" ]; then
   # `-` is stdin. FILENAME is "-" (gawk) or "" (one-true-awk) there, and neither is ever

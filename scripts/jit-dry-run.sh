@@ -68,8 +68,16 @@ jit_host_row() {
       printf '%s\n' "$line"
       return 0
     fi
-  done <<< "$JIT_HOST_REGISTRY"
+  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
   return 1
+}
+jit_host_sig_set() {
+  case "${1:-}" in
+    CLAUDE_CODE_ENTRYPOINT) [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ] ;;
+    CLAUDE_CODE_SESSION_ID) [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] ;;
+    GEMINI_SESSION_ID) [ -n "${GEMINI_SESSION_ID:-}" ] ;;
+    *) return 1 ;;
+  esac
 }
 jit_host_detect() {
   local name sigs sig old_ifs
@@ -80,13 +88,13 @@ jit_host_detect() {
     IFS=','
     for sig in $sigs; do
       IFS="$old_ifs"
-      if [ -n "${!sig:-}" ]; then
+      if jit_host_sig_set "$sig"; then
         printf '%s\n' "$name"
         return 0
       fi
     done
     IFS="$old_ifs"
-  done <<< "$JIT_HOST_REGISTRY"
+  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
   printf 'unknown\n'
   return 0
 }
@@ -100,7 +108,7 @@ jit_host_refusal_state() {
     printf 'refusal-not-established\n'
     return 0
   }
-  IFS='|' read -r _ _ _ _ _ _ refusal _ <<< "$row"
+  IFS='|' read -r _ _ _ _ _ _ refusal _ < <(printf '%s\n' "$row")
   printf '%s\n' "${refusal:-refusal-not-established}"
 }
 jit_all_tool_aliases() {
@@ -111,7 +119,7 @@ jit_all_tool_aliases() {
     [ -n "$aliases" ] || continue
     all="$all$sep$aliases"
     sep=","
-  done <<< "$JIT_HOST_REGISTRY"
+  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
   printf '%s\n' "$all"
 }
 JIT_HOST="$(jit_host_detect 2> /dev/null)" \
@@ -1558,7 +1566,7 @@ elif [ -f "$BASE/config.env" ]; then
       [ -n "$_cl" ] || continue
       CONFIG_REFUSED=$((CONFIG_REFUSED + 1))
       printf 'REFUSED  %-18s %-30s %s\n' "config.env" "" "${_cl#- }"
-    done <<< "$CONFIG_LINES"
+    done < <(printf '%s\n' "$CONFIG_LINES")
     printf '         %-18s %-30s those lines do not take effect — the hooks read this file as plain KEY=VALUE\n' "" ""
   else
     printf 'ok       %-18s %-30s every line honoured\n' "config.env" ""
@@ -1616,11 +1624,11 @@ idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name colum
         pats="$pats${line%%	*}$PAT_NL"
         ;;
     esac
-  done <<< "$out"
+  done < <(printf '%s\n' "$out")
   pats="${pats%"$PAT_NL"}"
   [ -n "$pats" ] || return 0
   n=0
-  while IFS= read -r line; do n=$((n + 1)); done <<< "$pats"
+  while IFS= read -r line; do n=$((n + 1)); done < <(printf '%s\n' "$pats")
   start=1
   while [ "$start" -le "$n" ]; do
     i=$(LC_ALL=C awk -v from="$start" '
@@ -1631,7 +1639,7 @@ idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name colum
           printf "ok %d\n", k
           fflush()
         }
-      }' <<< "$pats" 2> /dev/null | LC_ALL=C awk 'END { print (NR ? $2 : 0) }')
+      }' < <(printf '%s\n' "$pats") 2> /dev/null | LC_ALL=C awk 'END { print (NR ? $2 : 0) }')
     [ -n "$i" ] || i=0
     k=0
     while IFS= read -r line; do
@@ -1643,7 +1651,7 @@ idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name colum
         PAT_MEMO="$PAT_MEMO${PAT_NL}engine	$line	rejected"
         break
       fi
-    done <<< "$pats"
+    done < <(printf '%s\n' "$pats")
     [ "$i" -ge "$n" ] && break
     start=$((i + 2))
   done
@@ -1918,7 +1926,7 @@ check_row_bytes() {
     if [ -n "$file" ]; then disp="$(jit_report_name "$file")"; else disp="row $rown"; fi
     printf 'REFUSED  %-18s %-30s %s\n' "$label" "$disp" "$why"
     printf '         %-18s %-30s the hooks refuse this row and name it as "%s row %s"\n' "" "" "$label" "$rown"
-  done <<< "$rows"
+  done < <(printf '%s\n' "$rows")
 }
 for tsv in "$BASE"/tools/*/00-index.tsv; do
   [ -f "$tsv" ] || continue

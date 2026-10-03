@@ -21,8 +21,16 @@ jit_host_row() {
       printf '%s\n' "$line"
       return 0
     fi
-  done <<< "$JIT_HOST_REGISTRY"
+  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
   return 1
+}
+jit_host_sig_set() {
+  case "${1:-}" in
+    CLAUDE_CODE_ENTRYPOINT) [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ] ;;
+    CLAUDE_CODE_SESSION_ID) [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] ;;
+    GEMINI_SESSION_ID) [ -n "${GEMINI_SESSION_ID:-}" ] ;;
+    *) return 1 ;;
+  esac
 }
 jit_host_detect() {
   local name sigs sig old_ifs
@@ -33,13 +41,13 @@ jit_host_detect() {
     IFS=','
     for sig in $sigs; do
       IFS="$old_ifs"
-      if [ -n "${!sig:-}" ]; then
+      if jit_host_sig_set "$sig"; then
         printf '%s\n' "$name"
         return 0
       fi
     done
     IFS="$old_ifs"
-  done <<< "$JIT_HOST_REGISTRY"
+  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
   printf 'unknown\n'
   return 0
 }
@@ -53,7 +61,7 @@ jit_host_refusal_state() {
     printf 'refusal-not-established\n'
     return 0
   }
-  IFS='|' read -r _ _ _ _ _ _ refusal _ <<< "$row"
+  IFS='|' read -r _ _ _ _ _ _ refusal _ < <(printf '%s\n' "$row")
   printf '%s\n' "${refusal:-refusal-not-established}"
 }
 jit_all_tool_aliases() {
@@ -64,7 +72,7 @@ jit_all_tool_aliases() {
     [ -n "$aliases" ] || continue
     all="$all$sep$aliases"
     sep=","
-  done <<< "$JIT_HOST_REGISTRY"
+  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
   printf '%s\n' "$all"
 }
 JIT_HOST="$(jit_host_detect 2> /dev/null)" \
@@ -1471,7 +1479,7 @@ else
       GENERIC_STATE=missing
       break
     fi
-  done <<< "$GENERIC_MEMBERS"
+  done < <(printf '%s\n' "$GENERIC_MEMBERS")
 fi
 GENERIC_ARG_FILES_ENV=""
 if [ "$GENERIC_STATE" = ok ]; then
@@ -1646,7 +1654,7 @@ GENERIC_ARG_FILES=()
 if [ -n "$GENERIC_ARG_FILES_ENV" ]; then
   while IFS= read -r _gw_member; do
     [ -n "$_gw_member" ] && GENERIC_ARG_FILES+=("$_gw_member")
-  done <<< "$GENERIC_ARG_FILES_ENV"
+  done < <(printf '%s\n' "$GENERIC_ARG_FILES_ENV")
 fi
 if [ -n "$TAIL" ]; then
   _JIT_MISSES_OUT=$(LC_ALL=C tail -n "$TAIL" -- "$LOG" | GENERIC_ARG_FILES_ENV="$GENERIC_ARG_FILES_ENV" LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" -v bounded=1 -v tailn="$TAIL" -v logbytes="$LOGBYTES" -v threshold="$SIZE_THRESHOLD" -v genstate="$GENERIC_STATE" -v genname="$GENERIC_WORDS" "$JIT_MISSES_AWK_PROG" "${GENERIC_ARG_FILES[@]}" -)

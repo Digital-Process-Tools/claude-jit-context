@@ -50,8 +50,16 @@ jit_host_row() {
       printf '%s\n' "$line"
       return 0
     fi
-  done <<< "$JIT_HOST_REGISTRY"
+  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
   return 1
+}
+jit_host_sig_set() {
+  case "${1:-}" in
+    CLAUDE_CODE_ENTRYPOINT) [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ] ;;
+    CLAUDE_CODE_SESSION_ID) [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] ;;
+    GEMINI_SESSION_ID) [ -n "${GEMINI_SESSION_ID:-}" ] ;;
+    *) return 1 ;;
+  esac
 }
 jit_host_detect() {
   local name sigs sig old_ifs
@@ -62,13 +70,13 @@ jit_host_detect() {
     IFS=','
     for sig in $sigs; do
       IFS="$old_ifs"
-      if [ -n "${!sig:-}" ]; then
+      if jit_host_sig_set "$sig"; then
         printf '%s\n' "$name"
         return 0
       fi
     done
     IFS="$old_ifs"
-  done <<< "$JIT_HOST_REGISTRY"
+  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
   printf 'unknown\n'
   return 0
 }
@@ -82,7 +90,7 @@ jit_host_refusal_state() {
     printf 'refusal-not-established\n'
     return 0
   }
-  IFS='|' read -r _ _ _ _ _ _ refusal _ <<< "$row"
+  IFS='|' read -r _ _ _ _ _ _ refusal _ < <(printf '%s\n' "$row")
   printf '%s\n' "${refusal:-refusal-not-established}"
 }
 jit_all_tool_aliases() {
@@ -93,7 +101,7 @@ jit_all_tool_aliases() {
     [ -n "$aliases" ] || continue
     all="$all$sep$aliases"
     sep=","
-  done <<< "$JIT_HOST_REGISTRY"
+  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
   printf '%s\n' "$all"
 }
 JIT_HOST="$(jit_host_detect 2> /dev/null)" \

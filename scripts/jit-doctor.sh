@@ -23,8 +23,16 @@ jit_host_row() {
       printf '%s\n' "$line"
       return 0
     fi
-  done <<< "$JIT_HOST_REGISTRY"
+  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
   return 1
+}
+jit_host_sig_set() {
+  case "${1:-}" in
+    CLAUDE_CODE_ENTRYPOINT) [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ] ;;
+    CLAUDE_CODE_SESSION_ID) [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] ;;
+    GEMINI_SESSION_ID) [ -n "${GEMINI_SESSION_ID:-}" ] ;;
+    *) return 1 ;;
+  esac
 }
 jit_host_detect() {
   local name sigs sig old_ifs
@@ -35,13 +43,13 @@ jit_host_detect() {
     IFS=','
     for sig in $sigs; do
       IFS="$old_ifs"
-      if [ -n "${!sig:-}" ]; then
+      if jit_host_sig_set "$sig"; then
         printf '%s\n' "$name"
         return 0
       fi
     done
     IFS="$old_ifs"
-  done <<< "$JIT_HOST_REGISTRY"
+  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
   printf 'unknown\n'
   return 0
 }
@@ -55,7 +63,7 @@ jit_host_refusal_state() {
     printf 'refusal-not-established\n'
     return 0
   }
-  IFS='|' read -r _ _ _ _ _ _ refusal _ <<< "$row"
+  IFS='|' read -r _ _ _ _ _ _ refusal _ < <(printf '%s\n' "$row")
   printf '%s\n' "${refusal:-refusal-not-established}"
 }
 jit_all_tool_aliases() {
@@ -66,7 +74,7 @@ jit_all_tool_aliases() {
     [ -n "$aliases" ] || continue
     all="$all$sep$aliases"
     sep=","
-  done <<< "$JIT_HOST_REGISTRY"
+  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
   printf '%s\n' "$all"
 }
 JIT_HOST="$(jit_host_detect 2> /dev/null)" \
@@ -1347,7 +1355,7 @@ need_value() {
 }
 if [ "${1:-}" = "--arguments-string" ]; then
   [ $# -ge 2 ] || need_value "$1"
-  IFS=' ' read -r -a _jit_doctor_split_args <<< "${2:-}"
+  IFS=' ' read -r -a _jit_doctor_split_args < <(printf '%s\n' "${2:-}")
   shift 2
   set -- "${_jit_doctor_split_args[@]+"${_jit_doctor_split_args[@]}"}" "$@"
 fi
@@ -1566,7 +1574,7 @@ elif [ -f "$CFG" ]; then
       max=*) TREE_MAX="${_l#max=}" ;;
       min=*) TREE_MIN="${_l#min=}" ;;
     esac
-  done <<< "$_cfg"
+  done < <(printf '%s\n' "$_cfg")
   case "$CFG_REFUSED_N" in '' | *[!0-9]*) CFG_REFUSED_N=0 ;; esac
   _n=0
   while IFS= read -r _l || [ -n "$_l" ]; do
@@ -1807,7 +1815,7 @@ if [ "$LOG_STATE" = present ] && [ "$ENTRY_N" -gt 0 ]; then
   while IFS= read -r _c; do
     FIRED[$_i]="$_c"
     _i=$((_i + 1))
-  done <<< "$_counts"
+  done < <(printf '%s\n' "$_counts")
   unset _counts _i _c
 fi
 _i=0

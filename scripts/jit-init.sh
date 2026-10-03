@@ -47,7 +47,7 @@ need_value() {
 }
 if [ "${1:-}" = "--arguments-string" ]; then
   [ $# -ge 2 ] || need_value "$1"
-  IFS=' ' read -r -a _jit_init_split_args <<< "${2:-}"
+  IFS=' ' read -r -a _jit_init_split_args < <(printf '%s\n' "${2:-}")
   shift 2
   set -- "${_jit_init_split_args[@]+"${_jit_init_split_args[@]}"}" "$@"
 fi
@@ -198,8 +198,16 @@ jit_host_row() {
       printf '%s\n' "$line"
       return 0
     fi
-  done <<< "$JIT_HOST_REGISTRY"
+  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
   return 1
+}
+jit_host_sig_set() {
+  case "${1:-}" in
+    CLAUDE_CODE_ENTRYPOINT) [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ] ;;
+    CLAUDE_CODE_SESSION_ID) [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] ;;
+    GEMINI_SESSION_ID) [ -n "${GEMINI_SESSION_ID:-}" ] ;;
+    *) return 1 ;;
+  esac
 }
 jit_host_detect() {
   local name sigs sig old_ifs
@@ -210,13 +218,13 @@ jit_host_detect() {
     IFS=','
     for sig in $sigs; do
       IFS="$old_ifs"
-      if [ -n "${!sig:-}" ]; then
+      if jit_host_sig_set "$sig"; then
         printf '%s\n' "$name"
         return 0
       fi
     done
     IFS="$old_ifs"
-  done <<< "$JIT_HOST_REGISTRY"
+  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
   printf 'unknown\n'
   return 0
 }
@@ -230,7 +238,7 @@ jit_host_refusal_state() {
     printf 'refusal-not-established\n'
     return 0
   }
-  IFS='|' read -r _ _ _ _ _ _ refusal _ <<< "$row"
+  IFS='|' read -r _ _ _ _ _ _ refusal _ < <(printf '%s\n' "$row")
   printf '%s\n' "${refusal:-refusal-not-established}"
 }
 jit_all_tool_aliases() {
@@ -241,7 +249,7 @@ jit_all_tool_aliases() {
     [ -n "$aliases" ] || continue
     all="$all$sep$aliases"
     sep=","
-  done <<< "$JIT_HOST_REGISTRY"
+  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
   printf '%s\n' "$all"
 }
 JIT_HOST="$(jit_host_detect 2> /dev/null)" \
@@ -1746,7 +1754,7 @@ else
       _gw_n=$(LC_ALL=C awk 'END{print NR+0}' "$_gw_member" 2> /dev/null)
       case "$_gw_n" in "" | *[!0-9]*) _gw_n=0 ;; esac
       GENERIC_WORDS_LINES=$((GENERIC_WORDS_LINES + _gw_n))
-    done <<< "$GENERIC_WORDS_MEMBERS"
+    done < <(printf '%s\n' "$GENERIC_WORDS_MEMBERS")
   fi
   if [ -n "$GENERIC_WORDS_UNREADABLE" ]; then
     echo "FATAL    generic-word classifier: $GENERIC_WORDS_FILE_SAFE names a directory holding an unreadable member ($GENERIC_WORDS_UNREADABLE) -- every keyword this run will read as non-generic (the pre-#232 degrade), which would otherwise be silent. Fix its permissions or unset JIT_CONTEXT_GENERIC_WORDS to accept the degrade on purpose." >&2
