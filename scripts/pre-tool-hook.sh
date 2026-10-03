@@ -1519,11 +1519,9 @@ jit_missing_requires() {
     [ -f "$tsv" ] || continue
     while IFS= read -r bin; do
       [ -z "$bin" ] && continue
-      case "$bin" in
-        *[!A-Za-z0-9._+-]*) continue ;;
-      esac
+      [ -z "${bin//[A-Za-z0-9._+-]/}" ] || continue
       [ "${#bin}" -gt 255 ] && continue
-      case "$seen" in *" $bin "*) continue ;; esac
+      [ "${seen/ $bin /}" = "$seen" ] || continue
       seen="$seen$bin "
       command -v -- "$bin" > /dev/null 2>&1 && continue
       if [ "${#missing}" -gt "$JIT_MISSING_REQUIRES_MAX" ]; then
@@ -1631,7 +1629,7 @@ function jit_json_escape(s,   k, c) {
   return s
 }
 function jit_re_lit(s,    i, c, out, special) {
-  special = "\\.^$*+?()[]{}|"
+  special = "\134.^$*+?()[]{}|"
   out = ""
   for (i = 1; i <= length(s); i++) {
     c = substr(s, i, 1)
@@ -1967,7 +1965,7 @@ END {
           }
           vage = (layer ~ /00-manual/) ? jit_entry_age(layer "/" vfile) : ""
           vh = "# Vocabulary: " vfile " (matched: " vmatch[vfile] (vage != "" ? " · last edited " vage "d ago" : "") ")"
-          if (layer ~ /00-manual/) vh = vh "\\n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
+          if (layer ~ /00-manual/) vh = vh "\134n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
           log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent) (generic_only ? ":generic-only" : "")
           sep = ", "
           nblk++; blk[nblk] = vh "\n" vc

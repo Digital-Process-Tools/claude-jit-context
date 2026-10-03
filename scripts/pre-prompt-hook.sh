@@ -1695,7 +1695,7 @@ END {
         }
         vage = (layer ~ /00-manual/) ? jit_entry_age(layer "/" vfile) : ""
         vh = "# Vocabulary: " vfile " (matched: " vmatch[vfile] (vage != "" ? " · last edited " vage "d ago" : "") ")"
-        if (layer ~ /00-manual/) vh = vh "\\n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
+        if (layer ~ /00-manual/) vh = vh "\134n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
         log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent) (generic_only ? ":generic-only" : "")
         sep = ", "
         blk_body = vh "\n" vc
