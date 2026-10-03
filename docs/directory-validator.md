@@ -167,8 +167,22 @@ triggers again:
 Two candidates that looked right and were not: the two-line string `JIT_FM_NL="<newline>"`
 (`aya`) and `/^"[^"]*"$/` (`be`).
 
-**Still holding after all five (`release-preview-bq`, 23:00):** the rest of the hooks,
-after `JIT_AWK_GUARD`, has not been bisected. Same method, from the `ENTRY` awk program on.
+**Sixth trigger: a catch-all `*)` arm inside a loop (23:15-23:40).** The bash tail of
+`post-tool-hook.sh` held without its awk programs (`c1`); halving it put the hold in
+`jit_pt_canon_dir`, whose `while` loop carries `case "$head" in */*) ;; *) break ;; esac`.
+`cf` (without `cd -P`) and `cg` held, `ch` (the `case` as `if [ "${head#*/}" = "$head" ]`)
+cleared. This refines the second trigger: the `*)` arms that never held sit outside any
+loop (host detection, the top-level `case "$PT_FP"`). Every `*)` inside a loop in the
+hooks' code is rewritten as tests, and the awk/perl `"."` / `".."` literals as `"\056"` /
+`"\x2e"`. **`post-tool-hook.sh` cleared** (`release-preview-ci`); five hooks and `.` left.
+
+Refuted on `stop-hook.sh`: the `.` inside the bracket expression `[!A-Za-z0-9._-]` of
+`jit_report_name` (`sd`).
+
+**The cross-plugin version of all this** -- every trigger, the method, an offline sweep
+(`tools/sweep.sh`) and the preview builders -- lives in the local repository
+`~/Documents/claude-directory-publishing`, shared by the DPT plugins. This file keeps the
+jit-context history; that one is the reference.
 
 Along the way, `printf -v "$name"` with a name read from config.env was replaced by
 `jit_cfg_assign` (each of the 21 settings scripts read, by literal name). That did not
