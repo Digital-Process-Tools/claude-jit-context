@@ -95,7 +95,13 @@ _ms() {
 # fired. The bare "." further back (if $PWD itself is somehow empty) preserves the
 # old, already-tested degradation rather than reaching for a third fallback nothing
 # here exercises.
-JIT_BASE="${CLAUDE_PROJECT_DIR:-$PWD}/.claude/jit-context"
+# #461: an explicit branch, not `${CLAUDE_PROJECT_DIR:-$PWD}`. The directory validator
+# reads a default expansion that nests another `$` as "a command assembled at run time".
+if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+  JIT_BASE="$CLAUDE_PROJECT_DIR/.claude/jit-context"
+else
+  JIT_BASE="$PWD/.claude/jit-context"
+fi
 # Exported (#378): {{dimension/layer/file.md}} transclusion resolves its target through
 # ENVIRON["JIT_BASE"] inside the shared awk fragment, the same channel JIT_SYMLINKS below
 # already uses and for the same reason -- a -v value has its escapes PROCESSED, so a

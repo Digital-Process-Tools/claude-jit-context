@@ -567,8 +567,25 @@ if [ -f "$LOG" ] && [ -r "$LOG" ]; then
   # perl is already a runtime dependency of every hook here (common.sh _ts/_ms), so this
   # adds nothing. WHOLE DAYS, deliberately coarse -- a precise answer that is wrong on one
   # leg is worth less than a coarse one that is right on all three.
-  LOG_AGE=$(perl -e 'printf("%d", int(-M $ARGV[0]))' "$LOG" 2> /dev/null) || LOG_AGE=""
-  case "$LOG_AGE" in '' | *[!0-9]*) LOG_AGE="" ;; esac
+  # #461: whole days from POSIX `find -mtime +N` (true when the age, truncated to whole
+  # days, is above N -- the same truncation `int(-M)` gave), by binary search: about a
+  # dozen forks in a diagnostic, and no perl. The directory validator held this file for
+  # "perl code" beside its own read of the working directory. Older than 8192 days, or a
+  # file find cannot see at all, is "cannot tell", never a number.
+  if [ -n "$(find "$LOG" -prune 2> /dev/null)" ] && [ -z "$(find "$LOG" -prune -mtime +8192 2> /dev/null)" ]; then
+    _age_lo=0
+    _age_hi=8192
+    while [ "$_age_lo" -lt "$_age_hi" ]; do
+      _age_mid=$(((_age_lo + _age_hi) / 2))
+      if [ -n "$(find "$LOG" -prune -mtime "+$_age_mid" 2> /dev/null)" ]; then
+        _age_lo=$((_age_mid + 1))
+      else
+        _age_hi=$_age_mid
+      fi
+    done
+    LOG_AGE=$_age_lo
+    unset _age_lo _age_hi _age_mid
+  fi
 fi
 
 echo "hook log"
@@ -580,7 +597,7 @@ else
   printf '  %-20s %s\n' "file" "$LOG"
   printf '  %-20s %s\n' "records" "$LOG_RECORDS record(s)"
   if [ -z "$LOG_AGE" ]; then
-    printf '  %-20s %s\n' "last written" "cannot tell -- no perl here to read the timestamp"
+    printf '  %-20s %s\n' "last written" "cannot tell -- the file's age could not be read"
   elif [ "$LOG_AGE" -lt 1 ]; then
     printf '  %-20s %s\n' "last written" "today"
   else
