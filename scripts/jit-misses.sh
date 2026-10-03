@@ -137,6 +137,16 @@ need_value() {
 }
 
 while [ $# -gt 0 ]; do
+  # An unknown flag is refused rather than ignored. A silently dropped --min reads as
+  # a threshold that applied, which is the failure this whole script is written about.
+  # #461: tested before the case, not as a catch-all `*)` arm inside this loop.
+  if [ "$1" != --log ] && [ "$1" != --min ] && [ "$1" != --top ] && [ "$1" != --tail ] \
+    && [ "$1" != --size-threshold ] && [ "$1" != --generic-words ] \
+    && [ "$1" != --help ] && [ "$1" != -h ]; then
+    echo "jit-misses: SKIPPED -- unknown argument: $1" >&2
+    echo "  run with --help for the accepted flags" >&2
+    exit 2
+  fi
   case "$1" in
     --log)
       [ $# -ge 2 ] || need_value "$1"
@@ -172,13 +182,6 @@ while [ $# -gt 0 ]; do
     --help | -h)
       usage
       exit 0
-      ;;
-    *)
-      # An unknown flag is refused rather than ignored. A silently dropped --min reads as
-      # a threshold that applied, which is the failure this whole script is written about.
-      echo "jit-misses: SKIPPED -- unknown argument: $1" >&2
-      echo "  run with --help for the accepted flags" >&2
-      exit 2
       ;;
   esac
 done
@@ -249,14 +252,19 @@ if [ "$GENERIC_WORDS_SET" -eq 0 ]; then
     # No dirname fork -- session-start-hook.sh runs this on every session and
     # tests/test-fork-count.sh counts the hook's whole process tree, this child included.
     # #461: not a `*/*` case pattern (check_release_tree.py, the eighth trigger).
+    # No `"."` for "the current directory" either: with no slash in $0 the relative path
+    # is already right as it stands (#461).
     _JIT_MISSES_DIR="${0%/*}"
-    [ "$_JIT_MISSES_DIR" != "$0" ] || _JIT_MISSES_DIR="."
     # #437: the shipped default moved from a single 1 MB file to a directory of chunks
     # (data/generic-words/, each chunk under 256 KiB) for the Anthropic plugin
     # directory's per-file size limit. _jit_misses_generic_members() below reads
     # either shape; --generic-words PATH / JIT_CONTEXT_GENERIC_WORDS /
     # DYNAMIC_RULES_GENERIC_WORDS may still name a single plain file, unchanged.
-    GENERIC_WORDS="$_JIT_MISSES_DIR/../data/generic-words"
+    if [ "$_JIT_MISSES_DIR" != "$0" ]; then
+      GENERIC_WORDS="$_JIT_MISSES_DIR/../data/generic-words"
+    else
+      GENERIC_WORDS="../data/generic-words"
+    fi
   fi
 fi
 # #437: GENERIC_WORDS may now name a directory of chunks rather than one plain file.

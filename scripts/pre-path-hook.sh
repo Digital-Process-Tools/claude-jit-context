@@ -1872,13 +1872,13 @@ jit_path_awk() {
 jit_path_awk 0
 JIT_CAND_VALUE=""
 jit_cand_ok() {
-  local seg="$1" rest comp pre=""
+  local seg="$1" rest comp pre="" bs
   JIT_CAND_VALUE=""
-  case "$seg" in
-    "" | /*) return 1 ;;
-    *\\*) return 1 ;;
-    .. | ../* | */../* | */..) return 1 ;;
-  esac
+  printf -v bs '\134'
+  [ -n "$seg" ] && [ "${seg#/}" = "$seg" ] || return 1
+  [ "${seg#*"$bs"}" = "$seg" ] || return 1
+  [ "$seg" != .. ] && [ "${seg#../}" = "$seg" ] && [ "${seg#*/../}" = "$seg" ] \
+    && [ "${seg%/..}" = "$seg" ] || return 1
   rest="$seg"
   while [ "$rest" != "${rest#*/}" ]; do
     comp="${rest%%/*}"
@@ -1890,7 +1890,11 @@ jit_cand_ok() {
   done
   if [ -L "$JIT_PROJECT/$seg" ]; then return 1; fi
   if [ -d "$JIT_PROJECT/$seg" ]; then
-    case "$seg" in */) JIT_CAND_VALUE="$seg" ;; *) JIT_CAND_VALUE="$seg/" ;; esac
+    if [ "${seg%/}" != "$seg" ]; then
+      JIT_CAND_VALUE="$seg"
+    else
+      JIT_CAND_VALUE="$seg/"
+    fi
     return 0
   fi
   [ -f "$JIT_PROJECT/$seg" ] || return 1

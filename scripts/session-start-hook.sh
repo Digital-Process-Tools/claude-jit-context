@@ -1452,6 +1452,13 @@ need_value() {
   exit 2
 }
 while [ $# -gt 0 ]; do
+  if [ "$1" != --log ] && [ "$1" != --min ] && [ "$1" != --top ] && [ "$1" != --tail ] \
+    && [ "$1" != --size-threshold ] && [ "$1" != --generic-words ] \
+    && [ "$1" != --help ] && [ "$1" != -h ]; then
+    echo "jit-misses: SKIPPED -- unknown argument: $1" >&2
+    echo "  run with --help for the accepted flags" >&2
+    exit 2
+  fi
   case "$1" in
     --log)
       [ $# -ge 2 ] || need_value "$1"
@@ -1487,11 +1494,6 @@ while [ $# -gt 0 ]; do
     --help | -h)
       usage
       exit 0
-      ;;
-    *)
-      echo "jit-misses: SKIPPED -- unknown argument: $1" >&2
-      echo "  run with --help for the accepted flags" >&2
-      exit 2
       ;;
   esac
 done
@@ -1541,8 +1543,11 @@ if [ "$GENERIC_WORDS_SET" -eq 0 ]; then
     GENERIC_WORDS="$DYNAMIC_RULES_GENERIC_WORDS"
   else
     _JIT_MISSES_DIR="${0%/*}"
-    [ "$_JIT_MISSES_DIR" != "$0" ] || _JIT_MISSES_DIR="."
-    GENERIC_WORDS="$_JIT_MISSES_DIR/../data/generic-words"
+    if [ "$_JIT_MISSES_DIR" != "$0" ]; then
+      GENERIC_WORDS="$_JIT_MISSES_DIR/../data/generic-words"
+    else
+      GENERIC_WORDS="../data/generic-words"
+    fi
   fi
 fi
 _jit_misses_generic_members() {
