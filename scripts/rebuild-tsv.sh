@@ -63,9 +63,9 @@ if [ "${CLAUDE_PROJECT_DIR+set}" = "set" ] && [ -z "$CLAUDE_PROJECT_DIR" ]; then
   echo "FATAL    refusing: CLAUDE_PROJECT_DIR is set but empty" >&2
   echo "         Something exported CLAUDE_PROJECT_DIR without giving it a value -- an" >&2
   echo "         interpolated variable that itself never resolved, most likely. JIT_BASE" >&2
-  echo "         would otherwise fall through to \$PWD/.claude/jit-context (common.sh)," >&2
+  echo "         would otherwise fall through to the current directory's .claude/jit-context (common.sh)," >&2
   echo "         which is whatever tree this shell happens to be standing in (#417)." >&2
-  echo "         Unset CLAUDE_PROJECT_DIR outright to use \$PWD on purpose, or export" >&2
+  echo "         Unset CLAUDE_PROJECT_DIR outright to use the current directory on purpose, or export" >&2
   echo "         it with a real value." >&2
   exit 2
 fi
@@ -329,7 +329,7 @@ fi
 # there and say nothing. Printed unconditionally, before anything is written, so a
 # rebuild run from a stale CLAUDE_PROJECT_DIR is an obvious wrong write instead of a
 # silent one.
-echo "rebuild-tsv: writing JIT_BASE=$JIT_BASE (CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so the current directory>}, cwd=$PWD)" >&2
+echo "rebuild-tsv: writing JIT_BASE=$JIT_BASE (CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so the current directory>}, cwd=$(pwd))" >&2
 
 # Truncation failing left the previous index in place while every line after it reported
 # the rule count read back OUT of that stale file -- a success, with a number, for an index

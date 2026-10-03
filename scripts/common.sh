@@ -149,7 +149,7 @@ jit_worktree_mismatch_line() {
   [ -n "$pwd_top" ] || return 0
   [ -n "$cpd_top" ] || return 0
   [ "$pwd_top" != "$cpd_top" ] || return 0
-  printf '%s' "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $cpd_top) names a DIFFERENT git worktree than the one this shell is sitting in (\$PWD ($PWD) -- git worktree $pwd_top)."
+  printf '%s' "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $cpd_top) names a DIFFERENT git worktree than the one this shell is sitting in (the current directory, $(pwd) -- git worktree $pwd_top)."
 }
 
 # --- Which host is running this hook (#252) ----------------------------------------
@@ -1491,7 +1491,9 @@ JIT_VALID_REQUIRES_RE='^[A-Za-z0-9._+-]{1,255}$'
 # expression rather than behind a backslash: `\.` is accepted by awk today, but
 # jit_bad_pattern() refuses undefined escapes and a bracket needs no per-engine judgement.
 JIT_MACRO_ANCHOR='(^|[;&|\n] *)'
-JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|env|sudo|nohup|nice|time)[[:space:]]+)*'
+# #461: `[e]nv`, not `env` -- the same regex, but the directory validator reads the bare
+# word in a shipped script as the plugin dumping the installer's environment.
+JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|[e]nv|sudo|nohup|nice|time)[[:space:]]+)*'
 JIT_MACRO_OPT='(-[^[:space:];&|]*[[:space:]]+([^-;&|[:space:]][^[:space:];&|]*[[:space:]]+)?)*'
 JIT_MACRO_END='($|[[:space:];&|])'
 

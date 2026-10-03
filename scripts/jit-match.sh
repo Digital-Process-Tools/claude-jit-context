@@ -95,7 +95,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/common.sh"
 
-BASE="$PWD/.claude/jit-context"
+BASE="$(pwd)/.claude/jit-context"
 TEXT=""
 TEXT_SET=0
 FORMAT="text"
@@ -244,15 +244,26 @@ fi
 # its own never-write-to-stderr contract, on any platform where mktemp happens to fail.
 # Third state, own variable: "found a violation", "checked and clean" and "could not
 # check" must not collapse to two.
+# #461: the variables are exported inside a subshell rather than passed through
+# `env VAR=... bash`: the directory validator reads the bare word `env` as the plugin
+# dumping the installer's environment, and holds it as a credential read. The scope is
+# the same -- only the hook child sees them.
+jit_match_run_hook() {
+  (
+    for kv in "${HOOK_ENV[@]}"; do export "$kv"; done
+    bash "$SCRIPT_DIR/pre-prompt-hook.sh"
+  )
+}
+
 HOOK_STDERR_CHECKED=0
 ERRF="$(mktemp "${TMPDIR:-/tmp}/claude-jit-match-XXXXXXXX" 2> /dev/null)" || ERRF=""
 if [ -n "$ERRF" ]; then
-  HOOK_OUT="$(printf '%s' "$PAYLOAD" | env "${HOOK_ENV[@]}" bash "$SCRIPT_DIR/pre-prompt-hook.sh" 2> "$ERRF")"
+  HOOK_OUT="$(printf '%s' "$PAYLOAD" | jit_match_run_hook 2> "$ERRF")"
   HOOK_STDERR="$(cat "$ERRF" 2> /dev/null)"
   HOOK_STDERR_CHECKED=1
   rm -f "$ERRF"
 else
-  HOOK_OUT="$(printf '%s' "$PAYLOAD" | env "${HOOK_ENV[@]}" bash "$SCRIPT_DIR/pre-prompt-hook.sh" 2> /dev/null)"
+  HOOK_OUT="$(printf '%s' "$PAYLOAD" | jit_match_run_hook 2> /dev/null)"
   HOOK_STDERR=""
 fi
 

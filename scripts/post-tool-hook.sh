@@ -349,14 +349,14 @@ jit_pt_canon_dir() {
 JIT_BASE_ABS="$JIT_BASE"
 case "$JIT_BASE_ABS" in
   /*) ;;
-  *) JIT_BASE_ABS="$PWD/$JIT_BASE_ABS" ;;
+  *) JIT_BASE_ABS="$(pwd)/$JIT_BASE_ABS" ;;
 esac
 JIT_BASE_CANON="$(jit_pt_canon_dir "$JIT_BASE_ABS")"
 
 PT_FP_ABS="$PT_FP"
 case "$PT_FP_ABS" in
   /*) ;;
-  *) PT_FP_ABS="$PWD/$PT_FP_ABS" ;;
+  *) PT_FP_ABS="$(pwd)/$PT_FP_ABS" ;;
 esac
 case "$PT_FP_ABS" in
   */)

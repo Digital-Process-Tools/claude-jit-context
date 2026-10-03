@@ -127,6 +127,30 @@ assert_eq "claude-code and gemini-cli signatures both present -> claude-code win
   "$(run_detect env CLAUDE_CODE_SESSION_ID=abc GEMINI_SESSION_ID=xyz)"
 
 echo ""
+echo "=== #461: every registry signature has a literal arm in jit_host_sig_set ==="
+# jit_host_sig_set() names each signature literally instead of expanding `${!sig:-}`,
+# which the directory validator holds as a credential read. The cost is a second list:
+# a signature added to JIT_HOST_REGISTRY with no arm there is never detected, silently.
+# This loop is what turns that silence into a red. The control first: the registry must
+# yield at least one signature, or "every one has an arm" is true of nothing.
+sigs_seen=0
+while IFS= read -r sig_name; do
+  [ -n "$sig_name" ] || continue
+  sigs_seen=$((sigs_seen + 1))
+  assert_eq "signature $sig_name set -> jit_host_sig_set answers 0" "0" \
+    "$(env -i PATH="$PATH" "$sig_name=x" bash -c 'source "'"$HOST_SH"'" >/dev/null 2>&1; jit_host_sig_set "'"$sig_name"'"; echo $?')"
+  assert_eq "signature $sig_name unset -> jit_host_sig_set answers 1" "1" \
+    "$(env -i PATH="$PATH" bash -c 'source "'"$HOST_SH"'" >/dev/null 2>&1; jit_host_sig_set "'"$sig_name"'"; echo $?')"
+done < <(env -i PATH="$PATH" bash -c 'source "'"$HOST_SH"'" >/dev/null 2>&1; printf "%s\n" "$JIT_HOST_REGISTRY"' | cut -d'|' -f2 | tr ',' '\n')
+if [ "$sigs_seen" -gt 0 ]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: control -- the registry yielded $sigs_seen signature(s) to check"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: control -- the registry yielded no signature, so the loop above checked nothing"
+fi
+
+echo ""
 echo "=== jit_host_state / jit_host_inject_envelope / jit_host_refusal_state: three answers, never two ==="
 run_lookup() {
   env -i PATH="$PATH" bash -c 'source "'"$HOST_SH"'" >/dev/null 2>&1; '"$1"' "'"$2"'"'

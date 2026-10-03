@@ -258,9 +258,24 @@ jit_host_row() {
 # jit_host_detect -- identifies the hosting CLI from its own environment, mirroring
 # remember's detect_host(). Always prints exactly one line and always returns 0: a host
 # nobody has described yet is a normal state here, never a failure, the same posture
-# every other lookup in this file takes. `${!sig:-}` is indirect expansion, supported
-# since bash 2.0 -- no associative array and no eval needed to test a variable named by
-# a string.
+# every other lookup in this file takes. Each signature is tested through
+# jit_host_sig_set() below, by its literal name.
+#
+# jit_host_sig_set NAME -- 0 when the environment variable NAME is set and non-empty.
+# #461: a literal case, not the indirect expansion `${!NAME:-}` this used to be. The
+# directory validator reads an environment variable named at run time as a credential
+# read, and holds the plugin for review on it. A registry signature with no arm here is
+# never detected, so tests/test-host-registry.sh fails on any signature in
+# JIT_HOST_REGISTRY that this case does not name.
+jit_host_sig_set() {
+  case "${1:-}" in
+    CLAUDE_CODE_ENTRYPOINT) [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ] ;;
+    CLAUDE_CODE_SESSION_ID) [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] ;;
+    GEMINI_SESSION_ID) [ -n "${GEMINI_SESSION_ID:-}" ] ;;
+    *) return 1 ;;
+  esac
+}
+
 jit_host_detect() {
   local name sigs sig old_ifs
   while IFS='|' read -r name sigs _ _ _ _ _; do
@@ -270,7 +285,7 @@ jit_host_detect() {
     IFS=','
     for sig in $sigs; do
       IFS="$old_ifs"
-      if [ -n "${!sig:-}" ]; then
+      if jit_host_sig_set "$sig"; then
         printf '%s\n' "$name"
         return 0
       fi

@@ -39,12 +39,12 @@ set -uo pipefail
 # is resolving the path to. Same case split, written out.
 case "$0" in
   */*) SCRIPT_DIR="$(cd "${0%/*}" && pwd)" ;;
-  *) SCRIPT_DIR="$PWD" ;;
+  *) SCRIPT_DIR="$(pwd)" ;;
 esac
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/common.sh"
 
-BASE="$PWD/.claude/jit-context"
+BASE="$(pwd)/.claude/jit-context"
 # Written by jit_path_dir(), jit_path_base() and index_label() through `printf -v`, which
 # assigns into a variable named at runtime. shellcheck cannot follow that and reports
 # SC2154 at every use -- declared here so the warning is answered by the code rather than
