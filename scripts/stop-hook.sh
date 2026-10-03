@@ -1324,45 +1324,7 @@ jit_layer_refuse() {
   JIT_LAYERS_REFUSED="$JIT_LAYERS_REFUSED${JIT_LAYERS_REFUSED:+$JIT_NL}- $1: $2"
 }
 jit_scan_layers() {
-  local base="$1" dim="$2" d name tsv seen=0 kept=0 cut=0
-  local LC_ALL=C
   JIT_LAYERS=""
-  for d in "$base"/*/; do
-    [ -d "$d" ] || continue
-    d="${d%/}"
-    name="${d##*/}"
-    seen=$((seen + 1))
-    if [ "$kept" -ge "$JIT_LAYERS_MAX" ]; then
-      if [ "$cut" = 0 ]; then
-        cut=1
-        jit_layer_refuse "$dim" "the layer directories after the first $JIT_LAYERS_MAX were not read"
-      fi
-      continue
-    fi
-    case "$name" in
-      '' | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
-        jit_layer_refuse "$dim" "layer directory $seen was not read: the directory name is not a plain name"
-        continue
-        ;;
-    esac
-    if [ "${#name}" -gt 64 ]; then
-      jit_layer_refuse "$dim" "layer directory $seen was not read: the directory name is longer than 64 bytes"
-      continue
-    fi
-    if [ ! -r "$d" ] || [ ! -x "$d" ]; then
-      jit_layer_refuse "$dim" "layer directory $seen was not read: the directory could not be opened"
-      continue
-    fi
-    for tsv in "$d/00-index.tsv" "$d/01-paths.tsv"; do
-      [ -e "$tsv" ] || continue
-      if [ ! -r "$tsv" ]; then
-        jit_layer_refuse "$dim" "layer directory $seen was not read: an index inside it could not be opened"
-        continue 2
-      fi
-    done
-    JIT_LAYERS="$JIT_LAYERS${JIT_LAYERS:+ }$name"
-    kept=$((kept + 1))
-  done
 }
 JIT_ENTRY_AGES_MAX=8192
 export JIT_ENTRY_AGES=""
