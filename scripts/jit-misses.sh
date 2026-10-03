@@ -93,8 +93,8 @@ usage() {
     '  question about the codebase) and one that begins with < (a harness-generated block).' \
     '' \
     '  A pasted link is removed whole before tokenising -- any run of non-space characters' \
-    '  containing :// -- and counted in the header. https://github.com/acme/thing/pull/54' \
-    '  is not the words `https`, `github`, `com` and `pull`; none of them was typed. Only' \
+    '  containing :// -- and counted in the header. A pasted pull-request link, scheme and' \
+    '  all, is not the words that make up its host and path; none of them was typed. Only' \
     '  the scheme does this. A path (src/Billing/Totals.php) and a dotted file name' \
     '  (common.sh) are ordinary tokens and still count, because a host name cannot be told' \
     '  from a file name by shape -- only by a list of TLDs, and this tool keeps no lists.' \
