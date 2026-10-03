@@ -246,6 +246,21 @@ jit_config_refuse() {
   fi
   JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED${JIT_CONFIG_REFUSED:+$JIT_NL}- line $1: $2"
 }
+jit_cfg_clean_line() {
+  local LC_ALL=C
+  local line="$1"
+  line="${line%$'\r'}"
+  while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+  case "$line" in
+    '' | '#'*) return 1 ;;
+  esac
+  local rest="${line#export}"
+  if [ "$rest" != "$line" ] && [ "${rest#[[:space:]]}" != "$rest" ]; then
+    line="$rest"
+    while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+  fi
+  JIT_CFG_LINE="$line"
+}
 jit_config_name_ok() {
   local LC_ALL=C
   case "$1" in *[!A-Za-z0-9_]*) return 1 ;; esac
@@ -254,119 +269,125 @@ jit_config_name_ok() {
   case "$1" in DVSI_?*) return 0 ;; esac
   return 1
 }
-jit_load_config() {
+jit_cfg_split() {
   local LC_ALL=C
-  local file="$1" line cfg_name value reason q rest tail lineno=0
-  while IFS= read -r line || [ -n "$line" ]; do
-    lineno=$((lineno + 1))
-    line="${line%$'\r'}"
-    while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
-    case "$line" in
-      '' | '#'*) continue ;;
-    esac
-    rest="${line#export}"
-    if [ "$rest" != "$line" ] && [ "${rest#[[:space:]]}" != "$rest" ]; then
-      line="$rest"
-      while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
-    fi
-    reason=""
-    case "$line" in
-      *=*)
-        cfg_name="${line%%=*}"
-        value="${line#*=}"
-        ;;
-      *)
-        cfg_name=""
-        value=""
-        reason="not a KEY=VALUE assignment"
-        ;;
-    esac
-    if [ -z "$reason" ] && ! jit_config_name_ok "$cfg_name"; then
-      reason="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
-    fi
-    if [ -n "$reason" ]; then
-      jit_config_refuse "$lineno" "$reason"
-      continue
-    fi
+  JIT_CFG_REASON=""
+  case "$1" in
+    *=*)
+      JIT_CFG_NAME="${1%%=*}"
+      JIT_CFG_VALUE="${1#*=}"
+      ;;
+    *)
+      JIT_CFG_NAME=""
+      JIT_CFG_VALUE=""
+      JIT_CFG_REASON="not a KEY=VALUE assignment"
+      return 1
+      ;;
+  esac
+  if ! jit_config_name_ok "$JIT_CFG_NAME"; then
+    JIT_CFG_REASON="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
+    return 1
+  fi
+}
+jit_cfg_unquote() {
+  local LC_ALL=C
+  local value="$1" reason="" q rest tail
+  case "$value" in
+    '"'* | "'"*)
+      q="${value%"${value#?}"}" # the opening quote, " or '
+      rest="${value#?}"
+      case "$rest" in
+        *"$q"*)
+          tail="${rest#*"$q"}"
+          while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
+          case "$tail" in
+            '' | '#'*) value="${rest%%"$q"*}" ;;
+            *) reason="trailing text after the closing quote" ;;
+          esac
+          ;;
+        *) reason="unterminated quote" ;;
+      esac
+      ;;
+    *)
+      value="${value%%[[:space:]]#*}"
+      while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
+      ;;
+  esac
+  JIT_CFG_VALUE="$value"
+  JIT_CFG_REASON="$reason"
+  [ -z "$reason" ]
+}
+jit_cfg_check_value() {
+  local LC_ALL=C
+  local cfg_name="$1" value="$2"
+  JIT_CFG_REASON=""
+  if [ "$cfg_name" = JIT_CONTEXT_INJECT ]; then
     case "$value" in
-      '"'* | "'"*)
-        q="${value%"${value#?}"}" # the opening quote, " or '
-        rest="${value#?}"
-        case "$rest" in
-          *"$q"*)
-            tail="${rest#*"$q"}"
-            while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
-            case "$tail" in
-              '' | '#'*) value="${rest%%"$q"*}" ;;
-              *) reason="trailing text after the closing quote" ;;
-            esac
+      summary | full) ;;
+      *)
+        JIT_CFG_REASON="not an injection mode (the modes are summary and full)"
+        return 1
+        ;;
+    esac
+  fi
+  if [ "$cfg_name" = JIT_CONTEXT_STOP_REPORT ]; then
+    case "$value" in
+      0 | 1) ;;
+      *)
+        JIT_CFG_REASON="not a stop-report toggle (0 or 1)"
+        return 1
+        ;;
+    esac
+  fi
+  if [ "$cfg_name" = JIT_CONTEXT_STATUS ]; then
+    case "$value" in
+      fired | summary | off) ;;
+      *)
+        JIT_CFG_REASON="not a status mode (fired, summary or off)"
+        return 1
+        ;;
+    esac
+  fi
+  if [ "$cfg_name" = JIT_CONTEXT_MISSES ]; then
+    case "$value" in
+      on | off) ;;
+      *)
+        JIT_CFG_REASON="not a misses toggle (on or off)"
+        return 1
+        ;;
+    esac
+  fi
+  if [ "$cfg_name" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
+    case "$value" in
+      0) ;;
+      [1-9]*)
+        case "$value" in
+          *[!0-9]*)
+            JIT_CFG_REASON="not a byte count (0, or digits with no leading zero)"
+            return 1
             ;;
-          *) reason="unterminated quote" ;;
         esac
         ;;
       *)
-        value="${value%%[[:space:]]#*}"
-        while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
+        JIT_CFG_REASON="not a byte count (0, or digits with no leading zero)"
+        return 1
         ;;
     esac
-    if [ -n "$reason" ]; then
-      jit_config_refuse "$lineno" "$reason"
-      continue
+  fi
+  return 0
+}
+jit_load_config() {
+  local file="$1" line lineno=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    lineno=$((lineno + 1))
+    jit_cfg_clean_line "$line" || continue
+    if jit_cfg_split "$JIT_CFG_LINE" \
+      && jit_cfg_unquote "$JIT_CFG_VALUE" \
+      && jit_cfg_check_value "$JIT_CFG_NAME" "$JIT_CFG_VALUE"; then
+      printf -v "$JIT_CFG_NAME" '%s' "$JIT_CFG_VALUE"
+    else
+      jit_config_refuse "$lineno" "$JIT_CFG_REASON"
     fi
-    if [ "$cfg_name" = JIT_CONTEXT_INJECT ]; then
-      case "$value" in
-        summary | full) ;;
-        *)
-          jit_config_refuse "$lineno" "not an injection mode (the modes are summary and full)"
-          continue
-          ;;
-      esac
-    fi
-    if [ "$cfg_name" = JIT_CONTEXT_STOP_REPORT ]; then
-      case "$value" in
-        0 | 1) ;;
-        *)
-          jit_config_refuse "$lineno" "not a stop-report toggle (0 or 1)"
-          continue
-          ;;
-      esac
-    fi
-    if [ "$cfg_name" = JIT_CONTEXT_STATUS ]; then
-      case "$value" in
-        fired | summary | off) ;;
-        *)
-          jit_config_refuse "$lineno" "not a status mode (fired, summary or off)"
-          continue
-          ;;
-      esac
-    fi
-    if [ "$cfg_name" = JIT_CONTEXT_MISSES ]; then
-      case "$value" in
-        on | off) ;;
-        *)
-          jit_config_refuse "$lineno" "not a misses toggle (on or off)"
-          continue
-          ;;
-      esac
-    fi
-    if [ "$cfg_name" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
-      case "$value" in
-        0) ;;
-        [1-9]*)
-          case "$value" in
-            *[!0-9]*)
-              jit_config_refuse "$lineno" "not a byte count (0, or digits with no leading zero)"
-              continue
-              ;;
-          esac
-          ;;
-        *)
-          jit_config_refuse "$lineno" "not a byte count (0, or digits with no leading zero)"
-          continue
-          ;;
-      esac
-    fi
-    printf -v "$cfg_name" '%s' "$value"
   done < "$file"
 }
 if [ -L "$JIT_BASE/config.env" ]; then
