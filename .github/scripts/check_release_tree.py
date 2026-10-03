@@ -596,6 +596,13 @@ _ALLOWED_CROSS_SCRIPT_CALLS = frozenset({
 
 
 _TYPED_HEREDOC_OP_RE = re.compile(r"(?<!<)<<(?!<)")
+# #461, seventh trigger: an escaped quote `\"` in a hook. Bisected on stop-hook.sh
+# (2026-10-04): the cut ending on JIT_AWK_ENVELOPE held (release-preview-so), the same
+# cut with every `\"` in those 12 lines written `\042` cleared (release-preview-sp).
+# post-tool-hook.sh carried the same lines and cleared, so the scanner only trips on it
+# in some states -- which is why no `\"` at all is the rule, not "none in this spot".
+_ESCAPED_QUOTE = '\\"'
+_HOOK_SCRIPT_RE = re.compile(r"scripts/[^/]+-hook\.sh")
 _NAMED_SCRIPT_PATH_RE = re.compile(r"scripts/[A-Za-z0-9_-]+\.sh")
 _RUNTIME_COMMAND_RE = re.compile(r'^\s*"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?"?(\s|[^\s=]*\)\s*(;;)?\s*$)')
 
@@ -645,6 +652,10 @@ def _check_no_cross_script_loading(files: dict, kinds: dict, off: list) -> None:
                 off.append(f"{rel}:{n}: a command or case pattern named by a variable -- "
                            f"MCP_FORWARDS_CREDENTIAL_ENV / COMMAND_SCRIPT_NOT_FOLLOWED: "
                            f"{line.strip()[:80]!r}")
+            if _HOOK_SCRIPT_RE.fullmatch(rel) and _ESCAPED_QUOTE in line:
+                off.append(f"{rel}:{n}: an escaped quote in a hook -- write it \\042 "
+                           f"(awk) or single-quote the string -- "
+                           f"COMMAND_SCRIPT_NOT_FOLLOWED: {line.strip()[:80]!r}")
             if _TYPED_HEREDOC_OP_RE.search(line):
                 off.append(f"{rel}:{n}: types a `<<` the directory validator cannot place -- "
                            f"UNPINNED_NPX (blocks): {line.strip()[:80]!r}")

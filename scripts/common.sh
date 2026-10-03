@@ -2586,13 +2586,13 @@ jit_awk_capture() {
 jit_awk_crash_block() {
   # $1 the decisive awk's exit status (e.g. 139 for SIGSEGV)
   local rc="${1:-?}"
-  printf "{\"decision\":\"block\",\"reason\":\"# JIT Context: the rule engine could not evaluate this call -- awk exited %s before it finished. Refusing rather than permitting a call no rule was actually checked against. See issue #397.\"}" "$rc"
+  printf '{"decision":"block","reason":"# JIT Context: the rule engine could not evaluate this call -- awk exited %s before it finished. Refusing rather than permitting a call no rule was actually checked against. See issue #397."}' "$rc"
 }
 
 jit_awk_crash_sysmsg() {
   # $1 the decisive awk's exit status (e.g. 139 for SIGSEGV)
   local rc="${1:-?}"
-  printf "{\"systemMessage\":\"JIT Context: the rule engine could not evaluate this turn -- awk exited %s before it finished. No entries were checked, so none were injected. See issue #397.\"}" "$rc"
+  printf '{"systemMessage":"JIT Context: the rule engine could not evaluate this turn -- awk exited %s before it finished. No entries were checked, so none were injected. See issue #397."}' "$rc"
 }
 
 # #400 (CI, macOS leg, test-marker-degradation.sh section B): a SIGSEGV (measured 139 =

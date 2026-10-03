@@ -240,7 +240,7 @@ assert_calls() {
     echo "    expected to find in $file: $needle"
   fi
 }
-BLOCK_SKELETON_ESC='{\"decision\":\"block\",\"reason\":\"'
+BLOCK_SKELETON_ESC='{\042decision\042:\042block\042,\042reason\042:\042'
 BLOCK_SKELETON_PLAIN='{"decision":"block","reason":"'
 assert_literal_in "common.sh envelope carries the block skeleton" "$BLOCK_SKELETON_ESC" "$BLOCK_SKELETON_PLAIN" "$COMMON_SH" "$COMMON_AWK_SH"
 # #391: pre-tool-hook.sh's print site now calls jit_envelope_block_sysmsg() (defined in
@@ -250,9 +250,9 @@ assert_literal_in "common.sh envelope carries the block skeleton" "$BLOCK_SKELET
 assert_calls "pre-tool-hook.sh calls the shared block builder, not its own literal" \
   "jit_envelope_block_sysmsg(" "$REPO/scripts/pre-tool-hook.sh"
 
-INJECT_HEAD_ESC='{\"hookSpecificOutput\":{\"hookEventName\":\"'
+INJECT_HEAD_ESC='{\042hookSpecificOutput\042:{\042hookEventName\042:\042'
 INJECT_HEAD_PLAIN='{"hookSpecificOutput":{"hookEventName":"'
-INJECT_TAIL_ESC='\",\"additionalContext\":\"'
+INJECT_TAIL_ESC='\042,\042additionalContext\042:\042'
 INJECT_TAIL_PLAIN='","additionalContext":"'
 assert_literal_in "common.sh envelope carries the inject head" "$INJECT_HEAD_ESC" "$INJECT_HEAD_PLAIN" "$COMMON_SH" "$COMMON_AWK_SH"
 assert_literal_in "common.sh envelope carries the inject tail" "$INJECT_TAIL_ESC" "$INJECT_TAIL_PLAIN" "$COMMON_SH" "$COMMON_AWK_SH"
@@ -312,7 +312,7 @@ assert_literal_absent() {
 # test still looking for one would pass for the wrong reason (a literal that is not
 # there at all reads identically to one that moved). What they hand-roll now is the
 # systemMessage skeleton, and it is asserted the same way the block skeleton above is.
-SYSMSG_SKELETON_ESC='{\"systemMessage\":\"'
+SYSMSG_SKELETON_ESC='{\042systemMessage\042:\042'
 SYSMSG_SKELETON_PLAIN='{"systemMessage":"'
 for hook in session-start-hook.sh stop-hook.sh; do
   assert_literal_in "$hook hand-rolls the systemMessage skeleton" \

@@ -129,7 +129,7 @@ function jit_json_escape(s,   k, c) {
 function jit_cand_sep(   q) {
   if (jit_sep_re == "") {
     q = sprintf("%c", 39)
-    jit_sep_re = "[ \t\n\r;&|()<>\"`," q "=]+"
+    jit_sep_re = "[ \t\n\r;&|()<>\042`," q "=]+"
   }
   return jit_sep_re
 }
