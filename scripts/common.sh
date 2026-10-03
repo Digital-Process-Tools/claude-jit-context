@@ -95,7 +95,7 @@ _ms() {
 # fired. The bare "." further back (if $PWD itself is somehow empty) preserves the
 # old, already-tested degradation rather than reaching for a third fallback nothing
 # here exercises.
-JIT_BASE="${CLAUDE_PROJECT_DIR:-${PWD:-$(pwd)}}/.claude/jit-context"
+JIT_BASE="${CLAUDE_PROJECT_DIR:-$PWD}/.claude/jit-context"
 # Exported (#378): {{dimension/layer/file.md}} transclusion resolves its target through
 # ENVIRON["JIT_BASE"] inside the shared awk fragment, the same channel JIT_SYMLINKS below
 # already uses and for the same reason -- a -v value has its escapes PROCESSED, so a

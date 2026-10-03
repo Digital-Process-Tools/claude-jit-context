@@ -397,6 +397,61 @@ COMPILED_SCRIPTS = [
 _SCRIPT_DIR_DEF = 'case "$0" in */*) SCRIPT_DIR="${0%/*}" ;; *) SCRIPT_DIR="." ;; esac'
 
 
+_FUNC_START_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\) *\{ *$")
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def tree_shake(script: str) -> str:
+    """Drop every top-level function the script never reaches.
+
+    The library is inlined whole, so a script carries functions it never calls -- and the
+    directory validator judges the file by everything in it: jit-doctor.sh was held for
+    "perl code" that only _ms/_ts/jit_scan_entry_ages contain, and it calls none of them
+    (#461). A function is kept when its name appears as a word anywhere outside the
+    function definitions, or inside a kept function, transitively. A name passed as a
+    string (`jit_awk_dispatch ... crash_fn`) is a word too, so dispatch-by-name stays.
+    Only column-0 `name() {` ... `}` blocks are candidates; anything else is kept.
+    """
+    lines = script.split("\n")
+    funcs = {}  # name -> (start, end) inclusive
+    i = 0
+    while i < len(lines):
+        m = _FUNC_START_RE.match(lines[i])
+        if m:
+            j = i + 1
+            while j < len(lines) and lines[j] != "}":
+                j += 1
+            if j == len(lines):
+                return script  # unbalanced: refuse to guess, ship unshaken
+            funcs[m.group(1)] = (i, j)
+            i = j + 1
+        else:
+            i += 1
+    if not funcs:
+        return script
+    in_func = set()
+    for s, e in funcs.values():
+        in_func.update(range(s, e + 1))
+    root_words = set()
+    for n, line in enumerate(lines):
+        if n not in in_func:
+            root_words.update(_IDENT_RE.findall(line))
+    keep = {name for name in funcs if name in root_words}
+    frontier = list(keep)
+    while frontier:
+        s, e = funcs[frontier.pop()]
+        body = "\n".join(lines[s + 1:e])
+        for word in set(_IDENT_RE.findall(body)):
+            if word in funcs and word not in keep:
+                keep.add(word)
+                frontier.append(word)
+    drop = set()
+    for name, (s, e) in funcs.items():
+        if name not in keep:
+            drop.update(range(s, e + 1))
+    return "\n".join(line for n, line in enumerate(lines) if n not in drop)
+
+
 def drop_dead_script_dir(script: str) -> str:
     """Remove the SCRIPT_DIR definition when nothing else in the compiled file reads it.
 
@@ -478,8 +533,8 @@ def compile_scripts(contents: dict[str, bytes]) -> dict[str, bytes]:
     out = dict(contents)
     for path in COMPILED_SCRIPTS:
         protect_until = _usage_sed_end_line(text(path))
-        out[path] = drop_dead_script_dir(
-            strip_comments(compiled[path], protect_until)).encode("utf-8")
+        out[path] = tree_shake(drop_dead_script_dir(
+            strip_comments(compiled[path], protect_until))).encode("utf-8")
     for path in LIBRARY_FILES:
         del out[path]
     return out
