@@ -1328,10 +1328,10 @@ function jit_split_ctx_blocks(ctx,   nl_pos, header, body_rest, hn, hf, declared
 JIT_AWK_ENVELOPE='
 function jit_envelope_inject(event, text_escaped) {
   if (text_escaped == "") return "{}"
-  return "{\"hookSpecificOutput\":{\"hookEventName\":\"" event "\",\"additionalContext\":\"" text_escaped "\"}}"
+  return "{\042hookSpecificOutput\042:{\042hookEventName\042:\042" event "\042,\042additionalContext\042:\042" text_escaped "\042}}"
 }
 function jit_envelope_block(reason_escaped) {
-  return "{\"decision\":\"block\",\"reason\":\"" reason_escaped "\"}"
+  return "{\042decision\042:\042block\042,\042reason\042:\042" reason_escaped "\042}"
 }
 function jit_envelope_empty() {
   return "{}"
@@ -1344,13 +1344,13 @@ function jit_fmt_bytes(n) {
 }
 function jit_envelope_inject_sysmsg(event, text_escaped, sysmsg_escaped) {
   if (text_escaped == "" && sysmsg_escaped == "") return "{}"
-  if (text_escaped == "") return "{\"systemMessage\":\"" sysmsg_escaped "\"}"
+  if (text_escaped == "") return "{\042systemMessage\042:\042" sysmsg_escaped "\042}"
   if (sysmsg_escaped == "") return jit_envelope_inject(event, text_escaped)
-  return "{\"hookSpecificOutput\":{\"hookEventName\":\"" event "\",\"additionalContext\":\"" text_escaped "\"},\"systemMessage\":\"" sysmsg_escaped "\"}"
+  return "{\042hookSpecificOutput\042:{\042hookEventName\042:\042" event "\042,\042additionalContext\042:\042" text_escaped "\042},\042systemMessage\042:\042" sysmsg_escaped "\042}"
 }
 function jit_envelope_block_sysmsg(reason_escaped, sysmsg_escaped) {
   if (sysmsg_escaped == "") return jit_envelope_block(reason_escaped)
-  return "{\"decision\":\"block\",\"reason\":\"" reason_escaped "\",\"systemMessage\":\"" sysmsg_escaped "\"}"
+  return "{\042decision\042:\042block\042,\042reason\042:\042" reason_escaped "\042,\042systemMessage\042:\042" sysmsg_escaped "\042}"
 }
 '
 jit_frontmatter_many() { # VAR, entry file, field...
@@ -1535,11 +1535,11 @@ jit_awk_capture() {
 }
 jit_awk_crash_block() {
   local rc="${1:-?}"
-  printf "{\"decision\":\"block\",\"reason\":\"# JIT Context: the rule engine could not evaluate this call -- awk exited %s before it finished. Refusing rather than permitting a call no rule was actually checked against. See issue #397.\"}" "$rc"
+  printf '{"decision":"block","reason":"# JIT Context: the rule engine could not evaluate this call -- awk exited %s before it finished. Refusing rather than permitting a call no rule was actually checked against. See issue #397."}' "$rc"
 }
 jit_awk_crash_sysmsg() {
   local rc="${1:-?}"
-  printf "{\"systemMessage\":\"JIT Context: the rule engine could not evaluate this turn -- awk exited %s before it finished. No entries were checked, so none were injected. See issue #397.\"}" "$rc"
+  printf '{"systemMessage":"JIT Context: the rule engine could not evaluate this turn -- awk exited %s before it finished. No entries were checked, so none were injected. See issue #397."}' "$rc"
 }
 jit_awk_empty_ok() {
   printf '{}\n'

@@ -597,7 +597,7 @@ END {
   # filtered report from one that could not filter. Counted as occurrences set aside,
   # the same unit `set aside` above already uses.
   if (genstate == "ok") printf "  %d generic word(s) set aside (%s)\n", setaside_generic, genname
-  else if (genstate == "off") printf "  generic words not filtered (--generic-words \"\")\n"
+  else if (genstate == "off") printf "  generic words not filtered (--generic-words \042\042)\n"
   else printf "  generic words NOT filtered -- the list cannot be read: %s\n", genname
 
   # Rank: count desc, then token asc, so two runs over the same log print the same order.
