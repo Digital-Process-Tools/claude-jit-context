@@ -183,14 +183,14 @@ function jit_re_lit(s,    i, c, out, special) {
 }
 # #364: RAW canon name(s), space-separated, or RAW if ALIASES names none.
 # ALIASES: host.sh jit_all_tool_aliases (comma key=v1;v2 pairs, all hosts unioned).
-function jit_expand_tool_alias(aliases, raw,    n, entries, i, eq, key) {
+function jit_expand_tool_alias(aliases, raw,    n, entries, i, eq, ident) {
   if (aliases == "" || raw == "") return raw
   n = split(aliases, entries, ",")
   for (i = 1; i <= n; i++) {
     eq = index(entries[i], "=")
     if (eq == 0) continue
-    key = substr(entries[i], 1, eq - 1)
-    if (key != raw) continue
+    ident = substr(entries[i], 1, eq - 1)
+    if (ident != raw) continue
     gsub(/;/, " ", entries[i])
     return raw " " substr(entries[i], eq + 1)  # union, not replace (#364)
   }
@@ -688,15 +688,15 @@ END {
       # hold this key from an earlier spawn. For the main session the two sets are the
       # SAME marker file (agent_key equals session_id there), so this is byte-identical
       # to the old behaviour on every call that is not a spawn.
-      key = ""
+      ident = ""
       hushed = 0
       if (index(r_modes, "once") > 0) {
-        key = jit_loc_key("tools", tool_layer, r_file)
+        ident = jit_loc_key("tools", tool_layer, r_file)
         # `held` as well as `agent_shown`: an advisory rule delivered earlier in THIS scan
         # is not in `agent_shown` yet -- its mark waits on the block decision below (#112)
         # -- and without this a second row naming the same file would inject it twice in
         # one call.
-        if ((key in agent_shown) || (key in held)) {
+        if ((ident in agent_shown) || (ident in held)) {
           # `hushed`, not `continue`, for a row that can refuse (#139). `once` was leaving
           # this loop before the row reached its decision, so `mode: once, block` refused
           # the first matching call of a session and permitted every one after it -- no
@@ -765,7 +765,7 @@ END {
         # notice above has already reported the row by position, and filling `content` would
         # inject that same sentence a second time as advisory context.
         body = "(the text of this rule was not delivered: " file_why ")"
-        key = ""
+        ident = ""
       } else {
         rpath = tools_dir "/" r_file
         if (jit_entry_load(rpath, inject_default, keepbody, ent)) {
@@ -789,7 +789,7 @@ END {
         # was already true -- the branch below is what marked, and this one skipped it -- and
         # emptying `key` here is how it stays true now that the mark has moved down to the
         # three places the text is actually delivered.
-        key = ""
+        ident = ""
       }
 
       # A rule that can REFUSE must reach its decision on the strength of its INDEX ROW, and
@@ -822,7 +822,7 @@ END {
       # rather than `\s`: this is an awk ERE, and one-true-awk drops the class spelling.
       if (keepbody && body ~ /^[[:space:]]*$/) {
         body = "(the text of this rule was not delivered: the entry file has no text)"
-        key = ""
+        ident = ""
       }
 
       # A row that WOULD refuse but may not, because the binary its requires: column
@@ -926,7 +926,7 @@ END {
         # decision is known (#112).
         log_adv = log_adv asep "tool:" r_logname "(" r_match ")" jit_inject_tag(ent)
         asep = ", "
-        if (key != "") { held[key] = 1; hold_n++ }
+        if (ident != "") { held[ident] = 1; hold_n++ }
         # #389: the byte cost for THIS held advisory is only known once adv_header
         # and content are both settled a few lines down -- held_bytes[] carries it to
         # the commit loop below, the same deferral held[] itself already needs (#112).
@@ -1018,7 +1018,7 @@ END {
         # as the concat was -- a `break` above discards the whole scan on a block decision,
         # and nblk/blk[] are discarded right along with it, never read past that point.
         nblk++; blk[nblk] = adv_header "\n" content
-        if (key != "") held_bytes[key] = length(adv_header "\n" content)
+        if (ident != "") held_bytes[ident] = length(adv_header "\n" content)
         # #391: built INLINE, unlike held_bytes/held_name above -- nblk/blk[] themselves
         # are built the same way, unconditionally, and thrown away wholesale if a LATER
         # row in this same scan blocks (the `if (blocked != "") break` after the layer

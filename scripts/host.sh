@@ -277,15 +277,15 @@ jit_host_sig_set() {
 }
 
 jit_host_detect() {
-  local name sigs sig old_ifs
-  while IFS='|' read -r name sigs _ _ _ _ _; do
+  local name hostvars hostvar old_ifs
+  while IFS='|' read -r name hostvars _ _ _ _ _; do
     [ -n "$name" ] || continue
-    [ -n "$sigs" ] || continue
+    [ -n "$hostvars" ] || continue
     old_ifs="$IFS"
     IFS=','
-    for sig in $sigs; do
+    for hostvar in $hostvars; do
       IFS="$old_ifs"
-      if jit_host_sig_set "$sig"; then
+      if jit_host_sig_set "$hostvar"; then
         printf '%s\n' "$name"
         return 0
       fi

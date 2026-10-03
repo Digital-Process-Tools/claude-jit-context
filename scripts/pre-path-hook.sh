@@ -795,9 +795,9 @@ if [ -n "$JIT_TMP" ] && [ -s "$JIT_TMP" ]; then
     {
       IFS= read -r _JIT_SENTINEL
       IFS= read -r JIT_SESSION_REF
-      while IFS= read -r JIT_TOK; do
+      while IFS= read -r JIT_SEG; do
         [ "${#JIT_CANDIDATES}" -lt 4096 ] || break
-        if jit_cand_ok "$JIT_TOK"; then
+        if jit_cand_ok "$JIT_SEG"; then
           JIT_CANDIDATES="$JIT_CANDIDATES$JIT_CAND_VALUE$JIT_NL"
         fi
       done

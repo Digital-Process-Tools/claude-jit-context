@@ -20,6 +20,8 @@
 #                      token. Short names are read the same way: pat, tok, pw, cred...
 #                      Renamed rx/rx_list (jit-dry-run.sh) and seg (tok, jit-stats.sh,
 #                      pre-path-hook.sh).
+#   $pin              "reads the installer's pin" -- the next short name. Swept in one
+#                      pass with sig, key, keys, session and tok rather than one per scan.
 #
 # Comment lines are skipped: the build strips them, and the reason may name the
 # construct. A sweep that finds nothing must be told apart from a pattern that never
@@ -53,7 +55,7 @@ NEEDLES=(
   'PWD read|[$][{]?PWD([^A-Za-z0-9_]|$)'
   'environment dump word|(^|[^A-Za-z0-9_.-])(printenv|env|export[[:space:]]+-p)([^A-Za-z0-9_.=-]|$)'
   'secret-looking variable|[$][{]?[A-Za-z0-9_]*([Kk][Ee][Yy][Ss]?|[Tt][Oo][Kk][Ee][Nn][Ss]?|SECRET|PASSWORD)([^A-Za-z0-9_]|$)'
-  'short credential name|([$][{]?|^[[:space:]]*(local[[:space:]]+([^=[:space:]]+[[:space:]]+)*)?)([Pp][Aa][Tt][Ss]?|tok|toks|pw|pass|passwd|cred|creds|auth|secret)([^A-Za-z0-9_]|$)'
+  'short credential name|([$][{]?|^[[:space:]]*(local[[:space:]]+([^=[:space:]]+[[:space:]]+)*)?)([Pp][Aa][Tt][Ss]?|tok|toks|pw|pass|passwd|cred|creds|auth|secret|pin|pins|sig|sigs|otp|jwt|cookie|_?key)([^A-Za-z0-9_]|$)'
 )
 
 # sweep FILE ERE -- "LINE: TEXT" for every non-comment line matching ERE.
@@ -70,6 +72,7 @@ printf '%s\n' \
   'WRAP=(rtk|command|env|sudo)' \
   'for k in $VOCAB_KEYS; do' \
   'done <<< "$pats"' \
+  '    pin=1' \
   > "$fixture"
 safe="$(mktemp)"
 trap 'rm -f "$fixture" "$safe"' EXIT

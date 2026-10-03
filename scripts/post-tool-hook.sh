@@ -96,19 +96,19 @@ END {
   # fourth: exactly one of the two is ever populated, because tool_name (checked in
   # bash below) already decides which shape the payload is.
   if (fp == "") fp = cmd
-  key = jit_session_key(raw, fs, fe, n)
+  ident = jit_session_key(raw, fs, fe, n)
   print tool
-  print key
+  print ident
   print fp
 }
 ')"
 
 PT_TOOL=""
-PT_SESSION=""
+PT_RUN_ID=""
 PT_FP=""
 {
   IFS= read -r PT_TOOL
-  IFS= read -r PT_SESSION
+  IFS= read -r PT_RUN_ID
   PT_FP="$(cat)"
 } <<< "$PT_PARSED"
 
@@ -179,7 +179,7 @@ case "$PT_TOOL" in
     ;;
 esac
 
-if [ -z "$PT_FP" ] || [ -z "$PT_SESSION" ] || [ -z "$JIT_STATE_DIR" ]; then
+if [ -z "$PT_FP" ] || [ -z "$PT_RUN_ID" ] || [ -z "$JIT_STATE_DIR" ]; then
   echo '{}'
   exit 0
 fi
@@ -264,11 +264,11 @@ if [ "$PT_TOOL" = "Bash" ]; then
     echo '{}'
     exit 0
   fi
-  EDIT_MARK="$JIT_STATE_DIR/edited-$PT_SESSION.txt"
+  EDIT_MARK="$JIT_STATE_DIR/edited-$PT_RUN_ID.txt"
   if [ ! -L "$EDIT_MARK" ]; then
     : 2> /dev/null > "$EDIT_MARK"
   else
-    EDIT_DECLINED_MARK="$JIT_STATE_DIR/edited-declined-$PT_SESSION.txt"
+    EDIT_DECLINED_MARK="$JIT_STATE_DIR/edited-declined-$PT_RUN_ID.txt"
     if [ ! -L "$EDIT_DECLINED_MARK" ]; then
       : 2> /dev/null > "$EDIT_DECLINED_MARK"
     fi
@@ -390,7 +390,7 @@ fi
 # with the order reversed the write is the one that can fail while stderr is still the
 # session, which is the exact loudness this whole hook exists to avoid (see the matching
 # comment on jit_shown_apply() in common.sh).
-EDIT_MARK="$JIT_STATE_DIR/edited-$PT_SESSION.txt"
+EDIT_MARK="$JIT_STATE_DIR/edited-$PT_RUN_ID.txt"
 if [ ! -L "$EDIT_MARK" ]; then
   : 2> /dev/null > "$EDIT_MARK"
 else
@@ -402,7 +402,7 @@ else
   # reach here). Same `[ -L ]`-before-write guard, same left-to-right redirection
   # ordering, for the same reason: this new marker name is exactly as real a symlink
   # target as EDIT_MARK itself.
-  EDIT_DECLINED_MARK="$JIT_STATE_DIR/edited-declined-$PT_SESSION.txt"
+  EDIT_DECLINED_MARK="$JIT_STATE_DIR/edited-declined-$PT_RUN_ID.txt"
   if [ ! -L "$EDIT_DECLINED_MARK" ]; then
     : 2> /dev/null > "$EDIT_DECLINED_MARK"
   fi

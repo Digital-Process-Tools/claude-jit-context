@@ -602,13 +602,13 @@ END {
 
   # Rank: count desc, then token asc, so two runs over the same log print the same order.
   nk = 0
-  for (t in cnt) if (cnt[t] >= min) { nk++; keys[nk] = t }
+  for (t in cnt) if (cnt[t] >= min) { nk++; idents[nk] = t }
   for (i = 2; i <= nk; i++) {
-    k = keys[i]; j = i - 1
-    while (j >= 1 && (cnt[keys[j]] < cnt[k] || (cnt[keys[j]] == cnt[k] && keys[j] > k))) {
-      keys[j+1] = keys[j]; j--
+    k = idents[i]; j = i - 1
+    while (j >= 1 && (cnt[idents[j]] < cnt[k] || (cnt[idents[j]] == cnt[k] && idents[j] > k))) {
+      idents[j+1] = idents[j]; j--
     }
-    keys[j+1] = k
+    idents[j+1] = k
   }
 
   if (nk == 0) {
@@ -621,7 +621,7 @@ END {
   printf "\n  recurring misses -- prompts sharing a content word, most-missed first:\n\n"
   shown = 0
   for (i = 1; i <= nk && shown < top; i++) {
-    t = keys[i]
+    t = idents[i]
     printf "  %dx  %s\n", cnt[t], t
     for (j = 1; j <= exn[t]; j++) printf "        %s\n", ex[t, j]
     if (cnt[t] > exn[t]) printf "        ... and %d more\n", cnt[t] - exn[t]

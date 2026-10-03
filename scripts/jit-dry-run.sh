@@ -744,7 +744,7 @@ check_paths_fragment() {
   # an awk regex literal is exactly the kind of thing spelled differently across awks.
   #
   # `LC_ALL=C` (#196): both gsubs decode $ENVIRON["JIT_RX"], and a pattern carrying an
-  # invalid byte diverged two ways without this pin -- gawk under a UTF-8 locale let
+  # invalid byte diverged two ways without this is_fixed -- gawk under a UTF-8 locale let
   # `gsub(/\\./)` eat the escaped backslash plus the WHOLE multibyte character, where `C`
   # eats the backslash plus the lead byte only and leaves a stray continuation byte behind
   # in `p`; one-true-awk aborted `rc=2` instead, which this call never checked, so the
@@ -1140,7 +1140,7 @@ for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; 
   idx_prime "$tsv" 0 0 2 "$tsv_dir"
   # One awk for every pattern in this index, instead of two per row (see pat_prime).
   v_rown=0
-  while IFS=$'\t' read -r _v_key v_file _rest; do
+  while IFS=$'\t' read -r _v_ident v_file _rest; do
     v_rown=$((v_rown + 1))
     [ -n "${v_file:-}" ] || continue
     VOCAB_LISTED=$((VOCAB_LISTED + 1))
@@ -1192,7 +1192,7 @@ done
 # this file that compares BYTES, and the byte range it builds is not a character in a
 # UTF-8 locale: unpinned, one-true-awk aborted the whole program with "multibyte conversion
 # failure" on the first row of a tree carrying the byte this check exists to find -- the
-# linter falling over on exactly the input it was added for. The hooks pin it on every awk
+# linter falling over on exactly the input it was added for. The hooks is_fixed it on every awk
 # for the same reason (#68); this file does not, because its other awks read text.
 #
 # What it cannot see, stated rather than implied: one-true-awk truncates a record at a NUL
@@ -1293,7 +1293,7 @@ NODESC=0
 WHOLE_LINES=""
 list_whole() {
   # $1 layer dir, $2 label
-  local dir="$1" label="$2" md name inj raw_inj eff why size desc pin
+  local dir="$1" label="$2" md name inj raw_inj eff why size desc is_fixed
   [ -d "$dir" ] || return 0
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -1322,12 +1322,12 @@ list_whole() {
     fi
     jit_fm_get desc "$lw_fm" description
     why=""
-    # `pin` mirrors jit_entry_load() in common.sh: the mode was decided by the ENTRY, not
+    # `is_fixed` mirrors jit_entry_load() in common.sh: the mode was decided by the ENTRY, not
     # inherited from the project default. An entry pinned to full can never render as a
     # summary, so a missing description: on one of those is not what stands between this
     # tree and being able to flip -- naming it would send an author to write a line
     # nothing will ever read.
-    pin=0
+    is_fixed=0
     # `read` off the file, not `$(sed -n 1p ...)`: one fork per entry, over a whole tree,
     # to look at a line bash can read itself. `read` returns non-zero on a file with no
     # trailing newline, which is exactly the malformed case this test is looking for, so
@@ -1342,15 +1342,15 @@ list_whole() {
     IFS= read -r _fm_first 2> /dev/null < "$md"
     if [ "$_fm_first" != "---" ]; then
       eff=full
-      pin=1
+      is_fixed=1
       why="no frontmatter, so there is nothing to summarise"
     elif [ "$inj" = full ]; then
       eff=full
-      pin=1
+      is_fixed=1
       why="inject: full in this entry"
     elif [ "$inj" = summary ]; then
       eff=summary
-      pin=1
+      is_fixed=1
     else
       eff="$TREE_INJECT"
       if [ -n "$inj" ]; then
@@ -1398,7 +1398,7 @@ list_whole() {
       fi
       [ -z "$why" ] && why="the project default"
     fi
-    if [ -z "$desc" ] && [ "$pin$eff" != "1full" ]; then NODESC=$((NODESC + 1)); fi
+    if [ -z "$desc" ] && [ "$is_fixed$eff" != "1full" ]; then NODESC=$((NODESC + 1)); fi
     if [ "$eff" = full ]; then
       # Arithmetic expansion, not `| tr -d ' '`: some wc implementations pad the count with
       # leading whitespace, and $(( )) discards it for nothing. One fork per entry saved.
@@ -1554,9 +1554,9 @@ fi
 # answering about another string -- and gawk's `Invalid multibyte data detected` goes to
 # this script's own stderr, which report_hook's capture does not cover, so nothing said so.
 #
-# Same root cause as the pin on injected_bytes() below, opposite consequence: that one
+# Same root cause as the is_fixed on injected_bytes() below, opposite consequence: that one
 # misreported a NUMBER, this one misreported the SUBJECT. Under `C` there is no decoding
-# to go wrong, and the hooks read the payload as bytes anyway, so the pin is what makes
+# to go wrong, and the hooks read the payload as bytes anyway, so the is_fixed is what makes
 # the sample call and the real call the same call.
 #
 # Worth knowing if you go to reproduce it: gawk only takes its multibyte path for a record
@@ -1599,7 +1599,7 @@ json_quote() {
 # program wants characters. index() and the substr() beside it are self-consistent in
 # either semantics -- `"additionalContext":"` is 21 ASCII characters AND 21 bytes, so
 # k + 21 lands on the same place whichever unit k came back in -- and the sub() strips an
-# ASCII literal. So the pin changes exactly one answer, which is the one that was wrong.
+# ASCII literal. So the is_fixed changes exactly one answer, which is the one that was wrong.
 #
 # It also buys what #68 bought the hooks: this reads a payload carrying entry text, and an
 # entry saved as Latin-1 is a malformed sequence that aborted one-true-awk and made gawk
@@ -1707,10 +1707,10 @@ END {
   ctx = ""; rtext = ""
   for (i = 1; i + 2 <= n; i++) {
     if (fs[i] != fe[i]) continue
-    key = jit_field(raw, fs[i], fe[i])
-    if (key == "additionalContext" && ctx == "") {
+    ident = jit_field(raw, fs[i], fe[i])
+    if (ident == "additionalContext" && ctx == "") {
       ctx = jit_unescape_blocks(jit_field(raw, fs[i+2], fe[i+2]))
-    } else if (key == "reason" && rtext == "") {
+    } else if (ident == "reason" && rtext == "") {
       rtext = jit_unescape_blocks(jit_field(raw, fs[i+2], fe[i+2]))
     }
   }
