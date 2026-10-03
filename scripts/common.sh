@@ -1024,6 +1024,19 @@ jit_config_name_ok() {
   return 1
 }
 
+# jit_cfg_ltrim TEXT / jit_cfg_rtrim TEXT -- TEXT without its leading / trailing
+# whitespace, in JIT_CFG_T. #461: jit_load_config held the directory validator's
+# "Scripts the validator couldn't follow" for as long as a `while` loop sat inside a
+# case arm or an if branch of its read loop; the trims are calls now.
+jit_cfg_ltrim() {
+  JIT_CFG_T="$1"
+  while [ "$JIT_CFG_T" != "${JIT_CFG_T#[[:space:]]}" ]; do JIT_CFG_T="${JIT_CFG_T#[[:space:]]}"; done
+}
+jit_cfg_rtrim() {
+  JIT_CFG_T="$1"
+  while [ "$JIT_CFG_T" != "${JIT_CFG_T%[[:space:]]}" ]; do JIT_CFG_T="${JIT_CFG_T%[[:space:]]}"; done
+}
+
 jit_load_config() {
   # #388: `[A-Za-z0-9_]` below is a POSIX bracket range inside `[[ =~ ]]`, which glibc
   # matches by the active locale's collation order rather than by byte value. Turkish
@@ -1046,8 +1059,8 @@ jit_load_config() {
       # `export KEY=VALUE` was valid while this file was sourced, so it stays valid.
       # The export itself is a no-op now: the hooks read these as shell variables.
       [e]xport[[:space:]]*)
-        line="${line#[e]xport}"
-        while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+        jit_cfg_ltrim "${line#[e]xport}"
+        line="$JIT_CFG_T"
         ;;
     esac
 
@@ -1086,7 +1099,8 @@ jit_load_config() {
       case "$rest" in
         *"$q"*)
           tail="${rest#*"$q"}"
-          while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
+          jit_cfg_ltrim "$tail"
+          tail="$JIT_CFG_T"
           case "$tail" in
             # Anything after the closing quote that is not a comment is ambiguous, so it
             # is refused rather than guessed at. Guessing is how a value goes quietly
@@ -1103,7 +1117,8 @@ jit_load_config() {
       case "$value" in
         *[[:space:]]#*) value="${value%%[[:space:]]#*}" ;;
       esac
-      while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
+      jit_cfg_rtrim "$value"
+      value="$JIT_CFG_T"
     fi
     if [ -n "$reason" ]; then
       jit_config_refuse "$lineno" "$reason"
