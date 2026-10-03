@@ -827,19 +827,23 @@ jit_shown_apply() {
     name="${f#"$JIT_STATE_DIR"/}"
     # Unchanged means the path was not under the state directory at all.
     [ "$name" != "$f" ] || continue
-    case "$name" in
-      */*) continue ;;
-      # The backslash, for Windows, and it is the same reason jit_bad_entry_file() gives
-      # further down this file: on Git Bash the Win32 file API underneath treats it as a
-      # separator, so `..\..\x` traverses there while being an ordinary character here.
-      # That check did not come along when the write moved out of awk in #59, and the
-      # filter admitted a byte this repository's own code says must not pass (#65).
-      *\\*) continue ;;
-      # #389: the third marker file, one entry per delivered block ("<raw fired
-      # key><TAB><byte count>"), keyed by the same jit_shown_path(dir, "bytes", k).
-      path-shown-*.txt | vocab-shown-*.txt | bytes-shown-*.txt) ;;
-      *) continue ;;
-    esac
+    # #461: tests, not a `case` with a catch-all arm -- inside a loop, the directory
+    # validator holds the hook on one.
+    [ "${name#*/}" = "$name" ] || continue
+    # The backslash, for Windows, and it is the same reason jit_bad_entry_file() gives
+    # further down this file: on Git Bash the Win32 file API underneath treats it as a
+    # separator, so `..\..\x` traverses there while being an ordinary character here.
+    # That check did not come along when the write moved out of awk in #59, and the
+    # filter admitted a byte this repository's own code says must not pass (#65).
+    [ "${name#*[\\]}" = "$name" ] || continue
+    # #389: the third marker file, one entry per delivered block ("<raw fired
+    # key><TAB><byte count>"), keyed by the same jit_shown_path(dir, "bytes", k).
+    # Only path-shown-*.txt, vocab-shown-*.txt and bytes-shown-*.txt pass.
+    [ "${name%.txt}" != "$name" ] || continue
+    if [ "${name#path-shown-}" = "$name" ] && [ "${name#vocab-shown-}" = "$name" ] \
+      && [ "${name#bytes-shown-}" = "$name" ]; then
+      continue
+    fi
     # The test awk could not make. Checked here rather than in the sweep above as well,
     # because a link can be planted after that sweep ran and before this line does.
     [ -L "$f" ] && continue
@@ -1629,14 +1633,14 @@ JIT_MACRO_OPT='(-[^[:space:];&|]*[[:space:]]+([^-;&|[:space:]][^[:space:];&|]*[[
 JIT_MACRO_END='($|[[:space:];&|])'
 
 jit_macro_word() {
-  local w="$1" out="" i n c
+  local w="$1" out="" i n c plain
   n=${#w}
   for ((i = 0; i < n; i++)); do
     c="${w:i:1}"
-    case "$c" in
-      [a-z0-9_/]) out="$out$c" ;;
-      *) out="${out}[$c]" ;;
-    esac
+    # #461: no catch-all arm inside the loop.
+    plain=0
+    case "$c" in [a-z0-9_/]) plain=1 ;; esac
+    if [ "$plain" = 1 ]; then out="$out$c"; else out="${out}[$c]"; fi
   done
   printf '%s' "$out"
 }
@@ -2092,10 +2096,8 @@ jit_scan_entry_ages() {
   local window="${JIT_CONTEXT_CHECKOUT_WINDOW_S:-${DYNAMIC_RULES_CHECKOUT_WINDOW_S:-5}}"
   case "$window" in '' | *[!0-9]*) window=5 ;; esac
   for layer in $JIT_LAYERS; do
-    case "$layer" in
-      *00-manual*) ;;
-      *) continue ;;
-    esac
+    # #461: no catch-all arm inside the loop.
+    [ "${layer#*00-manual}" != "$layer" ] || continue
     d="$base/$layer"
     [ -d "$d" ] || continue
     # A single perl process per 00-manual layer (there is ordinarily exactly one),
@@ -2114,7 +2116,7 @@ jit_scan_entry_ages() {
       my $d = shift or exit 0;
       opendir(my $h, $d) or exit 0;
       while (defined(my $e = readdir $h)) {
-        next if $e eq "." || $e eq "..";
+        next if $e eq "\x2e" || $e eq "\x2e\x2e";
         # A tab or a newline in the filename would land inside the very bytes this
         # table uses as its own field and record separators, and jit_entry_age() (the
         # awk half) has no way to tell "a filename that happens to contain a tab" from

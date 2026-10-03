@@ -330,7 +330,8 @@ esac
 jit_pt_canon_dir() {
   local head="$1" tail="" phys
   while [ ! -d "$head" ]; do
-    case "$head" in */*) ;; *) break ;; esac
+    # #461: no catch-all arm inside the loop -- a word with no `/` ends the walk.
+    if [ "${head#*/}" = "$head" ]; then break; fi
     tail="${head##*/}${tail:+/}$tail"
     head="${head%/*}"
     [ -n "$head" ] || head="/"

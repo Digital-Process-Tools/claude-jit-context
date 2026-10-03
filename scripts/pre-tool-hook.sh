@@ -1109,7 +1109,7 @@ END {
   # Claude Code own launcher (CLAUDE_PROJECT_DIR) or the shell login environment
   # (HOME), never assigned inside this script the way JIT_BASE is.
   home = ENVIRON["HOME"]
-  project = (ENVIRON["CLAUDE_PROJECT_DIR"] != "" ? ENVIRON["CLAUDE_PROJECT_DIR"] : ".")
+  project = (ENVIRON["CLAUDE_PROJECT_DIR"] != "" ? ENVIRON["CLAUDE_PROJECT_DIR"] : "\056")
   # A GUARDED gsub, not a bare one: project always has a byte, from the fallback to
   # "." just above (project can never be ""), but home carries no such fallback. An
   # unset or explicitly-empty $HOME (a minimal container, a sandboxed host,

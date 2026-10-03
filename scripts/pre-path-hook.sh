@@ -140,7 +140,7 @@ function jit_cand_ctl(s) {
 function jit_cand_tokens(c, out,   nt, tk, i, t, project, plen, k) {
   jit_utf8_init()
   project = ENVIRON["CLAUDE_PROJECT_DIR"]
-  if (project == "") project = "."
+  if (project == "") project = "\056"
   sub(/\/+$/, "", project)
   if (project == "") project = "/"
   k = 0
@@ -173,7 +173,7 @@ function jit_cand_tokens(c, out,   nt, tk, i, t, project, plen, k) {
     while (t ~ /\/\//) sub(/\/\//, "/", t)
     sub(/\/\.$/, "", t)
     if (t == "" || substr(t, 1, 1) == "/") continue
-    if (t == "." || t == "..") continue
+    if (t == "\056" || t == "\056\056") continue
     if (t ~ /(^|\/)\.\.(\/|$)/) continue
     k++
     out[k] = t

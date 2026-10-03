@@ -364,7 +364,7 @@ function jit_bad_entry_file(f, dir) {
   # notice at the author over stray whitespace.
   if (f == "") return ""
   if (index(f, "/") > 0 || index(f, "\134") > 0) return "not a bare file name"
-  if (f == "." || f == "..") return "not a bare file name"
+  if (f == "\056" || f == "\056\056") return "not a bare file name"
   # A LEADING DOT, refused by name rather than caught by lstat, because lstat never saw it:
   # the sweep in the bash half enumerates the tree with globs and a glob * does not match a
   # leading dot. So `.hidden.md` skipped the link set entirely and every check below cleared
@@ -382,7 +382,7 @@ function jit_bad_entry_file(f, dir) {
   # is in that class, and it admits a whole English sentence of dots and hyphens -- so it
   # closes neither this nor the notice-quoting sibling, while refusing an accented or spaced
   # file name that works today. tests/test-security.sh pins both directions.
-  if (substr(f, 1, 1) == ".") return "the entry file name begins with a dot, so rename it without one"
+  if (substr(f, 1, 1) == "\056") return "the entry file name begins with a dot, so rename it without one"
   if (dir != "") {
     # The whole-tree sentinel first, and with its own reason: "its layer directory is a
     # symbolic link" would be a specific claim about a specific path that nobody checked.
@@ -815,8 +815,8 @@ BEGIN {
   JIT_TRANSCLUDE_TOTAL_MAX = 12
 }
 function jit_transclude_component_ok(s) {
-  if (s == "" || s == "." || s == "..") return 0
-  if (substr(s, 1, 1) == ".") return 0
+  if (s == "" || s == "\056" || s == "\056\056") return 0
+  if (substr(s, 1, 1) == "\056") return 0
   if (s ~ /[^A-Za-z0-9._-]/) return 0
   return 1
 }
