@@ -75,6 +75,25 @@ jit_all_tool_aliases() {
   done <<< "$JIT_HOST_REGISTRY"
   printf '%s\n' "$all"
 }
+jit_canonical_tool() {
+  local aliases="${1:-}" raw="${2:-}" entry alias_name vals
+  [ -n "$aliases" ] && [ -n "$raw" ] || {
+    printf '%s\n' "$raw"
+    return 0
+  }
+  local old_ifs="$IFS"
+  IFS=','
+  for entry in $aliases; do
+    IFS="$old_ifs"
+    alias_name="${entry%%=*}"
+    [ "$alias_name" = "$raw" ] || continue
+    vals="${entry#*=}"
+    printf '%s\n' "${vals//;/ }"
+    return 0
+  done
+  IFS="$old_ifs"
+  printf '%s\n' "$raw"
+}
 JIT_HOST="$(jit_host_detect 2> /dev/null)" \
   && JIT_HOST_REFUSAL_STATE="$(jit_host_refusal_state "$JIT_HOST" 2> /dev/null)"
 [ -n "$JIT_HOST" ] || JIT_HOST="unknown"
