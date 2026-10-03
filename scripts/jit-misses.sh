@@ -213,7 +213,7 @@ case "$SIZE_THRESHOLD" in "" | *[!0-9]*)
 esac
 
 if [ -z "$LOG" ]; then
-  LOG="${CLAUDE_PROJECT_DIR:-.}/.claude/jit-context/.discovery/logs/hooks.log"
+  LOG="${CLAUDE_PROJECT_DIR:-$PWD}/.claude/jit-context/.discovery/logs/hooks.log"
 fi
 
 skip() {

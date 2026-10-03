@@ -53,7 +53,7 @@ VOCAB_PATHS="${JIT_CONTEXT_VOCAB_PATHS:-${DYNAMIC_RULES_VOCAB_PATHS:-${DVSI_AUTO
 # escape sequences PROCESSED, so a checkout under a directory with a backslash in its name
 # would arrive mangled, and a newline in one is a fatal awk error raised before the program
 # runs. ENVIRON does neither. bash needs the same value, so it is normalised once here.
-JIT_PROJECT="${CLAUDE_PROJECT_DIR:-.}"
+JIT_PROJECT="${CLAUDE_PROJECT_DIR:-$PWD}"
 while [ "${JIT_PROJECT%/}" != "$JIT_PROJECT" ] && [ "$JIT_PROJECT" != "/" ]; do
   JIT_PROJECT="${JIT_PROJECT%/}"
 done
