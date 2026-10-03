@@ -390,7 +390,7 @@ BEGIN {
 # #386: the generic wordlist, one lowercase token per line, "#" lines and blanks
 # ignored -- the same read rebuild-tsv.sh does. Keyed on FILENAME, never FNR==NR.
 (FILENAME in isgenericfile) {
-  if ($0 == "" || substr($0, 1, 1) == "\043") next
+  if ($0 == "" || substr($0, 1, 1) == "#") next
   generic[$0] = 1
   next
 }

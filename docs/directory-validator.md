@@ -74,17 +74,24 @@ Confirmed causes:
 3. **Naming another script by path in text** ("run scripts/rebuild-tsv.sh"). Name tools
    in words instead.
 
-4. **Under investigation, not a confirmed cause: a `#` written inside quotes** (`'' | '#'*)` in a case pattern, `c == "#"` in awk).
-   The scanner reads the `#` as a comment and is left with an unclosed quote. Write
-   `\#*` in a bash pattern and `"\043"` in awk. **Hypothesis, then refuted:** on
-   `post-tool-hook.sh` (2026-10-03), lines 1-249 clear, 1-365 hold, the same cut with
-   `jit_load_config`'s body emptied clears; removing `printf -v`, the `done < "$file"`
-   read, the `export` arm, a trailing comment with an unclosed quote, `$'\r'`, a
-   `[[ =~ ]]` alternation, quote-character case patterns or `|`-joined case arms did not
-   clear it. Every variant without line `'' | '#'*) continue ;;` cleared, every one with
-   it held -- but the same cut with `\#*` written instead still holds (`release-preview-z389`).
-   So the trigger is in the first lines of the loop body (line counter, CR strip, trim
-   loop, that case with its `continue`), and not the quote around `#` alone.
+**Where the bisection stopped (2026-10-03, not resolved).** On `post-tool-hook.sh`:
+lines 1-249 clear, the cut that ends with `jit_load_config` and its call holds, the
+same cut with that function's body emptied clears. Inside it, every small piece clears
+on its own -- the read loop with its counter, CR strip, a trim loop and the
+`'' | #`-comment arm (`release-preview-zE`), the same with four more no-op lines (`zF`,
+so not length) -- and the hold comes back with the `export` arm (`zD`). Then it goes
+on holding whatever was rewritten, so these are **refuted**, not causes, and none of
+them was kept:
+- a `#` inside quotes (`'#'`), written `\#` / `"\043"` instead
+- the `export[[:space:]]*)` arm, written `[e]xport`
+- `$'\r'`, a `[[ =~ ]]` alternation, quote characters as case patterns, `|`-joined arms
+- a `while` loop nested in a case arm, moved into helper functions
+- `printf -v`, the `done < "$file"` read, the `jit_config_refuse` calls, one at a time
+
+Not bisected yet: the triggers after `jit_load_config` in the same hook (the full hooks
+hold with every rewrite above), and the bare `.` in the hold's file list, which first
+appears with lines 377-456. Each probe costs a validation, and the portal rate-limits
+after a handful in a few minutes: plan the next round, do not stream it.
 
 **Bisect with truncated hooks.** The validator reads scripts without running them, so a
 hook cut after N lines (at a point where the prefix still parses, then `echo '{}'`) is
