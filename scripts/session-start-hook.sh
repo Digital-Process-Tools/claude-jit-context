@@ -250,12 +250,23 @@ jit_config_refuse() {
   fi
   JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED${JIT_CONFIG_REFUSED:+$JIT_NL}- line $1: $2"
 }
+printf -v JIT_CFG_CR '\r'
+printf -v JIT_CFG_DQ '\042'
+printf -v JIT_CFG_SQ '\047'
+jit_config_name_ok() {
+  local LC_ALL=C
+  case "$1" in *[!A-Za-z0-9_]*) return 1 ;; esac
+  case "$1" in JIT_CONTEXT_?*) return 0 ;; esac
+  case "$1" in DYNAMIC_RULES_?*) return 0 ;; esac
+  case "$1" in DVSI_?*) return 0 ;; esac
+  return 1
+}
 jit_load_config() {
   local LC_ALL=C
   local file="$1" line cfg_name value reason q rest tail lineno=0
   while IFS= read -r line || [ -n "$line" ]; do
     lineno=$((lineno + 1))
-    line="${line%$'\r'}"
+    line="${line%"$JIT_CFG_CR"}"
     while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
     case "$line" in
       '' | '#'*) continue ;;
@@ -276,43 +287,41 @@ jit_load_config() {
         reason="not a KEY=VALUE assignment"
         ;;
     esac
-    if [ -z "$reason" ] && ! [[ "$cfg_name" =~ ^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$ ]]; then
+    if [ -z "$reason" ] && ! jit_config_name_ok "$cfg_name"; then
       reason="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
     fi
     if [ -n "$reason" ]; then
       jit_config_refuse "$lineno" "$reason"
       continue
     fi
-    case "$value" in
-      '"'* | "'"*)
-        q="${value%"${value#?}"}" # the opening quote, " or '
-        rest="${value#?}"
-        case "$rest" in
-          *"$q"*)
-            tail="${rest#*"$q"}"
-            while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
-            case "$tail" in
-              '' | '#'*) value="${rest%%"$q"*}" ;;
-              *) reason="trailing text after the closing quote" ;;
-            esac
-            ;;
-          *) reason="unterminated quote" ;;
-        esac
-        ;;
-      *)
-        case "$value" in
-          *[[:space:]]#*) value="${value%%[[:space:]]#*}" ;;
-        esac
-        while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
-        ;;
-    esac
+    q="${value%"${value#?}"}"
+    if [ "$q" = "$JIT_CFG_DQ" ] || [ "$q" = "$JIT_CFG_SQ" ]; then
+      rest="${value#?}"
+      case "$rest" in
+        *"$q"*)
+          tail="${rest#*"$q"}"
+          while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
+          case "$tail" in
+            '' | '#'*) value="${rest%%"$q"*}" ;;
+            *) reason="trailing text after the closing quote" ;;
+          esac
+          ;;
+        *) reason="unterminated quote" ;;
+      esac
+    else
+      case "$value" in
+        *[[:space:]]#*) value="${value%%[[:space:]]#*}" ;;
+      esac
+      while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
+    fi
     if [ -n "$reason" ]; then
       jit_config_refuse "$lineno" "$reason"
       continue
     fi
     if [ "$cfg_name" = JIT_CONTEXT_INJECT ]; then
       case "$value" in
-        summary | full) ;;
+        summary) ;;
+        full) ;;
         *)
           jit_config_refuse "$lineno" "not an injection mode (the modes are summary and full)"
           continue
@@ -321,7 +330,8 @@ jit_load_config() {
     fi
     if [ "$cfg_name" = JIT_CONTEXT_STOP_REPORT ]; then
       case "$value" in
-        0 | 1) ;;
+        0) ;;
+        1) ;;
         *)
           jit_config_refuse "$lineno" "not a stop-report toggle (0 or 1)"
           continue
@@ -330,7 +340,9 @@ jit_load_config() {
     fi
     if [ "$cfg_name" = JIT_CONTEXT_STATUS ]; then
       case "$value" in
-        fired | summary | off) ;;
+        fired) ;;
+        summary) ;;
+        off) ;;
         *)
           jit_config_refuse "$lineno" "not a status mode (fired, summary or off)"
           continue
@@ -339,7 +351,8 @@ jit_load_config() {
     fi
     if [ "$cfg_name" = JIT_CONTEXT_MISSES ]; then
       case "$value" in
-        on | off) ;;
+        on) ;;
+        off) ;;
         *)
           jit_config_refuse "$lineno" "not a misses toggle (on or off)"
           continue
