@@ -231,8 +231,9 @@ END {
   # available without that measurement.
   #
   # The run stops at a comma or semicolon as well as at whitespace: there is no space
-  # between a URL and the word after it in "see https://x.com/y,billing next" (a common
-  # paste shape -- an auto-linked chat message, a URL glued to a list separator), and
+  # between a URL and the word after it in a scheme-anchored link immediately followed
+  # by a comma and another word, e.g. a path ending "/y,billing" (a common paste shape --
+  # an auto-linked chat message, a URL glued to a list separator), and
   # without this the greedy [^ \t\n]+ run swallowed "billing" into the masked span along
   # with the URL, dropping a genuine keyword match nobody asked to lose (self-review
   # caught it too). A URL whose own path or query string genuinely contains a comma or
@@ -257,7 +258,8 @@ END {
   # A closing ) ] } was tried here too and reverted (third self-review pass): a
   # Wikipedia-style path segment routinely carries an unescaped parenthesis mid-path
   # ("/wiki/Foo_(bar)"), and RFC 3986 reserves a bracketed host for a literal IPv6
-  # address ("http://[2001:db8::1]:8080/y") -- excluding those characters stopped the
+  # address (a scheme-anchored link whose host is an IPv6 literal in brackets, followed
+  # by a port and a path) -- excluding those characters stopped the
   # mask right after the opening bracket/paren and let the rest of a genuine URL path
   # leak into the vocabulary subject unmasked, the exact defect class #377 exists to
   # close, and a worse regression than the word-glue bug the exclusion was meant to
@@ -265,8 +267,8 @@ END {
   # mid-URL must not be added to this set no matter how often it also shows up as glue.
   #
   # This is a curated stop-set, not a URL grammar, and it is not exhaustive -- colon is
-  # deliberately NOT in it either, for the identical reason (a port number,
-  # `http://x.com:8080/y`, is legitimate mid-URL). Any other punctuation not listed here
+  # deliberately NOT in it either, for the identical reason (a port number in a
+  # scheme-anchored link is legitimate mid-URL). Any other punctuation not listed here
   # (colon or a bracket/paren used as prose glue, an opening bracket, etc.) can still
   # glue a following word into the mask -- known and accepted for the same reason the
   # wider `url/` dimension is out of scope above: enumerating every prose separator by

@@ -16,7 +16,8 @@
     ".oss.json",
     ".supertool.json",
     "CLAUDE.md",
-    "CONTRIBUTING.md"
+    "CONTRIBUTING.md",
+    "README.release.md"
   ],
   "_budget_why": "max_file_bytes and max_files are the directory's own rules (pre-submission checklist, 'Files in the plugin folder'); images and fonts are exempt from the per-file limit. max_total_bytes (3 MiB) is this repository's own ceiling, matching claude-remember's -- the shipped tree here measures about 2.1 MB (#437), comfortably under it.",
   "budget": {
@@ -25,5 +26,6 @@
     "max_total_bytes": 3145728
   },
   "changelog": "CHANGELOG.md",
-  "rewrite_links": true
+  "rewrite_links": true,
+  "release_readme": "README.release.md"
 }

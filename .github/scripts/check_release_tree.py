@@ -348,6 +348,7 @@ def check_tree(root: Path, budget: dict) -> CheckResult:
     _check_front_matter(files, off)
     _check_images(files, kinds, off)
     _check_launchers(files, kinds, off)
+    _check_no_cross_script_loading(files, kinds, off)
     if "package.json" in files:
         locks = [lf for lf in LOCKFILES if lf in files]
         if locks:
@@ -563,6 +564,61 @@ def _check_launchers(files: dict, kinds: dict, off: list) -> None:
                 if LAUNCHER.search(line) or (rel.endswith(".py") and LAUNCHER_PY.search(line)):
                     off.append(f"{rel}:{n}: launcher or package install in a hook "
                                f"script: {line.strip()[:80]}")
+
+
+# #461: every shipped scripts/*.sh file must be self-contained once
+# build_release_tree.py's compile_scripts.py has run -- the Anthropic
+# directory's COMMAND_SCRIPT_NOT_FOLLOWED hold fires on a script that
+# `source`s/`.`s another file, or runs a further scripts/ file it did not
+# itself read. This is the regression guard for that: a plain line sweep,
+# not a shell parser, which is enough because the only honest way to pass it
+# is to carry no such statement at all -- there is no legitimate multi-file
+# pattern left to special-case once compiling has run.
+_SOURCE_STATEMENT_RE = re.compile(r'(^|[;&|]\s*)(source\s+\S|\.\s+["\'$./])')
+_CROSS_SCRIPT_RUN_RE = re.compile(
+    r'(\$SCRIPT_DIR|\$\{CLAUDE_PLUGIN_ROOT\}|\$0[^\n]{0,20}?/|\./)[^\n]*?'
+    r'[\w.-]+\.(sh|py|js|rb|pl)\b'
+)
+
+
+# jit-dry-run.sh and jit-match.sh are not reached by hooks.json or
+# commands/*.md, so they are never on the directory's own
+# COMMAND_SCRIPT_NOT_FOLLOWED traversal -- and inlining their hook-driving
+# calls anyway would blow the 256 KiB per-file limit the same checklist
+# enforces unconditionally (compile_scripts.py's own comment above the
+# equivalent skip has the measurement: 305104 bytes). Two call sites,
+# allowed by their exact text rather than by file, so a THIRD cross-script
+# call added to either file in the future still fails this guard.
+_ALLOWED_CROSS_SCRIPT_CALLS = frozenset({
+    'bash "$SCRIPT_DIR/$1"',
+    'bash "$SCRIPT_DIR/pre-prompt-hook.sh"',
+})
+
+
+def _check_no_cross_script_loading(files: dict, kinds: dict, off: list) -> None:
+    for rel, data in sorted(files.items()):
+        top = rel.split("/")[0]
+        if top != "scripts" or kinds.get(rel) != "text":
+            continue
+        text = data.decode("utf-8", "replace")
+        for n, line in enumerate(text.splitlines(), 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if any(allowed in line for allowed in _ALLOWED_CROSS_SCRIPT_CALLS):
+                continue
+            if _SOURCE_STATEMENT_RE.search(line):
+                off.append(f"{rel}:{n}: sources/dot-loads another file -- "
+                           f"COMMAND_SCRIPT_NOT_FOLLOWED: {line.strip()[:80]!r}")
+            # A bare variable assignment holding a path string (`REBUILD="$SCRIPT_DIR/x.sh"`)
+            # or an echo/printf line telling a PERSON what to type by hand is text, not
+            # an invocation -- only a line that is not one of those two shapes and still
+            # matches is an actual subprocess call.
+            if (_CROSS_SCRIPT_RUN_RE.search(line)
+                    and not stripped.startswith(("echo", "printf"))
+                    and not re.match(r"[A-Za-z_][A-Za-z0-9_]*=", stripped)):
+                off.append(f"{rel}:{n}: runs another scripts/ file as a subprocess -- "
+                           f"COMMAND_SCRIPT_NOT_FOLLOWED: {line.strip()[:80]!r}")
 
 
 def main(argv: list | None = None) -> int:

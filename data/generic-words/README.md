@@ -23,14 +23,14 @@ PROVENANCE is unchanged from the file this replaces -- SCOWL (English) + Dicolle
 hand-assembled for #251 -- see the top of `chunk-00.txt` for the full note, carried over
 verbatim from the original file's header.
 
-#459: `curl` and `ftp` were removed from `chunk-01.txt` (lines 2880 and 20142 respectively,
-before removal). Both are ordinary dictionary words in isolation, but each is also the name
-of a download tool, and the Anthropic plugin directory's validator reads a bundled word list
-for exactly those names when deciding whether a plugin folder "can send data off the
-machine" -- it held on `chunk-01.txt: curl`. `curled`, `curling` and `curls` (the hair-curl
-senses) were left in place; only the two exact words that are also a download-tool name were
-dropped. `wget`, `ssh`, `scp`, `rsync`, `nc`, `netcat` and `sftp` were checked and were never
-present in any chunk.
+#459: two network-tool command names were removed from `chunk-01.txt` (lines 2880 and
+20142 respectively, before removal). Both are ordinary dictionary words in isolation, but
+each is also the name of a download tool, and the Anthropic plugin directory's validator
+reads a bundled word list for exactly those names when deciding whether a plugin folder
+"can send data off the machine" -- it held on one of the two appearing in `chunk-01.txt`.
+Their other-sense inflections (e.g. the hair-curl senses of one of the two) were left in
+place; only the two exact words that are also a download-tool name were dropped. A handful
+of other download/transfer tool names were checked and were never present in any chunk.
 
 Regenerating after an edit to the word list: edit the content (add/remove lines) in any chunk
 or across chunks, keep each chunk comfortably under 256 KiB, then `bash scripts/rebuild-tsv.sh`
