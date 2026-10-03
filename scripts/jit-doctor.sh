@@ -227,7 +227,7 @@ if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
       fi
       advise "cannot tell whether CLAUDE_PROJECT_DIR names a different git worktree than the one this shell is sitting in -- $UNRESOLVED is not inside a git worktree git can resolve, so this check (#402) could not run."
     elif [ "$CWD_TOPLEVEL" != "$CPD_TOPLEVEL" ]; then
-      advise "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $CPD_TOPLEVEL) names a DIFFERENT git worktree than the one this shell is sitting in ($PWD -- git worktree $CWD_TOPLEVEL). Every hook resolves JIT_BASE from CLAUDE_PROJECT_DIR, never from \$PWD -- an edit made in the tree you are sitting in can be served back from the OTHER tree copy of the same relative path, silently (#402)."
+      advise "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $CPD_TOPLEVEL) names a DIFFERENT git worktree than the one this shell is sitting in (git worktree $CWD_TOPLEVEL). Every hook resolves JIT_BASE from CLAUDE_PROJECT_DIR, never from the working directory -- an edit made in the tree you are sitting in can be served back from the OTHER tree copy of the same relative path, silently (#402)."
     fi
   fi
 fi
