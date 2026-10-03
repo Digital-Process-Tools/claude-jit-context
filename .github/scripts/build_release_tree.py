@@ -318,12 +318,15 @@ def build(repo: Path, ref: str, out: Path, config: dict) -> dict:
     # README.release.md, when present, ships AS README.md -- the full README (with its
     # $VARIABLE examples, which the directory's MCP_FORWARDS_CREDENTIAL_ENV scan reads
     # together with any host it spells) stays on the default branch for GitHub visitors
-    # only. The source file itself is on the deny-list (shipped under neither name
-    # otherwise), so this has to happen here rather than by renaming in git: nothing
-    # else ever maps one path's content onto a DIFFERENT path's name in the output.
+    # only. It is NOT on the static deny-list (that removal happens BEFORE this point,
+    # which would make it vanish before this swap ever saw it) -- instead it is removed
+    # here, once its content has already been copied onto README.md, so it never also
+    # ships under its own name.
     release_readme = config.get("release_readme")
     if release_readme and release_readme in contents and "README.md" in contents:
-        contents["README.md"] = contents[release_readme]
+        contents["README.md"] = contents.pop(release_readme)
+        removed.append(release_readme)
+        kept = [(mode, sha, path) for mode, sha, path in kept if path != release_readme]
 
     rewritten: dict[str, int] = {}
     if config.get("rewrite_links", True):
