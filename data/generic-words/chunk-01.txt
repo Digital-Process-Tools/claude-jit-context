@@ -11600,7 +11600,6 @@ ellipticite
 elliptique
 elliptiquement
 elliptocytose
-elm
 elms
 elocution
 elodee
@@ -17828,7 +17827,6 @@ finassier
 finaud
 finauderie
 finaux
-finch
 finches
 find
 finding

@@ -135,8 +135,15 @@ else
       bad "$t: not found in the repo copy -- cannot drive it"
       continue
     fi
-    if (cd "$COPY" && bash "tests/$t") > "$TMPD/$t.out" 2>&1; then
+    (cd "$COPY" && bash "tests/$t") > "$TMPD/$t.out" 2>&1
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
       ok "$t passes against the compiled tree"
+    elif [ "$rc" -eq 2 ]; then
+      # A suite that cannot build its fixtures on this host says SKIPPED and exits 2,
+      # on the source tree too (test-stop-hook.sh on native Windows). That is not a
+      # divergence between source and compiled, and never a pass either.
+      echo "  SKIPPED: $t could not build its fixtures here (exit 2), compiled tree not measured by it"
     else
       bad "$t FAILED against the compiled tree" "$(tail -20 "$TMPD/$t.out")"
     fi

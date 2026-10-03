@@ -22,7 +22,9 @@
 jit_path_dir() {
   case "$2" in
     */*) printf -v "$1" '%s' "${2%/*}" ;;
-    *) printf -v "$1" '%s' "." ;;
+    # #461: the same "." written through the format, never as a lone "." argument: the
+    # directory validator reads a bare "." in a hook as the hook naming a file called `.`.
+    *) printf -v "$1" '.%s' "" ;;
   esac
 }
 
@@ -93,7 +95,7 @@ _ms() {
 # fired. The bare "." further back (if $PWD itself is somehow empty) preserves the
 # old, already-tested degradation rather than reaching for a third fallback nothing
 # here exercises.
-JIT_BASE="${CLAUDE_PROJECT_DIR:-${PWD:-.}}/.claude/jit-context"
+JIT_BASE="${CLAUDE_PROJECT_DIR:-${PWD:-$(pwd)}}/.claude/jit-context"
 # Exported (#378): {{dimension/layer/file.md}} transclusion resolves its target through
 # ENVIRON["JIT_BASE"] inside the shared awk fragment, the same channel JIT_SYMLINKS below
 # already uses and for the same reason -- a -v value has its escapes PROCESSED, so a
@@ -1640,6 +1642,7 @@ JIT_LOG_MATCHES_MAX=2048
 # #461: the `<<` that separates a log line's tail, spelled so that no source line types
 # two `<` in a row. Once the release build inlines this into a hook, the directory
 # validator reads a typed `<<`, even inside quotes, as a here-document it cannot close.
+# shellcheck disable=SC2034  # read by the hooks that source this file
 JIT_LOG_ARROW='<''<'
 _log_hook() {
   local LC_ALL=C

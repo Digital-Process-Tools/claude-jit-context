@@ -850,7 +850,6 @@ mutinying
 mutique
 mutisme
 mutite
-mutt
 mutter
 muttered
 muttering
@@ -9381,7 +9380,6 @@ piddle
 piddled
 piddles
 piddling
-pidgin
 pie
 piece
 pieced
@@ -9628,7 +9626,6 @@ pindarique
 pindariser
 pindarisme
 pindouler
-pine
 pineal
 pineapple
 pineapples

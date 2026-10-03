@@ -20295,7 +20295,6 @@ yard
 yards
 yardstick
 yardsticks
-yarn
 yarns
 yatagan
 yawl

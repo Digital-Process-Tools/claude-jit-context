@@ -429,7 +429,6 @@ gelose
 gelt
 gelule
 gelure
-gem
 gemeau
 gemellaire
 gemelle
@@ -1769,7 +1768,6 @@ goose
 goosed
 gooses
 goosing
-gopher
 gophers
 gopi
 gord
