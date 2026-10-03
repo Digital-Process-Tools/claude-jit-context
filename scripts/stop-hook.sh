@@ -1312,17 +1312,6 @@ JIT_LAYERS=""
 export JIT_LAYERS_REFUSED=""
 export JIT_LAYERS_REFUSED_N=0
 JIT_LAYERS_REFUSED_CUT=0
-jit_layer_refuse() {
-  JIT_LAYERS_REFUSED_N=$((JIT_LAYERS_REFUSED_N + 1))
-  if [ "${#JIT_LAYERS_REFUSED}" -gt "$JIT_LAYERS_REFUSED_MAX" ]; then
-    if [ "$JIT_LAYERS_REFUSED_CUT" = 0 ]; then
-      JIT_LAYERS_REFUSED_CUT=1
-      JIT_LAYERS_REFUSED="$JIT_LAYERS_REFUSED$JIT_NL- the remaining refused layer directories are not listed here; the count above is the whole total"
-    fi
-    return 0
-  fi
-  JIT_LAYERS_REFUSED="$JIT_LAYERS_REFUSED${JIT_LAYERS_REFUSED:+$JIT_NL}- $1: $2"
-}
 jit_scan_layers() {
   JIT_LAYERS=""
 }
