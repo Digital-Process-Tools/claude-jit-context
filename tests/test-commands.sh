@@ -91,6 +91,26 @@ check_command() {
     bad "commands/$name names scripts/$script"
   fi
 
+  # #456: the grant above and the fenced body's own invocation have to be byte-identical
+  # for the Bash tool's permission check to match the grant against the literal command
+  # text it sees -- quoting only the grant, or only the body, reproduces the bug (verified
+  # with a real `claude -p` run: an unquoted grant against a quoted body was DENIED). The
+  # two checks above are substring-only and would both still pass if the body alone
+  # regressed to the unquoted form while the grant stayed quoted, since the grant line
+  # itself also contains this substring -- so this counts occurrences: one in the grant,
+  # one in the body, both quoted the same way, or this test does not tell the two cases
+  # apart.
+  local want_invocation="bash \"\${CLAUDE_PLUGIN_ROOT}/scripts/$script\""
+  local invocation_count
+  invocation_count="$(grep -cF "$want_invocation" "$file")"
+  if [ "$invocation_count" -ge 2 ]; then
+    ok "commands/$name's body invokes bash \"\${CLAUDE_PLUGIN_ROOT}/scripts/$script\", byte-identical to the grant"
+  else
+    bad "commands/$name's body invokes bash \"\${CLAUDE_PLUGIN_ROOT}/scripts/$script\", byte-identical to the grant" \
+      "wanted 2+ occurrences (grant and body) of: $want_invocation" \
+      "got $invocation_count occurrence(s): $(grep -F "scripts/$script" "$file")"
+  fi
+
   # $ARGUMENTS passthrough -- both commands take flags a user or the session may supply
   # (jit-doctor.sh's --base, jit-init.sh's --base), and a command file that hardcodes no
   # args silently drops them.

@@ -40,7 +40,7 @@ slash command's fenced `bash` body is not guaranteed to run under bash. Before t
 that error left the split array unset and the script ran with **no arguments at all**: a
 typed `--misses-top 30` or `--base <tree>` was silently dropped rather than reaching the
 script, which then produced a plausible report answering a different question than the one
-asked. Invoking `bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh` explicitly, as the body
+asked. Invoking `bash "${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh"` explicitly, as the body
 above does, guarantees the script itself -- and therefore the `read -a` inside it -- always
 runs under bash regardless of what shell is running this fenced body.
 
