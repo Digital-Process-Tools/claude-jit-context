@@ -654,7 +654,7 @@ function jit_config_notice(list, n) {
 # every other notice in this file follows.
 function jit_worktree_notice(line) {
   return "# JIT Context: CLAUDE_PROJECT_DIR names a different git worktree than this shell is sitting in\n" line \
-    "\nEvery hook resolves rules from CLAUDE_PROJECT_DIR, never from $PWD -- content injected below (or on any call in this session) can be served from the copy in the OTHER tree, silently (#402). Run /jit-context:doctor"
+    "\nEvery hook resolves rules from CLAUDE_PROJECT_DIR, never from the working directory -- content injected below (or on any call in this session) can be served from the copy in the OTHER tree, silently (#402). Run /jit-context:doctor"
 }
 '
 # --- Shared entry reader: frontmatter, body, and what gets injected ----------

@@ -140,7 +140,7 @@ jit_worktree_mismatch_line() {
   [ -n "${CLAUDE_PROJECT_DIR:-}" ] || return 0
   command -v git > /dev/null 2>&1 || return 0
   local pwd_top cpd_top
-  pwd_top="$(cd "$PWD" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)"
+  pwd_top="$(git rev-parse --show-toplevel 2> /dev/null)"
   cpd_top="$(cd "$CLAUDE_PROJECT_DIR" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)"
   [ -n "$pwd_top" ] || return 0
   [ -n "$cpd_top" ] || return 0

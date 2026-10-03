@@ -216,11 +216,11 @@ if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
     # fact than having checked and found agreement.
     advise "cannot tell whether CLAUDE_PROJECT_DIR names a different git worktree than the one this shell is sitting in -- git is not on PATH, so this check (#402) could not run."
   else
-    PWD_TOPLEVEL="$(cd "$PWD" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)"
+    PWD_TOPLEVEL="$(git rev-parse --show-toplevel 2> /dev/null)"
     CPD_TOPLEVEL="$(cd "$CLAUDE_PROJECT_DIR" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)"
     if [ -z "$PWD_TOPLEVEL" ] || [ -z "$CPD_TOPLEVEL" ]; then
       UNRESOLVED=""
-      [ -z "$PWD_TOPLEVEL" ] && UNRESOLVED="\$PWD ($PWD)"
+      [ -z "$PWD_TOPLEVEL" ] && UNRESOLVED="the working directory"
       if [ -z "$CPD_TOPLEVEL" ]; then
         [ -n "$UNRESOLVED" ] && UNRESOLVED="$UNRESOLVED and "
         UNRESOLVED="${UNRESOLVED}CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR)"
