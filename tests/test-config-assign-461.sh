@@ -50,7 +50,7 @@ else
 fi
 while IFS= read -r name; do
   [ -n "$name" ] || continue
-  if printf '%s\n' "$body" | grep -q "\"\$1\" = $name \]"; then
+  if [[ "$body" == *"\"\$1\" = $name ]"* ]]; then
     ok "$name has an arm"
   else
     bad "$name is read by a script but jit_cfg_assign never sets it"
