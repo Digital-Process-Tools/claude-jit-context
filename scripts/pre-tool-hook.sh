@@ -321,7 +321,7 @@ jit_load_config() {
     line="${line%"$JIT_CFG_CR"}"
     while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
     case "$line" in
-      '' | '#'*) continue ;;
+      '' | \#*) continue ;;
       export[[:space:]]*)
         line="${line#export}"
         while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
@@ -354,7 +354,7 @@ jit_load_config() {
           tail="${rest#*"$q"}"
           while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
           case "$tail" in
-            '' | '#'*) value="${rest%%"$q"*}" ;;
+            '' | \#*) value="${rest%%"$q"*}" ;;
             *) reason="trailing text after the closing quote" ;;
           esac
           ;;
@@ -907,7 +907,7 @@ function jit_heredoc_opener_is_suppressed(prefix, state0,    i, c, state, n, q1,
     if (state == 0) {
       if (c == q1) state = 1
       else if (c == q2) state = 2
-      else if (c == "#") return 1
+      else if (c == "\043") return 1
       else if (c == bs) i++
     } else if (state == 1) {
       if (c == q1) state = 0
@@ -929,7 +929,7 @@ function jit_heredoc_line_exit_state(line, state0,    i, c, len, q1, q2, bs, sta
     if (state == 0) {
       if (c == q1) state = 1
       else if (c == q2) state = 2
-      else if (c == "#") break
+      else if (c == "\043") break
       else if (c == bs) i++
     } else if (state == 1) {
       if (c == q1) state = 0
@@ -1208,7 +1208,7 @@ function jit_split_ctx_blocks(ctx,   nl_pos, header, body_rest, hn, hf, declared
       body_rest = substr(ctx, nl_pos + 1)
       hn = split(header, hf, " ")
       declared_n = hf[3] + 0
-      if (hn == 3 + declared_n && declared_n >= 0 && hf[1] == "#" && hf[2] == "JIT-CTX-BLOCKS") {
+      if (hn == 3 + declared_n && declared_n >= 0 && hf[1] == "\043" && hf[2] == "JIT-CTX-BLOCKS") {
         jit_blk_manifest_ok = 1
         pos = 1
         for (bi = 1; bi <= declared_n; bi++) {
