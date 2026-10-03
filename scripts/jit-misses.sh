@@ -1,0 +1,673 @@
+#!/bin/bash
+# jit-context -- report the vocabulary this project keeps not having.
+#
+# pre-prompt-hook.sh already logs every prompt with the entries it matched, or the literal
+# `(none)`. A `(none)` that repeats on the same words is a measured record of what the team
+# keeps not knowing -- demand, not guesswork, and it costs nothing to collect because it is
+# already collected.
+#
+# This script READS and PRINTS. It writes no file, creates no entry, fires no hook and makes
+# no network call. That is why it does NOT source common.sh: common.sh mkdir -p's the log
+# directory at load, and a reporting tool that creates the thing it reports is a tool whose
+# own output cannot be trusted.
+#
+# Since #51 that mkdir is gated on `.claude/jit-context/` already existing, so it no longer
+# materialises a tree in a project that has none -- but it still creates `.discovery/logs/`
+# in every project that HAS one, which is every project this tool is ever pointed at. The
+# reason to keep the `source` line out is unchanged; only the size of what it would create
+# is smaller. Do not "fix" the missing source.
+#
+# Three outcomes, never two. An empty report that means "no repeated misses" and "the log
+# was not readable" identically is this repository own defect class, shipped inside the
+# tool that reports it:
+#
+#   findings   -- a ranked list, exit 0
+#   ok         -- the log was read, nothing recurs, exit 0
+#   SKIPPED    -- named reason, exit 2
+#
+# Usage: bash scripts/jit-misses.sh [--log PATH] [--min N] [--top N] [--tail N]
+
+LOG=""
+MIN=2
+TOP=20
+TAIL=""
+# #248: this tool reads the WHOLE log by default, unbounded -- fine for a person who
+# chose the moment, wrong for session-start-hook.sh, which now calls it on every
+# session (#233 part 3) with no rotation behind it. --tail bounds that automatic
+# caller; a manual run stays whole-log unless the caller asks for --tail too. Either
+# way the header always names the log's current byte size, so the report is legible
+# about growth even when the read itself was not bounded.
+SIZE_THRESHOLD=10000000
+# #386: the same wordlist rebuild-tsv.sh consults to mark a keyword generic (#232). This
+# tool used to hand a person "click", "ready" and "update" as candidate entries and then
+# ask them to judge which were ordinary words -- with the list that answers that sitting
+# one directory over. Precedence mirrors rebuild-tsv.sh (#265/#270): the flag wins, then
+# JIT_CONTEXT_GENERIC_WORDS if SET (even to empty -- an explicit opt-out), then
+# DYNAMIC_RULES_GENERIC_WORDS the same way, then the bundled default. Read once per run,
+# 0.07s for 103,843 lines on the maintainer's machine; this is tooling, not a hook, so a
+# dictionary is inside its contract (tooling.md), and session-start-hook.sh pays it once
+# per session, not per prompt.
+GENERIC_WORDS_SET=0
+GENERIC_WORDS=""
+
+usage() {
+  printf '%s\n' \
+    'jit-misses.sh -- the vocabulary this project keeps not having' \
+    '' \
+    '  jit-misses [--log PATH] [--min N] [--top N] [--tail N] [--size-threshold N]' \
+    '' \
+    '  --log PATH        hook log to read. Default: $CLAUDE_PROJECT_DIR/.claude/jit-context/' \
+    '                     .discovery/logs/hooks.log (CLAUDE_PROJECT_DIR defaults to .)' \
+    '  --min N           report a token shared by at least N misses. Default 2.' \
+    '  --top N           print at most N tokens. Default 20.' \
+    '  --tail N          read only the last N lines of the log instead of the whole file.' \
+    '                     Unset by default -- a manual run still reads the whole history. The' \
+    '                     header says plainly when a report is over a window rather than the' \
+    '                     full log (#248).' \
+    '  --size-threshold N   bytes. When the log is at or past this size, the header names it' \
+    '                     as a size worth attention. Default 10000000 (10MB, see #248).' \
+    '  --generic-words PATH   a one-word-per-line list, or a directory of chunk files read' \
+    '                     as if they were one (#437); a token in it is an ordinary word' \
+    '                     and never a candidate (#386). Default data/generic-words/, the' \
+    '                     list rebuild-tsv.sh already uses; JIT_CONTEXT_GENERIC_WORDS or' \
+    '                     DYNAMIC_RULES_GENERIC_WORDS override it when set, even to empty.' \
+    '                     An empty PATH turns the filter off; a PATH that cannot be read is' \
+    '                     named in the header rather than silently not filtering.' \
+    '  --help       this text.' \
+    '' \
+    'What counts as the same miss' \
+    '' \
+    '  Two prompts are the SAME MISS when they share a content word -- a token of three or' \
+    '  more characters that is not a stopword and not in the generic wordlist -- after the' \
+    '  same lowercase-and-strip normalisation the prompt hook applies to a prompt before it' \
+    '  looks a keyword up.' \
+    '' \
+    '  So "xsd validation" and "validate the xsd" are one miss, on "xsd". "validation" and' \
+    '  "validate" are NOT, because nothing here stems: no similarity metric, no threshold to' \
+    '  tune, and no way for two prompts to merge on a resemblance you cannot see. Every miss' \
+    '  that produced a row is printed under it, so you can always read why they grouped and' \
+    '  disagree with the grouping.' \
+    '' \
+    '  Set aside before grouping, and counted in the header rather than dropped in silence:' \
+    '  a prompt that begins with / (a slash command is an instruction to the harness, not a' \
+    '  question about the codebase) and one that begins with < (a harness-generated block).' \
+    '' \
+    '  A pasted link is removed whole before tokenising -- any run of non-space characters' \
+    '  containing :// -- and counted in the header. A pasted pull-request link, scheme and' \
+    '  all, is not the words that make up its host and path; none of them was typed. Only' \
+    '  the scheme does this. A path (src/Billing/Totals.php) and a dotted file name' \
+    '  (common.sh) are ordinary tokens and still count, because a host name cannot be told' \
+    '  from a file name by shape -- only by a list of TLDs, and this tool keeps no lists.' \
+    '' \
+    '  Only pre-prompt records are read. The tool and path dimensions produce far more' \
+    '  (none) rows than the prompt hook does -- on the machine this was designed against,' \
+    '  1,217 of 1,242 -- and none of them is a vocabulary gap.' \
+    '' \
+    'Outcomes' \
+    '' \
+    '  findings, exit 0   a ranked list' \
+    '  ok, exit 0         the log was read and nothing recurs' \
+    '  SKIPPED, exit 2    the log could not be evaluated -- the reason is named' \
+    '' \
+    '  It reads and prints. It writes nothing and creates no entry: it tells you what to' \
+    '  write, and an entry still has an author.'
+}
+
+# A flag whose value is missing needs the same loud refusal as an unknown flag. The first
+# draft left `shift 2` to fail on its own, which exits 2 having printed NOTHING -- three
+# outcomes collapsed back into two, in the script written to keep them apart.
+# Every refusal in this file goes to STDERR, and that is the contract in
+# paths/00-manual/tooling.md rather than a preference: a tool that cannot do its job says
+# so on stderr, with a non-zero status. The status was always right here; the stream was
+# not (#125).
+#
+# It matters for one reason. STDOUT IS THE REPORT. A caller doing
+# `bash scripts/jit-misses.sh > misses.txt` captured "jit-misses: SKIPPED -- not readable"
+# into the findings file, where it sits under no heading and reads as a finding -- the
+# tool reporting an absence it produced itself, which is the defect class this whole
+# script exists to report on. The three outcomes in the header stay three only if the
+# reader can tell them apart after a redirect.
+#
+# --help is NOT a refusal and keeps stdout: it is what the reader asked for, and
+# `jit-misses.sh --help | less` has to work.
+need_value() {
+  echo "jit-misses: SKIPPED -- $1 needs a value" >&2
+  echo "  run with --help for the accepted flags" >&2
+  exit 2
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --log)
+      [ $# -ge 2 ] || need_value "$1"
+      LOG="$2"
+      shift 2
+      ;;
+    --min)
+      [ $# -ge 2 ] || need_value "$1"
+      MIN="$2"
+      shift 2
+      ;;
+    --top)
+      [ $# -ge 2 ] || need_value "$1"
+      TOP="$2"
+      shift 2
+      ;;
+    --tail)
+      [ $# -ge 2 ] || need_value "$1"
+      TAIL="$2"
+      shift 2
+      ;;
+    --size-threshold)
+      [ $# -ge 2 ] || need_value "$1"
+      SIZE_THRESHOLD="$2"
+      shift 2
+      ;;
+    --generic-words)
+      [ $# -ge 2 ] || need_value "$1"
+      GENERIC_WORDS="$2"
+      GENERIC_WORDS_SET=1
+      shift 2
+      ;;
+    --help | -h)
+      usage
+      exit 0
+      ;;
+    *)
+      # An unknown flag is refused rather than ignored. A silently dropped --min reads as
+      # a threshold that applied, which is the failure this whole script is written about.
+      echo "jit-misses: SKIPPED -- unknown argument: $1" >&2
+      echo "  run with --help for the accepted flags" >&2
+      exit 2
+      ;;
+  esac
+done
+
+case "$MIN" in "" | *[!0-9]*)
+  echo "jit-misses: SKIPPED -- --min takes a whole number" >&2
+  exit 2
+  ;;
+esac
+case "$TOP" in "" | *[!0-9]*)
+  echo "jit-misses: SKIPPED -- --top takes a whole number" >&2
+  exit 2
+  ;;
+esac
+[ "$MIN" -ge 1 ] || MIN=1
+[ "$TOP" -ge 1 ] || TOP=1
+
+# --tail is unset by default (empty string), which means "whole log" and skips this
+# check entirely -- only validate it when a caller actually asked for a bound.
+if [ -n "$TAIL" ]; then
+  case "$TAIL" in "" | *[!0-9]*)
+    echo "jit-misses: SKIPPED -- --tail takes a whole number" >&2
+    exit 2
+    ;;
+  esac
+  [ "$TAIL" -ge 1 ] || TAIL=1
+fi
+case "$SIZE_THRESHOLD" in "" | *[!0-9]*)
+  echo "jit-misses: SKIPPED -- --size-threshold takes a whole number" >&2
+  exit 2
+  ;;
+esac
+
+if [ -z "$LOG" ]; then
+  LOG="${CLAUDE_PROJECT_DIR:-$PWD}/.claude/jit-context/.discovery/logs/hooks.log"
+fi
+
+skip() {
+  echo "jit-misses: SKIPPED -- $1" >&2
+  echo "  log: $LOG" >&2
+  exit 2
+}
+
+[ -e "$LOG" ] || skip "no such file -- the hooks have never run here, or the log lives elsewhere (--log PATH)"
+[ -f "$LOG" ] || skip "not a regular file"
+[ -r "$LOG" ] || skip "not readable"
+[ -s "$LOG" ] || skip "the file is empty -- the hooks have logged nothing yet"
+
+# #248: the log's current byte size, named in the header below whatever the outcome --
+# a plain byte count, not a parse, so it costs nothing next to the awk pass that
+# follows and stays honest about growth even on an unbounded read. wc failing (it
+# should not, given the checks above just passed) leaves LOGBYTES empty rather than
+# wrong, and the header omits the figure rather than printing a lie.
+LOGBYTES="$(wc -c < "$LOG" 2> /dev/null | tr -d '[:space:]')"
+case "$LOGBYTES" in "" | *[!0-9]*) LOGBYTES="" ;; esac
+
+# #386: three states for the wordlist, and the awk pass prints whichever held --
+# `ok` (a path awk will read), `off` (opted out, nothing filtered, said so) and
+# `missing` (named, and nothing filtered -- NOT the same line as `ok`, because a report
+# that filtered and one that could not must never read alike). `${VAR+set}` is presence,
+# not emptiness, for the reason rebuild-tsv.sh gives at GENERIC_WORDS_EXPLICIT (#270).
+if [ "$GENERIC_WORDS_SET" -eq 0 ]; then
+  if [ "${JIT_CONTEXT_GENERIC_WORDS+set}" = "set" ]; then
+    GENERIC_WORDS="$JIT_CONTEXT_GENERIC_WORDS"
+  elif [ "${DYNAMIC_RULES_GENERIC_WORDS+set}" = "set" ]; then
+    GENERIC_WORDS="$DYNAMIC_RULES_GENERIC_WORDS"
+  else
+    # No dirname fork -- session-start-hook.sh runs this on every session and
+    # tests/test-fork-count.sh counts the hook's whole process tree, this child included.
+    case "$0" in */*) _JIT_MISSES_DIR="${0%/*}" ;; *) _JIT_MISSES_DIR="." ;; esac
+    # #437: the shipped default moved from a single 1 MB file to a directory of chunks
+    # (data/generic-words/, each chunk under 256 KiB) for the Anthropic plugin
+    # directory's per-file size limit. _jit_misses_generic_members() below reads
+    # either shape; --generic-words PATH / JIT_CONTEXT_GENERIC_WORDS /
+    # DYNAMIC_RULES_GENERIC_WORDS may still name a single plain file, unchanged.
+    GENERIC_WORDS="$_JIT_MISSES_DIR/../data/generic-words"
+  fi
+fi
+# #437: GENERIC_WORDS may now name a directory of chunks rather than one plain file.
+# This script deliberately does not source common.sh (see the header), so this is a
+# byte-identical COPY of jit_generic_words_members() there rather than a shared call --
+# same convention this file already keeps for jit_fold_latin1() below. Prints one
+# member path per line, sorted by name; nothing for an empty/missing/non-file,
+# non-directory path.
+_jit_misses_generic_members() {
+  _jgm_path="$1"
+  [ -n "$_jgm_path" ] || return 0
+  if [ -f "$_jgm_path" ]; then
+    printf '%s\n' "$_jgm_path"
+    return 0
+  fi
+  if [ -d "$_jgm_path" ]; then
+    for _jgm_f in "$_jgm_path"/*.txt; do
+      [ -f "$_jgm_f" ] || continue
+      printf '%s\n' "$_jgm_f"
+    done | LC_ALL=C sort
+  fi
+  return 0
+}
+GENERIC_MEMBERS="$(_jit_misses_generic_members "$GENERIC_WORDS")"
+GENERIC_STATE=ok
+if [ -z "$GENERIC_WORDS" ]; then
+  GENERIC_STATE=off
+elif [ -z "$GENERIC_MEMBERS" ]; then
+  GENERIC_STATE=missing
+else
+  while IFS= read -r _gw_member; do
+    [ -n "$_gw_member" ] || continue
+    if [ ! -r "$_gw_member" ]; then
+      GENERIC_STATE=missing
+      break
+    fi
+  done <<< "$GENERIC_MEMBERS"
+fi
+# awk reads each member as an input file ahead of the log, told apart from the log by
+# FILENAME (isgenericfile[], not FNR==NR) -- an empty list would otherwise make the
+# log's own first file "the list". A list in the `missing`/`off` state contributes no
+# ARGV entry at all, so the branch is dead by construction rather than by a flag.
+# ENVIRON (never -v, same reason rebuild-tsv.sh gives at GENERIC_WORDS_FILES): a -v
+# value has its escapes processed, and this is newline-separated.
+GENERIC_ARG_FILES_ENV=""
+if [ "$GENERIC_STATE" = ok ]; then
+  GENERIC_ARG_FILES_ENV="$GENERIC_MEMBERS"
+fi
+
+# LC_ALL=C, for the same reason the three hooks pin it (#68) and one that is specific to
+# this tool: the file it reads is one THE HOOKS WROTE, and they truncate the prompt copy at
+# 80 bytes. An ordinary CJK or heavily accented prompt therefore leaves a half-finished
+# UTF-8 sequence at the end of a log line -- no attacker, no malformed input, just a
+# multibyte character straddling the cut. Reading that back aborted this awk with
+# `illegal byte sequence` under one-true-awk and made gawk print a multibyte warning, so
+# the reporting tool went dark on exactly the corpora the accent fold exists for.
+#
+# This tool may fail loudly, and it still does -- on a log it cannot read, with a named
+# SKIPPED reason and exit 2. Choking on bytes it wrote itself is not that.
+#
+# The fold table below is the byte-identical copy of the one in common.sh, built out of
+# index() and substr() with no decode and carrying both cases, so `C` costs it nothing --
+# tests/test-jit-misses.sh drives the accented fixture under both engines.
+# BUFFERED, and the stream is chosen from the exit code (#125). Three of this script own
+# refusals are reached inside the END block below -- an empty file, a file with no record
+# this tool recognises, and a log with records but none from pre-prompt -- and awk `print`
+# goes to stdout, which is the one stream that has to stay the report. A refusal captured
+# by `jit-misses.sh > misses.txt` sits in the findings file under no heading and reads as
+# a finding.
+#
+# `print ... > "/dev/stderr"` would be the short fix and is not taken. All three awks this
+# repo cares about special-case that name, but Git Bash is a CI leg nobody here can
+# observe, and an awk that opened it as a real file would abort on a platform where it is
+# not there -- turning a stream bug into a tool that says nothing at all.
+#
+# No temp file either. --help promises this script writes nothing and creates nothing, and
+# a reporting tool that quietly starts touching $TMPDIR to fix its own stream is a worse
+# trade than buffering a report already bounded by --top.
+#
+# $( ) is the right channel for it, and it is worth saying why, because
+# paths/00-manual/tests.md warns that it drops NUL bytes. The subject is hooks.log, and
+# every byte of that file was written by _log_hook()/jit_log_write() in common.sh -- bash
+# functions, and a bash variable cannot hold a NUL at all. A NUL in a prompt was dropped
+# before the log was written, not here. The awk output ends in exactly one newline on
+# every branch, which is what the printf below puts back.
+# #248: --tail bounds the READ, not just the report -- `tail -n N` feeds awk instead of
+# the file itself when a bound was asked for. Unset (the manual default), this stays
+# the exact pre-#248 shape -- `awk ... "$LOG"`, no pipe, no subprocess between the
+# checks above and awk's own open -- rather than a `cat | awk` that LOOKS equivalent
+# and is not: a pipe's exit status (without `set -o pipefail`, which this file does not
+# use) is awk's alone, so a `tail`/`cat` that failed to read $LOG in the narrow race
+# between the readability check above and this line would hand awk an empty stdin, and
+# awk would report that honestly as "the file is empty" -- true of a genuinely empty
+# log and false of a read that silently failed, which is exactly the ambiguity this
+# whole file exists to refuse. Keeping the unbounded path unpiped means the one caller
+# that can actually SHOW that sentence to a person (a manual run; STDOUT IS THE REPORT,
+# per the header comment above) never goes through the pipe at all. The only caller
+# that ever passes --tail is session-start-hook.sh, and it already treats "the file is
+# empty" as ordinary silence rather than a surfaced failure, so the same race there is
+# silent either way.
+#
+# The program text below is one variable rather than two copies inline, precisely so
+# this branch does not have to choose between duplicating ~230 lines of awk or
+# accepting the pipe unconditionally.
+JIT_MISSES_AWK_PROG='
+BEGIN {
+  # #437: GENERIC_ARG_FILES_ENV is a newline-separated list of member paths (one file,
+  # or every chunk of a directory -- see _jit_misses_generic_members() above), read
+  # through ENVIRON rather than -v for the same reason rebuild-tsv.sh gives at
+  # GENERIC_WORDS_FILES: a -v value has its escapes PROCESSED. Each member becomes an
+  # ARGV entry (see the invocation below) and this just tells them apart from the log
+  # by exact path, the same way the old single-genfile FILENAME test did.
+  ngf = split(ENVIRON["GENERIC_ARG_FILES_ENV"], genfiles, "\n")
+  for (gfi = 1; gfi <= ngf; gfi++) if (genfiles[gfi] != "") isgenericfile[genfiles[gfi]] = 1
+  # Filler that two prompts can share without sharing a subject. Deliberately short and
+  # visible: it is the only part of the grouping rule that is a matter of taste, and a
+  # word missing from here costs a noisy row, never a silent one.
+  split("the and for are you your our their his her its not but with without that this " \
+        "these those what when where which who whom whose how why can could shall should " \
+        "would will does did done have has had was were been being from into onto out off " \
+        "over under about after before again more most less least some any all every each " \
+        "other another same such than then there here just only also still yet now new old " \
+        "make made makes get gets got use used uses using need needs want wants know knows " \
+        "think thinks say says tell tells look looks see sees show shows give gives take " \
+        "please thanks thank hey hello yes yeah nope sure okay let lets like " \
+        "something anything nothing everything someone anyone thing things stuff " \
+        "run runs ran add adds added fix fixes fixed check checks checked " \
+        "one two three four five six seven eight nine ten", sw, " ")
+  for (i in sw) stop[sw[i]] = 1
+
+}
+
+# #386: the generic wordlist, one lowercase token per line, "#" lines and blanks
+# ignored -- the same read rebuild-tsv.sh does. Keyed on FILENAME, never FNR==NR.
+(FILENAME in isgenericfile) {
+  if ($0 == "" || substr($0, 1, 1) == "#") next
+  generic[$0] = 1
+  next
+}
+
+# A byte-identical copy of jit_fold_latin1() and its table from common.sh, which this
+# script deliberately does not source -- see the header. The hooks and rebuild-tsv.sh use
+# the common.sh copy, and a letter in one table but not the other is a keyword indexed one
+# way and reported another, so tests/test-jit-misses.sh compares the two rather than
+# trusting them.
+#
+# Latin-1 letters fold to their ASCII base BEFORE the strip below. Without this, `cassee`
+# came out of `cassée` as the token `cass` and `detaillee` out of `détaillée` as `taill`
+# -- the accent is replaced by a space, so one word becomes two fragments nobody typed,
+# offered as a candidate entry name. Measured under both awks: the character class is
+# ASCII either way.
+#
+# index()/substr() and not gsub(): gsub() with a multibyte character as its pattern
+# decodes the subject, and this script reads an 80-character log excerpt that may end
+# mid-character. Split on "[ ]" and not " ": one-true-awk splits a one-character
+# separator on newlines too, gawk does not, and this list has to mean the same on both.
+function jit_fold_latin1(s,   i, p, out) {
+  if (_jit_fold_n == 0)
+    _jit_fold_n = split("á a à a â a ä a ã a å a æ ae ç c é e è e ê e ë e í i ì i î i ï i ñ n " \
+                        "ó o ò o ô o ö o õ o œ oe ß ss ú u ù u û u ü u ý y ÿ y " \
+                        "Á a À a Â a Ä a Ã a Å a Æ ae Ç c É e È e Ê e Ë e Í i Ì i Î i Ï i Ñ n " \
+                        "Ó o Ò o Ô o Ö o Õ o Œ oe Ú u Ù u Û u Ü u Ý y", _jit_fold_tr, "[ ]")
+  for (i = 1; i + 1 <= _jit_fold_n; i += 2) {
+    out = ""
+    while ((p = index(s, _jit_fold_tr[i])) > 0) {
+      out = out substr(s, 1, p - 1) _jit_fold_tr[i+1]
+      s = substr(s, p + length(_jit_fold_tr[i]))
+    }
+    s = out s
+  }
+  return s
+}
+
+{
+  lines++
+
+  # #406: hooks.log rotates automatically now, and this tool deliberately reads only
+  # the CURRENT log -- never hooks.log.1 -- so a rotation makes the window narrower
+  # without anything here saying so, unless this line says so. jit_log_rotate() in
+  # common.sh writes this exact line as the first thing in a freshly rotated log, and
+  # it is deliberately NOT hook-record shaped (no "Nms |"), so it is invisible to
+  # every reader of hooks.log except this one, which looks for it by name.
+  if ($0 ~ /^\[[^]]*\] hooks\.log rotated at [0-9]+ bytes -- records before this line are in hooks\.log\.1$/) {
+    rotated = 1
+    rotated_ts = substr($0, 2, index($0, "]") - 2)
+    next
+  }
+
+  # A hook record, from any hook. Anchored: an unanchored test would fire on a record whose
+  # MESSAGE quotes a log line, and the point of this pass is to tell a log we can read from
+  # one we cannot.
+  #
+  # The tool name in the parentheses is whatever the payload called the tool, unsanitised
+  # -- pre-tool-hook.sh logs `pre-tool ($AWK_TOOL)` straight from tool_name, and an MCP tool
+  # is `mcp__server__thing`. Matching only [A-Za-z]+ there made a log full of MCP calls
+  # report "no line has the hook log format" instead of "no pre-prompt records": the right
+  # verdict for the wrong reason, from the script whose whole job is telling those apart.
+  if ($0 !~ /^\[[^]]*\] [a-z][a-z-]*( \([^)]*\))? [0-9]+ms \| /) next
+  shaped++
+
+  if (match($0, /^\[[^]]*\] pre-prompt [0-9]+ms \| /) == 0) next
+  prompts++
+  rest = substr($0, RLENGTH + 1)
+
+  if (index(rest, "(none) [shown:") != 1) next
+  misses++
+
+  p = index(rest, sprintf(" %c%c ", 60, 60))
+  if (p == 0) { headless++; next }
+  msg = substr(rest, p + 4)
+  if (msg == "") { headless++; next }
+
+  # A slash command is an instruction to the harness and a <...> block is harness-generated
+  # text. Neither is someone asking about the codebase. Counted, never silently dropped.
+  first = substr(msg, 1, 1)
+  if (first == "/" || first == "<") { aside++; next }
+  considered++
+
+  # A pasted link is a machine address, not prose. Left in, a scheme-anchored
+  # pull-request link becomes the tokens making up its scheme, host and path,
+  # and three pastes of the SAME link outrank every word a person actually typed, so the
+  # headline advice becomes "write vocabulary/00-manual/com.md". None of those was ever
+  # a word in the prompt, which is why this is a tokeniser rule and not a stop-list: a
+  # stop-list hides `com` in this corpus and leaves `https` in whatever the next one is.
+  #
+  # The rule is exactly one thing: a whitespace-delimited run containing `://` is
+  # dropped whole. Deliberately NOT "a dot between two alphanumerics" -- `common.sh`,
+  # `tests.md` and `rebuild-tsv.sh` are that shape and are all words someone may want an
+  # entry for, and `github.com` cannot be told apart from `common.sh` by structure, only
+  # by a list of TLDs, which is the stop-list under another name. So a scheme-less host
+  # still tokenises; a link, which is what people actually paste, does not. Paths are
+  # untouched: `src/Billing/Totals.php` carries no scheme and still yields `billing` and
+  # `totals`, and the paths dimension already treats a token like that as meaningful.
+  #
+  # Split on "[ \t]+" and not " ": a one-character separator splits on newlines under
+  # one-true-awk and not under gawk, and this has to mean the same thing on both.
+  np = split(msg, part, "[ \t]+")
+  stripped = 0
+  kept = ""
+  for (u = 1; u <= np; u++) {
+    if (part[u] == "") continue
+    if (index(part[u], "://") > 0) { stripped++; continue }
+    kept = (kept == "" ? part[u] : kept " " part[u])
+  }
+  urls += stripped
+
+  # The hook logs substr(msg, 1, 80), so an 80-character record may end mid-word. That
+  # partial token would be its own miss forever -- it can never recur as a real word.
+  # If the run that got cut was the link, it left with the cut, and dropping a further
+  # token would then discard a whole word nobody truncated.
+  truncated = (length(msg) == 80 && index(part[np], "://") == 0)
+
+  norm = tolower(kept)
+  # tolower() leaves a multibyte capital alone on one-true-awk, so the table carries both
+  # cases and the fold runs after it.
+  norm = jit_fold_latin1(norm)
+  gsub(/[^a-z0-9 -]/, " ", norm)
+  gsub(/  +/, " ", norm)
+  sub(/^ /, "", norm); sub(/ $/, "", norm)
+
+  n = split(norm, tok, " ")
+  if (truncated && n > 1) n--
+
+  delete seen
+  for (i = 1; i <= n; i++) {
+    t = tok[i]
+    gsub(/^-+/, "", t); gsub(/-+$/, "", t)
+    if (length(t) < 3) continue
+    if (t ~ /^[0-9-]+$/) continue
+    if (t in stop) continue
+    if (t in generic) { setaside_generic++; continue }
+    if (t in seen) continue
+    seen[t] = 1
+    cnt[t]++
+    if (exn[t] < 5) { exn[t]++; ex[t, exn[t]] = msg }
+  }
+}
+
+END {
+  if (lines == 0) {
+    print "jit-misses: SKIPPED -- the file is empty"
+    print "  log: " logfile
+    exit 2
+  }
+  if (shaped == 0) {
+    # #406: a log that is JUST the rotation marker (nothing has been logged since)
+    # is not "wrong format" -- it is the ordinary, expected shape of a log the
+    # instant after it rotated, and reading it as "not this tool log" would be a
+    # false alarm on a feature working exactly as designed. session-start-hook.sh
+    # treats this reason as ordinary silence, the same as "no such file" and "the
+    # file is empty" -- see its own case statement for why.
+    if (rotated) {
+      print "jit-misses: SKIPPED -- hooks.log was rotated at " rotated_ts " and has no records yet"
+      print "  log: " logfile
+      print "  older records are in hooks.log.1 -- this tool reads only the current log (#406);"
+      print "  the window narrows to whatever has been written since the rotation."
+      exit 2
+    }
+    print "jit-misses: SKIPPED -- no line in this file has the hook log format"
+    print "  log: " logfile
+    print "  expected records like: [23:48:14.393] pre-prompt 9ms | (none) [shown:1] " sprintf("%c%c", 60, 60) " ..."
+    print "  " lines " line(s) read, 0 recognised. Either this is not the log this script"
+    print "  reads, or the format changed and this script did not."
+    exit 2
+  }
+  if (prompts == 0) {
+    print "jit-misses: SKIPPED -- " shaped " hook record(s), none of them from pre-prompt"
+    print "  log: " logfile
+    print "  The tool and path hooks log misses too, and none of those is a vocabulary gap."
+    print "  A prompt miss can only come from a pre-prompt record, and this log has none."
+    if (rotated) print "  hooks.log was rotated at " rotated_ts "; older records are in hooks.log.1, not read here (#406)"
+    exit 2
+  }
+
+  # #248: the byte count is named whether or not the read was bounded -- it is what
+  # makes a report over a window still legible about the log it did NOT fully read, and
+  # it is what tells a reader the size is climbing well before the next threshold. It
+  # printed nothing during the awk pass above; it is the LOGBYTES the shell already
+  # measured with `wc -c`, before this pass ever started.
+  printf "jit-misses: %s", logfile
+  if (logbytes != "") printf " (%s bytes)", logbytes
+  printf "\n"
+  # #406: named up front, before "bounded read", because it is a fact about the
+  # WINDOW this report covers, the same class of fact --tail already prints here.
+  # hooks.log.1 holds whatever came before the rotation; this tool never reads it
+  # (see the marker-detection rule above for why one generation was judged enough).
+  if (rotated) printf "  hooks.log was rotated at %s -- older records are in hooks.log.1 and are outside this window (#406)\n", rotated_ts
+  if (bounded) printf "  bounded read -- last %d line(s) requested (--tail %d)\n", tailn, tailn
+  if (logbytes != "" && threshold != "" && (logbytes + 0) >= (threshold + 0))
+    printf "  the log has reached %s bytes, at or past the %s byte watch threshold -- reads may be getting slower; consider --tail or rotating\n", logbytes, threshold
+  printf "  %d line(s) read, %d prompt record(s), %d with no vocabulary match", lines, prompts, misses
+  if (aside > 0) printf ", %d set aside (slash command or harness block)", aside
+  if (headless > 0) printf ", %d with no message", headless
+  # Said out loud rather than dropped in silence, on the same principle as `set aside`:
+  # a prompt that was only a link now contributes no token at all, and a reader owed an
+  # explanation for a miss that produced nothing should not have to read the source.
+  if (urls > 0) printf ", %d link(s) stripped", urls
+  printf "\n"
+  # #386: which of the three wordlist states held, always, so a person can tell a
+  # filtered report from one that could not filter. Counted as occurrences set aside,
+  # the same unit `set aside` above already uses.
+  if (genstate == "ok") printf "  %d generic word(s) set aside (%s)\n", setaside_generic, genname
+  else if (genstate == "off") printf "  generic words not filtered (--generic-words \"\")\n"
+  else printf "  generic words NOT filtered -- the list cannot be read: %s\n", genname
+
+  # Rank: count desc, then token asc, so two runs over the same log print the same order.
+  nk = 0
+  for (t in cnt) if (cnt[t] >= min) { nk++; keys[nk] = t }
+  for (i = 2; i <= nk; i++) {
+    k = keys[i]; j = i - 1
+    while (j >= 1 && (cnt[keys[j]] < cnt[k] || (cnt[keys[j]] == cnt[k] && keys[j] > k))) {
+      keys[j+1] = keys[j]; j--
+    }
+    keys[j+1] = k
+  }
+
+  if (nk == 0) {
+    printf "  ok -- no token is shared by %d or more of them; nothing here is a repeated gap\n", min
+    if (considered == 0 && misses > 0)
+      print "  (every miss was a slash command or a harness block, so none was grouped)"
+    exit 0
+  }
+
+  printf "\n  recurring misses -- prompts sharing a content word, most-missed first:\n\n"
+  shown = 0
+  for (i = 1; i <= nk && shown < top; i++) {
+    t = keys[i]
+    printf "  %dx  %s\n", cnt[t], t
+    for (j = 1; j <= exn[t]; j++) printf "        %s\n", ex[t, j]
+    if (cnt[t] > exn[t]) printf "        ... and %d more\n", cnt[t] - exn[t]
+    print ""
+    shown++
+  }
+  if (nk > shown) printf "  ... and %d more token(s) below the cut (--top %d)\n", nk - shown, top
+  print "  Each block is one candidate vocabulary entry, written by a person:"
+  print "  .claude/jit-context/vocabulary/00-manual/<name>.md, then rebuild the index with the rebuild-tsv tool this plugin ships"
+  exit 0
+}
+'
+# #437: GENERIC_ARG_FILES, an array, replaces the old single-path GENERIC_ARG --
+# every member (one file, or every chunk of a directory) becomes its own ARGV entry
+# ahead of the log, read by the BEGIN/isgenericfile[] block above via ENVIRON. Empty
+# when the list is off or missing, contributing no ARGV entry at all, same as before.
+GENERIC_ARG_FILES=()
+if [ -n "$GENERIC_ARG_FILES_ENV" ]; then
+  while IFS= read -r _gw_member; do
+    [ -n "$_gw_member" ] && GENERIC_ARG_FILES+=("$_gw_member")
+  done <<< "$GENERIC_ARG_FILES_ENV"
+fi
+if [ -n "$TAIL" ]; then
+  # `-` is stdin. FILENAME is "-" (gawk) or "" (one-true-awk) there, and neither is ever
+  # one of the list's paths, so the isgenericfile[] branch stays exact.
+  _JIT_MISSES_OUT=$(LC_ALL=C tail -n "$TAIL" -- "$LOG" | GENERIC_ARG_FILES_ENV="$GENERIC_ARG_FILES_ENV" LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" -v bounded=1 -v tailn="$TAIL" -v logbytes="$LOGBYTES" -v threshold="$SIZE_THRESHOLD" -v genstate="$GENERIC_STATE" -v genname="$GENERIC_WORDS" "$JIT_MISSES_AWK_PROG" "${GENERIC_ARG_FILES[@]}" -)
+else
+  _JIT_MISSES_OUT=$(GENERIC_ARG_FILES_ENV="$GENERIC_ARG_FILES_ENV" LC_ALL=C awk -v min="$MIN" -v top="$TOP" -v logfile="$LOG" -v bounded=0 -v tailn=0 -v logbytes="$LOGBYTES" -v threshold="$SIZE_THRESHOLD" -v genstate="$GENERIC_STATE" -v genname="$GENERIC_WORDS" "$JIT_MISSES_AWK_PROG" "${GENERIC_ARG_FILES[@]}" "$LOG")
+fi
+_JIT_MISSES_RC=$?
+
+# 2 is this script own "could not evaluate", and an awk that DIED also exits 2 on both
+# gawk and one-true-awk. The fork does not try to tell those apart, and that is the right
+# side of it rather than an oversight: an awk that aborted mid-report emitted a partial
+# report, and a partial report on stdout reads as a complete one -- which is this
+# repository own defect class, arriving through the stream this change exists to fix. It
+# goes to stderr, where the engine diagnostic already is, and the status is 2, which is
+# what the header already promises a reader for a log that could not be evaluated. So the
+# two cases are conflated on purpose and land on the same honest answer.
+#
+# Any other non-zero is an awk that failed before producing anything worth calling a
+# report; it keeps stdout, because the status already says the run was not clean and
+# hiding the little it managed helps nobody.
+if [ "$_JIT_MISSES_RC" -eq 2 ]; then
+  printf '%s\n' "$_JIT_MISSES_OUT" >&2
+else
+  printf '%s\n' "$_JIT_MISSES_OUT"
+fi
+exit "$_JIT_MISSES_RC"
