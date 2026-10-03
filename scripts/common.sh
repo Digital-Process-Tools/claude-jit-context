@@ -1354,7 +1354,6 @@ if [ -r "$_jit_common_awk_sh" ]; then
 fi
 unset _jit_common_awk_sh
 
-
 # Every requested field of one entry, in one process. VAR receives a memo string, one
 # `<field><TAB><value>` record per line; read it with jit_fm_get(), which forks nothing.
 jit_frontmatter_many() { # VAR, entry file, field...
@@ -1564,9 +1563,6 @@ jit_expand_match() {
   printf '~%s' "$out"
 }
 
-
-
-
 # --- Shared JSON string reader ---------------------------------------------
 # Prepended to all three hook programs. Every hook used to read its payload with
 # `split(input, f, "\\"")` and take the raw field, which is wrong twice:
@@ -1600,11 +1596,6 @@ jit_expand_match() {
 # the backslash of an unknown escape would turn `\\d` into `d` and hand the matcher a
 # subject its author never typed. \\uXXXX is in that set deliberately -- decoding it needs
 # UTF-8 assembly no awk here can be trusted to do.
-
-
-
-
-
 
 # --- The log LINE is bounded; the information in it is not (#64) --------------
 # Hook log with timing + matches:
@@ -2001,9 +1992,7 @@ jit_scan_entry_ages() {
       n=$((n + 1))
       if [ -z "$emin" ] || [ "$epoch" -lt "$emin" ]; then emin="$epoch"; fi
       if [ -z "$emax" ] || [ "$epoch" -gt "$emax" ]; then emax="$epoch"; fi
-    done << EOF_SPREAD
-$out
-EOF_SPREAD
+    done <<< "$out"
 
     if [ "$n" -ge 2 ] && [ -n "$emin" ] && [ -n "$emax" ] && [ $((emax - emin)) -le "$window" ]; then
       # Every mtime in this layer sits within $window seconds of the others -- an
@@ -2031,9 +2020,7 @@ EOF_SPREAD
         continue
       fi
       JIT_ENTRY_AGES="$JIT_ENTRY_AGES${JIT_ENTRY_AGES:+$JIT_NL}$layer/$line"
-    done << EOF_AGES
-$out
-EOF_AGES
+    done <<< "$out"
   done
 }
 
@@ -2230,7 +2217,6 @@ jit_missing_requires() {
   done
   printf '%s' "$missing"
 }
-
 
 # --- The decisive awk crashed: silence is not "no rule matched" (#397) -------------
 #

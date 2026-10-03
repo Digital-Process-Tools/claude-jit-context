@@ -84,6 +84,51 @@ for shipped in scripts/common.sh hooks/hooks.json .claude-plugin/plugin.json REA
 done
 
 echo ""
+echo "=== #459: the README logo image is rewritten off raw.githubusercontent.com ==="
+# The directory validator holds MCP_FORWARDS_CREDENTIAL_ENV on a README that spells
+# the host raw.githubusercontent.com (it used to, for every markdown image). The
+# rewrite now stays on the same github.com host every other link uses, with a
+# ?raw=true suffix for the raw bytes.
+if [ "$BUILD_RC" -eq 0 ] && [ -f "$TREE/README.md" ]; then
+  if grep -q 'raw\.githubusercontent\.com' "$TREE/README.md"; then
+    bad "the built README.md still spells raw.githubusercontent.com"
+  else
+    ok "the built README.md does not spell raw.githubusercontent.com"
+  fi
+  if grep -qE 'https://github\.com/[^)]+\.png\?raw=true' "$TREE/README.md"; then
+    ok "the logo image rewrites to a github.com blob URL with ?raw=true"
+  else
+    bad "the logo image did not rewrite to the expected github.com ...png?raw=true form" \
+      "$(grep -n '\.png' "$TREE/README.md" || true)"
+  fi
+else
+  bad "README.md rewrite check skipped -- the build above did not produce a tree"
+fi
+
+echo ""
+echo "=== #459: an image link that already carries a query string does not double its '?' ==="
+# Self-review on #459 found that appending our own "?raw=true" and then the
+# original target's own frag (which can itself start with "?") produced a
+# malformed "...?raw=true?v=2" URL -- a regression this fix itself introduced,
+# since the host it replaced (raw.githubusercontent.com) never had query
+# parameters of its own for frag to collide with.
+if command -v python3 > /dev/null 2>&1; then
+  RAWURL_OUT=$(python3 -c "
+import sys
+sys.path.insert(0, '$REPO/.github/scripts')
+import build_release_tree as b
+print(b._absolute('diagram.png?v=2', '', lambda r: 'blob', 'acme/repo', 'main'))
+print(b._absolute('diagram.png?v=2#anchor', '', lambda r: 'blob', 'acme/repo', 'main'))
+print(b._absolute('diagram.png#anchor', '', lambda r: 'blob', 'acme/repo', 'main'))
+" 2>&1)
+  if grep -q 'raw=true?' <<< "$RAWURL_OUT"; then
+    bad "an image link with its own query string produced a malformed double '?' URL" "$RAWURL_OUT"
+  else
+    ok "an image link with its own query string (and/or anchor) merges raw=true cleanly"
+  fi
+fi
+
+echo ""
 echo "=== #437: every generic-word chunk in the built tree is under 256 KiB ==="
 if [ -d "$TREE/data/generic-words" ]; then
   CHUNK_N=0

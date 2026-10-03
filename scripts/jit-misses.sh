@@ -51,67 +51,66 @@ GENERIC_WORDS_SET=0
 GENERIC_WORDS=""
 
 usage() {
-  cat << 'EOF'
-jit-misses.sh -- the vocabulary this project keeps not having
-
-  bash scripts/jit-misses.sh [--log PATH] [--min N] [--top N] [--tail N] [--size-threshold N]
-
-  --log PATH        hook log to read. Default: $CLAUDE_PROJECT_DIR/.claude/jit-context/
-                     .discovery/logs/hooks.log (CLAUDE_PROJECT_DIR defaults to .)
-  --min N           report a token shared by at least N misses. Default 2.
-  --top N           print at most N tokens. Default 20.
-  --tail N          read only the last N lines of the log instead of the whole file.
-                     Unset by default -- a manual run still reads the whole history. The
-                     header says plainly when a report is over a window rather than the
-                     full log (#248).
-  --size-threshold N   bytes. When the log is at or past this size, the header names it
-                     as a size worth attention. Default 10000000 (10MB, see #248).
-  --generic-words PATH   a one-word-per-line list, or a directory of chunk files read
-                     as if they were one (#437); a token in it is an ordinary word
-                     and never a candidate (#386). Default data/generic-words/, the
-                     list rebuild-tsv.sh already uses; JIT_CONTEXT_GENERIC_WORDS or
-                     DYNAMIC_RULES_GENERIC_WORDS override it when set, even to empty.
-                     An empty PATH turns the filter off; a PATH that cannot be read is
-                     named in the header rather than silently not filtering.
-  --help       this text.
-
-What counts as the same miss
-
-  Two prompts are the SAME MISS when they share a content word -- a token of three or
-  more characters that is not a stopword and not in the generic wordlist -- after the
-  same lowercase-and-strip normalisation the prompt hook applies to a prompt before it
-  looks a keyword up.
-
-  So "xsd validation" and "validate the xsd" are one miss, on "xsd". "validation" and
-  "validate" are NOT, because nothing here stems: no similarity metric, no threshold to
-  tune, and no way for two prompts to merge on a resemblance you cannot see. Every miss
-  that produced a row is printed under it, so you can always read why they grouped and
-  disagree with the grouping.
-
-  Set aside before grouping, and counted in the header rather than dropped in silence:
-  a prompt that begins with / (a slash command is an instruction to the harness, not a
-  question about the codebase) and one that begins with < (a harness-generated block).
-
-  A pasted link is removed whole before tokenising -- any run of non-space characters
-  containing :// -- and counted in the header. https://github.com/acme/thing/pull/54
-  is not the words `https`, `github`, `com` and `pull`; none of them was typed. Only
-  the scheme does this. A path (src/Billing/Totals.php) and a dotted file name
-  (common.sh) are ordinary tokens and still count, because a host name cannot be told
-  from a file name by shape -- only by a list of TLDs, and this tool keeps no lists.
-
-  Only pre-prompt records are read. The tool and path dimensions produce far more
-  (none) rows than the prompt hook does -- on the machine this was designed against,
-  1,217 of 1,242 -- and none of them is a vocabulary gap.
-
-Outcomes
-
-  findings, exit 0   a ranked list
-  ok, exit 0         the log was read and nothing recurs
-  SKIPPED, exit 2    the log could not be evaluated -- the reason is named
-
-  It reads and prints. It writes nothing and creates no entry: it tells you what to
-  write, and an entry still has an author.
-EOF
+  printf '%s\n' \
+    'jit-misses.sh -- the vocabulary this project keeps not having' \
+    '' \
+    '  bash scripts/jit-misses.sh [--log PATH] [--min N] [--top N] [--tail N] [--size-threshold N]' \
+    '' \
+    '  --log PATH        hook log to read. Default: $CLAUDE_PROJECT_DIR/.claude/jit-context/' \
+    '                     .discovery/logs/hooks.log (CLAUDE_PROJECT_DIR defaults to .)' \
+    '  --min N           report a token shared by at least N misses. Default 2.' \
+    '  --top N           print at most N tokens. Default 20.' \
+    '  --tail N          read only the last N lines of the log instead of the whole file.' \
+    '                     Unset by default -- a manual run still reads the whole history. The' \
+    '                     header says plainly when a report is over a window rather than the' \
+    '                     full log (#248).' \
+    '  --size-threshold N   bytes. When the log is at or past this size, the header names it' \
+    '                     as a size worth attention. Default 10000000 (10MB, see #248).' \
+    '  --generic-words PATH   a one-word-per-line list, or a directory of chunk files read' \
+    '                     as if they were one (#437); a token in it is an ordinary word' \
+    '                     and never a candidate (#386). Default data/generic-words/, the' \
+    '                     list rebuild-tsv.sh already uses; JIT_CONTEXT_GENERIC_WORDS or' \
+    '                     DYNAMIC_RULES_GENERIC_WORDS override it when set, even to empty.' \
+    '                     An empty PATH turns the filter off; a PATH that cannot be read is' \
+    '                     named in the header rather than silently not filtering.' \
+    '  --help       this text.' \
+    '' \
+    'What counts as the same miss' \
+    '' \
+    '  Two prompts are the SAME MISS when they share a content word -- a token of three or' \
+    '  more characters that is not a stopword and not in the generic wordlist -- after the' \
+    '  same lowercase-and-strip normalisation the prompt hook applies to a prompt before it' \
+    '  looks a keyword up.' \
+    '' \
+    '  So "xsd validation" and "validate the xsd" are one miss, on "xsd". "validation" and' \
+    '  "validate" are NOT, because nothing here stems: no similarity metric, no threshold to' \
+    '  tune, and no way for two prompts to merge on a resemblance you cannot see. Every miss' \
+    '  that produced a row is printed under it, so you can always read why they grouped and' \
+    '  disagree with the grouping.' \
+    '' \
+    '  Set aside before grouping, and counted in the header rather than dropped in silence:' \
+    '  a prompt that begins with / (a slash command is an instruction to the harness, not a' \
+    '  question about the codebase) and one that begins with < (a harness-generated block).' \
+    '' \
+    '  A pasted link is removed whole before tokenising -- any run of non-space characters' \
+    '  containing :// -- and counted in the header. https://github.com/acme/thing/pull/54' \
+    '  is not the words `https`, `github`, `com` and `pull`; none of them was typed. Only' \
+    '  the scheme does this. A path (src/Billing/Totals.php) and a dotted file name' \
+    '  (common.sh) are ordinary tokens and still count, because a host name cannot be told' \
+    '  from a file name by shape -- only by a list of TLDs, and this tool keeps no lists.' \
+    '' \
+    '  Only pre-prompt records are read. The tool and path dimensions produce far more' \
+    '  (none) rows than the prompt hook does -- on the machine this was designed against,' \
+    '  1,217 of 1,242 -- and none of them is a vocabulary gap.' \
+    '' \
+    'Outcomes' \
+    '' \
+    '  findings, exit 0   a ranked list' \
+    '  ok, exit 0         the log was read and nothing recurs' \
+    '  SKIPPED, exit 2    the log could not be evaluated -- the reason is named' \
+    '' \
+    '  It reads and prints. It writes nothing and creates no entry: it tells you what to' \
+    '  write, and an entry still has an author.'
 }
 
 # A flag whose value is missing needs the same loud refusal as an unknown flag. The first

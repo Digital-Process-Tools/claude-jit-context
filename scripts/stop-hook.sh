@@ -386,9 +386,7 @@ for _jit_dim in vocabulary tools paths; do
   while IFS= read -r _jit_age_line; do
     [ -n "$_jit_age_line" ] || continue
     _jit_dim_ages="$_jit_dim_ages${_jit_dim_ages:+$JIT_NL}$_jit_dim/$_jit_age_line"
-  done << EOF_DIM_AGES
-$JIT_ENTRY_AGES
-EOF_DIM_AGES
+  done <<< "$JIT_ENTRY_AGES"
   [ -n "$_jit_dim_ages" ] || continue
   JIT_AGES_ALL="$JIT_AGES_ALL${JIT_AGES_ALL:+$JIT_NL}$_jit_dim_ages"
 done

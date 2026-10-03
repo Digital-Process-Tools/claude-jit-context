@@ -17,8 +17,10 @@ everything; this script produces the tree a `release` branch carries:
    skipped even when it has entries), its link definition, and a link to the full
    file on the default branch.
 4. Relative links and images in every shipped `.md` file that point at a path the
-   deny-list removed are rewritten to absolute URLs on the default branch:
-   raw.githubusercontent.com for images, github.com/.../blob for everything else.
+   deny-list removed are rewritten to absolute URLs on the default branch, all on
+   github.com: an image gets a `?raw=true` suffix on its blob URL (#459 -- a second
+   host, raw.githubusercontent.com, used to carry images and was itself a directory
+   validator policy hold), everything else a plain blob/tree URL.
 
 Usage:
     build_release_tree.py --ref v0.36.0 --out /tmp/release-tree [--repo .]
@@ -187,10 +189,26 @@ def _absolute(target: str, md_dir: str, should_rewrite: Callable[[str], str | No
     kind = should_rewrite(rel)
     if kind is None:
         return None
+    url = f"https://github.com/{repo}/{kind}/{ref}/{quote(rel)}"
     if force_raw or posixpath.splitext(rel)[1].lower() in IMAGE_EXTS:
-        url = f"https://raw.githubusercontent.com/{repo}/{ref}/{quote(rel)}"
-    else:
-        url = f"https://github.com/{repo}/{kind}/{ref}/{quote(rel)}"
+        # An image -- src= on an <img>, or an extension in IMAGE_EXTS (markdown
+        # ![](...)  uses the identical ](...)  target syntax as a normal link, so
+        # only the extension tells the two apart) -- needs the raw bytes, not a
+        # blob/tree HTML page. ?raw=true on the SAME github.com host does that;
+        # raw.githubusercontent.com used to be a second host this tree's own
+        # scripts and docs spelled, which is a directory-validator policy hold on
+        # its own (#459) independent of whether anything ever reads it.
+        #
+        # frag can itself open with "?" (a source target that already carried a
+        # query string -- see the sep loop above) or "#" or both or neither.
+        # Blindly doing `url += "?raw=true"; url += frag` produces a malformed
+        # second "?" when frag starts with one (self-review caught this, #459):
+        # merge raw=true into frag's own query instead of planting a second one.
+        if frag.startswith("?"):
+            query, _, anchor = frag.partition("#")
+            frag = f"{query}&raw=true" + (f"#{anchor}" if anchor else "")
+        else:
+            frag = "?raw=true" + frag
     url += frag
     return f"<{url}>" if bracketed else url
 
