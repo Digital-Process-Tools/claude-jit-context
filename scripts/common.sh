@@ -1020,13 +1020,16 @@ jit_load_config() {
     while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
     case "$line" in
       '' | '#'*) continue ;;
-      # `export KEY=VALUE` was valid while this file was sourced, so it stays valid.
-      # The export itself is a no-op now: the hooks read these as shell variables.
-      export[[:space:]]*)
-        line="${line#export}"
-        while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
-        ;;
     esac
+    # `export KEY=VALUE` was valid while this file was sourced, so it stays valid.
+    # The export itself is a no-op now: the hooks read these as shell variables.
+    # #461: tested with expansions, not an `export[[:space:]]*)` case arm -- the
+    # directory validator holds every hook on a POSIX class in a case pattern.
+    rest="${line#export}"
+    if [ "$rest" != "$line" ] && [ "${rest#[[:space:]]}" != "$rest" ]; then
+      line="$rest"
+      while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+    fi
 
     reason=""
     case "$line" in
@@ -1077,9 +1080,9 @@ jit_load_config() {
       *)
         # Bash starts a comment at a # preceded by whitespace, and treats one that is not
         # as an ordinary character -- so `^(a#b)$` keeps its hash and `1 # on` does not.
-        case "$value" in
-          *[[:space:]]#*) value="${value%%[[:space:]]#*}" ;;
-        esac
+        # #461: no case arm on `*[[:space:]]#*)`; the strip alone is a no-op when
+        # there is nothing to strip.
+        value="${value%%[[:space:]]#*}"
         while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
         ;;
     esac
@@ -1534,12 +1537,11 @@ jit_expand_match() {
 
   name="${body#@}"
   args=""
-  case "$name" in
-    *[[:space:]]*)
-      args="${name#*[[:space:]]}"
-      name="${name%%[[:space:]]*}"
-      ;;
-  esac
+  # #461: an expansion test, not a `*[[:space:]]*)` case arm.
+  if [ "${name%%[[:space:]]*}" != "$name" ]; then
+    args="${name#*[[:space:]]}"
+    name="${name%%[[:space:]]*}"
+  fi
   while [ "$args" != "${args#[[:space:]]}" ]; do args="${args#[[:space:]]}"; done
   while [ "$args" != "${args%[[:space:]]}" ]; do args="${args%[[:space:]]}"; done
   args="$(printf '%s' "$args" | tr '[:upper:]' '[:lower:]')"

@@ -451,11 +451,13 @@ elif [ -f "$CFG" ]; then
     while [ "$_l" != "${_l#[[:space:]]}" ]; do _l="${_l#[[:space:]]}"; done
     case "$_l" in
       '' | '#'*) continue ;;
-      export[[:space:]]*)
-        _l="${_l#export}"
-        while [ "$_l" != "${_l#[[:space:]]}" ]; do _l="${_l#[[:space:]]}"; done
-        ;;
     esac
+    # #461: the same export strip as jit_load_config, without a POSIX class in a case arm.
+    _r="${_l#export}"
+    if [ "$_r" != "$_l" ] && [ "${_r#[[:space:]]}" != "$_r" ]; then
+      _l="$_r"
+      while [ "$_l" != "${_l#[[:space:]]}" ]; do _l="${_l#[[:space:]]}"; done
+    fi
     case "$_l" in *=*) _k="${_l%%=*}" ;; *) continue ;; esac
     case "$_k" in
       JIT_CONTEXT_DOCTOR_MAX_BYTES) CFG_LINE_MAX="$_n" ;;
