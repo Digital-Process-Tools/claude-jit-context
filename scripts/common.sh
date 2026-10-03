@@ -1091,8 +1091,13 @@ jit_cfg_unquote() {
   #
   # Nothing inside a value is expanded: a $, a backtick or a $(...) is a literal now.
   # #461: tests, not a `case` on the value read from config.env (see jit_cfg_split).
+  # The two quote characters come from printf escapes: a quote written alone inside the
+  # other kind of quote made the directory validator mis-read the rest of the script.
+  local dq sq
+  printf -v dq '\042'
+  printf -v sq '\047'
   q="${value%"${value#?}"}"
-  if [ "$q" = '"' ] || [ "$q" = "'" ]; then
+  if [ "$q" = "$dq" ] || [ "$q" = "$sq" ]; then
     rest="${value#?}"
     if [ "${rest#*"$q"}" != "$rest" ]; then
       tail="${rest#*"$q"}"
@@ -1212,27 +1217,90 @@ jit_cfg_check_value() {
 # validator reads that as the hook sourcing the file (the bare `.` it listed).
 # tests/test-config-assign-461.sh fails on a setting read anywhere with no arm here.
 jit_cfg_assign() {
-  if [ "$1" = DVSI_AUTONOMOUS_VOCAB_PATHS ]; then DVSI_AUTONOMOUS_VOCAB_PATHS="$2"; return 0; fi
-  if [ "$1" = DYNAMIC_RULES_CHECKOUT_WINDOW_S ]; then DYNAMIC_RULES_CHECKOUT_WINDOW_S="$2"; return 0; fi
-  if [ "$1" = DYNAMIC_RULES_COLLISION_BYTES ]; then DYNAMIC_RULES_COLLISION_BYTES="$2"; return 0; fi
-  if [ "$1" = DYNAMIC_RULES_GENERIC_WORDS ]; then DYNAMIC_RULES_GENERIC_WORDS="$2"; return 0; fi
-  if [ "$1" = DYNAMIC_RULES_KEYWORD_BLACKLIST ]; then DYNAMIC_RULES_KEYWORD_BLACKLIST="$2"; return 0; fi
-  if [ "$1" = DYNAMIC_RULES_MODULE_PREFIX ]; then DYNAMIC_RULES_MODULE_PREFIX="$2"; return 0; fi
-  if [ "$1" = DYNAMIC_RULES_VOCAB_PATHS ]; then DYNAMIC_RULES_VOCAB_PATHS="$2"; return 0; fi
-  if [ "$1" = JIT_CONTEXT_ALLOW_CROSS_TREE ]; then JIT_CONTEXT_ALLOW_CROSS_TREE="$2"; return 0; fi
-  if [ "$1" = JIT_CONTEXT_CHECKOUT_WINDOW_S ]; then JIT_CONTEXT_CHECKOUT_WINDOW_S="$2"; return 0; fi
-  if [ "$1" = JIT_CONTEXT_COLLISION_BYTES ]; then JIT_CONTEXT_COLLISION_BYTES="$2"; return 0; fi
-  if [ "$1" = JIT_CONTEXT_DOCTOR_MAX_BYTES ]; then JIT_CONTEXT_DOCTOR_MAX_BYTES="$2"; return 0; fi
-  if [ "$1" = JIT_CONTEXT_DOCTOR_MIN_KEYWORD ]; then JIT_CONTEXT_DOCTOR_MIN_KEYWORD="$2"; return 0; fi
-  if [ "$1" = JIT_CONTEXT_GENERIC_WORDS ]; then JIT_CONTEXT_GENERIC_WORDS="$2"; return 0; fi
-  if [ "$1" = JIT_CONTEXT_INJECT ]; then JIT_CONTEXT_INJECT="$2"; return 0; fi
-  if [ "$1" = JIT_CONTEXT_KEYWORD_BLACKLIST ]; then JIT_CONTEXT_KEYWORD_BLACKLIST="$2"; return 0; fi
-  if [ "$1" = JIT_CONTEXT_LOG_MAX_BYTES ]; then JIT_CONTEXT_LOG_MAX_BYTES="$2"; return 0; fi
-  if [ "$1" = JIT_CONTEXT_MISSES ]; then JIT_CONTEXT_MISSES="$2"; return 0; fi
-  if [ "$1" = JIT_CONTEXT_MODULE_PREFIX ]; then JIT_CONTEXT_MODULE_PREFIX="$2"; return 0; fi
-  if [ "$1" = JIT_CONTEXT_STATUS ]; then JIT_CONTEXT_STATUS="$2"; return 0; fi
-  if [ "$1" = JIT_CONTEXT_STOP_REPORT ]; then JIT_CONTEXT_STOP_REPORT="$2"; return 0; fi
-  if [ "$1" = JIT_CONTEXT_VOCAB_PATHS ]; then JIT_CONTEXT_VOCAB_PATHS="$2"; return 0; fi
+  if [ "$1" = DVSI_AUTONOMOUS_VOCAB_PATHS ]; then
+    DVSI_AUTONOMOUS_VOCAB_PATHS="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_CHECKOUT_WINDOW_S ]; then
+    DYNAMIC_RULES_CHECKOUT_WINDOW_S="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_COLLISION_BYTES ]; then
+    DYNAMIC_RULES_COLLISION_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_GENERIC_WORDS ]; then
+    DYNAMIC_RULES_GENERIC_WORDS="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_KEYWORD_BLACKLIST ]; then
+    DYNAMIC_RULES_KEYWORD_BLACKLIST="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_MODULE_PREFIX ]; then
+    DYNAMIC_RULES_MODULE_PREFIX="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_VOCAB_PATHS ]; then
+    DYNAMIC_RULES_VOCAB_PATHS="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_ALLOW_CROSS_TREE ]; then
+    JIT_CONTEXT_ALLOW_CROSS_TREE="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_CHECKOUT_WINDOW_S ]; then
+    JIT_CONTEXT_CHECKOUT_WINDOW_S="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_COLLISION_BYTES ]; then
+    JIT_CONTEXT_COLLISION_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_DOCTOR_MAX_BYTES ]; then
+    JIT_CONTEXT_DOCTOR_MAX_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_DOCTOR_MIN_KEYWORD ]; then
+    JIT_CONTEXT_DOCTOR_MIN_KEYWORD="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_GENERIC_WORDS ]; then
+    JIT_CONTEXT_GENERIC_WORDS="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_INJECT ]; then
+    JIT_CONTEXT_INJECT="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_KEYWORD_BLACKLIST ]; then
+    JIT_CONTEXT_KEYWORD_BLACKLIST="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
+    JIT_CONTEXT_LOG_MAX_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_MISSES ]; then
+    JIT_CONTEXT_MISSES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_MODULE_PREFIX ]; then
+    JIT_CONTEXT_MODULE_PREFIX="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_STATUS ]; then
+    JIT_CONTEXT_STATUS="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_STOP_REPORT ]; then
+    JIT_CONTEXT_STOP_REPORT="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_VOCAB_PATHS ]; then
+    JIT_CONTEXT_VOCAB_PATHS="$2"
+    return 0
+  fi
   return 0
 }
 

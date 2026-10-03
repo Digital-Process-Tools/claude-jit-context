@@ -134,6 +134,22 @@ is `[ "${1#*=}" = "$1" ]`, "digits only" is `[ -z "${v//[0-9]/}" ]`. A narrow ar
 as `'' | '#'*)` with no catch-all is fine (`b0`). Applied to every helper of
 `jit_load_config`; not yet validated as a whole.
 
+**Third trigger: a quote character written alone inside the other kind of quote
+(21:55-22:20).** With the `case` statements gone, the config cut stopped listing the hook
+and listed only a bare `.` (`release-preview-at379`). Same method: only
+`jit_cfg_clean_line` called still listed `.` (`w0`), and dropping the four uncalled
+helper definitions cleared it (`y1`) -- **the scanner reads every function, called or
+not.** Halving the definitions put it in `jit_cfg_unquote` alone (`u1`), on
+`[ "$q" = '"' ] || [ "$q" = "'" ]`; the same function with both characters taken from
+`printf -v dq '\042'` / `'\047'` cleared (`s1`). The `.` was a symptom: past that line
+the scanner was splitting the script wrongly. Guard:
+`tests/test-no-lone-quote-literals-461.sh`.
+
+Along the way, `printf -v "$name"` with a name read from config.env was replaced by
+`jit_cfg_assign` (each of the 21 settings scripts read, by literal name). That did not
+change the `.` (`av403`), so it is not a confirmed trigger; it stays because it is the
+safer shape. Guard: `tests/test-config-assign-461.sh`.
+
 It is not the only trigger: with both class arms of `jit_load_config` rewritten, the
 function still held (`al383`), so an earlier round read the fix as refuted. **With
 several triggers, removing one changes nothing you can see: find a small failing set
