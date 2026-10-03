@@ -19,6 +19,8 @@
 # never matched anything, ever" and those two must not look the same.
 #
 # Usage: bash tests/test-no-heredocs-459.sh
+#
+# jit-drive: none -- this suite scans tracked files for a text shape; it defines no assertion helper
 
 set -uo pipefail
 
@@ -94,14 +96,14 @@ FIXTURE_EOF
 
 FIXTURE_HITS="$(detect_heredoc_lines "$FIXTURE")"
 
-if printf '%s\n' "$FIXTURE_HITS" | grep -q '^13:'; then
+if grep -q '^13:' <<< "$FIXTURE_HITS"; then
   ok "POSITIVE: the planted real \`done << REAL_HEREDOC\` (line 13) is caught"
 else
   bad "POSITIVE: the planted real heredoc was NOT caught -- the detector cannot see a real one" \
     "$FIXTURE_HITS"
 fi
 
-if printf '%s\n' "$FIXTURE_HITS" | grep -q '^18:'; then
+if grep -q '^18:' <<< "$FIXTURE_HITS"; then
   ok "POSITIVE: a planted \`done <<1EOF\` (line 18) -- a digit-leading delimiter, a real heredoc bash accepts -- is caught"
 else
   bad "POSITIVE: the digit-leading heredoc was NOT caught -- a letter-only identifier class would let this class of delimiter back in undetected" \
@@ -111,7 +113,7 @@ fi
 FALSE_POSITIVE_LINES="2 3 5 6 8 9"
 ANY_FALSE_POSITIVE=0
 for ln in $FALSE_POSITIVE_LINES; do
-  if printf '%s\n' "$FIXTURE_HITS" | grep -q "^${ln}:"; then
+  if grep -q "^${ln}:" <<< "$FIXTURE_HITS"; then
     ANY_FALSE_POSITIVE=1
     bad "NEGATIVE: line $ln (a comment, a quoted log token, a here-string, or an IFS read <<<) was wrongly flagged"
   fi

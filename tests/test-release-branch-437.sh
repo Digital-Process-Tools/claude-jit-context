@@ -121,7 +121,7 @@ print(b._absolute('diagram.png?v=2', '', lambda r: 'blob', 'acme/repo', 'main'))
 print(b._absolute('diagram.png?v=2#anchor', '', lambda r: 'blob', 'acme/repo', 'main'))
 print(b._absolute('diagram.png#anchor', '', lambda r: 'blob', 'acme/repo', 'main'))
 " 2>&1)
-  if printf '%s\n' "$RAWURL_OUT" | grep -q 'raw=true?'; then
+  if grep -q 'raw=true?' <<< "$RAWURL_OUT"; then
     bad "an image link with its own query string produced a malformed double '?' URL" "$RAWURL_OUT"
   else
     ok "an image link with its own query string (and/or anchor) merges raw=true cleanly"
