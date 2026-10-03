@@ -1533,7 +1533,7 @@ BYTES_REFUSED=0
 SKIPPED_READS=0
 BLOCKS_DESYNC=0
 VOCAB_REFUSED=0
-VOCAB_KEYS=0
+VOCAB_TERMS=0
 VOCAB_FILES=0
 WARNED=0
 ADVISED=0
@@ -1889,7 +1889,7 @@ for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; 
     check_entry_file "$label" "$v_file" "$tsv_dir" "$v_rown" || VOCAB_REFUSED=$((VOCAB_REFUSED + 1))
     case "$tsv" in
       */00-index.tsv)
-        VOCAB_KEYS=$((VOCAB_KEYS + 1))
+        VOCAB_TERMS=$((VOCAB_TERMS + 1))
         case "$VOCAB_SEEN" in
           *" $v_file "*) ;;
           *)
@@ -2042,8 +2042,8 @@ else
 fi
 echo ""
 echo "$LISTED rule(s) indexed, $CHECKED regex pattern(s) compiled, $REFUSED refused."
-if [ "$VOCAB_KEYS" -gt 0 ]; then
-  echo "$VOCAB_KEYS vocabulary keyword(s) across $VOCAB_FILES entry file(s) — literal, nothing to compile."
+if [ "$VOCAB_TERMS" -gt 0 ]; then
+  echo "$VOCAB_TERMS vocabulary keyword(s) across $VOCAB_FILES entry file(s) — literal, nothing to compile."
 fi
 if [ "$STALE" -gt 0 ]; then
   echo "$STALE entry file(s) whose frontmatter is not what the index carries."

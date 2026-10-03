@@ -1511,9 +1511,9 @@ END {
   path_count = 0
   if (cand_mode == 1) {
     path_count = jit_cand_load(all_paths)
-    shown_file = jit_shown_path(state_dir, "path", ENVIRON["JIT_SESSION_KEY"])
-    vocab_shown_file = jit_shown_path(state_dir, "vocab", ENVIRON["JIT_SESSION_KEY"])
-    bytes_shown_file = jit_shown_path(state_dir, "bytes", ENVIRON["JIT_SESSION_KEY"])
+    shown_file = jit_shown_path(state_dir, "path", ENVIRON["JIT_SESSION_REF"])
+    vocab_shown_file = jit_shown_path(state_dir, "vocab", ENVIRON["JIT_SESSION_REF"])
+    bytes_shown_file = jit_shown_path(state_dir, "bytes", ENVIRON["JIT_SESSION_REF"])
   } else if (file_path != "") {
     path_count = 1; all_paths[1] = file_path
   } else if (cmd != "" && cmd ~ /(^|[ \t\n;&|(])(\.\/)?supertool(\.py)?[ \t]/) {
@@ -1804,13 +1804,13 @@ jit_cand_ok() {
   return 0
 }
 JIT_CANDIDATES=""
-JIT_SESSION_KEY=""
+JIT_SESSION_REF=""
 if [ -n "$JIT_TMP" ] && [ -s "$JIT_TMP" ]; then
   IFS= read -r JIT_CAND_HEAD < "$JIT_TMP" || JIT_CAND_HEAD=""
   if [ "$JIT_CAND_HEAD" = "$JIT_CAND_BEGIN" ]; then
     {
       IFS= read -r _JIT_SENTINEL
-      IFS= read -r JIT_SESSION_KEY
+      IFS= read -r JIT_SESSION_REF
       while IFS= read -r JIT_TOK; do
         [ "${#JIT_CANDIDATES}" -lt 4096 ] || break
         if jit_cand_ok "$JIT_TOK"; then
@@ -1818,11 +1818,11 @@ if [ -n "$JIT_TMP" ] && [ -s "$JIT_TMP" ]; then
         fi
       done
     } < "$JIT_TMP"
-    case "$JIT_SESSION_KEY" in *[!A-Za-z0-9_-]*) JIT_SESSION_KEY="" ;; esac
+    case "$JIT_SESSION_REF" in *[!A-Za-z0-9_-]*) JIT_SESSION_REF="" ;; esac
     : > "$JIT_TMP"
     if [ -n "$JIT_CANDIDATES" ]; then
       export JIT_PATH_CANDIDATES="$JIT_CANDIDATES"
-      export JIT_SESSION_KEY
+      export JIT_SESSION_REF
       jit_path_awk 1 < /dev/null
     else
       echo "{}"

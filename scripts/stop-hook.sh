@@ -1393,14 +1393,14 @@ BYTES_FILE="$JIT_STATE_DIR/bytes-shown-$SESSION_ID.txt"
 EDIT_MARK="$JIT_STATE_DIR/edited-$SESSION_ID.txt"
 EDIT_DECLINED_MARK="$JIT_STATE_DIR/edited-declined-$SESSION_ID.txt"
 JIT_FIRED_MAX=500
-JIT_FIRED_KEYS=""
+JIT_FIRED_IDS=""
 JIT_FIRED_N=0
 JIT_FIRED_OVERFLOW=0
 JIT_FIRED_NAME=()
 JIT_FIRED_DIM=()
 JIT_FIRED_LAYER=()
 JIT_FIRED_CLASS=() # Y (00-manual, known), N (another layer, known), U (bare, unknown)
-JIT_FIRED_RAWKEY=()
+JIT_FIRED_RAWID=()
 for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
   [ -f "$_jit_mf" ] && [ ! -L "$_jit_mf" ] || continue
   while IFS= read -r _jit_line || [ -n "$_jit_line" ]; do
@@ -1463,15 +1463,15 @@ for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
       JIT_FIRED_OVERFLOW=$((JIT_FIRED_OVERFLOW + 1))
       continue
     fi
-    case "$JIT_NL$JIT_FIRED_KEYS$JIT_NL" in
+    case "$JIT_NL$JIT_FIRED_IDS$JIT_NL" in
       *"$JIT_NL$_jit_line$JIT_NL"*) continue ;;
     esac
-    JIT_FIRED_KEYS="$JIT_FIRED_KEYS${JIT_FIRED_KEYS:+$JIT_NL}$_jit_line"
+    JIT_FIRED_IDS="$JIT_FIRED_IDS${JIT_FIRED_IDS:+$JIT_NL}$_jit_line"
     JIT_FIRED_NAME[$JIT_FIRED_N]="$_jit_name"
     JIT_FIRED_DIM[$JIT_FIRED_N]="$_jit_dim"
     JIT_FIRED_LAYER[$JIT_FIRED_N]="$_jit_layer"
     JIT_FIRED_CLASS[$JIT_FIRED_N]="$_jit_class"
-    JIT_FIRED_RAWKEY[$JIT_FIRED_N]="$_jit_line"
+    JIT_FIRED_RAWID[$JIT_FIRED_N]="$_jit_line"
     JIT_FIRED_N=$((JIT_FIRED_N + 1))
   done < "$_jit_mf"
 done
@@ -1595,9 +1595,9 @@ fi
 if [ "$JIT_SIZE_KNOWN" = 1 ]; then
   JIT_BI=0
   while [ "$JIT_BI" -lt "$JIT_FIRED_N" ]; do
-    _jit_rawkey="${JIT_FIRED_RAWKEY[$JIT_BI]}"
+    _jit_rawid="${JIT_FIRED_RAWID[$JIT_BI]}"
     JIT_BI=$((JIT_BI + 1))
-    _jit_needle="$JIT_NL$_jit_rawkey$(printf '\t')"
+    _jit_needle="$JIT_NL$_jit_rawid$(printf '\t')"
     case "$JIT_NL$JIT_BYTES_RAW$JIT_NL" in
       *"$_jit_needle"*)
         _jit_brest="${JIT_NL}${JIT_BYTES_RAW}${JIT_NL}"
@@ -1617,7 +1617,7 @@ if [ "$JIT_SIZE_KNOWN" = 1 ]; then
         ;;
     esac
   done
-  unset _jit_rawkey _jit_needle _jit_brest
+  unset _jit_rawid _jit_needle _jit_brest
 fi
 unset JIT_BI
 JIT_SIZE_FMT=""

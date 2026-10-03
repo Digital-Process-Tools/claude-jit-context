@@ -1291,16 +1291,16 @@ if [ -z "$NEWEST" ]; then
   echo "JIT stats: no marker files under $STATE_DIR -- nothing has fired yet this session"
   exit 1
 fi
-SESSION_KEY="$(basename "$NEWEST")"
-SESSION_KEY="${SESSION_KEY#vocab-shown-}"
-SESSION_KEY="${SESSION_KEY#path-shown-}"
-SESSION_KEY="${SESSION_KEY#bytes-shown-}"
-SESSION_KEY="${SESSION_KEY%.txt}"
-echo "JIT stats -- session key: $SESSION_KEY (the most recently written marker file; a heuristic, not the true session id -- see this file's own header)"
+SESSION_REF="$(basename "$NEWEST")"
+SESSION_REF="${SESSION_REF#vocab-shown-}"
+SESSION_REF="${SESSION_REF#path-shown-}"
+SESSION_REF="${SESSION_REF#bytes-shown-}"
+SESSION_REF="${SESSION_REF%.txt}"
+echo "JIT stats -- session key: $SESSION_REF (the most recently written marker file; a heuristic, not the true session id -- see this file's own header)"
 echo ""
-VOCAB_FILE="$STATE_DIR/vocab-shown-$SESSION_KEY.txt"
-PATH_FILE="$STATE_DIR/path-shown-$SESSION_KEY.txt"
-BYTES_FILE="$STATE_DIR/bytes-shown-$SESSION_KEY.txt"
+VOCAB_FILE="$STATE_DIR/vocab-shown-$SESSION_REF.txt"
+PATH_FILE="$STATE_DIR/path-shown-$SESSION_REF.txt"
+BYTES_FILE="$STATE_DIR/bytes-shown-$SESSION_REF.txt"
 BYTES_RAW=""
 if [ -f "$BYTES_FILE" ] && [ ! -L "$BYTES_FILE" ]; then
   while IFS= read -r _jb || [ -n "$_jb" ]; do
