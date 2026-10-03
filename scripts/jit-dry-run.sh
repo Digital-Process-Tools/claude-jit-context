@@ -35,7 +35,7 @@
 set -uo pipefail
 case "$0" in
   */*) SCRIPT_DIR="$(cd "${0%/*}" && pwd)" ;;
-  *) SCRIPT_DIR="$PWD" ;;
+  *) SCRIPT_DIR="$(pwd)" ;;
 esac
 jit_path_dir() {
   case "$2" in
@@ -68,7 +68,7 @@ jit_host_row() {
       printf '%s\n' "$line"
       return 0
     fi
-  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
+  done <<< "$JIT_HOST_REGISTRY"
   return 1
 }
 jit_host_sig_set() {
@@ -94,7 +94,7 @@ jit_host_detect() {
       fi
     done
     IFS="$old_ifs"
-  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
+  done <<< "$JIT_HOST_REGISTRY"
   printf 'unknown\n'
   return 0
 }
@@ -108,7 +108,7 @@ jit_host_refusal_state() {
     printf 'refusal-not-established\n'
     return 0
   }
-  IFS='|' read -r _ _ _ _ _ _ refusal _ < <(printf '%s\n' "$row")
+  IFS='|' read -r _ _ _ _ _ _ refusal _ <<< "$row"
   printf '%s\n' "${refusal:-refusal-not-established}"
 }
 jit_all_tool_aliases() {
@@ -119,7 +119,7 @@ jit_all_tool_aliases() {
     [ -n "$aliases" ] || continue
     all="$all$sep$aliases"
     sep=","
-  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
+  done <<< "$JIT_HOST_REGISTRY"
   printf '%s\n' "$all"
 }
 JIT_HOST="$(jit_host_detect 2> /dev/null)" \
@@ -1249,7 +1249,7 @@ jit_fm_get() { # VAR, memo, field
 JIT_VALID_MODE_RE='^(remind|block|once)(,(remind|block|once))*$'
 JIT_VALID_REQUIRES_RE='^[A-Za-z0-9._+-]{1,255}$'
 JIT_MACRO_ANCHOR='(^|[;&|\n] *)'
-JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|env|sudo|nohup|nice|time)[[:space:]]+)*'
+JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|[e]nv|sudo|nohup|nice|time)[[:space:]]+)*'
 JIT_MACRO_OPT='(-[^[:space:];&|]*[[:space:]]+([^-;&|[:space:]][^[:space:];&|]*[[:space:]]+)?)*'
 JIT_MACRO_END='($|[[:space:];&|])'
 jit_macro_word() {
@@ -1399,7 +1399,7 @@ jit_report_name() {
 }
 export JIT_KEYWORD_WITHHELD='<withheld: not a plain keyword>'
 JIT_MISSING_REQUIRES_MAX=4096
-BASE="$PWD/.claude/jit-context"
+BASE="$(pwd)/.claude/jit-context"
 label=""
 tsv_dir=""
 rb_label=""
@@ -1566,7 +1566,7 @@ elif [ -f "$BASE/config.env" ]; then
       [ -n "$_cl" ] || continue
       CONFIG_REFUSED=$((CONFIG_REFUSED + 1))
       printf 'REFUSED  %-18s %-30s %s\n' "config.env" "" "${_cl#- }"
-    done < <(printf '%s\n' "$CONFIG_LINES")
+    done <<< "$CONFIG_LINES"
     printf '         %-18s %-30s those lines do not take effect — the hooks read this file as plain KEY=VALUE\n' "" ""
   else
     printf 'ok       %-18s %-30s every line honoured\n' "config.env" ""
@@ -1624,11 +1624,11 @@ idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name colum
         pats="$pats${line%%	*}$PAT_NL"
         ;;
     esac
-  done < <(printf '%s\n' "$out")
+  done <<< "$out"
   pats="${pats%"$PAT_NL"}"
   [ -n "$pats" ] || return 0
   n=0
-  while IFS= read -r line; do n=$((n + 1)); done < <(printf '%s\n' "$pats")
+  while IFS= read -r line; do n=$((n + 1)); done <<< "$pats"
   start=1
   while [ "$start" -le "$n" ]; do
     i=$(LC_ALL=C awk -v from="$start" '
@@ -1639,7 +1639,7 @@ idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name colum
           printf "ok %d\n", k
           fflush()
         }
-      }' < <(printf '%s\n' "$pats") 2> /dev/null | LC_ALL=C awk 'END { print (NR ? $2 : 0) }')
+      }' <<< "$pats" 2> /dev/null | LC_ALL=C awk 'END { print (NR ? $2 : 0) }')
     [ -n "$i" ] || i=0
     k=0
     while IFS= read -r line; do
@@ -1651,7 +1651,7 @@ idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name colum
         PAT_MEMO="$PAT_MEMO${PAT_NL}engine	$line	rejected"
         break
       fi
-    done < <(printf '%s\n' "$pats")
+    done <<< "$pats"
     [ "$i" -ge "$n" ] && break
     start=$((i + 2))
   done
@@ -1926,7 +1926,7 @@ check_row_bytes() {
     if [ -n "$file" ]; then disp="$(jit_report_name "$file")"; else disp="row $rown"; fi
     printf 'REFUSED  %-18s %-30s %s\n' "$label" "$disp" "$why"
     printf '         %-18s %-30s the hooks refuse this row and name it as "%s row %s"\n' "" "" "$label" "$rown"
-  done < <(printf '%s\n' "$rows")
+  done <<< "$rows"
 }
 for tsv in "$BASE"/tools/*/00-index.tsv; do
   [ -f "$tsv" ] || continue

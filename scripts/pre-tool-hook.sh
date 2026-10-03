@@ -32,7 +32,7 @@ jit_worktree_mismatch_line() {
   [ -n "$pwd_top" ] || return 0
   [ -n "$cpd_top" ] || return 0
   [ "$pwd_top" != "$cpd_top" ] || return 0
-  printf '%s' "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $cpd_top) names a DIFFERENT git worktree than the one this shell is sitting in (\$PWD ($PWD) -- git worktree $pwd_top)."
+  printf '%s' "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $cpd_top) names a DIFFERENT git worktree than the one this shell is sitting in (the current directory, $(pwd) -- git worktree $pwd_top)."
 }
 JIT_HOST="unknown"
 JIT_HOST_REFUSAL_STATE="refusal-not-established"
@@ -50,7 +50,7 @@ jit_host_row() {
       printf '%s\n' "$line"
       return 0
     fi
-  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
+  done <<< "$JIT_HOST_REGISTRY"
   return 1
 }
 jit_host_sig_set() {
@@ -76,7 +76,7 @@ jit_host_detect() {
       fi
     done
     IFS="$old_ifs"
-  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
+  done <<< "$JIT_HOST_REGISTRY"
   printf 'unknown\n'
   return 0
 }
@@ -90,7 +90,7 @@ jit_host_refusal_state() {
     printf 'refusal-not-established\n'
     return 0
   }
-  IFS='|' read -r _ _ _ _ _ _ refusal _ < <(printf '%s\n' "$row")
+  IFS='|' read -r _ _ _ _ _ _ refusal _ <<< "$row"
   printf '%s\n' "${refusal:-refusal-not-established}"
 }
 jit_all_tool_aliases() {
@@ -101,7 +101,7 @@ jit_all_tool_aliases() {
     [ -n "$aliases" ] || continue
     all="$all$sep$aliases"
     sep=","
-  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
+  done <<< "$JIT_HOST_REGISTRY"
   printf '%s\n' "$all"
 }
 JIT_HOST="$(jit_host_detect 2> /dev/null)" \
@@ -1276,7 +1276,7 @@ jit_fm_get() { # VAR, memo, field
 JIT_VALID_MODE_RE='^(remind|block|once)(,(remind|block|once))*$'
 JIT_VALID_REQUIRES_RE='^[A-Za-z0-9._+-]{1,255}$'
 JIT_MACRO_ANCHOR='(^|[;&|\n] *)'
-JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|env|sudo|nohup|nice|time)[[:space:]]+)*'
+JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|[e]nv|sudo|nohup|nice|time)[[:space:]]+)*'
 JIT_MACRO_OPT='(-[^[:space:];&|]*[[:space:]]+([^-;&|[:space:]][^[:space:];&|]*[[:space:]]+)?)*'
 JIT_MACRO_END='($|[[:space:];&|])'
 
@@ -1403,7 +1403,7 @@ jit_scan_entry_ages() {
       n=$((n + 1))
       if [ -z "$emin" ] || [ "$epoch" -lt "$emin" ]; then emin="$epoch"; fi
       if [ -z "$emax" ] || [ "$epoch" -gt "$emax" ]; then emax="$epoch"; fi
-    done < <(printf '%s\n' "$out")
+    done <<< "$out"
     if [ "$n" -ge 2 ] && [ -n "$emin" ] && [ -n "$emax" ] && [ $((emax - emin)) -le "$window" ]; then
       jit_log_write "[$(_ts)] entry-ages declined for $layer: $n files within $((emax - emin))s of each other (looks like a checkout, not real age data)"
       continue
@@ -1415,7 +1415,7 @@ jit_scan_entry_ages() {
         continue
       fi
       JIT_ENTRY_AGES="$JIT_ENTRY_AGES${JIT_ENTRY_AGES:+$JIT_NL}$layer/$line"
-    done < <(printf '%s\n' "$out")
+    done <<< "$out"
   done
 }
 export JIT_KEYWORD_WITHHELD='<withheld: not a plain keyword>'

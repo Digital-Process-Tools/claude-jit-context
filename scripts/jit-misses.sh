@@ -213,7 +213,7 @@ case "$SIZE_THRESHOLD" in "" | *[!0-9]*)
 esac
 
 if [ -z "$LOG" ]; then
-  LOG="${CLAUDE_PROJECT_DIR:-$PWD}/.claude/jit-context/.discovery/logs/hooks.log"
+  LOG="${CLAUDE_PROJECT_DIR:-$(pwd)}/.claude/jit-context/.discovery/logs/hooks.log"
 fi
 
 skip() {
@@ -291,7 +291,7 @@ else
       GENERIC_STATE=missing
       break
     fi
-  done < <(printf '%s\n' "$GENERIC_MEMBERS")
+  done <<< "$GENERIC_MEMBERS"
 fi
 # awk reads each member as an input file ahead of the log, told apart from the log by
 # FILENAME (isgenericfile[], not FNR==NR) -- an empty list would otherwise make the
@@ -642,7 +642,7 @@ GENERIC_ARG_FILES=()
 if [ -n "$GENERIC_ARG_FILES_ENV" ]; then
   while IFS= read -r _gw_member; do
     [ -n "$_gw_member" ] && GENERIC_ARG_FILES+=("$_gw_member")
-  done < <(printf '%s\n' "$GENERIC_ARG_FILES_ENV")
+  done <<< "$GENERIC_ARG_FILES_ENV"
 fi
 if [ -n "$TAIL" ]; then
   # `-` is stdin. FILENAME is "-" (gawk) or "" (one-true-awk) there, and neither is ever

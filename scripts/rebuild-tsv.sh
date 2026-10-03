@@ -39,7 +39,7 @@ jit_host_row() {
       printf '%s\n' "$line"
       return 0
     fi
-  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
+  done <<< "$JIT_HOST_REGISTRY"
   return 1
 }
 jit_host_sig_set() {
@@ -65,7 +65,7 @@ jit_host_detect() {
       fi
     done
     IFS="$old_ifs"
-  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
+  done <<< "$JIT_HOST_REGISTRY"
   printf 'unknown\n'
   return 0
 }
@@ -79,7 +79,7 @@ jit_host_refusal_state() {
     printf 'refusal-not-established\n'
     return 0
   }
-  IFS='|' read -r _ _ _ _ _ _ refusal _ < <(printf '%s\n' "$row")
+  IFS='|' read -r _ _ _ _ _ _ refusal _ <<< "$row"
   printf '%s\n' "${refusal:-refusal-not-established}"
 }
 jit_all_tool_aliases() {
@@ -90,7 +90,7 @@ jit_all_tool_aliases() {
     [ -n "$aliases" ] || continue
     all="$all$sep$aliases"
     sep=","
-  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
+  done <<< "$JIT_HOST_REGISTRY"
   printf '%s\n' "$all"
 }
 JIT_HOST="$(jit_host_detect 2> /dev/null)" \
@@ -1231,7 +1231,7 @@ jit_frontmatter() {
 JIT_VALID_MODE_RE='^(remind|block|once)(,(remind|block|once))*$'
 JIT_VALID_REQUIRES_RE='^[A-Za-z0-9._+-]{1,255}$'
 JIT_MACRO_ANCHOR='(^|[;&|\n] *)'
-JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|env|sudo|nohup|nice|time)[[:space:]]+)*'
+JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|[e]nv|sudo|nohup|nice|time)[[:space:]]+)*'
 JIT_MACRO_OPT='(-[^[:space:];&|]*[[:space:]]+([^-;&|[:space:]][^[:space:];&|]*[[:space:]]+)?)*'
 JIT_MACRO_END='($|[[:space:];&|])'
 jit_macro_word() {
@@ -1374,9 +1374,9 @@ if [ "${CLAUDE_PROJECT_DIR+set}" = "set" ] && [ -z "$CLAUDE_PROJECT_DIR" ]; then
   echo "FATAL    refusing: CLAUDE_PROJECT_DIR is set but empty" >&2
   echo "         Something exported CLAUDE_PROJECT_DIR without giving it a value -- an" >&2
   echo "         interpolated variable that itself never resolved, most likely. JIT_BASE" >&2
-  echo "         would otherwise fall through to \$PWD/.claude/jit-context (common.sh)," >&2
+  echo "         would otherwise fall through to the current directory's .claude/jit-context (common.sh)," >&2
   echo "         which is whatever tree this shell happens to be standing in (#417)." >&2
-  echo "         Unset CLAUDE_PROJECT_DIR outright to use \$PWD on purpose, or export" >&2
+  echo "         Unset CLAUDE_PROJECT_DIR outright to use the current directory on purpose, or export" >&2
   echo "         it with a real value." >&2
   exit 2
 fi
@@ -1455,7 +1455,7 @@ if [ "$JIT_DIMS_FOUND" = 0 ]; then
   echo "         with an exit 0. Currently CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so the current directory>}" >&2
   exit 2
 fi
-echo "rebuild-tsv: writing JIT_BASE=$JIT_BASE (CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so the current directory>}, cwd=$PWD)" >&2
+echo "rebuild-tsv: writing JIT_BASE=$JIT_BASE (CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so the current directory>}, cwd=$(pwd))" >&2
 truncate_index() {
   local tsv="$1" disp="${2:-$1}" why=""
   if [ -L "$tsv" ]; then
@@ -1595,7 +1595,7 @@ else
       _gw_n=$(LC_ALL=C awk 'END{print NR+0}' "$_gw_member" 2> /dev/null)
       case "$_gw_n" in "" | *[!0-9]*) _gw_n=0 ;; esac
       GENERIC_WORDS_LINES=$((GENERIC_WORDS_LINES + _gw_n))
-    done < <(printf '%s\n' "$GENERIC_WORDS_MEMBERS")
+    done <<< "$GENERIC_WORDS_MEMBERS"
   fi
   if [ -n "$GENERIC_WORDS_UNREADABLE" ]; then
     echo "FATAL    generic-word classifier: $GENERIC_WORDS_FILE_SAFE names a directory holding an unreadable member ($GENERIC_WORDS_UNREADABLE) -- every keyword this run will read as non-generic (the pre-#232 degrade), which would otherwise be silent. Fix its permissions or unset JIT_CONTEXT_GENERIC_WORDS to accept the degrade on purpose." >&2

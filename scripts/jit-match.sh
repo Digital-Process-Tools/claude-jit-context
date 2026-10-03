@@ -64,7 +64,7 @@ jit_host_row() {
       printf '%s\n' "$line"
       return 0
     fi
-  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
+  done <<< "$JIT_HOST_REGISTRY"
   return 1
 }
 jit_host_sig_set() {
@@ -90,7 +90,7 @@ jit_host_detect() {
       fi
     done
     IFS="$old_ifs"
-  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
+  done <<< "$JIT_HOST_REGISTRY"
   printf 'unknown\n'
   return 0
 }
@@ -104,7 +104,7 @@ jit_host_refusal_state() {
     printf 'refusal-not-established\n'
     return 0
   }
-  IFS='|' read -r _ _ _ _ _ _ refusal _ < <(printf '%s\n' "$row")
+  IFS='|' read -r _ _ _ _ _ _ refusal _ <<< "$row"
   printf '%s\n' "${refusal:-refusal-not-established}"
 }
 jit_all_tool_aliases() {
@@ -115,7 +115,7 @@ jit_all_tool_aliases() {
     [ -n "$aliases" ] || continue
     all="$all$sep$aliases"
     sep=","
-  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
+  done <<< "$JIT_HOST_REGISTRY"
   printf '%s\n' "$all"
 }
 JIT_HOST="$(jit_host_detect 2> /dev/null)" \
@@ -1245,7 +1245,7 @@ jit_fm_get() { # VAR, memo, field
 JIT_VALID_MODE_RE='^(remind|block|once)(,(remind|block|once))*$'
 JIT_VALID_REQUIRES_RE='^[A-Za-z0-9._+-]{1,255}$'
 JIT_MACRO_ANCHOR='(^|[;&|\n] *)'
-JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|env|sudo|nohup|nice|time)[[:space:]]+)*'
+JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|[e]nv|sudo|nohup|nice|time)[[:space:]]+)*'
 JIT_MACRO_OPT='(-[^[:space:];&|]*[[:space:]]+([^-;&|[:space:]][^[:space:];&|]*[[:space:]]+)?)*'
 JIT_MACRO_END='($|[[:space:];&|])'
 
@@ -1317,7 +1317,7 @@ JIT_ENTRY_AGES_MAX=8192
 export JIT_ENTRY_AGES=""
 export JIT_KEYWORD_WITHHELD='<withheld: not a plain keyword>'
 JIT_MISSING_REQUIRES_MAX=4096
-BASE="$PWD/.claude/jit-context"
+BASE="$(pwd)/.claude/jit-context"
 TEXT=""
 TEXT_SET=0
 FORMAT="text"
@@ -1424,15 +1424,21 @@ HOOK_ENV=(CLAUDE_PROJECT_DIR="$PROJECT" JIT_SAMPLE_CALL=1)
 if [ "$SUMMARY" = 1 ]; then
   HOOK_ENV+=(JIT_CONTEXT_INJECT=summary)
 fi
+jit_match_run_hook() {
+  (
+    for kv in "${HOOK_ENV[@]}"; do export "$kv"; done
+    bash "$SCRIPT_DIR/pre-prompt-hook.sh"
+  )
+}
 HOOK_STDERR_CHECKED=0
 ERRF="$(mktemp "${TMPDIR:-/tmp}/claude-jit-match-XXXXXXXX" 2> /dev/null)" || ERRF=""
 if [ -n "$ERRF" ]; then
-  HOOK_OUT="$(printf '%s' "$PAYLOAD" | env "${HOOK_ENV[@]}" bash "$SCRIPT_DIR/pre-prompt-hook.sh" 2> "$ERRF")"
+  HOOK_OUT="$(printf '%s' "$PAYLOAD" | jit_match_run_hook 2> "$ERRF")"
   HOOK_STDERR="$(cat "$ERRF" 2> /dev/null)"
   HOOK_STDERR_CHECKED=1
   rm -f "$ERRF"
 else
-  HOOK_OUT="$(printf '%s' "$PAYLOAD" | env "${HOOK_ENV[@]}" bash "$SCRIPT_DIR/pre-prompt-hook.sh" 2> /dev/null)"
+  HOOK_OUT="$(printf '%s' "$PAYLOAD" | jit_match_run_hook 2> /dev/null)"
   HOOK_STDERR=""
 fi
 RESULT="$(

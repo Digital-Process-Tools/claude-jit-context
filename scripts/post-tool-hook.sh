@@ -21,7 +21,7 @@ jit_host_row() {
       printf '%s\n' "$line"
       return 0
     fi
-  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
+  done <<< "$JIT_HOST_REGISTRY"
   return 1
 }
 jit_host_sig_set() {
@@ -47,7 +47,7 @@ jit_host_detect() {
       fi
     done
     IFS="$old_ifs"
-  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
+  done <<< "$JIT_HOST_REGISTRY"
   printf 'unknown\n'
   return 0
 }
@@ -61,7 +61,7 @@ jit_host_refusal_state() {
     printf 'refusal-not-established\n'
     return 0
   }
-  IFS='|' read -r _ _ _ _ _ _ refusal _ < <(printf '%s\n' "$row")
+  IFS='|' read -r _ _ _ _ _ _ refusal _ <<< "$row"
   printf '%s\n' "${refusal:-refusal-not-established}"
 }
 jit_all_tool_aliases() {
@@ -72,7 +72,7 @@ jit_all_tool_aliases() {
     [ -n "$aliases" ] || continue
     all="$all$sep$aliases"
     sep=","
-  done < <(printf '%s\n' "$JIT_HOST_REGISTRY")
+  done <<< "$JIT_HOST_REGISTRY"
   printf '%s\n' "$all"
 }
 jit_canonical_tool() {
@@ -1221,7 +1221,7 @@ jit_fm_get() { # VAR, memo, field
 JIT_VALID_MODE_RE='^(remind|block|once)(,(remind|block|once))*$'
 JIT_VALID_REQUIRES_RE='^[A-Za-z0-9._+-]{1,255}$'
 JIT_MACRO_ANCHOR='(^|[;&|\n] *)'
-JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|env|sudo|nohup|nice|time)[[:space:]]+)*'
+JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|[e]nv|sudo|nohup|nice|time)[[:space:]]+)*'
 JIT_MACRO_OPT='(-[^[:space:];&|]*[[:space:]]+([^-;&|[:space:]][^[:space:];&|]*[[:space:]]+)?)*'
 JIT_MACRO_END='($|[[:space:];&|])'
 
@@ -1279,7 +1279,7 @@ PT_FP=""
   IFS= read -r PT_TOOL
   IFS= read -r PT_SESSION
   PT_FP="$(cat)"
-} < <(printf '%s\n' "$PT_PARSED")
+} <<< "$PT_PARSED"
 PT_TOOL_PRIORITY=0
 for pt_variant in $(jit_canonical_tool "$JIT_TOOL_ALIASES" "$PT_TOOL"); do
   case "$pt_variant" in
@@ -1376,13 +1376,13 @@ jit_pt_canon_dir() {
 JIT_BASE_ABS="$JIT_BASE"
 case "$JIT_BASE_ABS" in
   /*) ;;
-  *) JIT_BASE_ABS="$PWD/$JIT_BASE_ABS" ;;
+  *) JIT_BASE_ABS="$(pwd)/$JIT_BASE_ABS" ;;
 esac
 JIT_BASE_CANON="$(jit_pt_canon_dir "$JIT_BASE_ABS")"
 PT_FP_ABS="$PT_FP"
 case "$PT_FP_ABS" in
   /*) ;;
-  *) PT_FP_ABS="$PWD/$PT_FP_ABS" ;;
+  *) PT_FP_ABS="$(pwd)/$PT_FP_ABS" ;;
 esac
 case "$PT_FP_ABS" in
   */)
