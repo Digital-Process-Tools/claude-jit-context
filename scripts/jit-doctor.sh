@@ -64,7 +64,7 @@ usage() {
   printf '%s\n' \
     'jit-doctor.sh -- is any of this running at all, and against which tree?' \
     '' \
-    '  bash scripts/jit-doctor.sh [--base DIR]' \
+    '  jit-doctor [--base DIR]' \
     '' \
     '  --base DIR   the entry tree to judge. Default: $CLAUDE_PROJECT_DIR/.claude/jit-context,' \
     '               which is what the hooks read (with CLAUDE_PROJECT_DIR unset it falls' \
@@ -698,7 +698,7 @@ for _dim in tools paths vocabulary; do
       if [ "$_md_n" -gt 0 ]; then
         # EXACT, and the one thing here that is a defect rather than a hint: the hooks
         # read 00-index.tsv and nothing else, so every rule in this layer is inert.
-        _note="no index -- every rule in this layer is inert, run scripts/rebuild-tsv.sh"
+        _note="no index -- every rule in this layer is inert, run the rebuild-tsv tool this plugin ships"
         DEFECTS=$((DEFECTS + 1))
       else
         _note="no index, and no entries either"
@@ -862,7 +862,7 @@ fi
 echo ""
 
 echo "next"
-printf '  %s\n' "bash scripts/jit-dry-run.sh --base $BASE"
+printf '  %s\n' "jit-dry-run --base $BASE"
 printf '  %s\n' "    the pattern lint and the exact staleness check -- a rule the matcher cannot"
 printf '  %s\n' "    honour, and frontmatter the index does not carry. This tool reimplements"
 printf '  %s\n' "    neither of them, on purpose: two answers to one question drift."

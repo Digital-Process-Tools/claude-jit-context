@@ -972,7 +972,7 @@ check_index_current() {
       # the directory does and that no other tool agrees with.
       disp="$(jit_report_name "$name")"
       printf 'STALE    %-18s %-30s frontmatter and index disagree — this rule is not the one running\n' "$label" "$disp"
-      printf '         %-18s %-30s run scripts/rebuild-tsv.sh in that tree and commit the index\n' "" ""
+      printf '         %-18s %-30s run the rebuild-tsv tool in that tree and commit the index\n' "" ""
     fi
   done
 }
@@ -1268,7 +1268,7 @@ done
 
 if [ "$INDEXES" -eq 0 ]; then
   echo "SKIPPED: no 00-index.tsv under $BASE."
-  echo "         Entries are inert until indexed — run scripts/rebuild-tsv.sh in that tree."
+  echo "         Entries are inert until indexed — run the rebuild-tsv tool in that tree."
   echo "         Nothing was checked. This is not a clean result."
   exit 2
 fi
@@ -1443,7 +1443,7 @@ if [ "$TREE_INJECT" = full ]; then
   echo "every match on this tree injects the whole entry body."
   if [ "$NODESC" -gt 0 ]; then
     echo "$NODESC entr(ies) carry no description:, so summary mode could only NAME them."
-    echo "Run scripts/rebuild-tsv.sh in that tree for the per-match sizes and the names."
+    echo "Run the rebuild-tsv tool in that tree for the per-match sizes and the names."
   else
     echo "Every entry carries a description:, so JIT_CONTEXT_INJECT=summary is available."
   fi

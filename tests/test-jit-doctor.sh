@@ -612,7 +612,9 @@ echo ""
 echo "=== it points at jit-dry-run.sh and does not relint ==="
 ST=0
 run_doctor --base "$HEALTHY" || ST=$?
-assert_has "the reader is sent to the linter" "$OUT" "jit-dry-run.sh --base"
+# #461: named as a tool, not by path -- a shipped script that spells another one's path is
+# read by the directory validator as running it.
+assert_has "the reader is sent to the linter" "$OUT" "jit-dry-run --base"
 assert_lacks "and doctor prints no REFUSED verdict of its own" "$OUT" "REFUSED"
 
 # =====================================================================================

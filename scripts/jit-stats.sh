@@ -5,7 +5,7 @@
 # byte record agrees, a size -- and nothing else. This is where the detail #367
 # deliberately pulled off that line goes back to: which entries, which dimension and
 # layer, the word or pattern that matched, the bytes each one cost, and what keeps
-# missing (scripts/jit-misses.sh).
+# missing (jit-misses).
 #
 # A DELIBERATE, HAND-RUN diagnostic, not a hook -- paths/00-manual/tooling.md's
 # contract, not hooks.md's: fail loudly, exit codes carry meaning, never silently
@@ -388,7 +388,7 @@ if [ "$N_SHOWN" -eq 0 ]; then
 fi
 
 echo ""
-echo "--- recurring misses (scripts/jit-misses.sh) ---"
+echo "--- recurring misses (jit-misses) ---"
 bash "$SCRIPT_DIR/jit-misses.sh" --log "$LOG_FILE" --top "$MISSES_TOP"
 
 exit 0
