@@ -146,7 +146,7 @@ function jit_bad_pattern(p,   i, n, c, nx, depth, inbr, brpos) {
   # matches nothing, on both engines, while awk exits 0 -- the exact silence this guard
   # exists to break. Anchored on `@name` followed by a space or end of pattern, so a
   # pattern that genuinely starts with a literal @ (`@app/.*`) is untouched.
-  if (p ~ /^@[A-Za-z][A-Za-z0-9-]*([[:space:]]|$)/) return "unexpanded macro -- run scripts/rebuild-tsv.sh"
+  if (p ~ /^@[A-Za-z][A-Za-z0-9-]*([[:space:]]|$)/) return "unexpanded macro -- rebuild the index with the rebuild-tsv tool this plugin ships"
   n = length(p)
   depth = 0
   inbr = 0
@@ -598,7 +598,7 @@ function jit_unreached_add(list, item) {
 }
 function jit_refusal_notice(list, n) {
   return "# JIT Context: " n " rule(s) could not be evaluated, so they did NOT run\n" list \
-    "\nA pattern the matcher cannot honour is not a rule that did not match, and until now the two looked identical. Lint the tree that owns these rules:\n  bash scripts/jit-dry-run.sh --base <tree>/.claude/jit-context"
+    "\nA pattern the matcher cannot honour is not a rule that did not match, and until now the two looked identical. Lint the tree that owns these rules with the jit-dry-run tool this plugin ships, --base <tree>/.claude/jit-context"
 }
 # The third state for a LAYER rather than for a row (#176). Everything above reports a
 # rule the matcher read and could not honour; this reports a directory of rules the

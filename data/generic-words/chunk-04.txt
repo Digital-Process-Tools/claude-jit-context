@@ -10498,7 +10498,6 @@ talismanique
 talismans
 talith
 talitre
-talk
 talkative
 talked
 talker

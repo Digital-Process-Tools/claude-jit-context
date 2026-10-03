@@ -9731,7 +9731,6 @@ drifter
 drifting
 drifts
 driftwood
-drill
 drille
 drilled
 driller
@@ -17371,7 +17370,6 @@ festoyer
 festoyeur
 feta
 fetard
-fetch
 fetched
 fetches
 fetching
@@ -17849,7 +17847,6 @@ finesses
 finessing
 finest
 finette
-finger
 fingered
 fingering
 fingernail

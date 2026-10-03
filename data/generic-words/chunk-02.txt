@@ -14540,7 +14540,6 @@ linkage
 linked
 linker
 linking
-links
 linneen
 lino
 linogravure
@@ -15702,7 +15701,6 @@ lyncheur
 lynching
 lynchpin
 lynchpins
-lynx
 lyonnais
 lyophile
 lyophilisat
@@ -16126,7 +16124,6 @@ maigreur
 maigrichon
 maigriot
 maigrir
-mail
 mailbox
 mailboxes
 mailed

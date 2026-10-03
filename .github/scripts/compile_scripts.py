@@ -394,6 +394,24 @@ COMPILED_SCRIPTS = [
 ]
 
 
+_SCRIPT_DIR_DEF = 'case "$0" in */*) SCRIPT_DIR="${0%/*}" ;; *) SCRIPT_DIR="." ;; esac'
+
+
+def drop_dead_script_dir(script: str) -> str:
+    """Remove the SCRIPT_DIR definition when nothing else in the compiled file reads it.
+
+    It exists only to find common.sh; once the library is inlined it is dead code, and
+    its `SCRIPT_DIR="."` fallback is read by the directory validator as the script
+    naming a further file, `.`, which holds COMMAND_SCRIPT_NOT_FOLLOWED (#461). A file
+    that still uses SCRIPT_DIR anywhere else keeps the line untouched.
+    """
+    lines = script.split("\n")
+    users = [i for i, line in enumerate(lines) if "SCRIPT_DIR" in line]
+    if len(users) == 1 and lines[users[0]].strip() == _SCRIPT_DIR_DEF:
+        del lines[users[0]]
+    return "\n".join(lines)
+
+
 def compile_scripts(contents: dict[str, bytes]) -> dict[str, bytes]:
     """Mutate-and-return a {path: bytes} map: every script in COMPILED_SCRIPTS
     becomes self-contained and comment-stripped, LIBRARY_FILES are removed
@@ -460,7 +478,8 @@ def compile_scripts(contents: dict[str, bytes]) -> dict[str, bytes]:
     out = dict(contents)
     for path in COMPILED_SCRIPTS:
         protect_until = _usage_sed_end_line(text(path))
-        out[path] = strip_comments(compiled[path], protect_until).encode("utf-8")
+        out[path] = drop_dead_script_dir(
+            strip_comments(compiled[path], protect_until)).encode("utf-8")
     for path in LIBRARY_FILES:
         del out[path]
     return out
