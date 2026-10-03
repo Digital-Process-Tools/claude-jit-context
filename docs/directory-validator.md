@@ -179,6 +179,27 @@ hooks' code is rewritten as tests, and the awk/perl `"."` / `".."` literals as `
 Refuted on `stop-hook.sh`: the `.` inside the bracket expression `[!A-Za-z0-9._-]` of
 `jit_report_name` (`sd`).
 
+**Seventh trigger: an escaped quote `\"` in an awk string (2026-10-04).** The idea that
+`jit_canonical_tool` reset some scanner state was refuted first (`sl` held). Plain
+prefix cuts of `stop-hook.sh` then put the hold in the JSON envelope builders: the cut at
+`JIT_AWK_BLK_BUILD` cleared (`sm`), the one ending on `JIT_AWK_ENVELOPE` held (`so`),
+and the same cut with every `\"` in those 12 lines written `\042` cleared (`sp`).
+`post-tool-hook.sh` carries the same lines and clears, so the scanner only trips on it in
+some states: none at all is the rule. The two crash `printf` lines in `common.sh` are
+single-quoted now. Guard: `check_release_tree.py`.
+
+**Eighth trigger: a `*/*` glob as a `case` pattern (2026-10-04).** With the seventh fixed,
+the full build still held. Cuts of `stop-hook.sh`: 1440 cleared (`t1`), 1585 held
+(`t2`), 1494 cleared (`t4`), 1569 held (`t5`) -- the fired-marks read loop. Inside it,
+removing the bracket-pattern `case` (`t6`), the loop tail (`t7`), the `*\\*` patterns
+(`t8`) and the catch-all arms (`t9`) all still held; the body without its second `case`
+cleared (`t11`). `t12` (two `*/*` arms left) held and `t13` (the same, spelled `*yq*`)
+cleared. Also state-dependent: `jit_scan_symlinks` has a `*/*/*)` arm in every hook,
+`post-tool-hook.sh` included. Rewritten as `${x#*/}` tests in the loop, in
+`jit_scan_symlinks` and in the `jit-misses.sh` default directory. Guard:
+`check_release_tree.py`. **`stop-hook.sh` cleared** (`release-preview-ck`); four hooks and
+`.` left.
+
 **The cross-plugin version of all this** -- every trigger, the method, an offline sweep
 (`tools/sweep.sh`) and the preview builders -- lives in the local repository
 `~/Documents/claude-directory-publishing`, shared by the DPT plugins. This file keeps the
