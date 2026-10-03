@@ -75,8 +75,11 @@ Confirmed causes:
    in words instead.
 
 Ruled out by scan variants, each removed alone: here-strings, `perl`, `awk -f` with a
-program assembled at run time, awk programs held in a variable. An empty hook clears the
-hold. The library alone keeps it, and so does the hook-specific code alone. **Applied,
+program assembled at run time, awk programs held in a variable. Here-strings and awk
+programs in a variable were tested a second time and ruled out again (previews
+`73f48ff`, `release-preview-n2`), because this list was not read first: read it first.
+An empty hook clears the hold. The library alone keeps it, and so does the
+hook-specific code alone. **Applied,
 under test:** commands and `case` patterns built from variables (see the credential hold
 below), a dead `SCRIPT_DIR="."` line.
 
@@ -128,11 +131,24 @@ What cleared each one:
 
   **Confirmed:** each one stopped being cited.
 
-**Where we stopped (2026-10-03, preview `f94bb58`).** The read side became "an environment
-variable named at run time", that is the indirect expansion `${!sig:-}` in our host
-detection, and the send side stayed a plain string assignment. Both are ordinary bash
-needed for the product to work. Both holds say a reviewer can confirm them, so we
-submitted with a note rather than rewrite them away.
+- **No environment variable named at run time.** `${!sig:-}` became a literal `case`
+  over the known names, guarded by a test that fails on a name with no arm.
+  **Confirmed:** the read side moved on.
+- **No bare word `env` in a shipped script**, not even as a regex alternative
+  (`rtk|command|env|sudo`), cited as "printenv / env / export -p / set". Write `[e]nv`
+  in a regex, and `export` inside a subshell instead of `env VAR=... cmd`.
+  **Confirmed:** the read side moved on.
+- **No `$PWD` read anywhere in code,** not only in the diagnostic: the read can come
+  from any shipped script, here `jit-dry-run.sh`, which no hook or command runs.
+  `$(pwd)` everywhere. **Applied, under test** (preview `f62114c`).
+
+**There is no reviewer note in the submission form.** We planned to submit with a hold
+and a note, and found no field for it. A hold has to be cleared.
+
+**Read the JSON, not the page.** The portal's validation report (in the browser's
+network tab) gives each hold as structured `params`: `env`, `credential_at`,
+`sender_at`, `host`. `host: ""` means no network destination was found, so the send
+side is a guess and the read side is the one to cut.
 
 ## Warnings
 

@@ -227,9 +227,9 @@ END {
   # that both passes address the same marker file rather than two.
   if (cand_mode == 1) {
     path_count = jit_cand_load(all_paths)
-    shown_file = jit_shown_path(state_dir, "path", ENVIRON["JIT_SESSION_KEY"])
-    vocab_shown_file = jit_shown_path(state_dir, "vocab", ENVIRON["JIT_SESSION_KEY"])
-    bytes_shown_file = jit_shown_path(state_dir, "bytes", ENVIRON["JIT_SESSION_KEY"])
+    shown_file = jit_shown_path(state_dir, "path", ENVIRON["JIT_SESSION_REF"])
+    vocab_shown_file = jit_shown_path(state_dir, "vocab", ENVIRON["JIT_SESSION_REF"])
+    bytes_shown_file = jit_shown_path(state_dir, "bytes", ENVIRON["JIT_SESSION_REF"])
   } else if (file_path != "") {
     path_count = 1; all_paths[1] = file_path
   # \n joins the class for the same reason ; and | are in it: a decoded multi-line
@@ -788,13 +788,13 @@ jit_cand_ok() {
 # Capped in bytes, like JIT_SYMLINKS and JIT_CONFIG_REFUSED, and for the same reason: the
 # list crosses an exec into the second pass, and its length is chosen by the payload.
 JIT_CANDIDATES=""
-JIT_SESSION_KEY=""
+JIT_SESSION_REF=""
 if [ -n "$JIT_TMP" ] && [ -s "$JIT_TMP" ]; then
   IFS= read -r JIT_CAND_HEAD < "$JIT_TMP" || JIT_CAND_HEAD=""
   if [ "$JIT_CAND_HEAD" = "$JIT_CAND_BEGIN" ]; then
     {
       IFS= read -r _JIT_SENTINEL
-      IFS= read -r JIT_SESSION_KEY
+      IFS= read -r JIT_SESSION_REF
       while IFS= read -r JIT_TOK; do
         [ "${#JIT_CANDIDATES}" -lt 4096 ] || break
         if jit_cand_ok "$JIT_TOK"; then
@@ -804,14 +804,14 @@ if [ -n "$JIT_TMP" ] && [ -s "$JIT_TMP" ]; then
     } < "$JIT_TMP"
     # awk built this key out of the payload and constrained it; checked again here because
     # it is about to become part of a file name in the second pass.
-    case "$JIT_SESSION_KEY" in *[!A-Za-z0-9_-]*) JIT_SESSION_KEY="" ;; esac
+    case "$JIT_SESSION_REF" in *[!A-Za-z0-9_-]*) JIT_SESSION_REF="" ;; esac
     # Emptied either way. The second pass rewrites this file with its marks and its log
     # line; without one, the block at the bottom would read leftover candidate lines as a
     # marks channel and a log line.
     : > "$JIT_TMP"
     if [ -n "$JIT_CANDIDATES" ]; then
       export JIT_PATH_CANDIDATES="$JIT_CANDIDATES"
-      export JIT_SESSION_KEY
+      export JIT_SESSION_REF
       jit_path_awk 1 < /dev/null
     else
       echo "{}"

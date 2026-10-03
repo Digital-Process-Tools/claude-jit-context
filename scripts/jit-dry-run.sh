@@ -344,7 +344,7 @@ SKIPPED_READS=0
 # of this file.
 BLOCKS_DESYNC=0
 VOCAB_REFUSED=0
-VOCAB_KEYS=0
+VOCAB_TERMS=0
 VOCAB_FILES=0
 WARNED=0
 # Counted apart from WARNED, and not folded into it, because the two tails say different
@@ -1152,7 +1152,7 @@ for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; 
     # "## Modules" section and are not something anybody authored as a rule.
     case "$tsv" in
       */00-index.tsv)
-        VOCAB_KEYS=$((VOCAB_KEYS + 1))
+        VOCAB_TERMS=$((VOCAB_TERMS + 1))
         # bash 3.2 ships on macOS and has no associative arrays, so distinct file names
         # are tracked in a space-delimited string. This is a count in a summary line and
         # nothing branches on it, so a pathological name that fooled the membership test
@@ -1464,8 +1464,8 @@ echo "$LISTED rule(s) indexed, $CHECKED regex pattern(s) compiled, $REFUSED refu
 # the run does not have -- but leaving them out entirely printed "0 rule(s) indexed" over a
 # tree holding a rule that fires, which is this repository's own defect class. A project
 # seeded by jit-init.sh is exactly that tree, and it is the first thing a new user lints.
-if [ "$VOCAB_KEYS" -gt 0 ]; then
-  echo "$VOCAB_KEYS vocabulary keyword(s) across $VOCAB_FILES entry file(s) — literal, nothing to compile."
+if [ "$VOCAB_TERMS" -gt 0 ]; then
+  echo "$VOCAB_TERMS vocabulary keyword(s) across $VOCAB_FILES entry file(s) — literal, nothing to compile."
 fi
 if [ "$STALE" -gt 0 ]; then
   echo "$STALE entry file(s) whose frontmatter is not what the index carries."

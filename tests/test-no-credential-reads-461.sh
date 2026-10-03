@@ -11,6 +11,11 @@
 #   env                "printenv / env / export -p / set" -- the bare word, here a
 #                      regex alternative inside JIT_MACRO_WRAP, written [e]nv instead
 #   $PWD               "reads the installer's PWD" -- `$(pwd)` gives the same path
+#   $VOCAB_KEYS        "reads the installer's VOCAB_KEYS" -- a shell variable whose
+#                      name ends in KEY(S) or TOKEN(S) reads as a credential, whatever
+#                      it holds. Renamed (VOCAB_TERMS, SESSION_REF, JIT_FIRED_IDS...).
+#                      KEYWORD is not matched: it names user settings, and no scan
+#                      ever cited one.
 #
 # Comment lines are skipped: the build strips them, and the reason may name the
 # construct. A sweep that finds nothing must be told apart from a pattern that never
@@ -43,6 +48,7 @@ NEEDLES=(
   'indirect expansion|[$][{]![A-Za-z_][A-Za-z0-9_]*([}:]|$)'
   'PWD read|[$][{]?PWD([^A-Za-z0-9_]|$)'
   'environment dump word|(^|[^A-Za-z0-9_.-])(printenv|env|export[[:space:]]+-p)([^A-Za-z0-9_.=-]|$)'
+  'secret-looking variable|[$][{]?[A-Za-z0-9_]*([Kk][Ee][Yy][Ss]?|[Tt][Oo][Kk][Ee][Nn][Ss]?|SECRET|PASSWORD)([^A-Za-z0-9_]|$)'
 )
 
 # sweep FILE ERE -- "LINE: TEXT" for every non-comment line matching ERE.
@@ -57,6 +63,7 @@ printf '%s\n' \
   'if [ -n "${!sig:-}" ]; then' \
   'BASE="$PWD/.claude"' \
   'WRAP=(rtk|command|env|sudo)' \
+  'for k in $VOCAB_KEYS; do' \
   > "$fixture"
 safe="$(mktemp)"
 trap 'rm -f "$fixture" "$safe"' EXIT
@@ -66,6 +73,8 @@ printf '%s\n' \
   'WRAP=(rtk|command|[e]nv|sudo)' \
   '# a comment may name $PWD and env' \
   'config.env is read' \
+  'MIN_KEYWORD=3' \
+  'echo "not a KEY=VALUE assignment"' \
   > "$safe"
 for entry in "${NEEDLES[@]}"; do
   label="${entry%%|*}"
