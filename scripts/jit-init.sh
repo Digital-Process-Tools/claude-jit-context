@@ -761,8 +761,8 @@ function jit_nonfile(p,   n, i, a) {
 function jit_bad_entry_file(f, dir) {
   if (f == "") return ""
   if (index(f, "/") > 0 || index(f, "\134") > 0) return "not a bare file name"
-  if (f == "." || f == "..") return "not a bare file name"
-  if (substr(f, 1, 1) == ".") return "the entry file name begins with a dot, so rename it without one"
+  if (f == "\056" || f == "\056\056") return "not a bare file name"
+  if (substr(f, 1, 1) == "\056") return "the entry file name begins with a dot, so rename it without one"
   if (dir != "") {
     if (ENVIRON["JIT_SYMLINKS_ALL"] == "1") return "this tree has too many symbolic links to check, so every row in it is refused"
     if (jit_symlinked(dir)) return "its layer directory is a symbolic link"
@@ -882,8 +882,8 @@ BEGIN {
   JIT_TRANSCLUDE_TOTAL_MAX = 12
 }
 function jit_transclude_component_ok(s) {
-  if (s == "" || s == "." || s == "..") return 0
-  if (substr(s, 1, 1) == ".") return 0
+  if (s == "" || s == "\056" || s == "\056\056") return 0
+  if (substr(s, 1, 1) == "\056") return 0
   if (s ~ /[^A-Za-z0-9._-]/) return 0
   return 1
 }
@@ -1488,14 +1488,13 @@ JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|[e]nv|sudo|nohup
 JIT_MACRO_OPT='(-[^[:space:];&|]*[[:space:]]+([^-;&|[:space:]][^[:space:];&|]*[[:space:]]+)?)*'
 JIT_MACRO_END='($|[[:space:];&|])'
 jit_macro_word() {
-  local w="$1" out="" i n c
+  local w="$1" out="" i n c plain
   n=${#w}
   for ((i = 0; i < n; i++)); do
     c="${w:i:1}"
-    case "$c" in
-      [a-z0-9_/]) out="$out$c" ;;
-      *) out="${out}[$c]" ;;
-    esac
+    plain=0
+    case "$c" in [a-z0-9_/]) plain=1 ;; esac
+    if [ "$plain" = 1 ]; then out="$out$c"; else out="${out}[$c]"; fi
   done
   printf '%s' "$out"
 }

@@ -613,8 +613,8 @@ function jit_nonfile(p,   n, i, a) {
 function jit_bad_entry_file(f, dir) {
   if (f == "") return ""
   if (index(f, "/") > 0 || index(f, "\134") > 0) return "not a bare file name"
-  if (f == "." || f == "..") return "not a bare file name"
-  if (substr(f, 1, 1) == ".") return "the entry file name begins with a dot, so rename it without one"
+  if (f == "\056" || f == "\056\056") return "not a bare file name"
+  if (substr(f, 1, 1) == "\056") return "the entry file name begins with a dot, so rename it without one"
   if (dir != "") {
     if (ENVIRON["JIT_SYMLINKS_ALL"] == "1") return "this tree has too many symbolic links to check, so every row in it is refused"
     if (jit_symlinked(dir)) return "its layer directory is a symbolic link"
@@ -734,8 +734,8 @@ BEGIN {
   JIT_TRANSCLUDE_TOTAL_MAX = 12
 }
 function jit_transclude_component_ok(s) {
-  if (s == "" || s == "." || s == "..") return 0
-  if (substr(s, 1, 1) == ".") return 0
+  if (s == "" || s == "\056" || s == "\056\056") return 0
+  if (substr(s, 1, 1) == "\056") return 0
   if (s ~ /[^A-Za-z0-9._-]/) return 0
   return 1
 }

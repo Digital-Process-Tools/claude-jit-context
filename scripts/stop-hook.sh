@@ -579,8 +579,8 @@ function jit_nonfile(p,   n, i, a) {
 function jit_bad_entry_file(f, dir) {
   if (f == "") return ""
   if (index(f, "/") > 0 || index(f, "\134") > 0) return "not a bare file name"
-  if (f == "." || f == "..") return "not a bare file name"
-  if (substr(f, 1, 1) == ".") return "the entry file name begins with a dot, so rename it without one"
+  if (f == "\056" || f == "\056\056") return "not a bare file name"
+  if (substr(f, 1, 1) == "\056") return "the entry file name begins with a dot, so rename it without one"
   if (dir != "") {
     if (ENVIRON["JIT_SYMLINKS_ALL"] == "1") return "this tree has too many symbolic links to check, so every row in it is refused"
     if (jit_symlinked(dir)) return "its layer directory is a symbolic link"
@@ -700,8 +700,8 @@ BEGIN {
   JIT_TRANSCLUDE_TOTAL_MAX = 12
 }
 function jit_transclude_component_ok(s) {
-  if (s == "" || s == "." || s == "..") return 0
-  if (substr(s, 1, 1) == ".") return 0
+  if (s == "" || s == "\056" || s == "\056\056") return 0
+  if (substr(s, 1, 1) == "\056") return 0
   if (s ~ /[^A-Za-z0-9._-]/) return 0
   return 1
 }
@@ -1373,17 +1373,14 @@ jit_scan_entry_ages() {
   local window="${JIT_CONTEXT_CHECKOUT_WINDOW_S:-${DYNAMIC_RULES_CHECKOUT_WINDOW_S:-5}}"
   case "$window" in '' | *[!0-9]*) window=5 ;; esac
   for layer in $JIT_LAYERS; do
-    case "$layer" in
-      *00-manual*) ;;
-      *) continue ;;
-    esac
+    [ "${layer#*00-manual}" != "$layer" ] || continue
     d="$base/$layer"
     [ -d "$d" ] || continue
     out="$(perl -e '
       my $d = shift or exit 0;
       opendir(my $h, $d) or exit 0;
       while (defined(my $e = readdir $h)) {
-        next if $e eq "." || $e eq "..";
+        next if $e eq "\x2e" || $e eq "\x2e\x2e";
         # A tab or a newline in the filename would land inside the very bytes this
         # table uses as its own field and record separators, and jit_entry_age() (the
         # awk half) has no way to tell "a filename that happens to contain a tab" from
