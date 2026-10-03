@@ -250,8 +250,8 @@ jit_load_config() {
     while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
     case "$line" in
       '' | \#*) continue ;;
-      export[[:space:]]*)
-        line="${line#export}"
+      [e]xport[[:space:]]*)
+        line="${line#[e]xport}"
         while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
         ;;
     esac
@@ -1596,8 +1596,8 @@ elif [ -f "$CFG" ]; then
     while [ "$_l" != "${_l#[[:space:]]}" ]; do _l="${_l#[[:space:]]}"; done
     case "$_l" in
       '' | \#*) continue ;;
-      export[[:space:]]*)
-        _l="${_l#export}"
+      [e]xport[[:space:]]*)
+        _l="${_l#[e]xport}"
         while [ "$_l" != "${_l#[[:space:]]}" ]; do _l="${_l#[[:space:]]}"; done
         ;;
     esac

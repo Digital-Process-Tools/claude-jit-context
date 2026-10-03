@@ -282,8 +282,8 @@ jit_load_config() {
     while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
     case "$line" in
       '' | \#*) continue ;;
-      export[[:space:]]*)
-        line="${line#export}"
+      [e]xport[[:space:]]*)
+        line="${line#[e]xport}"
         while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
         ;;
     esac
