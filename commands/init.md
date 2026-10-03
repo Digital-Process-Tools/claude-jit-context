@@ -1,12 +1,12 @@
 ---
 description: Seed .claude/jit-context with one live entry that says how to write the next one
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-init.sh:*)
+allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/jit-init.sh":*)
 ---
 
 Run the seeder and relay its output verbatim:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-init.sh --arguments-string '$ARGUMENTS'
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/jit-init.sh" --arguments-string '$ARGUMENTS'
 ```
 
 **The whole typed `$ARGUMENTS` string is handed through one synthetic `--arguments-string`

@@ -1,12 +1,12 @@
 ---
 description: What fired this session, on what word, and what it cost -- the detail the Stop line's one-line total points at.
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh:*)
+allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh":*)
 ---
 
 Run the report and relay its output verbatim:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh --arguments-string '$ARGUMENTS'
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/jit-stats.sh" --arguments-string '$ARGUMENTS'
 ```
 
 `${CLAUDE_PLUGIN_ROOT}` is the same resolution `commands/doctor.md` and `commands/init.md`

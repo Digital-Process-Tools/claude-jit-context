@@ -62,12 +62,16 @@ check_command() {
   # #439: a bare `allowed-tools: Bash` grants every shell command, which the
   # Anthropic directory holds as unrestricted shell access. The narrowed form names this
   # one script, invoked explicitly through bash so the grant text and the body's first
-  # words are byte-identical.
-  local want_grant="allowed-tools: Bash(bash \${CLAUDE_PLUGIN_ROOT}/scripts/$script:*)"
+  # words are byte-identical. #456: ${CLAUDE_PLUGIN_ROOT} is quoted in both the body and
+  # the grant -- a plugin root containing a space otherwise splits into several words
+  # before the script can parse its own flags, and the grant has to stay byte-identical
+  # to the quoted body for the Bash tool's permission check to match it (verified against
+  # a real `claude -p` run: an unquoted grant against a quoted body was DENIED).
+  local want_grant="allowed-tools: Bash(bash \"\${CLAUDE_PLUGIN_ROOT}/scripts/$script\":*)"
   if grep -qF "$want_grant" "$file"; then
-    ok "commands/$name narrows allowed-tools to bash \${CLAUDE_PLUGIN_ROOT}/scripts/$script"
+    ok "commands/$name narrows allowed-tools to bash \"\${CLAUDE_PLUGIN_ROOT}/scripts/$script\""
   else
-    bad "commands/$name narrows allowed-tools to bash \${CLAUDE_PLUGIN_ROOT}/scripts/$script" \
+    bad "commands/$name narrows allowed-tools to bash \"\${CLAUDE_PLUGIN_ROOT}/scripts/$script\"" \
       "wanted: $want_grant" "got: $(grep -E '^allowed-tools:' "$file")"
   fi
 
