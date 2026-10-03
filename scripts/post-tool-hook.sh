@@ -221,13 +221,11 @@ if [ "$PT_TOOL" = "Bash" ]; then
   # note above), not a new failure mode, and the Windows CI leg's own shell is Git
   # Bash, which itself emits forward-slash paths -- so the gap is narrow in
   # practice and untested here rather than measured as reachable.
-  case "$PT_FP" in
-    *"/.claude/jit-context/"*) ;;
-    *)
-      echo '{}'
-      exit 0
-      ;;
-  esac
+  # #461: a prefix test, not a quoted literal in a case pattern (the ninth trigger).
+  if [ "${PT_FP#*/.claude/jit-context/}" = "$PT_FP" ]; then
+    echo '{}'
+    exit 0
+  fi
   # Explore self-review on #301 (live-reproduced, both fixed here):
   #
   #   1. An unanchored `*'sed'*'-i'*` substring test cannot tell a real `-i` FLAG
@@ -311,13 +309,11 @@ esac
 # ALWAYS reaches the canonical check below, whether or not it also happened to pass the
 # old lexical prefix test -- so the physically-outside-but-lexically-inside case can no
 # longer skip it.
-case "$PT_FP" in
-  *"/.claude/jit-context/"*) ;;
-  *)
-    echo '{}'
-    exit 0
-    ;;
-esac
+# #461: a prefix test, not a quoted literal in a case pattern (the ninth trigger).
+if [ "${PT_FP#*/.claude/jit-context/}" = "$PT_FP" ]; then
+  echo '{}'
+  exit 0
+fi
 
 # jit_pt_canon_dir(): prints $1's physical location on disk today, resolving
 # symlinks in whatever prefix of it already exists and reattaching whatever is
