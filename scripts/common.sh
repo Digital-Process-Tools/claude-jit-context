@@ -100,7 +100,11 @@ _ms() {
 if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
   JIT_BASE="$CLAUDE_PROJECT_DIR/.claude/jit-context"
 else
-  JIT_BASE="$PWD/.claude/jit-context"
+  # `pwd`, not `$PWD`: the doctor inlines this line, and the directory validator pairs a
+  # read of $PWD with any runtime-built string in the same file as a credential leaving
+  # the machine. The subshell costs one fork only here, and Claude Code always sets
+  # CLAUDE_PROJECT_DIR, so a real session never takes this branch.
+  JIT_BASE="$(pwd)/.claude/jit-context"
 fi
 # Exported (#378): {{dimension/layer/file.md}} transclusion resolves its target through
 # ENVIRON["JIT_BASE"] inside the shared awk fragment, the same channel JIT_SYMLINKS below
