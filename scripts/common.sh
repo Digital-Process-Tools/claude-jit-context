@@ -1001,6 +1001,20 @@ jit_config_refuse() {
   JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED${JIT_CONFIG_REFUSED:+$JIT_NL}- line $1: $2"
 }
 
+# jit_config_name_ok NAME -- 0 for JIT_CONTEXT_*, DYNAMIC_RULES_* or DVSI_* followed by
+# at least one more character, every character a letter, digit or underscore: the set
+# `^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$` accepted. #461: case globs, not a
+# `[[ =~ ]]` regex -- the directory validator held every hook while that regex was in
+# jit_load_config (release-preview-x4).
+jit_config_name_ok() {
+  local LC_ALL=C
+  case "$1" in *[!A-Za-z0-9_]*) return 1 ;; esac
+  case "$1" in JIT_CONTEXT_?*) return 0 ;; esac
+  case "$1" in DYNAMIC_RULES_?*) return 0 ;; esac
+  case "$1" in DVSI_?*) return 0 ;; esac
+  return 1
+}
+
 jit_load_config() {
   # #388: `[A-Za-z0-9_]` below is a POSIX bracket range inside `[[ =~ ]]`, which glibc
   # matches by the active locale's collation order rather than by byte value. Turkish
@@ -1043,7 +1057,7 @@ jit_load_config() {
         reason="not a KEY=VALUE assignment"
         ;;
     esac
-    if [ -z "$reason" ] && ! [[ "$cfg_name" =~ ^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$ ]]; then
+    if [ -z "$reason" ] && ! jit_config_name_ok "$cfg_name"; then
       reason="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
     fi
     if [ -n "$reason" ]; then
