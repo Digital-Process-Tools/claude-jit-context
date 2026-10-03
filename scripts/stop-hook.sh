@@ -501,16 +501,17 @@ function jit_bad_pattern(p,   i, n, c, nx, depth, inbr, brpos) {
   brpos = 0
   for (i = 1; i <= n; i++) {
     c = substr(p, i, 1)
-    if (c == "\\") {
+    if (c == "\134") {
       nx = substr(p, i + 1, 1)
       if (nx == "") return "trailing backslash"
-      if (nx ~ /[[:alnum:]]/ && nx !~ /^[ntr]$/) return "undefined escape \\" nx
+      if (nx ~ /[[:alnum:]]/ && nx !~ /^[ntr]$/) return "undefined escape \134" nx
       if (nx > "\177") return "undefined escape \\ before a non-ASCII byte"
       i++
       continue
     }
     if (inbr) {
-      if (c == "[" && substr(p, i + 1, 1) ~ /^[:.=]$/) {
+      nx = substr(p, i + 1, 1)
+      if (c == "[" && nx != "" && index(sprintf("%c%c%c", 58, 46, 61), nx) > 0) {
         k = index(substr(p, i + 2), substr(p, i + 1, 1) "]")
         if (k == 0) return "unterminated [" substr(p, i + 1, 1) " element inside a character class"
         i = i + 2 + k
@@ -577,7 +578,7 @@ function jit_nonfile(p,   n, i, a) {
 }
 function jit_bad_entry_file(f, dir) {
   if (f == "") return ""
-  if (index(f, "/") > 0 || index(f, "\\") > 0) return "not a bare file name"
+  if (index(f, "/") > 0 || index(f, "\134") > 0) return "not a bare file name"
   if (f == "." || f == "..") return "not a bare file name"
   if (substr(f, 1, 1) == ".") return "the entry file name begins with a dot, so rename it without one"
   if (dir != "") {
@@ -1016,11 +1017,11 @@ function jit_heredoc_opener_is_known_sink(line) {
 JIT_AWK_JSON='
 function jit_trailing_backslashes(s,   c, n) {
   n = length(s); c = 0
-  while (c < n && substr(s, n - c, 1) == "\\") c++
+  while (c < n && substr(s, n - c, 1) == "\134") c++
   return c
 }
 function jit_json_fields(s, raw, fs, fe,   n, i, k) {
-  n = split(s, raw, "\"")
+  n = split(s, raw, "\042")
   k = 1
   fs[1] = 1
   for (i = 1; i < n; i++) {
@@ -1136,24 +1137,24 @@ function jit_field(raw, a, b,   o, i) {
   if (a == "" || b == "" || a > b) return ""
   if (a == b) return raw[a]
   o = raw[a]
-  for (i = a + 1; i <= b; i++) o = o "\"" raw[i]
+  for (i = a + 1; i <= b; i++) o = o "\042" raw[i]
   return o
 }
 function jit_unescape(s,   n, i, c, nx, o) {
-  if (index(s, "\\") == 0) return s
+  if (index(s, "\134") == 0) return s
   n = length(s); o = ""
   for (i = 1; i <= n; i++) {
     c = substr(s, i, 1)
-    if (c != "\\" || i == n) { o = o c; continue }
+    if (c != "\134" || i == n) { o = o c; continue }
     nx = substr(s, i + 1, 1)
     if (nx == "n") o = o "\n"
     else if (nx == "t") o = o "\t"
     else if (nx == "r") o = o "\r"
     else if (nx == "b") o = o "\b"
     else if (nx == "f") o = o "\f"
-    else if (nx == "\"") o = o "\""
+    else if (nx == "\042") o = o "\042"
     else if (nx == "/") o = o "/"
-    else if (nx == "\\") o = o "\\"
+    else if (nx == "\134") o = o "\134"
     else { o = o c nx; i++; continue }
     i++
   }
@@ -1179,20 +1180,20 @@ function jit_blk_join(   bi, out, manifest) {
 '
 JIT_AWK_BLOCKS='
 function jit_unescape_blocks(s,   n, i, c, nx, hx, v, o) {
-  if (index(s, "\\") == 0) return s
+  if (index(s, "\134") == 0) return s
   n = length(s); o = ""
   for (i = 1; i <= n; i++) {
     c = substr(s, i, 1)
-    if (c != "\\" || i == n) { o = o c; continue }
+    if (c != "\134" || i == n) { o = o c; continue }
     nx = substr(s, i + 1, 1)
     if (nx == "n") { o = o "\n"; i++; continue }
     if (nx == "t") { o = o "\t"; i++; continue }
     if (nx == "r") { o = o "\r"; i++; continue }
     if (nx == "b") { o = o "\b"; i++; continue }
     if (nx == "f") { o = o "\f"; i++; continue }
-    if (nx == "\"") { o = o "\""; i++; continue }
+    if (nx == "\042") { o = o "\042"; i++; continue }
     if (nx == "/") { o = o "/"; i++; continue }
-    if (nx == "\\") { o = o "\\"; i++; continue }
+    if (nx == "\134") { o = o "\134"; i++; continue }
     if (nx == "u" && substr(s, i, 6) ~ /^\\u00[0-9a-fA-F][0-9a-fA-F]$/) {
       hx = tolower(substr(s, i + 4, 2))
       v = index("0123456789abcdef", substr(hx, 1, 1)) - 1

@@ -544,16 +544,17 @@ function jit_bad_pattern(p,   i, n, c, nx, depth, inbr, brpos) {
   brpos = 0
   for (i = 1; i <= n; i++) {
     c = substr(p, i, 1)
-    if (c == "\\") {
+    if (c == "\134") {
       nx = substr(p, i + 1, 1)
       if (nx == "") return "trailing backslash"
-      if (nx ~ /[[:alnum:]]/ && nx !~ /^[ntr]$/) return "undefined escape \\" nx
+      if (nx ~ /[[:alnum:]]/ && nx !~ /^[ntr]$/) return "undefined escape \134" nx
       if (nx > "\177") return "undefined escape \\ before a non-ASCII byte"
       i++
       continue
     }
     if (inbr) {
-      if (c == "[" && substr(p, i + 1, 1) ~ /^[:.=]$/) {
+      nx = substr(p, i + 1, 1)
+      if (c == "[" && nx != "" && index(sprintf("%c%c%c", 58, 46, 61), nx) > 0) {
         k = index(substr(p, i + 2), substr(p, i + 1, 1) "]")
         if (k == 0) return "unterminated [" substr(p, i + 1, 1) " element inside a character class"
         i = i + 2 + k
@@ -620,7 +621,7 @@ function jit_nonfile(p,   n, i, a) {
 }
 function jit_bad_entry_file(f, dir) {
   if (f == "") return ""
-  if (index(f, "/") > 0 || index(f, "\\") > 0) return "not a bare file name"
+  if (index(f, "/") > 0 || index(f, "\134") > 0) return "not a bare file name"
   if (f == "." || f == "..") return "not a bare file name"
   if (substr(f, 1, 1) == ".") return "the entry file name begins with a dot, so rename it without one"
   if (dir != "") {
@@ -1059,11 +1060,11 @@ function jit_heredoc_opener_is_known_sink(line) {
 JIT_AWK_JSON='
 function jit_trailing_backslashes(s,   c, n) {
   n = length(s); c = 0
-  while (c < n && substr(s, n - c, 1) == "\\") c++
+  while (c < n && substr(s, n - c, 1) == "\134") c++
   return c
 }
 function jit_json_fields(s, raw, fs, fe,   n, i, k) {
-  n = split(s, raw, "\"")
+  n = split(s, raw, "\042")
   k = 1
   fs[1] = 1
   for (i = 1; i < n; i++) {
@@ -1179,24 +1180,24 @@ function jit_field(raw, a, b,   o, i) {
   if (a == "" || b == "" || a > b) return ""
   if (a == b) return raw[a]
   o = raw[a]
-  for (i = a + 1; i <= b; i++) o = o "\"" raw[i]
+  for (i = a + 1; i <= b; i++) o = o "\042" raw[i]
   return o
 }
 function jit_unescape(s,   n, i, c, nx, o) {
-  if (index(s, "\\") == 0) return s
+  if (index(s, "\134") == 0) return s
   n = length(s); o = ""
   for (i = 1; i <= n; i++) {
     c = substr(s, i, 1)
-    if (c != "\\" || i == n) { o = o c; continue }
+    if (c != "\134" || i == n) { o = o c; continue }
     nx = substr(s, i + 1, 1)
     if (nx == "n") o = o "\n"
     else if (nx == "t") o = o "\t"
     else if (nx == "r") o = o "\r"
     else if (nx == "b") o = o "\b"
     else if (nx == "f") o = o "\f"
-    else if (nx == "\"") o = o "\""
+    else if (nx == "\042") o = o "\042"
     else if (nx == "/") o = o "/"
-    else if (nx == "\\") o = o "\\"
+    else if (nx == "\134") o = o "\134"
     else { o = o c nx; i++; continue }
     i++
   }
@@ -1222,20 +1223,20 @@ function jit_blk_join(   bi, out, manifest) {
 '
 JIT_AWK_BLOCKS='
 function jit_unescape_blocks(s,   n, i, c, nx, hx, v, o) {
-  if (index(s, "\\") == 0) return s
+  if (index(s, "\134") == 0) return s
   n = length(s); o = ""
   for (i = 1; i <= n; i++) {
     c = substr(s, i, 1)
-    if (c != "\\" || i == n) { o = o c; continue }
+    if (c != "\134" || i == n) { o = o c; continue }
     nx = substr(s, i + 1, 1)
     if (nx == "n") { o = o "\n"; i++; continue }
     if (nx == "t") { o = o "\t"; i++; continue }
     if (nx == "r") { o = o "\r"; i++; continue }
     if (nx == "b") { o = o "\b"; i++; continue }
     if (nx == "f") { o = o "\f"; i++; continue }
-    if (nx == "\"") { o = o "\""; i++; continue }
+    if (nx == "\042") { o = o "\042"; i++; continue }
     if (nx == "/") { o = o "/"; i++; continue }
-    if (nx == "\\") { o = o "\\"; i++; continue }
+    if (nx == "\134") { o = o "\134"; i++; continue }
     if (nx == "u" && substr(s, i, 6) ~ /^\\u00[0-9a-fA-F][0-9a-fA-F]$/) {
       hx = tolower(substr(s, i + 4, 2))
       v = index("0123456789abcdef", substr(hx, 1, 1)) - 1
@@ -1504,7 +1505,7 @@ fi
 json_escape() {
   printf '%s' "$1" | LC_ALL=C perl -0777 -pe '
     s/\\/\\\\/g;
-    s/"/\\"/g;
+    s/"/\x5c"/g;
     s/\t/\\t/g;
     s/\r/\\r/g;
     s/\n/\\n/g;
@@ -1540,8 +1541,8 @@ RESULT="$(
     -v vocab_layers="$VOCAB_LAYERS" -v vocab_base="$BASE/vocabulary" \
     "$JIT_AWK_JSON$JIT_AWK_ENTRY$JIT_AWK_BLOCKS"'
 function emit_json_str(s) {
-  gsub(/\\/, "\\\\", s)
-  gsub(/"/, "\\\"", s)
+  gsub(/\\/, "\134\134", s)
+  gsub(/"/, "\134\042", s)
   gsub(/\t/, "\\t", s)
   gsub(/\n/, "\\n", s)
   gsub(/\r/, "\\r", s)
@@ -1553,43 +1554,6 @@ function emit_json_str(s) {
   }
   return s
 }
-# jit_unescape_blocks() (common.sh, JIT_AWK_BLOCKS) is what this file calls below to
-# decode a block-carrying field instead of jit_unescape() alone -- it moved here (#223)
-# alongside jit_split_ctx_blocks() for the same reason as that function: jit-dry-run.sh
-# report_hook() needs the identical decode before it can trust a block header, and a
-# second copy here is what let the two drift out of step in the first place. It replaced
-# the two-pass jit_decode_u00(jit_unescape(...)) idiom in #226, fusing both into one walk
-# so an entry own escaped backslash can never be mistaken for a genuine \u00XX escape
-# once jit_unescape() has already run on it. See its own comment in common.sh.
-# --- The tree own index, loaded once, used only to VERIFY -------------------------------
-# This does NOT reimplement the matcher. It does not fold accents, does not apply the
-# LC_ALL=C keyword-lookup this whole design deliberately leaves to the real hook, and it
-# never DECIDES that a match fired -- it only answers a narrower, purely structural
-# question: does a (file, keyword) pair the hook claims fired actually exist as a row in
-# this tree own 00-index.tsv? A row that does not exist could not have caused a real
-# match, whatever the hook output claims.
-#
-# Why this exists (#202/#205/#189 review, maintainer override on PR #216): the
-# index()-based block splitter above cannot tell a genuine hook-emitted join from the
-# same literal bytes appearing inside one entry own author-controlled body -- paths/00-
-# manual/hooks.md says plainly that .claude/jit-context/ is attacker-controlled input.
-# Proven unsolvable from ctx alone: `matched = matched "\n---\n" vh "\n" vc` in
-# pre-prompt-hook.sh produces a BYTE-IDENTICAL join to an entry whose own full-mode body
-# (raw file content, no fixed ending) happens to end in the same five-plus-header bytes,
-# so no property of the SURROUNDING text can ever distinguish the two cases -- reasoned
-# through and confirmed against the real hook source, not assumed.
-#
-# What this DOES close: the specific reproduction that motivated it -- an entry naming a
-# file/keyword pair that does not exist anywhere in the tree own index at all. That is a
-# decidable, false-positive-free question: every REAL match necessarily corresponds to a
-# real index row, by construction, so this can never flag a genuine match.
-#
-# What this does NOT close, said once rather than reasoned about twice: a forged entry
-# that instead names another file own REAL keyword already indexed elsewhere in the SAME
-# tree would pass this check too -- verifying existence is not verifying that THIS TEXT
-# caused THAT row to fire, and closing that gap needs the hook own match count, which
-# only the protocol change the maintainer accepted as out-of-scope reaches. Said in the
-# report, not silently narrowed here.
 function jit_index_load(   nl, li, layer, lookup, vl, why, vf) {
   if (jit_idx_loaded) return
   jit_idx_loaded = 1
@@ -1607,11 +1571,6 @@ function jit_index_load(   nl, li, layer, lookup, vl, why, vf) {
     close(lookup)
   }
 }
-# mkw may carry more than one keyword, "|"-joined (jit_inject_text/vmatch join multiple
-# keywords that matched the same file that way -- see the vmatch[vfile] build in
-# pre-prompt-hook.sh). Verified when AT LEAST ONE of them is a real row for mfile: that is
-# the OR a real match would satisfy, since any one of them firing is what puts the file in
-# vmatch to begin with.
 function jit_index_verified(mfile, mkw,   nk, ki, kws) {
   jit_index_load()
   if (mkw == "") return 0
@@ -1625,39 +1584,15 @@ function jit_index_verified(mfile, mkw,   nk, ki, kws) {
 END {
   n = jit_json_fields(input, raw, fs, fe)
   ctx = ""
-  # Stride 2, matching pre-prompt-hook.sh own scan for "prompt": a quoted key is always
-  # followed by ONE more field holding the colon (and, for a nested object, the opening
-  # brace too) before the next quoted field -- the value, or the next nested key. This
-  # response is a fixed, known shape (this script own hook, this script own envelope), so
-  # jumping straight to i+2 for the value is exact rather than a guess.
   for (i = 1; i + 2 <= n; i++) {
     if (fs[i] != fe[i]) continue
     if (jit_field(raw, fs[i], fe[i]) != "additionalContext") continue
     ctx = jit_unescape_blocks(jit_field(raw, fs[i+2], fe[i+2]))
     break
   }
-
   nmatch = 0; nnotice = 0
   if (ctx != "") {
-    # The manifest-vs-fallback block split is shared with jit-dry-run.sh report_hook()
-    # now (#223) -- jit_split_ctx_blocks() in common.sh (JIT_AWK_BLOCKS), carried over
-    # verbatim from here rather than reimplemented, so the two consumers cannot drift the
-    # way this one drifted out of step with #219 in the first place. It fills jit_blk_n
-    # and jit_blk_body[1..jit_blk_n]; jit_index_verified() below is the second, structural
-    # check this file still runs on top of it -- see its own comment for what it does and
-    # does not close.
     jit_split_ctx_blocks(ctx)
-    # #227: jit_blk_manifest_ok is set (0 or 1) by jit_split_ctx_blocks() above and was
-    # read by nobody -- 0 means the manifest failed to verify and the split fell back to
-    # the pre-#219/#223 heuristic splitter, which an entry body can forge. This tool must
-    # never fail hard, so the degrade is named in the injected context instead of an
-    # exception -- the same register the "N rule(s) could not be evaluated" notice
-    # already uses (common.sh, jit_refusal_notice()) -- and it still counts as a notice
-    # below, which already moves this tool off exit 0 the same way an unverifiable match
-    # or a refused row does.
-    #
-    # Gated on !jit_blk_manifest_ok alone (#230): pre-prompt-hook.sh -- the only hook this
-    # script ever shells out to -- always builds a manifest now, so "no manifest was ever
     if (!jit_blk_manifest_ok) {
       nnotice++
       notice[nnotice] = "# JIT Context: the block manifest could not be evaluated, so this call fell back to a splitter an entry body can forge"
@@ -1701,18 +1636,18 @@ END {
     out = "{\"count\":" nmatch ",\"dropped\":" dropped ",\"matches\":["
     for (m = 1; m <= kept; m++) {
       out = out (m > 1 ? "," : "") \
-        "{\"file\":\"" emit_json_str(mname[m]) "\"" \
-        ",\"keywords\":\"" emit_json_str(mkwlist[m]) "\"" \
-        ",\"mode\":\"" mmode[m] "\"" \
+        "{\"file\":\"" emit_json_str(mname[m]) "\042" \
+        ",\"keywords\":\"" emit_json_str(mkwlist[m]) "\042" \
+        ",\"mode\":\"" mmode[m] "\042" \
         ",\"text\":\"" emit_json_str(mtext[m]) "\"}"
     }
     out = out "],\"dropped_files\":["
-    for (m = kept + 1; m <= nmatch; m++) out = out (m > kept + 1 ? "," : "") "\"" emit_json_str(mname[m]) "\""
+    for (m = kept + 1; m <= nmatch; m++) out = out (m > kept + 1 ? "," : "") "\042" emit_json_str(mname[m]) "\042"
     out = out "],\"unverifiable\":["
     for (u = 1; u <= nunverified; u++) {
       out = out (u > 1 ? "," : "") \
-        "{\"file\":\"" emit_json_str(uname[u]) "\"" \
-        ",\"keywords\":\"" emit_json_str(ukwlist[u]) "\"" \
+        "{\"file\":\"" emit_json_str(uname[u]) "\042" \
+        ",\"keywords\":\"" emit_json_str(ukwlist[u]) "\042" \
         ",\"text\":\"" emit_json_str(utext[u]) "\"}"
     }
     out = out "]}"
@@ -1739,10 +1674,8 @@ END {
 }
 '
 )"
-
 AWK_STATUS="$(printf '%s\n' "$RESULT" | awk -F'\t' '/^JIT-MATCH-STATUS\t/ { s = $2 } END { print s + 0 }')"
 printf '%s\n' "$RESULT" | grep -v '^JIT-MATCH-STATUS'"$(printf '\t')"
-
 EXIT=0
 if [ "$HOOK_STDERR_CHECKED" = 1 ] && [ -n "$HOOK_STDERR" ]; then
   echo "" >&2
@@ -1751,16 +1684,10 @@ if [ "$HOOK_STDERR_CHECKED" = 1 ] && [ -n "$HOOK_STDERR" ]; then
   printf '%s\n' "$HOOK_STDERR" | sed 's/^/  /' >&2
   EXIT=1
 elif [ "$HOOK_STDERR_CHECKED" = 0 ]; then
-  # Not promoted to exit 1: nothing was FOUND wrong, only left unverified, and jit-doctor.sh
-  # already sets the precedent for that distinction -- its own "cannot tell" answers are
-  # real, first-class outcomes that do not move an exit code, because a confident claim of
-  # a defect that was never actually observed is worse than saying plainly it was not
-  # checked. Always printed, on stderr, so this state is never silent either.
   echo "" >&2
   echo "jit-match: NOTE -- no temp file was available to check pre-prompt-hook.sh's stderr." >&2
   echo "  This is not a clean result: whether it kept its never-write-to-stderr contract" >&2
   echo "  was not checked, one way or the other. What matched above is not verified against it." >&2
 fi
 [ "$AWK_STATUS" = "1" ] && EXIT=1
-
 exit "$EXIT"

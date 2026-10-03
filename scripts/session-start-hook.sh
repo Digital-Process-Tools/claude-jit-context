@@ -523,16 +523,17 @@ function jit_bad_pattern(p,   i, n, c, nx, depth, inbr, brpos) {
   brpos = 0
   for (i = 1; i <= n; i++) {
     c = substr(p, i, 1)
-    if (c == "\\") {
+    if (c == "\134") {
       nx = substr(p, i + 1, 1)
       if (nx == "") return "trailing backslash"
-      if (nx ~ /[[:alnum:]]/ && nx !~ /^[ntr]$/) return "undefined escape \\" nx
+      if (nx ~ /[[:alnum:]]/ && nx !~ /^[ntr]$/) return "undefined escape \134" nx
       if (nx > "\177") return "undefined escape \\ before a non-ASCII byte"
       i++
       continue
     }
     if (inbr) {
-      if (c == "[" && substr(p, i + 1, 1) ~ /^[:.=]$/) {
+      nx = substr(p, i + 1, 1)
+      if (c == "[" && nx != "" && index(sprintf("%c%c%c", 58, 46, 61), nx) > 0) {
         k = index(substr(p, i + 2), substr(p, i + 1, 1) "]")
         if (k == 0) return "unterminated [" substr(p, i + 1, 1) " element inside a character class"
         i = i + 2 + k
@@ -599,7 +600,7 @@ function jit_nonfile(p,   n, i, a) {
 }
 function jit_bad_entry_file(f, dir) {
   if (f == "") return ""
-  if (index(f, "/") > 0 || index(f, "\\") > 0) return "not a bare file name"
+  if (index(f, "/") > 0 || index(f, "\134") > 0) return "not a bare file name"
   if (f == "." || f == "..") return "not a bare file name"
   if (substr(f, 1, 1) == ".") return "the entry file name begins with a dot, so rename it without one"
   if (dir != "") {
@@ -1038,11 +1039,11 @@ function jit_heredoc_opener_is_known_sink(line) {
 JIT_AWK_JSON='
 function jit_trailing_backslashes(s,   c, n) {
   n = length(s); c = 0
-  while (c < n && substr(s, n - c, 1) == "\\") c++
+  while (c < n && substr(s, n - c, 1) == "\134") c++
   return c
 }
 function jit_json_fields(s, raw, fs, fe,   n, i, k) {
-  n = split(s, raw, "\"")
+  n = split(s, raw, "\042")
   k = 1
   fs[1] = 1
   for (i = 1; i < n; i++) {
@@ -1158,24 +1159,24 @@ function jit_field(raw, a, b,   o, i) {
   if (a == "" || b == "" || a > b) return ""
   if (a == b) return raw[a]
   o = raw[a]
-  for (i = a + 1; i <= b; i++) o = o "\"" raw[i]
+  for (i = a + 1; i <= b; i++) o = o "\042" raw[i]
   return o
 }
 function jit_unescape(s,   n, i, c, nx, o) {
-  if (index(s, "\\") == 0) return s
+  if (index(s, "\134") == 0) return s
   n = length(s); o = ""
   for (i = 1; i <= n; i++) {
     c = substr(s, i, 1)
-    if (c != "\\" || i == n) { o = o c; continue }
+    if (c != "\134" || i == n) { o = o c; continue }
     nx = substr(s, i + 1, 1)
     if (nx == "n") o = o "\n"
     else if (nx == "t") o = o "\t"
     else if (nx == "r") o = o "\r"
     else if (nx == "b") o = o "\b"
     else if (nx == "f") o = o "\f"
-    else if (nx == "\"") o = o "\""
+    else if (nx == "\042") o = o "\042"
     else if (nx == "/") o = o "/"
-    else if (nx == "\\") o = o "\\"
+    else if (nx == "\134") o = o "\134"
     else { o = o c nx; i++; continue }
     i++
   }
@@ -1201,20 +1202,20 @@ function jit_blk_join(   bi, out, manifest) {
 '
 JIT_AWK_BLOCKS='
 function jit_unescape_blocks(s,   n, i, c, nx, hx, v, o) {
-  if (index(s, "\\") == 0) return s
+  if (index(s, "\134") == 0) return s
   n = length(s); o = ""
   for (i = 1; i <= n; i++) {
     c = substr(s, i, 1)
-    if (c != "\\" || i == n) { o = o c; continue }
+    if (c != "\134" || i == n) { o = o c; continue }
     nx = substr(s, i + 1, 1)
     if (nx == "n") { o = o "\n"; i++; continue }
     if (nx == "t") { o = o "\t"; i++; continue }
     if (nx == "r") { o = o "\r"; i++; continue }
     if (nx == "b") { o = o "\b"; i++; continue }
     if (nx == "f") { o = o "\f"; i++; continue }
-    if (nx == "\"") { o = o "\""; i++; continue }
+    if (nx == "\042") { o = o "\042"; i++; continue }
     if (nx == "/") { o = o "/"; i++; continue }
-    if (nx == "\\") { o = o "\\"; i++; continue }
+    if (nx == "\134") { o = o "\134"; i++; continue }
     if (nx == "u" && substr(s, i, 6) ~ /^\\u00[0-9a-fA-F][0-9a-fA-F]$/) {
       hx = tolower(substr(s, i + 4, 2))
       v = index("0123456789abcdef", substr(hx, 1, 1)) - 1
@@ -1780,7 +1781,7 @@ if [ "$MISSES_RC" = 0 ]; then
       if (substr(tail, 1, 2) != "  ") next
       seg = substr(tail, 3)
       if (seg == "") next
-      out = out (out == "" ? "" : ", ") "\\\"" seg "\\\" x" n
+      out = out (out == "" ? "" : ", ") "\134\042" seg "\134\042 x" n
       c++
       if (c >= top) exit
     }
@@ -1801,9 +1802,11 @@ else
     "no such file"* | "the file is empty"* | "hooks.log was rotated"*) JIT_SKIP_REASON="" ;;
   esac
   if [ -n "$JIT_SKIP_REASON" ]; then
-    JIT_SKIP_REASON="$(printf '%s' "$JIT_SKIP_REASON" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
+    JIT_SKIP_REASON="$(printf '%s' "$JIT_SKIP_REASON" | LC_ALL=C awk '{ gsub(/\\/, "\134\134"); gsub(/"/, "\134\042"); print }')"
   fi
 fi
+
+# #248: jit-misses.sh names the log's own size, and past its watch threshold says so in
 JIT_SIZE_NOTE="$(printf '%s\n' "$MISSES_OUT" | LC_ALL=C awk '
   {
     prefix = "  the log has reached "
@@ -1811,8 +1814,19 @@ JIT_SIZE_NOTE="$(printf '%s\n' "$MISSES_OUT" | LC_ALL=C awk '
   }
 ')"
 if [ -n "$JIT_SIZE_NOTE" ]; then
-  JIT_SIZE_NOTE="$(printf '%s' "$JIT_SIZE_NOTE" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
+  JIT_SIZE_NOTE="$(printf '%s' "$JIT_SIZE_NOTE" | LC_ALL=C awk '{ gsub(/\\/, "\134\134"); gsub(/"/, "\134\042"); print }')"
 fi
+
+# #386: one report, one action, nothing else. The line before this read "recurring
+# misses (last 5000 line(s) of the log, raw counts, not filtered for ordinary words --
+# judge before adding a vocabulary entry): ... -- also, 10134016 bytes, at or past the
+# 10000000 byte watch threshold (#248) -- reads may be getting slower; consider --tail
+# or rotating", and the maintainer read it and asked what any of it was for. The window
+# (#248), the unfiltered caveat (#246) and the issue numbers were all true and all
+# addressed to the wrong reader: a person at the start of a session wants to know what
+# was found and what to do about it. The caveat is gone because jit-misses.sh now
+# filters ordinary words itself (data/generic-words/, same list rebuild-tsv.sh
+# uses); the window is still bounded, and still named in jit-misses.sh's own report
 if [ "$JIT_STATUS" = "off" ]; then
   echo '{}'
 else
@@ -1824,13 +1838,27 @@ else
   fi
   if [ -n "$JIT_SIZE_NOTE" ]; then
     JIT_MB="$(printf '%s' "$JIT_SIZE_NOTE" | LC_ALL=C awk '{ printf "%.1f", $1 / 1000000 }')"
-    JIT_LOG_ESC="$(printf '%s' "$LOG_FILE" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
+    JIT_LOG_ESC="$(printf '%s' "$LOG_FILE" | LC_ALL=C awk '{ gsub(/\\/, "\134\134"); gsub(/"/, "\134\042"); print }')"
+    # #406: this line used to say "Delete or rotate it" -- the exact instruction this
+    # issue exists to stop giving, since delete loses the corpus jit-misses.sh reads
+    # and nothing here ever said so. Rotation past JIT_CONTEXT_LOG_MAX_BYTES is now
+    # automatic (jit_log_rotate(), run above, before jit-misses.sh was even called),
+    # #434: when rotation is on and JIT_CONTEXT_LOG_MAX_BYTES is a valid byte count, a
+    # reading in between the watch threshold and that max carries no action -- the
+    # feature already rotated, or will at the next SessionStart -- so this case prints
+    # nothing at all now (the "rotates automatically -- nothing to do" line this used
+    # to print cost every such session a line and told the reader nothing they could
+    # act on). Only the two states that still need a person to act get a line:
+    # rotation explicitly off (JIT_CONTEXT_LOG_MAX_BYTES=0, handled below), or a value
+    # jit_log_rotate() refused, so rotation did NOT run this session.
     if [ "$JIT_CONTEXT_LOG_MAX_BYTES" = 0 ]; then
       JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. Automatic rotation is off (JIT_CONTEXT_LOG_MAX_BYTES=0) -- delete or rotate it yourself: $JIT_LOG_ESC"
     else
+      # #423: JIT_CONTEXT_LOG_MAX_BYTES arrives here with no validation -- it can be
+      # exported straight into the environment, bypassing jit_load_config()'s own
       case "$JIT_CONTEXT_LOG_MAX_BYTES" in
         "" | *[!0-9]* | 0*)
-          JIT_MAX_ESC="$(printf '%s' "$JIT_CONTEXT_LOG_MAX_BYTES" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
+          JIT_MAX_ESC="$(printf '%s' "$JIT_CONTEXT_LOG_MAX_BYTES" | LC_ALL=C awk '{ gsub(/\\/, "\134\134"); gsub(/"/, "\134\042"); print }')"
           JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. JIT_CONTEXT_LOG_MAX_BYTES=$JIT_MAX_ESC is not a byte count automatic rotation accepts, so it did NOT rotate this session -- delete or rotate it yourself: $JIT_LOG_ESC"
           ;;
       esac
