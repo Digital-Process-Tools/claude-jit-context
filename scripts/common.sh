@@ -932,7 +932,12 @@ _ts() {
         ;;
     esac
   fi
-  perl -MTime::HiRes -MPOSIX -e 'my $t=Time::HiRes::time(); printf("%s.%03d\n", strftime("%H:%M:%S",localtime($t)), ($t*1000)%1000)'
+  # #461: no perl here. Without EPOCHREALTIME (bash 3.2, macOS's own) the log line keeps
+  # whole seconds and prints .000. The milliseconds were cosmetic -- durations come from
+  # _ms, not from this -- and perl in this function made every script that logs a config
+  # refusal (jit-doctor.sh among them) carry "perl code" beside its own $PWD read, which
+  # the directory validator holds as a credential leaving the machine.
+  date '+%H:%M:%S.000'
 }
 
 # --- Optional per-project settings ------------------------------------------
