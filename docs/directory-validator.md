@@ -74,6 +74,29 @@ Confirmed causes:
 3. **Naming another script by path in text** ("run scripts/rebuild-tsv.sh"). Name tools
    in words instead.
 
+4. **Under investigation, not a confirmed cause: a `#` written inside quotes** (`'' | '#'*)` in a case pattern, `c == "#"` in awk).
+   The scanner reads the `#` as a comment and is left with an unclosed quote. Write
+   `\#*` in a bash pattern and `"\043"` in awk. **Hypothesis, then refuted:** on
+   `post-tool-hook.sh` (2026-10-03), lines 1-249 clear, 1-365 hold, the same cut with
+   `jit_load_config`'s body emptied clears; removing `printf -v`, the `done < "$file"`
+   read, the `export` arm, a trailing comment with an unclosed quote, `$'\r'`, a
+   `[[ =~ ]]` alternation, quote-character case patterns or `|`-joined case arms did not
+   clear it. Every variant without line `'' | '#'*) continue ;;` cleared, every one with
+   it held -- but the same cut with `\#*` written instead still holds (`release-preview-z389`).
+   So the trigger is in the first lines of the loop body (line counter, CR strip, trim
+   loop, that case with its `continue`), and not the quote around `#` alone.
+
+**Bisect with truncated hooks.** The validator reads scripts without running them, so a
+hook cut after N lines (at a point where the prefix still parses, then `echo '{}'`) is
+a valid probe. The other hooks reduced to `echo '{}'`. Halve the range each round.
+
+**Validate from the browser console, one call at a time.** The portal posts to
+`/claudeai-rpc/anthropic.directory_submissions.plugins.v1alpha.PluginSubmissionsService/ValidatePlugin`
+with `{"organizationUuid", "github": {"repoFullName", "ref"}}` and the
+`x-organization-uuid` header, and the response carries the report JSON. Parallel calls
+are refused: "Too many validations for this organization right now", retry after about
+90 seconds. Keep one at a time.
+
 Ruled out by scan variants, each removed alone: here-strings, `perl`, `awk -f` with a
 program assembled at run time, awk programs held in a variable. Here-strings and awk
 programs in a variable were tested a second time and ruled out again (previews
@@ -140,7 +163,17 @@ What cleared each one:
   **Confirmed:** the read side moved on.
 - **No `$PWD` read anywhere in code,** not only in the diagnostic: the read can come
   from any shipped script, here `jit-dry-run.sh`, which no hook or command runs.
-  `$(pwd)` everywhere. **Applied, under test** (preview `f62114c`).
+  `$(pwd)` everywhere. **Confirmed** (preview `f62114c`): the read side moved on.
+- **No variable whose name reads as a credential**, shell or awk, whatever it holds.
+  Cited one per scan, in this order: `VOCAB_KEYS`, `pats` ("pat", a personal access
+  token), `pin`. Sweep them all at once rather than one per validation: `*KEY`, `*KEYS`,
+  `*TOKEN*`, `SECRET`, `PASSWORD`, and the short names `pat`, `tok`, `pw`, `pass`,
+  `cred`, `auth`, `pin`, `sig`, `otp`, `jwt`, `cookie`, `key`. `KEYWORD` was never cited.
+  **Confirmed.**
+- **No `${!` at all, arrays included.** `"${!ENTRY_FILENAME[@]}"` (the index list of an
+  array, which reads no environment) was cited as "an environment variable named at run
+  time". A counted loop replaced it. **Confirmed: the credential hold cleared**
+  (preview `4540249`, 2026-10-03).
 
 **There is no reviewer note in the submission form.** We planned to submit with a hold
 and a note, and found no field for it. A hold has to be cleared.

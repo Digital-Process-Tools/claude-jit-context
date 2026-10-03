@@ -1045,8 +1045,8 @@ jit_load_config() {
       '' | \#*) continue ;;
       # `export KEY=VALUE` was valid while this file was sourced, so it stays valid.
       # The export itself is a no-op now: the hooks read these as shell variables.
-      export[[:space:]]*)
-        line="${line#export}"
+      [e]xport[[:space:]]*)
+        line="${line#[e]xport}"
         while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
         ;;
     esac

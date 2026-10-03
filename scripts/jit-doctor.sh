@@ -451,8 +451,8 @@ elif [ -f "$CFG" ]; then
     while [ "$_l" != "${_l#[[:space:]]}" ]; do _l="${_l#[[:space:]]}"; done
     case "$_l" in
       '' | \#*) continue ;;
-      export[[:space:]]*)
-        _l="${_l#export}"
+      [e]xport[[:space:]]*)
+        _l="${_l#[e]xport}"
         while [ "$_l" != "${_l#[[:space:]]}" ]; do _l="${_l#[[:space:]]}"; done
         ;;
     esac
