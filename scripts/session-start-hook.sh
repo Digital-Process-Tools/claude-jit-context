@@ -187,9 +187,9 @@ if [ "$MISSES_RC" = 0 ]; then
       if (n !~ /^[0-9]+$/) next
       tail = substr(rest, xi + 1)
       if (substr(tail, 1, 2) != "  ") next
-      tok = substr(tail, 3)
-      if (tok == "") next
-      out = out (out == "" ? "" : ", ") "\\\"" tok "\\\" x" n
+      seg = substr(tail, 3)
+      if (seg == "") next
+      out = out (out == "" ? "" : ", ") "\\\"" seg "\\\" x" n
       c++
       if (c >= top) exit
     }

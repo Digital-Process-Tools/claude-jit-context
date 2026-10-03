@@ -285,7 +285,7 @@ match_for() {
   # That is a real anchor, the same kind of guarantee bytes_for() above gets
   # from $JIT_NL: a token boundary a crafted or coincidental key can be a
   # substring of, but can never BE without actually starting there.
-  local dim="$1" layer="$2" file="$3" needle line rest tok
+  local dim="$1" layer="$2" file="$3" needle line rest seg
   [ -f "$LOG_FILE" ] && [ ! -L "$LOG_FILE" ] || {
     printf ''
     return 0
@@ -311,15 +311,15 @@ match_for() {
   }
   rest="${line#*"| "}"
   IFS=',' read -r -a _js_toks <<< "$rest"
-  for tok in "${_js_toks[@]+"${_js_toks[@]}"}"; do
-    tok="${tok# }"
+  for seg in "${_js_toks[@]+"${_js_toks[@]}"}"; do
+    seg="${seg# }"
     # #461: [[ ]], not a `case` pattern starting with "$needle" (read by the directory
     # validator as a command assembled at run time).
-    if [[ "$tok" == "$needle"* ]]; then
-      tok="${tok#"$needle"}"
-      case "$tok" in
+    if [[ "$seg" == "$needle"* ]]; then
+      seg="${seg#"$needle"}"
+      case "$seg" in
         *')'*)
-          jit_stats_extract_wrapped "$tok"
+          jit_stats_extract_wrapped "$seg"
           return 0
           ;;
       esac

@@ -485,7 +485,7 @@ TREE_INJECT="$(
 # carries neither a real newline nor a tab, so it cannot forge a record boundary.
 PAT_MEMO=""
 ENT_MEMO=""
-PAT_NL="
+RX_NL="
 "
 
 # The engine probe is the half that cannot simply be looped inside one awk: a pattern the
@@ -523,7 +523,7 @@ PAT_NL="
 # and marks a regex with a leading `~`, `paths` keeps a bare ERE in column 1. The file-name
 # column moves too. All of it is an argument, named by the caller that knows its own index.
 idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name column, layer dir
-  local tsv="$1" pcol="$2" need="$3" ncol="$4" dir="$5" out pats n i start line k
+  local tsv="$1" pcol="$2" need="$3" ncol="$4" dir="$5" out rx_list n i start line k
   out="$(JIT_DIR="$dir" LC_ALL=C awk -F'\t' -v pc="$pcol" -v need="$need" -v nc="$ncol" \
     "$JIT_AWK_GUARD$JIT_AWK_ENTRY"'
     {
@@ -541,24 +541,24 @@ idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name colum
       }
     }' "$tsv" 2> /dev/null)"
   [ -n "$out" ] || return 0
-  PAT_MEMO="$PAT_MEMO$PAT_NL$out"
-  ENT_MEMO="$ENT_MEMO$PAT_NL$out"
+  PAT_MEMO="$PAT_MEMO$RX_NL$out"
+  ENT_MEMO="$ENT_MEMO$RX_NL$out"
 
   [ "$pcol" -gt 0 ] || return 0
   # The pattern list, in the order the memo above carries it, for the engine probe.
-  pats=""
+  rx_list=""
   while IFS= read -r line; do
     case "$line" in
       "why	"*)
         line="${line#why	}"
-        pats="$pats${line%%	*}$PAT_NL"
+        rx_list="$rx_list${line%%	*}$RX_NL"
         ;;
     esac
   done <<< "$out"
-  pats="${pats%"$PAT_NL"}"
-  [ -n "$pats" ] || return 0
+  rx_list="${rx_list%"$RX_NL"}"
+  [ -n "$rx_list" ] || return 0
   n=0
-  while IFS= read -r line; do n=$((n + 1)); done <<< "$pats"
+  while IFS= read -r line; do n=$((n + 1)); done <<< "$rx_list"
 
   # The engine probe is the half that cannot join the pass above: a pattern the engine
   # refuses is FATAL and takes the whole process down with it -- which is exactly the
@@ -569,26 +569,26 @@ idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name colum
   start=1
   while [ "$start" -le "$n" ]; do
     i=$(LC_ALL=C awk -v from="$start" '
-      { pat[NR] = $0 }
+      { rx[NR] = $0 }
       END {
         for (k = from; k <= NR; k++) {
-          if (match("", pat[k])) x = 1
+          if (match("", rx[k])) x = 1
           printf "ok %d\n", k
           fflush()
         }
-      }' <<< "$pats" 2> /dev/null | LC_ALL=C awk 'END { print (NR ? $2 : 0) }')
+      }' <<< "$rx_list" 2> /dev/null | LC_ALL=C awk 'END { print (NR ? $2 : 0) }')
     [ -n "$i" ] || i=0
     k=0
     while IFS= read -r line; do
       k=$((k + 1))
       [ "$k" -ge "$start" ] || continue
       if [ "$k" -le "$i" ]; then
-        PAT_MEMO="$PAT_MEMO${PAT_NL}engine	$line	accepted"
+        PAT_MEMO="$PAT_MEMO${RX_NL}engine	$line	accepted"
       elif [ "$k" -eq $((i + 1)) ]; then
-        PAT_MEMO="$PAT_MEMO${PAT_NL}engine	$line	rejected"
+        PAT_MEMO="$PAT_MEMO${RX_NL}engine	$line	rejected"
         break
       fi
-    done <<< "$pats"
+    done <<< "$rx_list"
     [ "$i" -ge "$n" ] && break
     start=$((i + 2))
   done
@@ -601,11 +601,11 @@ idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name colum
 # Parameter expansion only. No awk, no grep, no command substitution: a fork here would be
 # one per row, which is exactly what idx_prime() just spent one process to avoid.
 pat_memo_get() { # VAR, kind (why|engine), pattern
-  local _probe="$PAT_NL$2	$3	" _rest
+  local _probe="$RX_NL$2	$3	" _rest
   case "$PAT_MEMO" in
     *"$_probe"*)
       _rest="${PAT_MEMO#*"$_probe"}"
-      printf -v "$1" '%s' "${_rest%%"$PAT_NL"*}"
+      printf -v "$1" '%s' "${_rest%%"$RX_NL"*}"
       ;;
     *) return 1 ;;
   esac
@@ -617,7 +617,7 @@ check_pattern() {
   # jit_report_name() at both sites below and never raw (#124). The PATTERN is untouched:
   # it goes out verbatim on its own marked line, which is also what keeps a REFUSED row
   # identifiable when its name is the withheld one.
-  local label="$1" file="$2" pat="$3" why engine hint="" disp
+  local label="$1" file="$2" rx="$3" why engine hint="" disp
   disp="$(jit_report_name "$file")"
 
   # Patterns travel through the environment, never through awk -v: a -v assignment
@@ -642,19 +642,19 @@ check_pattern() {
   # The memo idx_prime() filled for this index, if it has this pattern. A miss falls
   # through to the two forks below, unchanged -- see pat_memo_get().
   local memo_why="" memo_engine="" memo_hit=0
-  if pat_memo_get memo_why why "$pat" && pat_memo_get memo_engine engine "$pat"; then
+  if pat_memo_get memo_why why "$rx" && pat_memo_get memo_engine engine "$rx"; then
     memo_hit=1
   fi
 
   if [ "$memo_hit" = 1 ]; then
     why="$memo_why"
   else
-    why="$(LC_ALL=C JIT_PAT="$pat" awk "$JIT_AWK_GUARD"'BEGIN { print jit_bad_pattern(ENVIRON["JIT_PAT"]) }')"
+    why="$(LC_ALL=C JIT_RX="$rx" awk "$JIT_AWK_GUARD"'BEGIN { print jit_bad_pattern(ENVIRON["JIT_RX"]) }')"
   fi
 
   if { [ "$memo_hit" = 1 ] && [ "$memo_engine" = accepted ]; } \
     || { [ "$memo_hit" != 1 ] \
-      && LC_ALL=C JIT_PAT="$pat" awk 'BEGIN { if (match("", ENVIRON["JIT_PAT"])) x = 1 }' > /dev/null 2>&1; }; then
+      && LC_ALL=C JIT_RX="$rx" awk 'BEGIN { if (match("", ENVIRON["JIT_RX"])) x = 1 }' > /dev/null 2>&1; }; then
     engine="accepted"
   elif [ -n "$why" ]; then
     # The structural guard refuses this row at load, so the hook never hands it to
@@ -688,7 +688,7 @@ check_pattern() {
     # it -- tree text with this script's own verdict welded to the end of it, and no
     # boundary between the two. It moves to its own marked line below. (#52)
     printf '         %-18s %-30s engine: %s\n' "" "" "$engine"
-    print_untrusted "$pat"
+    print_untrusted "$rx"
     return 1
   else
     printf 'ok       %-18s %-30s engine: %s\n' "$label" "$disp" "$engine"
@@ -725,7 +725,7 @@ check_paths_fragment() {
   # $file through jit_report_name() for the same reason as check_pattern (#124), and this
   # row matters MORE than the refused one: a WARN needs no defect in the tree to fire, so
   # it is the row a hostile name reaches on a tree with nothing wrong with it.
-  local label="$1" file="$2" pat="$3" disp
+  local label="$1" file="$2" rx="$3" disp
   disp="$(jit_report_name "$file")"
   # Two strips before the question is asked, because in both of them the character is
   # present and is not an anchor — and crediting it as one is a MISS, which is the failure
@@ -743,7 +743,7 @@ check_paths_fragment() {
   # index() rather than a bracket expression of our own for the final test: a `/` inside
   # an awk regex literal is exactly the kind of thing spelled differently across awks.
   #
-  # `LC_ALL=C` (#196): both gsubs decode $ENVIRON["JIT_PAT"], and a pattern carrying an
+  # `LC_ALL=C` (#196): both gsubs decode $ENVIRON["JIT_RX"], and a pattern carrying an
   # invalid byte diverged two ways without this pin -- gawk under a UTF-8 locale let
   # `gsub(/\\./)` eat the escaped backslash plus the WHOLE multibyte character, where `C`
   # eats the backslash plus the lead byte only and leaves a stray continuation byte behind
@@ -755,9 +755,9 @@ check_paths_fragment() {
   # also silences the "Invalid multibyte data" runtime warning gawk wrote straight into
   # this linter's own report on stderr, uninvited and unredirected, for the identical
   # reason -- noise this file exists to remove, not add.
-  LC_ALL=C JIT_PAT="$pat" awk '
+  LC_ALL=C JIT_RX="$rx" awk '
     BEGIN {
-      p = ENVIRON["JIT_PAT"]
+      p = ENVIRON["JIT_RX"]
       gsub(/\\./, "", p)
       gsub(/\[[^]]*\]/, "", p)
       exit((index(p, "/") || index(p, "^") || index(p, "$")) ? 0 : 1)
@@ -770,7 +770,7 @@ check_paths_fragment() {
   # sentence. A WARN needs no defect in the tree to fire, which is why this half matters
   # more than the REFUSED one above. (#52)
   printf '         %-18s %-30s fine if you meant it; otherwise anchor it with ^ or a parent directory\n' "" ""
-  print_untrusted "$pat"
+  print_untrusted "$rx"
   return 1
 }
 
@@ -791,11 +791,11 @@ ent_memo_get() { # VAR, name
   # idx_prime() writes every record as "<kind><TAB><value><TAB><verdict>" -- "ent" for
   # this one, exactly like pat_memo_get()'s "why"/"engine" -- so the needle has to open
   # on "ent<TAB>", not on a bare newline, or it can never match a record at all (#346).
-  local _probe="${PAT_NL}ent	$2	" _rest
+  local _probe="${RX_NL}ent	$2	" _rest
   case "$ENT_MEMO" in
     *"$_probe"*)
       _rest="${ENT_MEMO#*"$_probe"}"
-      printf -v "$1" '%s' "${_rest%%"$PAT_NL"*}"
+      printf -v "$1" '%s' "${_rest%%"$RX_NL"*}"
       ;;
     *) return 1 ;;
   esac
@@ -958,9 +958,9 @@ check_index_current() {
       idx_cache=""
       # `$(< file)`, not `$(cat file)`: bash reads the file itself, so this is a subshell
       # and not a subshell plus an exec.
-      [ -f "$dir/00-index.tsv" ] && idx_cache="$PAT_NL$(< "$dir/00-index.tsv")$PAT_NL"
+      [ -f "$dir/00-index.tsv" ] && idx_cache="$RX_NL$(< "$dir/00-index.tsv")$RX_NL"
     fi
-    if [ "${idx_cache#*"$PAT_NL$row$PAT_NL"}" = "$idx_cache" ]; then
+    if [ "${idx_cache#*"$RX_NL$row$RX_NL"}" = "$idx_cache" ]; then
       STALE=$((STALE + 1))
       # No row position on this line, and unlike check_entry_file() that is deliberate.
       # There is none to give -- this loop walks a *.md glob, not an index -- but the

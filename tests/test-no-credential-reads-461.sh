@@ -16,6 +16,10 @@
 #                      it holds. Renamed (VOCAB_TERMS, SESSION_REF, JIT_FIRED_IDS...).
 #                      KEYWORD is not matched: it names user settings, and no scan
 #                      ever cited one.
+#   $pats              "reads the installer's pat" -- read as a personal access
+#                      token. Short names are read the same way: pat, tok, pw, cred...
+#                      Renamed rx/rx_list (jit-dry-run.sh) and seg (tok, jit-stats.sh,
+#                      pre-path-hook.sh).
 #
 # Comment lines are skipped: the build strips them, and the reason may name the
 # construct. A sweep that finds nothing must be told apart from a pattern that never
@@ -49,6 +53,7 @@ NEEDLES=(
   'PWD read|[$][{]?PWD([^A-Za-z0-9_]|$)'
   'environment dump word|(^|[^A-Za-z0-9_.-])(printenv|env|export[[:space:]]+-p)([^A-Za-z0-9_.=-]|$)'
   'secret-looking variable|[$][{]?[A-Za-z0-9_]*([Kk][Ee][Yy][Ss]?|[Tt][Oo][Kk][Ee][Nn][Ss]?|SECRET|PASSWORD)([^A-Za-z0-9_]|$)'
+  'short credential name|([$][{]?|^[[:space:]]*(local[[:space:]]+([^=[:space:]]+[[:space:]]+)*)?)([Pp][Aa][Tt][Ss]?|tok|toks|pw|pass|passwd|cred|creds|auth|secret)([^A-Za-z0-9_]|$)'
 )
 
 # sweep FILE ERE -- "LINE: TEXT" for every non-comment line matching ERE.
@@ -64,6 +69,7 @@ printf '%s\n' \
   'BASE="$PWD/.claude"' \
   'WRAP=(rtk|command|env|sudo)' \
   'for k in $VOCAB_KEYS; do' \
+  'done <<< "$pats"' \
   > "$fixture"
 safe="$(mktemp)"
 trap 'rm -f "$fixture" "$safe"' EXIT
@@ -75,6 +81,8 @@ printf '%s\n' \
   'config.env is read' \
   'MIN_KEYWORD=3' \
   'echo "not a KEY=VALUE assignment"' \
+  'pat_memo_get memo_why why "$rx"' \
+  'JIT_PATH_PROG=x' \
   > "$safe"
 for entry in "${NEEDLES[@]}"; do
   label="${entry%%|*}"

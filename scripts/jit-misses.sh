@@ -515,12 +515,12 @@ function jit_fold_latin1(s,   i, p, out) {
   gsub(/  +/, " ", norm)
   sub(/^ /, "", norm); sub(/ $/, "", norm)
 
-  n = split(norm, tok, " ")
+  n = split(norm, seg, " ")
   if (truncated && n > 1) n--
 
   delete seen
   for (i = 1; i <= n; i++) {
-    t = tok[i]
+    t = seg[i]
     gsub(/^-+/, "", t); gsub(/-+$/, "", t)
     if (length(t) < 3) continue
     if (t ~ /^[0-9-]+$/) continue
