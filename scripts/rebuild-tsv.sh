@@ -938,7 +938,7 @@ build_vocab_tsv() {
             gsub(/[[:space:]]+$/, "", raw)
             # Normalize IDENTICALLY to the matcher (pre-prompt-hook.sh): lowercase, then
             # map any char outside [a-z0-9 -] to a space, collapse, trim. A keyword
-            # authored with dots/slashes ("docs.dp.tools", "security/dast") would
+            # authored with dots/slashes ("ops.deploy", "security/dast") would
             # otherwise be DEAD -- the matcher strips those from the prompt, so a dotted
             # keyword can never match.
             kw = tolower(toks[i])

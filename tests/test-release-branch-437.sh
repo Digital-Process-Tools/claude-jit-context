@@ -106,6 +106,29 @@ else
 fi
 
 echo ""
+echo "=== #459: an image link that already carries a query string does not double its '?' ==="
+# Self-review on #459 found that appending our own "?raw=true" and then the
+# original target's own frag (which can itself start with "?") produced a
+# malformed "...?raw=true?v=2" URL -- a regression this fix itself introduced,
+# since the host it replaced (raw.githubusercontent.com) never had query
+# parameters of its own for frag to collide with.
+if command -v python3 > /dev/null 2>&1; then
+  RAWURL_OUT=$(python3 -c "
+import sys
+sys.path.insert(0, '$REPO/.github/scripts')
+import build_release_tree as b
+print(b._absolute('diagram.png?v=2', '', lambda r: 'blob', 'acme/repo', 'main'))
+print(b._absolute('diagram.png?v=2#anchor', '', lambda r: 'blob', 'acme/repo', 'main'))
+print(b._absolute('diagram.png#anchor', '', lambda r: 'blob', 'acme/repo', 'main'))
+" 2>&1)
+  if printf '%s\n' "$RAWURL_OUT" | grep -q 'raw=true?'; then
+    bad "an image link with its own query string produced a malformed double '?' URL" "$RAWURL_OUT"
+  else
+    ok "an image link with its own query string (and/or anchor) merges raw=true cleanly"
+  fi
+fi
+
+echo ""
 echo "=== #437: every generic-word chunk in the built tree is under 256 KiB ==="
 if [ -d "$TREE/data/generic-words" ]; then
   CHUNK_N=0

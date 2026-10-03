@@ -198,7 +198,17 @@ def _absolute(target: str, md_dir: str, should_rewrite: Callable[[str], str | No
         # raw.githubusercontent.com used to be a second host this tree's own
         # scripts and docs spelled, which is a directory-validator policy hold on
         # its own (#459) independent of whether anything ever reads it.
-        url += "?raw=true"
+        #
+        # frag can itself open with "?" (a source target that already carried a
+        # query string -- see the sep loop above) or "#" or both or neither.
+        # Blindly doing `url += "?raw=true"; url += frag` produces a malformed
+        # second "?" when frag starts with one (self-review caught this, #459):
+        # merge raw=true into frag's own query instead of planting a second one.
+        if frag.startswith("?"):
+            query, _, anchor = frag.partition("#")
+            frag = f"{query}&raw=true" + (f"#{anchor}" if anchor else "")
+        else:
+            frag = "?raw=true" + frag
     url += frag
     return f"<{url}>" if bracketed else url
 

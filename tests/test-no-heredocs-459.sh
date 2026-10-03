@@ -48,8 +48,12 @@ Q2=$(printf '\042')
 # or double quote, and the identifier that is the heredoc delimiter. The `(^|[^<])`
 # prefix is load-bearing: it refuses to let a match start on the SECOND `<` of a
 # `<<<` by requiring the character immediately before the matched `<<` not itself be
-# a `<` -- so neither alignment attempt over a `<<<` sequence can match.
-HEREDOC_PATTERN="(^|[^<])<<-?[[:space:]]*[${Q1}${Q2}]?[A-Za-z_][A-Za-z0-9_]*"
+# a `<` -- so neither alignment attempt over a `<<<` sequence can match. The
+# delimiter's own first character is `[A-Za-z0-9_]`, not `[A-Za-z_]` (self-review
+# on #459): a bash heredoc delimiter is an ordinary shell word and bash accepts one
+# that starts with a digit (`cat <<1EOF` is a real, working heredoc) -- a
+# letter-only start would have let exactly that shape back in undetected.
+HEREDOC_PATTERN="(^|[^<])<<-?[[:space:]]*[${Q1}${Q2}]?[A-Za-z0-9_][A-Za-z0-9_]*"
 
 # detect_heredoc_lines FILE -- prints "LINENO: TEXT" for every line that opens a real
 # heredoc, comment lines excluded. Blanks comment lines rather than deleting them
@@ -81,6 +85,11 @@ while IFS= read -r body_line; do
 done << REAL_HEREDOC
 this is a real heredoc body
 REAL_HEREDOC
+while IFS= read -r body_line; do
+  echo "$body_line"
+done <<1EOF
+a heredoc whose delimiter starts with a digit is still a real heredoc
+1EOF
 FIXTURE_EOF
 
 FIXTURE_HITS="$(detect_heredoc_lines "$FIXTURE")"
@@ -89,6 +98,13 @@ if printf '%s\n' "$FIXTURE_HITS" | grep -q '^13:'; then
   ok "POSITIVE: the planted real \`done << REAL_HEREDOC\` (line 13) is caught"
 else
   bad "POSITIVE: the planted real heredoc was NOT caught -- the detector cannot see a real one" \
+    "$FIXTURE_HITS"
+fi
+
+if printf '%s\n' "$FIXTURE_HITS" | grep -q '^18:'; then
+  ok "POSITIVE: a planted \`done <<1EOF\` (line 18) -- a digit-leading delimiter, a real heredoc bash accepts -- is caught"
+else
+  bad "POSITIVE: the digit-leading heredoc was NOT caught -- a letter-only identifier class would let this class of delimiter back in undetected" \
     "$FIXTURE_HITS"
 fi
 
