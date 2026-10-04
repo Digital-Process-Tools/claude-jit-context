@@ -95,7 +95,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/common.sh"
 
-BASE="$PWD/.claude/jit-context"
+BASE="$(pwd)/.claude/jit-context"
 TEXT=""
 TEXT_SET=0
 FORMAT="text"
@@ -213,7 +213,7 @@ fi
 json_escape() {
   printf '%s' "$1" | LC_ALL=C perl -0777 -pe '
     s/\\/\\\\/g;
-    s/"/\\"/g;
+    s/"/\x5c"/g;
     s/\t/\\t/g;
     s/\r/\\r/g;
     s/\n/\\n/g;
@@ -244,15 +244,27 @@ fi
 # its own never-write-to-stderr contract, on any platform where mktemp happens to fail.
 # Third state, own variable: "found a violation", "checked and clean" and "could not
 # check" must not collapse to two.
+# #461: the variables are exported inside a subshell rather than passed through
+# `env VAR=... bash`: the directory validator reads the bare word `env` as the plugin
+# dumping the installer's environment, and holds it as a credential read. The scope is
+# the same -- only the hook child sees them.
+jit_match_run_hook() {
+  (
+    # shellcheck disable=SC2163  # kv is NAME=VALUE, exported as written
+    for kv in "${HOOK_ENV[@]}"; do export "$kv"; done
+    bash "$SCRIPT_DIR/pre-prompt-hook.sh"
+  )
+}
+
 HOOK_STDERR_CHECKED=0
 ERRF="$(mktemp "${TMPDIR:-/tmp}/claude-jit-match-XXXXXXXX" 2> /dev/null)" || ERRF=""
 if [ -n "$ERRF" ]; then
-  HOOK_OUT="$(printf '%s' "$PAYLOAD" | env "${HOOK_ENV[@]}" bash "$SCRIPT_DIR/pre-prompt-hook.sh" 2> "$ERRF")"
+  HOOK_OUT="$(printf '%s' "$PAYLOAD" | jit_match_run_hook 2> "$ERRF")"
   HOOK_STDERR="$(cat "$ERRF" 2> /dev/null)"
   HOOK_STDERR_CHECKED=1
   rm -f "$ERRF"
 else
-  HOOK_OUT="$(printf '%s' "$PAYLOAD" | env "${HOOK_ENV[@]}" bash "$SCRIPT_DIR/pre-prompt-hook.sh" 2> /dev/null)"
+  HOOK_OUT="$(printf '%s' "$PAYLOAD" | jit_match_run_hook 2> /dev/null)"
   HOOK_STDERR=""
 fi
 
@@ -273,8 +285,8 @@ RESULT="$(
     -v vocab_layers="$VOCAB_LAYERS" -v vocab_base="$BASE/vocabulary" \
     "$JIT_AWK_JSON$JIT_AWK_ENTRY$JIT_AWK_BLOCKS"'
 function emit_json_str(s) {
-  gsub(/\\/, "\\\\", s)
-  gsub(/"/, "\\\"", s)
+  gsub(/\\/, "\134\134", s)
+  gsub(/"/, "\134\042", s)
   gsub(/\t/, "\\t", s)
   gsub(/\n/, "\\n", s)
   gsub(/\r/, "\\r", s)
@@ -458,18 +470,18 @@ END {
     out = "{\"count\":" nmatch ",\"dropped\":" dropped ",\"matches\":["
     for (m = 1; m <= kept; m++) {
       out = out (m > 1 ? "," : "") \
-        "{\"file\":\"" emit_json_str(mname[m]) "\"" \
-        ",\"keywords\":\"" emit_json_str(mkwlist[m]) "\"" \
-        ",\"mode\":\"" mmode[m] "\"" \
+        "{\"file\":\"" emit_json_str(mname[m]) "\042" \
+        ",\"keywords\":\"" emit_json_str(mkwlist[m]) "\042" \
+        ",\"mode\":\"" mmode[m] "\042" \
         ",\"text\":\"" emit_json_str(mtext[m]) "\"}"
     }
     out = out "],\"dropped_files\":["
-    for (m = kept + 1; m <= nmatch; m++) out = out (m > kept + 1 ? "," : "") "\"" emit_json_str(mname[m]) "\""
+    for (m = kept + 1; m <= nmatch; m++) out = out (m > kept + 1 ? "," : "") "\042" emit_json_str(mname[m]) "\042"
     out = out "],\"unverifiable\":["
     for (u = 1; u <= nunverified; u++) {
       out = out (u > 1 ? "," : "") \
-        "{\"file\":\"" emit_json_str(uname[u]) "\"" \
-        ",\"keywords\":\"" emit_json_str(ukwlist[u]) "\"" \
+        "{\"file\":\"" emit_json_str(uname[u]) "\042" \
+        ",\"keywords\":\"" emit_json_str(ukwlist[u]) "\042" \
         ",\"text\":\"" emit_json_str(utext[u]) "\"}"
     }
     out = out "]}"

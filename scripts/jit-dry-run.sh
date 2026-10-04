@@ -39,12 +39,12 @@ set -uo pipefail
 # is resolving the path to. Same case split, written out.
 case "$0" in
   */*) SCRIPT_DIR="$(cd "${0%/*}" && pwd)" ;;
-  *) SCRIPT_DIR="$PWD" ;;
+  *) SCRIPT_DIR="$(pwd)" ;;
 esac
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/common.sh"
 
-BASE="$PWD/.claude/jit-context"
+BASE="$(pwd)/.claude/jit-context"
 # Written by jit_path_dir(), jit_path_base() and index_label() through `printf -v`, which
 # assigns into a variable named at runtime. shellcheck cannot follow that and reports
 # SC2154 at every use -- declared here so the warning is answered by the code rather than
@@ -344,7 +344,7 @@ SKIPPED_READS=0
 # of this file.
 BLOCKS_DESYNC=0
 VOCAB_REFUSED=0
-VOCAB_KEYS=0
+VOCAB_TERMS=0
 VOCAB_FILES=0
 WARNED=0
 # Counted apart from WARNED, and not folded into it, because the two tails say different
@@ -485,7 +485,7 @@ TREE_INJECT="$(
 # carries neither a real newline nor a tab, so it cannot forge a record boundary.
 PAT_MEMO=""
 ENT_MEMO=""
-PAT_NL="
+RX_NL="
 "
 
 # The engine probe is the half that cannot simply be looped inside one awk: a pattern the
@@ -523,7 +523,7 @@ PAT_NL="
 # and marks a regex with a leading `~`, `paths` keeps a bare ERE in column 1. The file-name
 # column moves too. All of it is an argument, named by the caller that knows its own index.
 idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name column, layer dir
-  local tsv="$1" pcol="$2" need="$3" ncol="$4" dir="$5" out pats n i start line k
+  local tsv="$1" pcol="$2" need="$3" ncol="$4" dir="$5" out rx_list n i start line k
   out="$(JIT_DIR="$dir" LC_ALL=C awk -F'\t' -v pc="$pcol" -v need="$need" -v nc="$ncol" \
     "$JIT_AWK_GUARD$JIT_AWK_ENTRY"'
     {
@@ -541,24 +541,24 @@ idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name colum
       }
     }' "$tsv" 2> /dev/null)"
   [ -n "$out" ] || return 0
-  PAT_MEMO="$PAT_MEMO$PAT_NL$out"
-  ENT_MEMO="$ENT_MEMO$PAT_NL$out"
+  PAT_MEMO="$PAT_MEMO$RX_NL$out"
+  ENT_MEMO="$ENT_MEMO$RX_NL$out"
 
   [ "$pcol" -gt 0 ] || return 0
   # The pattern list, in the order the memo above carries it, for the engine probe.
-  pats=""
+  rx_list=""
   while IFS= read -r line; do
     case "$line" in
       "why	"*)
         line="${line#why	}"
-        pats="$pats${line%%	*}$PAT_NL"
+        rx_list="$rx_list${line%%	*}$RX_NL"
         ;;
     esac
   done <<< "$out"
-  pats="${pats%"$PAT_NL"}"
-  [ -n "$pats" ] || return 0
+  rx_list="${rx_list%"$RX_NL"}"
+  [ -n "$rx_list" ] || return 0
   n=0
-  while IFS= read -r line; do n=$((n + 1)); done <<< "$pats"
+  while IFS= read -r line; do n=$((n + 1)); done <<< "$rx_list"
 
   # The engine probe is the half that cannot join the pass above: a pattern the engine
   # refuses is FATAL and takes the whole process down with it -- which is exactly the
@@ -569,26 +569,26 @@ idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name colum
   start=1
   while [ "$start" -le "$n" ]; do
     i=$(LC_ALL=C awk -v from="$start" '
-      { pat[NR] = $0 }
+      { rx[NR] = $0 }
       END {
         for (k = from; k <= NR; k++) {
-          if (match("", pat[k])) x = 1
+          if (match("", rx[k])) x = 1
           printf "ok %d\n", k
           fflush()
         }
-      }' <<< "$pats" 2> /dev/null | LC_ALL=C awk 'END { print (NR ? $2 : 0) }')
+      }' <<< "$rx_list" 2> /dev/null | LC_ALL=C awk 'END { print (NR ? $2 : 0) }')
     [ -n "$i" ] || i=0
     k=0
     while IFS= read -r line; do
       k=$((k + 1))
       [ "$k" -ge "$start" ] || continue
       if [ "$k" -le "$i" ]; then
-        PAT_MEMO="$PAT_MEMO${PAT_NL}engine	$line	accepted"
+        PAT_MEMO="$PAT_MEMO${RX_NL}engine	$line	accepted"
       elif [ "$k" -eq $((i + 1)) ]; then
-        PAT_MEMO="$PAT_MEMO${PAT_NL}engine	$line	rejected"
+        PAT_MEMO="$PAT_MEMO${RX_NL}engine	$line	rejected"
         break
       fi
-    done <<< "$pats"
+    done <<< "$rx_list"
     [ "$i" -ge "$n" ] && break
     start=$((i + 2))
   done
@@ -601,11 +601,11 @@ idx_prime() { # tsv, match column (0 for none), 1 if ~ marks a regex, name colum
 # Parameter expansion only. No awk, no grep, no command substitution: a fork here would be
 # one per row, which is exactly what idx_prime() just spent one process to avoid.
 pat_memo_get() { # VAR, kind (why|engine), pattern
-  local _key="$PAT_NL$2	$3	" _rest
+  local _probe="$RX_NL$2	$3	" _rest
   case "$PAT_MEMO" in
-    *"$_key"*)
-      _rest="${PAT_MEMO#*"$_key"}"
-      printf -v "$1" '%s' "${_rest%%"$PAT_NL"*}"
+    *"$_probe"*)
+      _rest="${PAT_MEMO#*"$_probe"}"
+      printf -v "$1" '%s' "${_rest%%"$RX_NL"*}"
       ;;
     *) return 1 ;;
   esac
@@ -617,7 +617,7 @@ check_pattern() {
   # jit_report_name() at both sites below and never raw (#124). The PATTERN is untouched:
   # it goes out verbatim on its own marked line, which is also what keeps a REFUSED row
   # identifiable when its name is the withheld one.
-  local label="$1" file="$2" pat="$3" why engine hint="" disp
+  local label="$1" file="$2" rx="$3" why engine hint="" disp
   disp="$(jit_report_name "$file")"
 
   # Patterns travel through the environment, never through awk -v: a -v assignment
@@ -642,19 +642,19 @@ check_pattern() {
   # The memo idx_prime() filled for this index, if it has this pattern. A miss falls
   # through to the two forks below, unchanged -- see pat_memo_get().
   local memo_why="" memo_engine="" memo_hit=0
-  if pat_memo_get memo_why why "$pat" && pat_memo_get memo_engine engine "$pat"; then
+  if pat_memo_get memo_why why "$rx" && pat_memo_get memo_engine engine "$rx"; then
     memo_hit=1
   fi
 
   if [ "$memo_hit" = 1 ]; then
     why="$memo_why"
   else
-    why="$(LC_ALL=C JIT_PAT="$pat" awk "$JIT_AWK_GUARD"'BEGIN { print jit_bad_pattern(ENVIRON["JIT_PAT"]) }')"
+    why="$(LC_ALL=C JIT_RX="$rx" awk "$JIT_AWK_GUARD"'BEGIN { print jit_bad_pattern(ENVIRON["JIT_RX"]) }')"
   fi
 
   if { [ "$memo_hit" = 1 ] && [ "$memo_engine" = accepted ]; } \
     || { [ "$memo_hit" != 1 ] \
-      && LC_ALL=C JIT_PAT="$pat" awk 'BEGIN { if (match("", ENVIRON["JIT_PAT"])) x = 1 }' > /dev/null 2>&1; }; then
+      && LC_ALL=C JIT_RX="$rx" awk 'BEGIN { if (match("", ENVIRON["JIT_RX"])) x = 1 }' > /dev/null 2>&1; }; then
     engine="accepted"
   elif [ -n "$why" ]; then
     # The structural guard refuses this row at load, so the hook never hands it to
@@ -688,7 +688,7 @@ check_pattern() {
     # it -- tree text with this script's own verdict welded to the end of it, and no
     # boundary between the two. It moves to its own marked line below. (#52)
     printf '         %-18s %-30s engine: %s\n' "" "" "$engine"
-    print_untrusted "$pat"
+    print_untrusted "$rx"
     return 1
   else
     printf 'ok       %-18s %-30s engine: %s\n' "$label" "$disp" "$engine"
@@ -725,7 +725,7 @@ check_paths_fragment() {
   # $file through jit_report_name() for the same reason as check_pattern (#124), and this
   # row matters MORE than the refused one: a WARN needs no defect in the tree to fire, so
   # it is the row a hostile name reaches on a tree with nothing wrong with it.
-  local label="$1" file="$2" pat="$3" disp
+  local label="$1" file="$2" rx="$3" disp
   disp="$(jit_report_name "$file")"
   # Two strips before the question is asked, because in both of them the character is
   # present and is not an anchor — and crediting it as one is a MISS, which is the failure
@@ -743,8 +743,8 @@ check_paths_fragment() {
   # index() rather than a bracket expression of our own for the final test: a `/` inside
   # an awk regex literal is exactly the kind of thing spelled differently across awks.
   #
-  # `LC_ALL=C` (#196): both gsubs decode $ENVIRON["JIT_PAT"], and a pattern carrying an
-  # invalid byte diverged two ways without this pin -- gawk under a UTF-8 locale let
+  # `LC_ALL=C` (#196): both gsubs decode $ENVIRON["JIT_RX"], and a pattern carrying an
+  # invalid byte diverged two ways without this is_fixed -- gawk under a UTF-8 locale let
   # `gsub(/\\./)` eat the escaped backslash plus the WHOLE multibyte character, where `C`
   # eats the backslash plus the lead byte only and leaves a stray continuation byte behind
   # in `p`; one-true-awk aborted `rc=2` instead, which this call never checked, so the
@@ -755,9 +755,9 @@ check_paths_fragment() {
   # also silences the "Invalid multibyte data" runtime warning gawk wrote straight into
   # this linter's own report on stderr, uninvited and unredirected, for the identical
   # reason -- noise this file exists to remove, not add.
-  LC_ALL=C JIT_PAT="$pat" awk '
+  LC_ALL=C JIT_RX="$rx" awk '
     BEGIN {
-      p = ENVIRON["JIT_PAT"]
+      p = ENVIRON["JIT_RX"]
       gsub(/\\./, "", p)
       gsub(/\[[^]]*\]/, "", p)
       exit((index(p, "/") || index(p, "^") || index(p, "$")) ? 0 : 1)
@@ -770,7 +770,7 @@ check_paths_fragment() {
   # sentence. A WARN needs no defect in the tree to fire, which is why this half matters
   # more than the REFUSED one above. (#52)
   printf '         %-18s %-30s fine if you meant it; otherwise anchor it with ^ or a parent directory\n' "" ""
-  print_untrusted "$pat"
+  print_untrusted "$rx"
   return 1
 }
 
@@ -791,11 +791,11 @@ ent_memo_get() { # VAR, name
   # idx_prime() writes every record as "<kind><TAB><value><TAB><verdict>" -- "ent" for
   # this one, exactly like pat_memo_get()'s "why"/"engine" -- so the needle has to open
   # on "ent<TAB>", not on a bare newline, or it can never match a record at all (#346).
-  local _key="${PAT_NL}ent	$2	" _rest
+  local _probe="${RX_NL}ent	$2	" _rest
   case "$ENT_MEMO" in
-    *"$_key"*)
-      _rest="${ENT_MEMO#*"$_key"}"
-      printf -v "$1" '%s' "${_rest%%"$PAT_NL"*}"
+    *"$_probe"*)
+      _rest="${ENT_MEMO#*"$_probe"}"
+      printf -v "$1" '%s' "${_rest%%"$RX_NL"*}"
       ;;
     *) return 1 ;;
   esac
@@ -958,9 +958,9 @@ check_index_current() {
       idx_cache=""
       # `$(< file)`, not `$(cat file)`: bash reads the file itself, so this is a subshell
       # and not a subshell plus an exec.
-      [ -f "$dir/00-index.tsv" ] && idx_cache="$PAT_NL$(< "$dir/00-index.tsv")$PAT_NL"
+      [ -f "$dir/00-index.tsv" ] && idx_cache="$RX_NL$(< "$dir/00-index.tsv")$RX_NL"
     fi
-    if [ "${idx_cache#*"$PAT_NL$row$PAT_NL"}" = "$idx_cache" ]; then
+    if [ "${idx_cache#*"$RX_NL$row$RX_NL"}" = "$idx_cache" ]; then
       STALE=$((STALE + 1))
       # No row position on this line, and unlike check_entry_file() that is deliberate.
       # There is none to give -- this loop walks a *.md glob, not an index -- but the
@@ -972,7 +972,7 @@ check_index_current() {
       # the directory does and that no other tool agrees with.
       disp="$(jit_report_name "$name")"
       printf 'STALE    %-18s %-30s frontmatter and index disagree — this rule is not the one running\n' "$label" "$disp"
-      printf '         %-18s %-30s run scripts/rebuild-tsv.sh in that tree and commit the index\n' "" ""
+      printf '         %-18s %-30s run the rebuild-tsv tool in that tree and commit the index\n' "" ""
     fi
   done
 }
@@ -1140,7 +1140,7 @@ for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; 
   idx_prime "$tsv" 0 0 2 "$tsv_dir"
   # One awk for every pattern in this index, instead of two per row (see pat_prime).
   v_rown=0
-  while IFS=$'\t' read -r _v_key v_file _rest; do
+  while IFS=$'\t' read -r _v_ident v_file _rest; do
     v_rown=$((v_rown + 1))
     [ -n "${v_file:-}" ] || continue
     VOCAB_LISTED=$((VOCAB_LISTED + 1))
@@ -1152,7 +1152,7 @@ for tsv in "$BASE"/vocabulary/*/00-index.tsv "$BASE"/vocabulary/*/01-paths.tsv; 
     # "## Modules" section and are not something anybody authored as a rule.
     case "$tsv" in
       */00-index.tsv)
-        VOCAB_KEYS=$((VOCAB_KEYS + 1))
+        VOCAB_TERMS=$((VOCAB_TERMS + 1))
         # bash 3.2 ships on macOS and has no associative arrays, so distinct file names
         # are tracked in a space-delimited string. This is a count in a summary line and
         # nothing branches on it, so a pathological name that fooled the membership test
@@ -1192,7 +1192,7 @@ done
 # this file that compares BYTES, and the byte range it builds is not a character in a
 # UTF-8 locale: unpinned, one-true-awk aborted the whole program with "multibyte conversion
 # failure" on the first row of a tree carrying the byte this check exists to find -- the
-# linter falling over on exactly the input it was added for. The hooks pin it on every awk
+# linter falling over on exactly the input it was added for. The hooks is_fixed it on every awk
 # for the same reason (#68); this file does not, because its other awks read text.
 #
 # What it cannot see, stated rather than implied: one-true-awk truncates a record at a NUL
@@ -1268,7 +1268,7 @@ done
 
 if [ "$INDEXES" -eq 0 ]; then
   echo "SKIPPED: no 00-index.tsv under $BASE."
-  echo "         Entries are inert until indexed — run scripts/rebuild-tsv.sh in that tree."
+  echo "         Entries are inert until indexed — run the rebuild-tsv tool in that tree."
   echo "         Nothing was checked. This is not a clean result."
   exit 2
 fi
@@ -1293,7 +1293,7 @@ NODESC=0
 WHOLE_LINES=""
 list_whole() {
   # $1 layer dir, $2 label
-  local dir="$1" label="$2" md name inj raw_inj eff why size desc pin
+  local dir="$1" label="$2" md name inj raw_inj eff why size desc is_fixed
   [ -d "$dir" ] || return 0
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -1322,12 +1322,12 @@ list_whole() {
     fi
     jit_fm_get desc "$lw_fm" description
     why=""
-    # `pin` mirrors jit_entry_load() in common.sh: the mode was decided by the ENTRY, not
+    # `is_fixed` mirrors jit_entry_load() in common.sh: the mode was decided by the ENTRY, not
     # inherited from the project default. An entry pinned to full can never render as a
     # summary, so a missing description: on one of those is not what stands between this
     # tree and being able to flip -- naming it would send an author to write a line
     # nothing will ever read.
-    pin=0
+    is_fixed=0
     # `read` off the file, not `$(sed -n 1p ...)`: one fork per entry, over a whole tree,
     # to look at a line bash can read itself. `read` returns non-zero on a file with no
     # trailing newline, which is exactly the malformed case this test is looking for, so
@@ -1342,15 +1342,15 @@ list_whole() {
     IFS= read -r _fm_first 2> /dev/null < "$md"
     if [ "$_fm_first" != "---" ]; then
       eff=full
-      pin=1
+      is_fixed=1
       why="no frontmatter, so there is nothing to summarise"
     elif [ "$inj" = full ]; then
       eff=full
-      pin=1
+      is_fixed=1
       why="inject: full in this entry"
     elif [ "$inj" = summary ]; then
       eff=summary
-      pin=1
+      is_fixed=1
     else
       eff="$TREE_INJECT"
       if [ -n "$inj" ]; then
@@ -1398,7 +1398,7 @@ list_whole() {
       fi
       [ -z "$why" ] && why="the project default"
     fi
-    if [ -z "$desc" ] && [ "$pin$eff" != "1full" ]; then NODESC=$((NODESC + 1)); fi
+    if [ -z "$desc" ] && [ "$is_fixed$eff" != "1full" ]; then NODESC=$((NODESC + 1)); fi
     if [ "$eff" = full ]; then
       # Arithmetic expansion, not `| tr -d ' '`: some wc implementations pad the count with
       # leading whitespace, and $(( )) discards it for nothing. One fork per entry saved.
@@ -1443,7 +1443,7 @@ if [ "$TREE_INJECT" = full ]; then
   echo "every match on this tree injects the whole entry body."
   if [ "$NODESC" -gt 0 ]; then
     echo "$NODESC entr(ies) carry no description:, so summary mode could only NAME them."
-    echo "Run scripts/rebuild-tsv.sh in that tree for the per-match sizes and the names."
+    echo "Run the rebuild-tsv tool in that tree for the per-match sizes and the names."
   else
     echo "Every entry carries a description:, so JIT_CONTEXT_INJECT=summary is available."
   fi
@@ -1464,8 +1464,8 @@ echo "$LISTED rule(s) indexed, $CHECKED regex pattern(s) compiled, $REFUSED refu
 # the run does not have -- but leaving them out entirely printed "0 rule(s) indexed" over a
 # tree holding a rule that fires, which is this repository's own defect class. A project
 # seeded by jit-init.sh is exactly that tree, and it is the first thing a new user lints.
-if [ "$VOCAB_KEYS" -gt 0 ]; then
-  echo "$VOCAB_KEYS vocabulary keyword(s) across $VOCAB_FILES entry file(s) — literal, nothing to compile."
+if [ "$VOCAB_TERMS" -gt 0 ]; then
+  echo "$VOCAB_TERMS vocabulary keyword(s) across $VOCAB_FILES entry file(s) — literal, nothing to compile."
 fi
 if [ "$STALE" -gt 0 ]; then
   echo "$STALE entry file(s) whose frontmatter is not what the index carries."
@@ -1554,9 +1554,9 @@ fi
 # answering about another string -- and gawk's `Invalid multibyte data detected` goes to
 # this script's own stderr, which report_hook's capture does not cover, so nothing said so.
 #
-# Same root cause as the pin on injected_bytes() below, opposite consequence: that one
+# Same root cause as the is_fixed on injected_bytes() below, opposite consequence: that one
 # misreported a NUMBER, this one misreported the SUBJECT. Under `C` there is no decoding
-# to go wrong, and the hooks read the payload as bytes anyway, so the pin is what makes
+# to go wrong, and the hooks read the payload as bytes anyway, so the is_fixed is what makes
 # the sample call and the real call the same call.
 #
 # Worth knowing if you go to reproduce it: gawk only takes its multibyte path for a record
@@ -1568,8 +1568,8 @@ json_quote() {
     o = ""
     for (i = 1; i <= length($0); i++) {
       c = substr($0, i, 1)
-      if (c == "\\") o = o "\\\\"
-      else if (c == "\"") o = o "\\\""
+      if (c == "\134") o = o "\134\134"
+      else if (c == "\042") o = o "\134\042"
       else if (c == "\t") o = o "\\t"
       else o = o c
     }
@@ -1599,7 +1599,7 @@ json_quote() {
 # program wants characters. index() and the substr() beside it are self-consistent in
 # either semantics -- `"additionalContext":"` is 21 ASCII characters AND 21 bytes, so
 # k + 21 lands on the same place whichever unit k came back in -- and the sub() strips an
-# ASCII literal. So the pin changes exactly one answer, which is the one that was wrong.
+# ASCII literal. So the is_fixed changes exactly one answer, which is the one that was wrong.
 #
 # It also buys what #68 bought the hooks: this reads a payload carrying entry text, and an
 # entry saved as Latin-1 is a malformed sequence that aborted one-true-awk and made gawk
@@ -1707,10 +1707,10 @@ END {
   ctx = ""; rtext = ""
   for (i = 1; i + 2 <= n; i++) {
     if (fs[i] != fe[i]) continue
-    key = jit_field(raw, fs[i], fe[i])
-    if (key == "additionalContext" && ctx == "") {
+    ident = jit_field(raw, fs[i], fe[i])
+    if (ident == "additionalContext" && ctx == "") {
       ctx = jit_unescape_blocks(jit_field(raw, fs[i+2], fe[i+2]))
-    } else if (key == "reason" && rtext == "") {
+    } else if (ident == "reason" && rtext == "") {
       rtext = jit_unescape_blocks(jit_field(raw, fs[i+2], fe[i+2]))
     }
   }

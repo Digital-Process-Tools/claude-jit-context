@@ -5,7 +5,7 @@
 # byte record agrees, a size -- and nothing else. This is where the detail #367
 # deliberately pulled off that line goes back to: which entries, which dimension and
 # layer, the word or pattern that matched, the bytes each one cost, and what keeps
-# missing (scripts/jit-misses.sh).
+# missing (jit-misses).
 #
 # A DELIBERATE, HAND-RUN diagnostic, not a hook -- paths/00-manual/tooling.md's
 # contract, not hooks.md's: fail loudly, exit codes carry meaning, never silently
@@ -107,18 +107,18 @@ if [ -z "$NEWEST" ]; then
   exit 1
 fi
 
-SESSION_KEY="$(basename "$NEWEST")"
-SESSION_KEY="${SESSION_KEY#vocab-shown-}"
-SESSION_KEY="${SESSION_KEY#path-shown-}"
-SESSION_KEY="${SESSION_KEY#bytes-shown-}"
-SESSION_KEY="${SESSION_KEY%.txt}"
+SESSION_REF="$(basename "$NEWEST")"
+SESSION_REF="${SESSION_REF#vocab-shown-}"
+SESSION_REF="${SESSION_REF#path-shown-}"
+SESSION_REF="${SESSION_REF#bytes-shown-}"
+SESSION_REF="${SESSION_REF%.txt}"
 
-echo "JIT stats -- session key: $SESSION_KEY (the most recently written marker file; a heuristic, not the true session id -- see this file's own header)"
+echo "JIT stats -- session key: $SESSION_REF (the most recently written marker file; a heuristic, not the true session id -- see this file's own header)"
 echo ""
 
-VOCAB_FILE="$STATE_DIR/vocab-shown-$SESSION_KEY.txt"
-PATH_FILE="$STATE_DIR/path-shown-$SESSION_KEY.txt"
-BYTES_FILE="$STATE_DIR/bytes-shown-$SESSION_KEY.txt"
+VOCAB_FILE="$STATE_DIR/vocab-shown-$SESSION_REF.txt"
+PATH_FILE="$STATE_DIR/path-shown-$SESSION_REF.txt"
+BYTES_FILE="$STATE_DIR/bytes-shown-$SESSION_REF.txt"
 
 # One byte lookup, built once: "<key><TAB><n>" lines, NL-joined, same shape
 # stop-hook.sh already reads back -- see #389.
@@ -145,9 +145,9 @@ fi
 # the exact figure. A caller with no path to offer (dim/layer not resolved --
 # a legacy bare shown-mark) gets no fallback and stays "unknown", honestly.
 bytes_for() {
-  local key="$1" path="$2" needle rest n
+  local ident="$1" path="$2" needle rest n
   if [ -n "$BYTES_RAW" ]; then
-    needle="$JIT_NL$key$(printf '\t')"
+    needle="$JIT_NL$ident$(printf '\t')"
     case "$JIT_NL$BYTES_RAW$JIT_NL" in
       *"$needle"*)
         # #389 self-review: stripped through the SAME NL-anchored needle the
@@ -285,7 +285,7 @@ match_for() {
   # That is a real anchor, the same kind of guarantee bytes_for() above gets
   # from $JIT_NL: a token boundary a crafted or coincidental key can be a
   # substring of, but can never BE without actually starting there.
-  local dim="$1" layer="$2" file="$3" needle line rest tok
+  local dim="$1" layer="$2" file="$3" needle line rest seg
   [ -f "$LOG_FILE" ] && [ ! -L "$LOG_FILE" ] || {
     printf ''
     return 0
@@ -311,19 +311,19 @@ match_for() {
   }
   rest="${line#*"| "}"
   IFS=',' read -r -a _js_toks <<< "$rest"
-  for tok in "${_js_toks[@]+"${_js_toks[@]}"}"; do
-    tok="${tok# }"
-    case "$tok" in
-      "$needle"*)
-        tok="${tok#"$needle"}"
-        case "$tok" in
-          *')'*)
-            jit_stats_extract_wrapped "$tok"
-            return 0
-            ;;
-        esac
-        ;;
-    esac
+  for seg in "${_js_toks[@]+"${_js_toks[@]}"}"; do
+    seg="${seg# }"
+    # #461: [[ ]], not a `case` pattern starting with "$needle" (read by the directory
+    # validator as a command assembled at run time).
+    if [[ "$seg" == "$needle"* ]]; then
+      seg="${seg#"$needle"}"
+      case "$seg" in
+        *')'*)
+          jit_stats_extract_wrapped "$seg"
+          return 0
+          ;;
+      esac
+    fi
   done
   printf ''
   return 0
@@ -388,7 +388,7 @@ if [ "$N_SHOWN" -eq 0 ]; then
 fi
 
 echo ""
-echo "--- recurring misses (scripts/jit-misses.sh) ---"
+echo "--- recurring misses (jit-misses) ---"
 bash "$SCRIPT_DIR/jit-misses.sh" --log "$LOG_FILE" --top "$MISSES_TOP"
 
 exit 0

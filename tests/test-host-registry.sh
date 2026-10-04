@@ -127,6 +127,30 @@ assert_eq "claude-code and gemini-cli signatures both present -> claude-code win
   "$(run_detect env CLAUDE_CODE_SESSION_ID=abc GEMINI_SESSION_ID=xyz)"
 
 echo ""
+echo "=== #461: every registry signature has a literal arm in jit_host_sig_set ==="
+# jit_host_sig_set() names each signature literally instead of expanding `${!sig:-}`,
+# which the directory validator holds as a credential read. The cost is a second list:
+# a signature added to JIT_HOST_REGISTRY with no arm there is never detected, silently.
+# This loop is what turns that silence into a red. The control first: the registry must
+# yield at least one signature, or "every one has an arm" is true of nothing.
+sigs_seen=0
+while IFS= read -r sig_name; do
+  [ -n "$sig_name" ] || continue
+  sigs_seen=$((sigs_seen + 1))
+  assert_eq "signature $sig_name set -> jit_host_sig_set answers 0" "0" \
+    "$(env -i PATH="$PATH" "$sig_name=x" bash -c 'source "'"$HOST_SH"'" >/dev/null 2>&1; jit_host_sig_set "'"$sig_name"'"; echo $?')"
+  assert_eq "signature $sig_name unset -> jit_host_sig_set answers 1" "1" \
+    "$(env -i PATH="$PATH" bash -c 'source "'"$HOST_SH"'" >/dev/null 2>&1; jit_host_sig_set "'"$sig_name"'"; echo $?')"
+done < <(env -i PATH="$PATH" bash -c 'source "'"$HOST_SH"'" >/dev/null 2>&1; printf "%s\n" "$JIT_HOST_REGISTRY"' | cut -d'|' -f2 | tr ',' '\n')
+if [ "$sigs_seen" -gt 0 ]; then
+  PASS=$((PASS + 1))
+  echo "  PASS: control -- the registry yielded $sigs_seen signature(s) to check"
+else
+  FAIL=$((FAIL + 1))
+  echo "  FAIL: control -- the registry yielded no signature, so the loop above checked nothing"
+fi
+
+echo ""
 echo "=== jit_host_state / jit_host_inject_envelope / jit_host_refusal_state: three answers, never two ==="
 run_lookup() {
   env -i PATH="$PATH" bash -c 'source "'"$HOST_SH"'" >/dev/null 2>&1; '"$1"' "'"$2"'"'
@@ -216,7 +240,7 @@ assert_calls() {
     echo "    expected to find in $file: $needle"
   fi
 }
-BLOCK_SKELETON_ESC='{\"decision\":\"block\",\"reason\":\"'
+BLOCK_SKELETON_ESC='{\042decision\042:\042block\042,\042reason\042:\042'
 BLOCK_SKELETON_PLAIN='{"decision":"block","reason":"'
 assert_literal_in "common.sh envelope carries the block skeleton" "$BLOCK_SKELETON_ESC" "$BLOCK_SKELETON_PLAIN" "$COMMON_SH" "$COMMON_AWK_SH"
 # #391: pre-tool-hook.sh's print site now calls jit_envelope_block_sysmsg() (defined in
@@ -226,9 +250,9 @@ assert_literal_in "common.sh envelope carries the block skeleton" "$BLOCK_SKELET
 assert_calls "pre-tool-hook.sh calls the shared block builder, not its own literal" \
   "jit_envelope_block_sysmsg(" "$REPO/scripts/pre-tool-hook.sh"
 
-INJECT_HEAD_ESC='{\"hookSpecificOutput\":{\"hookEventName\":\"'
+INJECT_HEAD_ESC='{\042hookSpecificOutput\042:{\042hookEventName\042:\042'
 INJECT_HEAD_PLAIN='{"hookSpecificOutput":{"hookEventName":"'
-INJECT_TAIL_ESC='\",\"additionalContext\":\"'
+INJECT_TAIL_ESC='\042,\042additionalContext\042:\042'
 INJECT_TAIL_PLAIN='","additionalContext":"'
 assert_literal_in "common.sh envelope carries the inject head" "$INJECT_HEAD_ESC" "$INJECT_HEAD_PLAIN" "$COMMON_SH" "$COMMON_AWK_SH"
 assert_literal_in "common.sh envelope carries the inject tail" "$INJECT_TAIL_ESC" "$INJECT_TAIL_PLAIN" "$COMMON_SH" "$COMMON_AWK_SH"
@@ -288,7 +312,7 @@ assert_literal_absent() {
 # test still looking for one would pass for the wrong reason (a literal that is not
 # there at all reads identically to one that moved). What they hand-roll now is the
 # systemMessage skeleton, and it is asserted the same way the block skeleton above is.
-SYSMSG_SKELETON_ESC='{\"systemMessage\":\"'
+SYSMSG_SKELETON_ESC='{\042systemMessage\042:\042'
 SYSMSG_SKELETON_PLAIN='{"systemMessage":"'
 for hook in session-start-hook.sh stop-hook.sh; do
   assert_literal_in "$hook hand-rolls the systemMessage skeleton" \

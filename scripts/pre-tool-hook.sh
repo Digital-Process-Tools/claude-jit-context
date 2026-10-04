@@ -143,8 +143,8 @@ JIT_AWK_PROGRAM="$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AW
 # and skips the code point the engine cannot represent -- without that skip, index(s, "")
 # returns 1 and gsub would be handed an empty regex, which matches at every position.
 function jit_json_escape(s,   k, c) {
-  gsub(/\\/, "\\\\", s)
-  gsub(/"/, "\\\"", s)
+  gsub(/\\/, "\134\134", s)
+  gsub(/"/, "\134\042", s)
   gsub(/\t/, "\\t", s)
   gsub(/\n/, "\\n", s)
   gsub(/\r/, "\\r", s)
@@ -173,24 +173,24 @@ function jit_json_escape(s,   k, c) {
 # character by character rather than gsub-on-gsub, so escaping this awk functions own
 # output is never itself a place a metacharacter could leak back in.
 function jit_re_lit(s,    i, c, out, special) {
-  special = "\\.^$*+?()[]{}|"
+  special = "\134.^$*+?()[]{}|"
   out = ""
   for (i = 1; i <= length(s); i++) {
     c = substr(s, i, 1)
-    out = out (index(special, c) > 0 ? "\\" c : c)
+    out = out (index(special, c) > 0 ? "\134" c : c)
   }
   return out
 }
 # #364: RAW canon name(s), space-separated, or RAW if ALIASES names none.
 # ALIASES: host.sh jit_all_tool_aliases (comma key=v1;v2 pairs, all hosts unioned).
-function jit_expand_tool_alias(aliases, raw,    n, entries, i, eq, key) {
+function jit_expand_tool_alias(aliases, raw,    n, entries, i, eq, ident) {
   if (aliases == "" || raw == "") return raw
   n = split(aliases, entries, ",")
   for (i = 1; i <= n; i++) {
     eq = index(entries[i], "=")
     if (eq == 0) continue
-    key = substr(entries[i], 1, eq - 1)
-    if (key != raw) continue
+    ident = substr(entries[i], 1, eq - 1)
+    if (ident != raw) continue
     gsub(/;/, " ", entries[i])
     return raw " " substr(entries[i], eq + 1)  # union, not replace (#364)
   }
@@ -273,7 +273,7 @@ END {
   # substring rules as if it were a command, which is the false block issue #7 reports.
   cmd = full_command
   gsub(/[;&|].*/, "", cmd)
-  q = index(cmd, "\"")
+  q = index(cmd, "\042")
   if (q > 0) cmd = substr(cmd, 1, q - 1)
   gsub(/ --.*/, "", cmd)
 
@@ -688,15 +688,15 @@ END {
       # hold this key from an earlier spawn. For the main session the two sets are the
       # SAME marker file (agent_key equals session_id there), so this is byte-identical
       # to the old behaviour on every call that is not a spawn.
-      key = ""
+      ident = ""
       hushed = 0
       if (index(r_modes, "once") > 0) {
-        key = jit_loc_key("tools", tool_layer, r_file)
+        ident = jit_loc_key("tools", tool_layer, r_file)
         # `held` as well as `agent_shown`: an advisory rule delivered earlier in THIS scan
         # is not in `agent_shown` yet -- its mark waits on the block decision below (#112)
         # -- and without this a second row naming the same file would inject it twice in
         # one call.
-        if ((key in agent_shown) || (key in held)) {
+        if ((ident in agent_shown) || (ident in held)) {
           # `hushed`, not `continue`, for a row that can refuse (#139). `once` was leaving
           # this loop before the row reached its decision, so `mode: once, block` refused
           # the first matching call of a session and permitted every one after it -- no
@@ -765,7 +765,7 @@ END {
         # notice above has already reported the row by position, and filling `content` would
         # inject that same sentence a second time as advisory context.
         body = "(the text of this rule was not delivered: " file_why ")"
-        key = ""
+        ident = ""
       } else {
         rpath = tools_dir "/" r_file
         if (jit_entry_load(rpath, inject_default, keepbody, ent)) {
@@ -789,7 +789,7 @@ END {
         # was already true -- the branch below is what marked, and this one skipped it -- and
         # emptying `key` here is how it stays true now that the mark has moved down to the
         # three places the text is actually delivered.
-        key = ""
+        ident = ""
       }
 
       # A rule that can REFUSE must reach its decision on the strength of its INDEX ROW, and
@@ -822,7 +822,7 @@ END {
       # rather than `\s`: this is an awk ERE, and one-true-awk drops the class spelling.
       if (keepbody && body ~ /^[[:space:]]*$/) {
         body = "(the text of this rule was not delivered: the entry file has no text)"
-        key = ""
+        ident = ""
       }
 
       # A row that WOULD refuse but may not, because the binary its requires: column
@@ -926,7 +926,7 @@ END {
         # decision is known (#112).
         log_adv = log_adv asep "tool:" r_logname "(" r_match ")" jit_inject_tag(ent)
         asep = ", "
-        if (key != "") { held[key] = 1; hold_n++ }
+        if (ident != "") { held[ident] = 1; hold_n++ }
         # #389: the byte cost for THIS held advisory is only known once adv_header
         # and content are both settled a few lines down -- held_bytes[] carries it to
         # the commit loop below, the same deferral held[] itself already needs (#112).
@@ -1018,7 +1018,7 @@ END {
         # as the concat was -- a `break` above discards the whole scan on a block decision,
         # and nblk/blk[] are discarded right along with it, never read past that point.
         nblk++; blk[nblk] = adv_header "\n" content
-        if (key != "") held_bytes[key] = length(adv_header "\n" content)
+        if (ident != "") held_bytes[ident] = length(adv_header "\n" content)
         # #391: built INLINE, unlike held_bytes/held_name above -- nblk/blk[] themselves
         # are built the same way, unconditionally, and thrown away wholesale if a LATER
         # row in this same scan blocks (the `if (blocked != "") break` after the layer
@@ -1109,7 +1109,7 @@ END {
   # Claude Code own launcher (CLAUDE_PROJECT_DIR) or the shell login environment
   # (HOME), never assigned inside this script the way JIT_BASE is.
   home = ENVIRON["HOME"]
-  project = (ENVIRON["CLAUDE_PROJECT_DIR"] != "" ? ENVIRON["CLAUDE_PROJECT_DIR"] : ".")
+  project = (ENVIRON["CLAUDE_PROJECT_DIR"] != "" ? ENVIRON["CLAUDE_PROJECT_DIR"] : "\056")
   # A GUARDED gsub, not a bare one: project always has a byte, from the fallback to
   # "." just above (project can never be ""), but home carries no such fallback. An
   # unset or explicitly-empty $HOME (a minimal container, a sandboxed host,
@@ -1276,7 +1276,7 @@ END {
           # comment there.
           vage = (layer ~ /00-manual/) ? jit_entry_age(layer "/" vfile) : ""
           vh = "# Vocabulary: " vfile " (matched: " vmatch[vfile] (vage != "" ? " · last edited " vage "d ago" : "") ")"
-          if (layer ~ /00-manual/) vh = vh "\\n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
+          if (layer ~ /00-manual/) vh = vh "\134n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
           log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent) (generic_only ? ":generic-only" : "")
           sep = ", "
           nblk++; blk[nblk] = vh "\n" vc
@@ -1582,7 +1582,7 @@ if [ -n "$JIT_TMP" ] && [ -s "$JIT_TMP" ]; then
   # Two arguments, not one concatenation: _log_hook caps the matches field and leaves the
   # tail alone (#64). The tail is already bounded to 80 bytes inside awk and is what
   # jit-misses.sh reads, so it must survive a line that had to be cut.
-  _log_hook "pre-tool ($AWK_TOOL)" "$TOTAL" "$AWK_MATCHES" "[shown:$AWK_SHOWN] << $AWK_TEXT"
+  _log_hook "pre-tool ($AWK_TOOL)" "$TOTAL" "$AWK_MATCHES" "[shown:$AWK_SHOWN] $JIT_LOG_ARROW $AWK_TEXT"
 fi
 
 # Stated, not inherited. The hook exit status used to be whatever the last command

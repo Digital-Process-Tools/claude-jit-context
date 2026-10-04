@@ -126,7 +126,9 @@ assert_contains "locates the dead-escape rule by row" "$OUT" "tools/00-manual ro
 assert_not_contains "and does not quote the file-name column back" "$OUT" "fatal.md"
 assert_not_contains "nor the dead-escape one" "$OUT" "dead-escape.md"
 assert_contains "names the construct" "$OUT" "\\s"
-assert_contains "points at the dry-run" "$OUT" "jit-dry-run.sh"
+# #461: the tool is named in words, never by path (the directory validator reads a path as
+# the hook running that script).
+assert_contains "points at the dry-run" "$OUT" "jit-dry-run tool"
 
 echo ""
 echo "=== a dead block rule does not read as enforced ==="

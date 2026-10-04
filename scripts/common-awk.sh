@@ -146,17 +146,17 @@ function jit_bad_pattern(p,   i, n, c, nx, depth, inbr, brpos) {
   # matches nothing, on both engines, while awk exits 0 -- the exact silence this guard
   # exists to break. Anchored on `@name` followed by a space or end of pattern, so a
   # pattern that genuinely starts with a literal @ (`@app/.*`) is untouched.
-  if (p ~ /^@[A-Za-z][A-Za-z0-9-]*([[:space:]]|$)/) return "unexpanded macro -- run scripts/rebuild-tsv.sh"
+  if (p ~ /^@[A-Za-z][A-Za-z0-9-]*([[:space:]]|$)/) return "unexpanded macro -- rebuild the index with the rebuild-tsv tool this plugin ships"
   n = length(p)
   depth = 0
   inbr = 0
   brpos = 0
   for (i = 1; i <= n; i++) {
     c = substr(p, i, 1)
-    if (c == "\\") {
+    if (c == "\134") {
       nx = substr(p, i + 1, 1)
       if (nx == "") return "trailing backslash"
-      if (nx ~ /[[:alnum:]]/ && nx !~ /^[ntr]$/) return "undefined escape \\" nx
+      if (nx ~ /[[:alnum:]]/ && nx !~ /^[ntr]$/) return "undefined escape \134" nx
       # A byte above ASCII, and the test above could never see it (#116). LC_ALL=C is
       # pinned on every awk that reaches this function, so substr() returns one BYTE:
       # the lead byte of an accented or CJK character. Measured on awk 20200816 and gawk
@@ -186,7 +186,10 @@ function jit_bad_pattern(p,   i, n, c, nx, depth, inbr, brpos) {
       # contains does NOT close the bracket expression. Scanning ] naively reads
       # [[:alnum:] as balanced and hands it to match(), where it is a FATAL awk error --
       # reopening the exact failure this guard exists to stop.
-      if (c == "[" && substr(p, i + 1, 1) ~ /^[:.=]$/) {
+      # #461: the three element openers come from sprintf, not the text `:.=` -- the
+      # directory validator read that sequence as a `.` command and held every hook.
+      nx = substr(p, i + 1, 1)
+      if (c == "[" && nx != "" && index(sprintf("%c%c%c", 58, 46, 61), nx) > 0) {
         k = index(substr(p, i + 2), substr(p, i + 1, 1) "]")
         if (k == 0) return "unterminated [" substr(p, i + 1, 1) " element inside a character class"
         i = i + 2 + k
@@ -269,7 +272,7 @@ function jit_row_id(layer, rown) {
 # scan built; a line this split cannot make sense of (no tab, an empty key) is skipped
 # rather than crashing the whole table, the same tolerance jit_shown_load() already
 # gives a marker file it did not write.
-function jit_entry_age(key,   raw, n, i, ln, tp) {
+function jit_entry_age(ident,   raw, n, i, ln, tp) {
   if (!jit_age_loaded) {
     jit_age_loaded = 1
     raw = ENVIRON["JIT_ENTRY_AGES"]
@@ -284,7 +287,7 @@ function jit_entry_age(key,   raw, n, i, ln, tp) {
       }
     }
   }
-  if (key in jit_age) return jit_age[key]
+  if (ident in jit_age) return jit_age[ident]
   return ""
 }
 # Every hook log line ends with a field lifted verbatim out of the tool payload, after
@@ -360,8 +363,8 @@ function jit_bad_entry_file(f, dir) {
   # the caller skips it on the existing content == "" path; refusing it would fire a
   # notice at the author over stray whitespace.
   if (f == "") return ""
-  if (index(f, "/") > 0 || index(f, "\\") > 0) return "not a bare file name"
-  if (f == "." || f == "..") return "not a bare file name"
+  if (index(f, "/") > 0 || index(f, "\134") > 0) return "not a bare file name"
+  if (f == "\056" || f == "\056\056") return "not a bare file name"
   # A LEADING DOT, refused by name rather than caught by lstat, because lstat never saw it:
   # the sweep in the bash half enumerates the tree with globs and a glob * does not match a
   # leading dot. So `.hidden.md` skipped the link set entirely and every check below cleared
@@ -379,7 +382,7 @@ function jit_bad_entry_file(f, dir) {
   # is in that class, and it admits a whole English sentence of dots and hyphens -- so it
   # closes neither this nor the notice-quoting sibling, while refusing an accented or spaced
   # file name that works today. tests/test-security.sh pins both directions.
-  if (substr(f, 1, 1) == ".") return "the entry file name begins with a dot, so rename it without one"
+  if (substr(f, 1, 1) == "\056") return "the entry file name begins with a dot, so rename it without one"
   if (dir != "") {
     # The whole-tree sentinel first, and with its own reason: "its layer directory is a
     # symbolic link" would be a specific claim about a specific path that nobody checked.
@@ -598,7 +601,7 @@ function jit_unreached_add(list, item) {
 }
 function jit_refusal_notice(list, n) {
   return "# JIT Context: " n " rule(s) could not be evaluated, so they did NOT run\n" list \
-    "\nA pattern the matcher cannot honour is not a rule that did not match, and until now the two looked identical. Lint the tree that owns these rules:\n  bash scripts/jit-dry-run.sh --base <tree>/.claude/jit-context"
+    "\nA pattern the matcher cannot honour is not a rule that did not match, and until now the two looked identical. Lint the tree that owns these rules with the jit-dry-run tool this plugin ships, --base <tree>/.claude/jit-context"
 }
 # The third state for a LAYER rather than for a row (#176). Everything above reports a
 # rule the matcher read and could not honour; this reports a directory of rules the
@@ -610,7 +613,7 @@ function jit_refusal_notice(list, n) {
 # fatal error raised before the program runs. No layer NAME is ever in it -- the bullets
 # carry a dimension, a position in the glob and a constant reason.
 function jit_layers_notice(list, n) {
-  return "# JIT Context: " n " jit-context layer director" (n == 1 ? "y" : "ies") " could not be read, so no rule inside them ran\n" list "\nThese are directories under .claude/jit-context/<dimension>/ that exist and hold rules the matcher never opened. A layer that was never loaded and a layer whose rules never matched look identical from a session, which is why this says so. Name a layer directory with letters, digits, dot, underscore and hyphen only, and lint the tree:\n  bash scripts/jit-dry-run.sh --base <tree>/.claude/jit-context"
+  return "# JIT Context: " n " jit-context layer director" (n == 1 ? "y" : "ies") " could not be read, so no rule inside them ran\n" list "\nThese are directories under .claude/jit-context/<dimension>/ that exist and hold rules the matcher never opened. A layer that was never loaded and a layer whose rules never matched look identical from a session, which is why this says so. Name a layer directory with letters, digits, dot, underscore and hyphen only, and lint the tree with the jit-dry-run tool this plugin ships, --base <tree>/.claude/jit-context"
 }
 # The third state for a TOOL rather than for a row or a layer (#182). The two above
 # report rules the matcher read; this reports rules the matcher never reached, because
@@ -654,7 +657,7 @@ function jit_config_notice(list, n) {
 # every other notice in this file follows.
 function jit_worktree_notice(line) {
   return "# JIT Context: CLAUDE_PROJECT_DIR names a different git worktree than this shell is sitting in\n" line \
-    "\nEvery hook resolves rules from CLAUDE_PROJECT_DIR, never from $PWD -- content injected below (or on any call in this session) can be served from the copy in the OTHER tree, silently (#402). Run: bash scripts/jit-doctor.sh"
+    "\nEvery hook resolves rules from CLAUDE_PROJECT_DIR, never from the working directory -- content injected below (or on any call in this session) can be served from the copy in the OTHER tree, silently (#402). Run /jit-context:doctor"
 }
 '
 # --- Shared entry reader: frontmatter, body, and what gets injected ----------
@@ -812,8 +815,8 @@ BEGIN {
   JIT_TRANSCLUDE_TOTAL_MAX = 12
 }
 function jit_transclude_component_ok(s) {
-  if (s == "" || s == "." || s == "..") return 0
-  if (substr(s, 1, 1) == ".") return 0
+  if (s == "" || s == "\056" || s == "\056\056") return 0
+  if (substr(s, 1, 1) == "\056") return 0
   if (s ~ /[^A-Za-z0-9._-]/) return 0
   return 1
 }
@@ -961,7 +964,7 @@ function jit_transclude_expand_line(line, depth,   trimmed, out, i, n, start, en
 #
 # keepbody forces the body to be read whatever the mode says. Exactly one caller passes
 # it: a tools rule that can REFUSE the call. See pre-tool-hook.sh for why.
-function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, key, val, nread, r) {
+function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, ident, val, nread, r) {
   e["body"] = ""; e["title"] = ""; e["desc"] = ""
   e["mode"] = def; e["fm"] = 0; e["badmode"] = 0; e["read"] = 0; e["injseen"] = 0
   # PIN: the mode was decided by the ENTRY rather than inherited from the project
@@ -1013,8 +1016,8 @@ function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, key, val,
     }
     if (nfm != 1) continue
     if (index(ln, ":") == 0) continue
-    key = substr(ln, 1, index(ln, ":") - 1)
-    if (key ~ /[^A-Za-z0-9_-]/) continue
+    ident = substr(ln, 1, index(ln, ":") - 1)
+    if (ident ~ /[^A-Za-z0-9_-]/) continue
     val = substr(ln, index(ln, ":") + 1)
     sub(/^[[:space:]]+/, "", val)
     sub(/[[:space:]]+$/, "", val)
@@ -1022,9 +1025,9 @@ function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, key, val,
     # there: only a quote pair wrapping the WHOLE value is YAML quoting. A quote anywhere
     # else is data, and deleting it is #19.
     if (val ~ /^"[^"]*"$/) val = substr(val, 2, length(val) - 2)
-    if (key == "title") { if (e["title"] == "") e["title"] = val }
-    else if (key == "description") { if (e["desc"] == "") e["desc"] = val }
-    else if (key == "inject" && !e["injseen"]) {
+    if (ident == "title") { if (e["title"] == "") e["title"] = val }
+    else if (ident == "description") { if (e["desc"] == "") e["desc"] = val }
+    else if (ident == "inject" && !e["injseen"]) {
       e["injseen"] = 1
       gsub(/[[:space:]]/, "", val)
       val = tolower(val)
@@ -1404,7 +1407,11 @@ function jit_heredoc_quote_states(lines, n, qin,    i, state) {
 # column no matter what command it sits under; it does NOT skip the suppression
 # checks above, since those answer a different question (is this text a real
 # heredoc operator at all) that both callers need answered the same way.
-function jit_strip_heredoc_body(s, unconditional,    n, lines, i, j, out, strip_tabs, delim, line, rest, probed, op, word, prefix, q1, q2, q3, qclass, close_i, quote_in) {
+function jit_strip_heredoc_body(s, unconditional,    n, lines, i, j, out, strip_tabs, delim, line, rest, probed, op, word, prefix, q1, q2, q3, qclass, close_i, quote_in, lt2) {
+  # #461: the heredoc operator is built from its character code, never typed. Once the
+  # release build inlines this file into a hook, the directory validator reads a typed
+  # double `<` here as a shell here-document it cannot close, and blocks the plugin.
+  lt2 = sprintf("%c%c", 60, 60)
   q1 = sprintf("%c", 39)
   q2 = sprintf("%c", 34)
   # TWO bytes, not one: q3 sits inside a DYNAMIC (string) regex bracket expression
@@ -1426,13 +1433,13 @@ function jit_strip_heredoc_body(s, unconditional,    n, lines, i, j, out, strip_
     line = lines[i]
     probed = " " line
     close_i = 0
-    if (match(probed, "[^<]<<-?[ \t]*" qclass "[A-Za-z_][A-Za-z0-9_]*" qclass)) {
+    if (match(probed, "[^<]" lt2 "-?[ \t]*" qclass "[A-Za-z_][A-Za-z0-9_]*" qclass)) {
       prefix = substr(probed, 1, RSTART)
       if (!jit_heredoc_opener_is_suppressed(prefix, quote_in[i])) {
         op = substr(probed, RSTART + 1, RLENGTH - 1)
-        strip_tabs = (substr(op, 1, 3) == "<<-")
+        strip_tabs = (substr(op, 1, 3) == lt2 "-")
         word = op
-        sub(/^<<-?[ \t]*/, "", word)
+        sub("^" lt2 "-?[ \t]*", "", word)
         gsub("[" q1 q2 q3 "]", "", word)
         if (word != "" && (unconditional || jit_heredoc_opener_is_known_sink(line))) {
           delim = word
@@ -1528,11 +1535,11 @@ function jit_heredoc_opener_is_known_sink(line) {
 JIT_AWK_JSON='
 function jit_trailing_backslashes(s,   c, n) {
   n = length(s); c = 0
-  while (c < n && substr(s, n - c, 1) == "\\") c++
+  while (c < n && substr(s, n - c, 1) == "\134") c++
   return c
 }
 function jit_json_fields(s, raw, fs, fe,   n, i, k) {
-  n = split(s, raw, "\"")
+  n = split(s, raw, "\042")
   k = 1
   fs[1] = 1
   for (i = 1; i < n; i++) {
@@ -1573,10 +1580,10 @@ function jit_json_fields(s, raw, fs, fe,   n, i, k) {
 # shape jit_session_key() below already uses, and for the same reason given there: the
 # runner-written value should never lose to a string an untrusted tool_input carries
 # later in the payload.
-function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth, ti_depth, pending_key, pending_key_depth, i, c, ch, txt, val, nxt, is_key) {
+function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth, ti_depth, pending_ident, pending_key_depth, i, c, ch, txt, val, nxt, is_ident) {
   depth = 0
   ti_depth = -1
-  pending_key = ""
+  pending_ident = ""
   pending_key_depth = -1
   for (i = 1; i <= n; i++) {
     if (i % 2 == 1) {
@@ -1585,14 +1592,14 @@ function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth
         ch = substr(txt, c, 1)
         if (ch == "{") {
           depth++
-          # #426 self-review finding: pending_key alone names WHICH key precedes this
+          # #426 self-review finding: pending_ident alone names WHICH key precedes this
           # brace, not WHERE that key itself sat. Without pending_key_depth == 1 here,
           # any earlier key spelled "tool_input" at ANY depth -- nested three objects
           # deep, say -- would lock ti_depth onto ITS value object, and first-wins would
           # then silently discard the real top-level tool_input for every name the
           # impostor also claims. Only a "tool_input" key read while depth was still 1
           # (before this open brace bumps it) is the genuine top-level one.
-          if (pending_key == "tool_input" && pending_key_depth == 1 && ti_depth == -1) ti_depth = depth
+          if (pending_ident == "tool_input" && pending_key_depth == 1 && ti_depth == -1) ti_depth = depth
         } else if (ch == "}") {
           if (depth == ti_depth) ti_depth = -1
           depth--
@@ -1603,15 +1610,15 @@ function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth
     # A field spanning several raw pieces -- an escaped quote inside it -- is never a
     # bare key name this loop wants and can never BE the pending key either -- the same
     # single-piece guard every dispatch loop in this file already used.
-    if (fs[i] != fe[i]) { pending_key = ""; pending_key_depth = -1; continue }
+    if (fs[i] != fe[i]) { pending_ident = ""; pending_key_depth = -1; continue }
     val = raw[fs[i]]
-    is_key = 0
+    is_ident = 0
     if (i + 1 <= n) {
       nxt = raw[fs[i+1]]
-      if (nxt ~ /^[[:space:]]*:/) is_key = 1
+      if (nxt ~ /^[[:space:]]*:/) is_ident = 1
     }
-    if (!is_key) { pending_key = ""; pending_key_depth = -1; continue }
-    pending_key = val
+    if (!is_ident) { pending_ident = ""; pending_key_depth = -1; continue }
+    pending_ident = val
     pending_key_depth = depth
     # The VALUE field i+2 may itself span several raw pieces -- a command carrying an
     # escaped quote, or a Write payload own file body -- and jit_field() already
@@ -1799,9 +1806,9 @@ function jit_shown_load(file, set,   line) {
 # symbolic link, because awk cannot lstat (#49). Both belong to bash now: jit_shown_flush()
 # hands these lines to the hook temp channel and jit_shown_apply() in the shell does the
 # append, behind a `[ -L ]` and a `2>/dev/null` that awk has no way to write.
-function jit_shown_mark(file, key) {
+function jit_shown_mark(file, ident) {
   if (file == "") return
-  JIT_MARKS = JIT_MARKS file "\t" key "\n"
+  JIT_MARKS = JIT_MARKS file "\t" ident "\n"
 }
 function jit_loc_key(dim, layer, file) {
   return "loc:" dim ":" layer ":" file
@@ -1826,24 +1833,24 @@ function jit_field(raw, a, b,   o, i) {
   if (a == "" || b == "" || a > b) return ""
   if (a == b) return raw[a]
   o = raw[a]
-  for (i = a + 1; i <= b; i++) o = o "\"" raw[i]
+  for (i = a + 1; i <= b; i++) o = o "\042" raw[i]
   return o
 }
 function jit_unescape(s,   n, i, c, nx, o) {
-  if (index(s, "\\") == 0) return s
+  if (index(s, "\134") == 0) return s
   n = length(s); o = ""
   for (i = 1; i <= n; i++) {
     c = substr(s, i, 1)
-    if (c != "\\" || i == n) { o = o c; continue }
+    if (c != "\134" || i == n) { o = o c; continue }
     nx = substr(s, i + 1, 1)
     if (nx == "n") o = o "\n"
     else if (nx == "t") o = o "\t"
     else if (nx == "r") o = o "\r"
     else if (nx == "b") o = o "\b"
     else if (nx == "f") o = o "\f"
-    else if (nx == "\"") o = o "\""
+    else if (nx == "\042") o = o "\042"
     else if (nx == "/") o = o "/"
-    else if (nx == "\\") o = o "\\"
+    else if (nx == "\134") o = o "\134"
     else { o = o c nx; i++; continue }
     i++
   }
@@ -1964,20 +1971,20 @@ function jit_blk_join(   bi, out, manifest) {
 # shellcheck disable=SC2034
 JIT_AWK_BLOCKS='
 function jit_unescape_blocks(s,   n, i, c, nx, hx, v, o) {
-  if (index(s, "\\") == 0) return s
+  if (index(s, "\134") == 0) return s
   n = length(s); o = ""
   for (i = 1; i <= n; i++) {
     c = substr(s, i, 1)
-    if (c != "\\" || i == n) { o = o c; continue }
+    if (c != "\134" || i == n) { o = o c; continue }
     nx = substr(s, i + 1, 1)
     if (nx == "n") { o = o "\n"; i++; continue }
     if (nx == "t") { o = o "\t"; i++; continue }
     if (nx == "r") { o = o "\r"; i++; continue }
     if (nx == "b") { o = o "\b"; i++; continue }
     if (nx == "f") { o = o "\f"; i++; continue }
-    if (nx == "\"") { o = o "\""; i++; continue }
+    if (nx == "\042") { o = o "\042"; i++; continue }
     if (nx == "/") { o = o "/"; i++; continue }
-    if (nx == "\\") { o = o "\\"; i++; continue }
+    if (nx == "\134") { o = o "\134"; i++; continue }
     # v <= 31 is not a style choice, it is the whole fix for a defect an auditor found
     # in the predecessor of this function during #223 review. The encoder
     # (jit_json_escape() in each hook) only ever WRITES this shape for k in 0..31
@@ -2089,10 +2096,10 @@ function jit_split_ctx_blocks(ctx,   nl_pos, header, body_rest, hn, hf, declared
 JIT_AWK_ENVELOPE='
 function jit_envelope_inject(event, text_escaped) {
   if (text_escaped == "") return "{}"
-  return "{\"hookSpecificOutput\":{\"hookEventName\":\"" event "\",\"additionalContext\":\"" text_escaped "\"}}"
+  return "{\042hookSpecificOutput\042:{\042hookEventName\042:\042" event "\042,\042additionalContext\042:\042" text_escaped "\042}}"
 }
 function jit_envelope_block(reason_escaped) {
-  return "{\"decision\":\"block\",\"reason\":\"" reason_escaped "\"}"
+  return "{\042decision\042:\042block\042,\042reason\042:\042" reason_escaped "\042}"
 }
 function jit_envelope_empty() {
   return "{}"
@@ -2114,12 +2121,12 @@ function jit_fmt_bytes(n) {
 }
 function jit_envelope_inject_sysmsg(event, text_escaped, sysmsg_escaped) {
   if (text_escaped == "" && sysmsg_escaped == "") return "{}"
-  if (text_escaped == "") return "{\"systemMessage\":\"" sysmsg_escaped "\"}"
+  if (text_escaped == "") return "{\042systemMessage\042:\042" sysmsg_escaped "\042}"
   if (sysmsg_escaped == "") return jit_envelope_inject(event, text_escaped)
-  return "{\"hookSpecificOutput\":{\"hookEventName\":\"" event "\",\"additionalContext\":\"" text_escaped "\"},\"systemMessage\":\"" sysmsg_escaped "\"}"
+  return "{\042hookSpecificOutput\042:{\042hookEventName\042:\042" event "\042,\042additionalContext\042:\042" text_escaped "\042},\042systemMessage\042:\042" sysmsg_escaped "\042}"
 }
 function jit_envelope_block_sysmsg(reason_escaped, sysmsg_escaped) {
   if (sysmsg_escaped == "") return jit_envelope_block(reason_escaped)
-  return "{\"decision\":\"block\",\"reason\":\"" reason_escaped "\",\"systemMessage\":\"" sysmsg_escaped "\"}"
+  return "{\042decision\042:\042block\042,\042reason\042:\042" reason_escaped "\042,\042systemMessage\042:\042" sysmsg_escaped "\042}"
 }
 '

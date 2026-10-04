@@ -96,19 +96,19 @@ END {
   # fourth: exactly one of the two is ever populated, because tool_name (checked in
   # bash below) already decides which shape the payload is.
   if (fp == "") fp = cmd
-  key = jit_session_key(raw, fs, fe, n)
+  ident = jit_session_key(raw, fs, fe, n)
   print tool
-  print key
+  print ident
   print fp
 }
 ')"
 
 PT_TOOL=""
-PT_SESSION=""
+PT_RUN_ID=""
 PT_FP=""
 {
   IFS= read -r PT_TOOL
-  IFS= read -r PT_SESSION
+  IFS= read -r PT_RUN_ID
   PT_FP="$(cat)"
 } <<< "$PT_PARSED"
 
@@ -179,7 +179,7 @@ case "$PT_TOOL" in
     ;;
 esac
 
-if [ -z "$PT_FP" ] || [ -z "$PT_SESSION" ] || [ -z "$JIT_STATE_DIR" ]; then
+if [ -z "$PT_FP" ] || [ -z "$PT_RUN_ID" ] || [ -z "$JIT_STATE_DIR" ]; then
   echo '{}'
   exit 0
 fi
@@ -221,13 +221,11 @@ if [ "$PT_TOOL" = "Bash" ]; then
   # note above), not a new failure mode, and the Windows CI leg's own shell is Git
   # Bash, which itself emits forward-slash paths -- so the gap is narrow in
   # practice and untested here rather than measured as reachable.
-  case "$PT_FP" in
-    *"/.claude/jit-context/"*) ;;
-    *)
-      echo '{}'
-      exit 0
-      ;;
-  esac
+  # #461: a prefix test, not a quoted literal in a case pattern (the ninth trigger).
+  if [ "${PT_FP#*/.claude/jit-context/}" = "$PT_FP" ]; then
+    echo '{}'
+    exit 0
+  fi
   # Explore self-review on #301 (live-reproduced, both fixed here):
   #
   #   1. An unanchored `*'sed'*'-i'*` substring test cannot tell a real `-i` FLAG
@@ -264,11 +262,11 @@ if [ "$PT_TOOL" = "Bash" ]; then
     echo '{}'
     exit 0
   fi
-  EDIT_MARK="$JIT_STATE_DIR/edited-$PT_SESSION.txt"
+  EDIT_MARK="$JIT_STATE_DIR/edited-$PT_RUN_ID.txt"
   if [ ! -L "$EDIT_MARK" ]; then
     : 2> /dev/null > "$EDIT_MARK"
   else
-    EDIT_DECLINED_MARK="$JIT_STATE_DIR/edited-declined-$PT_SESSION.txt"
+    EDIT_DECLINED_MARK="$JIT_STATE_DIR/edited-declined-$PT_RUN_ID.txt"
     if [ ! -L "$EDIT_DECLINED_MARK" ]; then
       : 2> /dev/null > "$EDIT_DECLINED_MARK"
     fi
@@ -311,13 +309,11 @@ esac
 # ALWAYS reaches the canonical check below, whether or not it also happened to pass the
 # old lexical prefix test -- so the physically-outside-but-lexically-inside case can no
 # longer skip it.
-case "$PT_FP" in
-  *"/.claude/jit-context/"*) ;;
-  *)
-    echo '{}'
-    exit 0
-    ;;
-esac
+# #461: a prefix test, not a quoted literal in a case pattern (the ninth trigger).
+if [ "${PT_FP#*/.claude/jit-context/}" = "$PT_FP" ]; then
+  echo '{}'
+  exit 0
+fi
 
 # jit_pt_canon_dir(): prints $1's physical location on disk today, resolving
 # symlinks in whatever prefix of it already exists and reattaching whatever is
@@ -330,7 +326,8 @@ esac
 jit_pt_canon_dir() {
   local head="$1" tail="" phys
   while [ ! -d "$head" ]; do
-    case "$head" in */*) ;; *) break ;; esac
+    # #461: no catch-all arm inside the loop -- a word with no `/` ends the walk.
+    if [ "${head#*/}" = "$head" ]; then break; fi
     tail="${head##*/}${tail:+/}$tail"
     head="${head%/*}"
     [ -n "$head" ] || head="/"
@@ -349,14 +346,14 @@ jit_pt_canon_dir() {
 JIT_BASE_ABS="$JIT_BASE"
 case "$JIT_BASE_ABS" in
   /*) ;;
-  *) JIT_BASE_ABS="$PWD/$JIT_BASE_ABS" ;;
+  *) JIT_BASE_ABS="$(pwd)/$JIT_BASE_ABS" ;;
 esac
 JIT_BASE_CANON="$(jit_pt_canon_dir "$JIT_BASE_ABS")"
 
 PT_FP_ABS="$PT_FP"
 case "$PT_FP_ABS" in
   /*) ;;
-  *) PT_FP_ABS="$PWD/$PT_FP_ABS" ;;
+  *) PT_FP_ABS="$(pwd)/$PT_FP_ABS" ;;
 esac
 case "$PT_FP_ABS" in
   */)
@@ -376,13 +373,12 @@ else
   PT_FP_CANON="$PT_FP_DIR_CANON"
 fi
 
-case "$PT_FP_CANON" in
-  "$JIT_BASE_CANON"/*) ;;
-  *)
-    echo '{}'
-    exit 0
-    ;;
-esac
+# #461: [[ ]], not a `case` pattern starting with "$JIT_BASE_CANON" (read by the directory
+# validator as a command assembled at run time).
+if [[ "$PT_FP_CANON" != "$JIT_BASE_CANON"/* ]]; then
+  echo '{}'
+  exit 0
+fi
 
 # `[ -L ]` before the write, the same guard jit_shown_apply() applies to the `shown`
 # marks: awk cannot lstat, and although this write never goes through awk, a marker name
@@ -391,7 +387,7 @@ esac
 # with the order reversed the write is the one that can fail while stderr is still the
 # session, which is the exact loudness this whole hook exists to avoid (see the matching
 # comment on jit_shown_apply() in common.sh).
-EDIT_MARK="$JIT_STATE_DIR/edited-$PT_SESSION.txt"
+EDIT_MARK="$JIT_STATE_DIR/edited-$PT_RUN_ID.txt"
 if [ ! -L "$EDIT_MARK" ]; then
   : 2> /dev/null > "$EDIT_MARK"
 else
@@ -403,7 +399,7 @@ else
   # reach here). Same `[ -L ]`-before-write guard, same left-to-right redirection
   # ordering, for the same reason: this new marker name is exactly as real a symlink
   # target as EDIT_MARK itself.
-  EDIT_DECLINED_MARK="$JIT_STATE_DIR/edited-declined-$PT_SESSION.txt"
+  EDIT_DECLINED_MARK="$JIT_STATE_DIR/edited-declined-$PT_RUN_ID.txt"
   if [ ! -L "$EDIT_DECLINED_MARK" ]; then
     : 2> /dev/null > "$EDIT_DECLINED_MARK"
   fi

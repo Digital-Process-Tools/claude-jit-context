@@ -61,7 +61,7 @@ Vocabulary entries use `keywords:` instead of `match:`.
 Rebuilding is not evidence. Drive the hook:
 
 ```bash
-cd <project> && export CLAUDE_PROJECT_DIR="$PWD"
+export CLAUDE_PROJECT_DIR=/absolute/path/to/project
 bash <jit>/scripts/rebuild-tsv.sh
 bash <jit>/scripts/session-start-hook.sh          # clears `once` markers
 printf '%s' '{"tool_name":"Bash","tool_input":{"command":"supertool '"'"'read:tests/x.py'"'"'"}}' \

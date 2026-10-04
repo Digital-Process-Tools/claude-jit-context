@@ -46,6 +46,7 @@ from urllib.parse import quote, unquote
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 from check_release_tree import gitattributes_offences
+from compile_scripts import LIBRARY_FILES, CompileError, compile_scripts
 
 DEFAULT_CONFIG = _HERE.parent / "release-branch.json"
 
@@ -291,12 +292,41 @@ def build(repo: Path, ref: str, out: Path, config: dict) -> dict:
                 raise BuildError(f"{path}: {', '.join(bad)} -- the directory stops "
                                  "validating on these attributes")
 
+    # Compile every shipped scripts/*.sh file that sources another file or runs
+    # another scripts/ file into one self-contained file (#461) -- this is what
+    # clears COMMAND_SCRIPT_NOT_FOLLOWED on the hooks and commands. Only runs
+    # when this tree actually carries the jit-context scripts/ layout; a repo
+    # reusing this file for a different plugin with no such scripts/ simply
+    # keeps its own tree untouched.
+    compiled_needed = LIBRARY_FILES | {"scripts/jit-misses.sh"}
+    if compiled_needed <= set(contents):
+        try:
+            contents = compile_scripts(contents)
+        except CompileError as exc:
+            raise BuildError(f"compile_scripts: {exc}") from exc
+        dropped = sorted(LIBRARY_FILES)
+        removed.extend(dropped)
+        kept = [(mode, sha, path) for mode, sha, path in kept if path not in LIBRARY_FILES]
+
     slug = config["repo"]
     branch = config.get("link_ref") or config["default_branch"]
     changelog = config.get("changelog")
     if changelog and changelog in contents:
         url = f"https://github.com/{slug}/blob/{config['default_branch']}/{changelog}"
         contents[changelog] = cut_changelog(contents[changelog].decode("utf-8"), url).encode("utf-8")
+
+    # README.release.md, when present, ships AS README.md -- the full README (with its
+    # $VARIABLE examples, which the directory's MCP_FORWARDS_CREDENTIAL_ENV scan reads
+    # together with any host it spells) stays on the default branch for GitHub visitors
+    # only. It is NOT on the static deny-list (that removal happens BEFORE this point,
+    # which would make it vanish before this swap ever saw it) -- instead it is removed
+    # here, once its content has already been copied onto README.md, so it never also
+    # ships under its own name.
+    release_readme = config.get("release_readme")
+    if release_readme and release_readme in contents and "README.md" in contents:
+        contents["README.md"] = contents.pop(release_readme)
+        removed.append(release_readme)
+        kept = [(mode, sha, path) for mode, sha, path in kept if path != release_readme]
 
     rewritten: dict[str, int] = {}
     if config.get("rewrite_links", True):

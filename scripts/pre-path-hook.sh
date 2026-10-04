@@ -53,7 +53,7 @@ VOCAB_PATHS="${JIT_CONTEXT_VOCAB_PATHS:-${DYNAMIC_RULES_VOCAB_PATHS:-${DVSI_AUTO
 # escape sequences PROCESSED, so a checkout under a directory with a backslash in its name
 # would arrive mangled, and a newline in one is a fatal awk error raised before the program
 # runs. ENVIRON does neither. bash needs the same value, so it is normalised once here.
-JIT_PROJECT="${CLAUDE_PROJECT_DIR:-.}"
+JIT_PROJECT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 while [ "${JIT_PROJECT%/}" != "$JIT_PROJECT" ] && [ "$JIT_PROJECT" != "/" ]; do
   JIT_PROJECT="${JIT_PROJECT%/}"
 done
@@ -84,8 +84,8 @@ JIT_PATH_PROG=$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_B
 # and skips the code point the engine cannot represent -- without that skip, index(s, "")
 # returns 1 and gsub would be handed an empty regex, which matches at every position.
 function jit_json_escape(s,   k, c) {
-  gsub(/\\/, "\\\\", s)
-  gsub(/"/, "\\\"", s)
+  gsub(/\\/, "\134\134", s)
+  gsub(/"/, "\134\042", s)
   gsub(/\t/, "\\t", s)
   gsub(/\n/, "\\n", s)
   gsub(/\r/, "\\r", s)
@@ -129,7 +129,7 @@ function jit_json_escape(s,   k, c) {
 function jit_cand_sep(   q) {
   if (jit_sep_re == "") {
     q = sprintf("%c", 39)
-    jit_sep_re = "[ \t\n\r;&|()<>\"`," q "=]+"
+    jit_sep_re = "[ \t\n\r;&|()<>\042`," q "=]+"
   }
   return jit_sep_re
 }
@@ -140,7 +140,7 @@ function jit_cand_ctl(s) {
 function jit_cand_tokens(c, out,   nt, tk, i, t, project, plen, k) {
   jit_utf8_init()
   project = ENVIRON["CLAUDE_PROJECT_DIR"]
-  if (project == "") project = "."
+  if (project == "") project = "\056"
   sub(/\/+$/, "", project)
   if (project == "") project = "/"
   k = 0
@@ -152,7 +152,7 @@ function jit_cand_tokens(c, out,   nt, tk, i, t, project, plen, k) {
     # An option is not a path. Its VALUE still is: `=` is a separator above, so
     # --file=src/x.php arrives here as two tokens and the second one survives.
     if (substr(t, 1, 1) == "-") continue
-    if (index(t, "\\") > 0) continue
+    if (index(t, "\134") > 0) continue
     # one-true-awk truncates the record at a NUL and never sees one; gawk carries it.
     if (length(jit_nul) == 1 && index(t, jit_nul) > 0) continue
     if (jit_cand_ctl(t)) continue
@@ -173,7 +173,7 @@ function jit_cand_tokens(c, out,   nt, tk, i, t, project, plen, k) {
     while (t ~ /\/\//) sub(/\/\//, "/", t)
     sub(/\/\.$/, "", t)
     if (t == "" || substr(t, 1, 1) == "/") continue
-    if (t == "." || t == "..") continue
+    if (t == "\056" || t == "\056\056") continue
     if (t ~ /(^|\/)\.\.(\/|$)/) continue
     k++
     out[k] = t
@@ -227,9 +227,9 @@ END {
   # that both passes address the same marker file rather than two.
   if (cand_mode == 1) {
     path_count = jit_cand_load(all_paths)
-    shown_file = jit_shown_path(state_dir, "path", ENVIRON["JIT_SESSION_KEY"])
-    vocab_shown_file = jit_shown_path(state_dir, "vocab", ENVIRON["JIT_SESSION_KEY"])
-    bytes_shown_file = jit_shown_path(state_dir, "bytes", ENVIRON["JIT_SESSION_KEY"])
+    shown_file = jit_shown_path(state_dir, "path", ENVIRON["JIT_SESSION_REF"])
+    vocab_shown_file = jit_shown_path(state_dir, "vocab", ENVIRON["JIT_SESSION_REF"])
+    bytes_shown_file = jit_shown_path(state_dir, "bytes", ENVIRON["JIT_SESSION_REF"])
   } else if (file_path != "") {
     path_count = 1; all_paths[1] = file_path
   # \n joins the class for the same reason ; and | are in it: a decoded multi-line
@@ -755,14 +755,16 @@ jit_path_awk 0
 # and `grep -r x src/Components/` are the same directory and only one of them fires.
 JIT_CAND_VALUE=""
 jit_cand_ok() {
-  local tok="$1" rest comp pre=""
+  local seg="$1" rest comp pre="" bs
   JIT_CAND_VALUE=""
-  case "$tok" in
-    "" | /*) return 1 ;;
-    *\\*) return 1 ;;
-    .. | ../* | */../* | */..) return 1 ;;
-  esac
-  rest="$tok"
+  # #461: tests, not case patterns -- empty, absolute, a backslash, and a `..` component
+  # (alone, leading, inside, trailing). The directory validator held on this `case`.
+  printf -v bs '\134'
+  [ -n "$seg" ] && [ "${seg#/}" = "$seg" ] || return 1
+  [ "${seg#*"$bs"}" = "$seg" ] || return 1
+  [ "$seg" != .. ] && [ "${seg#../}" = "$seg" ] && [ "${seg#*/../}" = "$seg" ] \
+    && [ "${seg%/..}" = "$seg" ] || return 1
+  rest="$seg"
   while [ "$rest" != "${rest#*/}" ]; do
     comp="${rest%%/*}"
     rest="${rest#*/}"
@@ -771,13 +773,17 @@ jit_cand_ok() {
     if [ -L "$JIT_PROJECT/$pre" ]; then return 1; fi
     pre="$pre/"
   done
-  if [ -L "$JIT_PROJECT/$tok" ]; then return 1; fi
-  if [ -d "$JIT_PROJECT/$tok" ]; then
-    case "$tok" in */) JIT_CAND_VALUE="$tok" ;; *) JIT_CAND_VALUE="$tok/" ;; esac
+  if [ -L "$JIT_PROJECT/$seg" ]; then return 1; fi
+  if [ -d "$JIT_PROJECT/$seg" ]; then
+    if [ "${seg%/}" != "$seg" ]; then
+      JIT_CAND_VALUE="$seg"
+    else
+      JIT_CAND_VALUE="$seg/"
+    fi
     return 0
   fi
-  [ -f "$JIT_PROJECT/$tok" ] || return 1
-  JIT_CAND_VALUE="$tok"
+  [ -f "$JIT_PROJECT/$seg" ] || return 1
+  JIT_CAND_VALUE="$seg"
   return 0
 }
 
@@ -788,30 +794,30 @@ jit_cand_ok() {
 # Capped in bytes, like JIT_SYMLINKS and JIT_CONFIG_REFUSED, and for the same reason: the
 # list crosses an exec into the second pass, and its length is chosen by the payload.
 JIT_CANDIDATES=""
-JIT_SESSION_KEY=""
+JIT_SESSION_REF=""
 if [ -n "$JIT_TMP" ] && [ -s "$JIT_TMP" ]; then
   IFS= read -r JIT_CAND_HEAD < "$JIT_TMP" || JIT_CAND_HEAD=""
   if [ "$JIT_CAND_HEAD" = "$JIT_CAND_BEGIN" ]; then
     {
       IFS= read -r _JIT_SENTINEL
-      IFS= read -r JIT_SESSION_KEY
-      while IFS= read -r JIT_TOK; do
+      IFS= read -r JIT_SESSION_REF
+      while IFS= read -r JIT_SEG; do
         [ "${#JIT_CANDIDATES}" -lt 4096 ] || break
-        if jit_cand_ok "$JIT_TOK"; then
+        if jit_cand_ok "$JIT_SEG"; then
           JIT_CANDIDATES="$JIT_CANDIDATES$JIT_CAND_VALUE$JIT_NL"
         fi
       done
     } < "$JIT_TMP"
     # awk built this key out of the payload and constrained it; checked again here because
     # it is about to become part of a file name in the second pass.
-    case "$JIT_SESSION_KEY" in *[!A-Za-z0-9_-]*) JIT_SESSION_KEY="" ;; esac
+    case "$JIT_SESSION_REF" in *[!A-Za-z0-9_-]*) JIT_SESSION_REF="" ;; esac
     # Emptied either way. The second pass rewrites this file with its marks and its log
     # line; without one, the block at the bottom would read leftover candidate lines as a
     # marks channel and a log line.
     : > "$JIT_TMP"
     if [ -n "$JIT_CANDIDATES" ]; then
       export JIT_PATH_CANDIDATES="$JIT_CANDIDATES"
-      export JIT_SESSION_KEY
+      export JIT_SESSION_REF
       jit_path_awk 1 < /dev/null
     else
       echo "{}"
@@ -839,7 +845,7 @@ if [ -n "$JIT_TMP" ] && [ -s "$JIT_TMP" ]; then
   # Two arguments, not one concatenation: _log_hook caps the matches field and leaves the
   # tail alone (#64). The tail is already bounded to 80 bytes inside awk and is what
   # jit-misses.sh reads, so it must survive a line that had to be cut.
-  _log_hook "pre-path" "$TOTAL" "$AWK_MATCHES" "<< $AWK_PATH"
+  _log_hook "pre-path" "$TOTAL" "$AWK_MATCHES" "$JIT_LOG_ARROW $AWK_PATH"
 fi
 
 # Stated, not inherited. The hook exit status used to be whatever the last command

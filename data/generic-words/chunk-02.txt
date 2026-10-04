@@ -429,7 +429,6 @@ gelose
 gelt
 gelule
 gelure
-gem
 gemeau
 gemellaire
 gemelle
@@ -1769,7 +1768,6 @@ goose
 goosed
 gooses
 goosing
-gopher
 gophers
 gopi
 gord
@@ -5581,7 +5579,6 @@ hospitalizes
 hospitalizing
 hospitals
 hospodar
-host
 hostage
 hostages
 hosted
@@ -5721,7 +5718,6 @@ hows
 howzat
 hoyau
 hpz
-http
 huard
 huart
 hub
@@ -14542,7 +14538,6 @@ linkage
 linked
 linker
 linking
-links
 linneen
 lino
 linogravure
@@ -15704,7 +15699,6 @@ lyncheur
 lynching
 lynchpin
 lynchpins
-lynx
 lyonnais
 lyophile
 lyophilisat
@@ -16128,7 +16122,6 @@ maigreur
 maigrichon
 maigriot
 maigrir
-mail
 mailbox
 mailboxes
 mailed

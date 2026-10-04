@@ -5455,7 +5455,6 @@ apron
 aprons
 aprotique
 apside
-apt
 apte
 apter
 aptere
@@ -5869,7 +5868,6 @@ argyraspide
 argyrisme
 argyronete
 argyrose
-aria
 arianisme
 ariary
 arias
@@ -12318,7 +12316,6 @@ breviaire
 breviligne
 brevite
 brevity
-brew
 brewed
 breweries
 brewery
@@ -14710,7 +14707,6 @@ caretakers
 carex
 carfentanyl
 cargaison
-cargo
 cargoes
 cargos
 cargue

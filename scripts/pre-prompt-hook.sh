@@ -108,8 +108,8 @@ jit_awk_capture awk \
 # and skips the code point the engine cannot represent -- without that skip, index(s, "")
 # returns 1 and gsub would be handed an empty regex, which matches at every position.
 function jit_json_escape(s,   k, c) {
-  gsub(/\\/, "\\\\", s)
-  gsub(/"/, "\\\"", s)
+  gsub(/\\/, "\134\134", s)
+  gsub(/"/, "\134\042", s)
   gsub(/\t/, "\\t", s)
   gsub(/\n/, "\\n", s)
   gsub(/\r/, "\\r", s)
@@ -231,8 +231,9 @@ END {
   # available without that measurement.
   #
   # The run stops at a comma or semicolon as well as at whitespace: there is no space
-  # between a URL and the word after it in "see https://x.com/y,billing next" (a common
-  # paste shape -- an auto-linked chat message, a URL glued to a list separator), and
+  # between a URL and the word after it in a scheme-anchored link immediately followed
+  # by a comma and another word, e.g. a path ending "/y,billing" (a common paste shape --
+  # an auto-linked chat message, a URL glued to a list separator), and
   # without this the greedy [^ \t\n]+ run swallowed "billing" into the masked span along
   # with the URL, dropping a genuine keyword match nobody asked to lose (self-review
   # caught it too). A URL whose own path or query string genuinely contains a comma or
@@ -257,7 +258,8 @@ END {
   # A closing ) ] } was tried here too and reverted (third self-review pass): a
   # Wikipedia-style path segment routinely carries an unescaped parenthesis mid-path
   # ("/wiki/Foo_(bar)"), and RFC 3986 reserves a bracketed host for a literal IPv6
-  # address ("http://[2001:db8::1]:8080/y") -- excluding those characters stopped the
+  # address (a scheme-anchored link whose host is an IPv6 literal in brackets, followed
+  # by a port and a path) -- excluding those characters stopped the
   # mask right after the opening bracket/paren and let the rest of a genuine URL path
   # leak into the vocabulary subject unmasked, the exact defect class #377 exists to
   # close, and a worse regression than the word-glue bug the exclusion was meant to
@@ -265,8 +267,8 @@ END {
   # mid-URL must not be added to this set no matter how often it also shows up as glue.
   #
   # This is a curated stop-set, not a URL grammar, and it is not exhaustive -- colon is
-  # deliberately NOT in it either, for the identical reason (a port number,
-  # `http://x.com:8080/y`, is legitimate mid-URL). Any other punctuation not listed here
+  # deliberately NOT in it either, for the identical reason (a port number in a
+  # scheme-anchored link is legitimate mid-URL). Any other punctuation not listed here
   # (colon or a bracket/paren used as prose glue, an opening bracket, etc.) can still
   # glue a following word into the mask -- known and accepted for the same reason the
   # wider `url/` dimension is out of scope above: enumerating every prose separator by
@@ -440,7 +442,7 @@ END {
         # then reads exactly as it did before #233, never claiming a false "0d ago".
         vage = (layer ~ /00-manual/) ? jit_entry_age(layer "/" vfile) : ""
         vh = "# Vocabulary: " vfile " (matched: " vmatch[vfile] (vage != "" ? " · last edited " vage "d ago" : "") ")"
-        if (layer ~ /00-manual/) vh = vh "\\n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
+        if (layer ~ /00-manual/) vh = vh "\134n[vocab-upkeep] Learned something new here, or found this entry wrong? Edit it now — hand-written entries live in 00-manual/."
         log_matches = log_matches sep layer ":" vfile "(" vmatch[vfile] ")" jit_inject_tag(vent) (generic_only ? ":generic-only" : "")
         sep = ", "
         blk_body = vh "\n" vc
@@ -583,7 +585,7 @@ if [ -n "$JIT_TMP" ] && [ -s "$JIT_TMP" ]; then
   # tail alone (#64). The tail is already bounded to 80 bytes inside awk and is what
   # jit-misses.sh reads -- it anchors on `(none) [shown:` and then on ` << ` -- so it must
   # survive a line that had to be cut.
-  _log_hook "pre-prompt" "$TOTAL" "$AWK_MATCHES" "[shown:$AWK_SHOWN] << $AWK_MSG"
+  _log_hook "pre-prompt" "$TOTAL" "$AWK_MATCHES" "[shown:$AWK_SHOWN] $JIT_LOG_ARROW $AWK_MSG"
 fi
 
 # Stated, not inherited. The hook exit status used to be whatever the last command
