@@ -7,6 +7,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-04
+
+### Added
+
+- **The directory listing has a proper name and its links** (#466). `plugin.json` now sets
+  `displayName` ("JIT Context", where the directory derived "Jit Context") and the
+  homepage, documentation, support, privacy-policy and terms links. The new `PRIVACY.md`
+  says what the plugin reads and writes on your machine, down to the start of every prompt
+  that `hooks.log` keeps and the scratch file each hook creates in `$TMPDIR`, and that it
+  sends nothing over the network; it stays on `main` rather than shipping in the release
+  tree.
+
 ## [0.15.0] - 2026-10-04
 
 ### Added
@@ -4011,7 +4023,8 @@ and publishes it.
 
 Initial internal version: tool and path rules, configured through `config.json`.
 
-[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.16.0
 [0.15.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.15.0
 [0.14.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.14.0
 [0.13.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.13.0
