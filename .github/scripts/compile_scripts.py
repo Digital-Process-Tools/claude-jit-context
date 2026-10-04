@@ -186,8 +186,14 @@ def wrap_as_function(name: str, body: str) -> str:
     `name "$@"` it has the same argv, stdout, stderr and exit-status contract
     as `bash original-script.sh "$@"` -- `exit` inside a `()` body ends the
     subshell, not the caller, and `VAR=val name ...` exports VAR for that one
-    call the same way it would for `VAR=val bash original-script.sh ...`."""
-    return f"{name}() (\n{body.rstrip(chr(10))}\n)"
+    call the same way it would for `VAR=val bash original-script.sh ...`.
+
+    A child bash also starts with every `set` option off; this body would
+    otherwise inherit the caller's (`set -uo pipefail` in jit-init.sh, #461
+    release audit), so it turns them off first. It still sees the caller's
+    unexported variables, which a child bash does not -- the callers export
+    what the called script reads, so source and build read the same values."""
+    return f"{name}() (\nset +e +u +o pipefail\n{body.rstrip(chr(10))}\n)"
 
 
 def inline_subprocess_call(script: str, call_text: str, func_name: str,
@@ -279,7 +285,7 @@ def strip_comments(text: str, protect_until: int = 0) -> str:
                 i += 1
                 continue
             if state == "DOUBLE":
-                if c == "\\\\" and i + 1 < n:
+                if c == "\\" and i + 1 < n:
                     i += 2
                     continue
                 if c == '"':
@@ -287,7 +293,7 @@ def strip_comments(text: str, protect_until: int = 0) -> str:
                 i += 1
                 continue
             # state == CODE
-            if c == "\\\\" and i + 1 < n:
+            if c == "\\" and i + 1 < n:
                 i += 2
                 continue
             if c == "'":
