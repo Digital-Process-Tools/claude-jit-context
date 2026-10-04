@@ -43,7 +43,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEMPLATE_ROOT="$SCRIPT_DIR/../templates/jit-context"
 SEED_REL="vocabulary/00-manual/writing-rules.md"
 
-BASE="$PWD/.claude/jit-context"
+BASE="$(pwd)/.claude/jit-context"
 
 usage() {
   # The header block, to the first non-comment line. Read structurally rather than as a
@@ -114,7 +114,7 @@ BASE="${BASE%/}"
 # is a CI leg here, and $PWD/C:/x is not a path on any platform.
 case "$BASE" in
   /* | ?:/* | ?:\\*) ;;
-  *) BASE="$PWD/$BASE" ;;
+  *) BASE="$(pwd)/$BASE" ;;
 esac
 
 case "$BASE" in

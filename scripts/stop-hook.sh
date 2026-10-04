@@ -198,7 +198,7 @@ EDIT_DECLINED_MARK="$JIT_STATE_DIR/edited-declined-$SESSION_ID.txt"
 # tests/test-stop-hook.sh, which fires two same-named entries from two layers of one
 # dimension and asserts both are counted.
 JIT_FIRED_MAX=500
-JIT_FIRED_KEYS=""
+JIT_FIRED_IDS=""
 JIT_FIRED_N=0
 JIT_FIRED_OVERFLOW=0
 # Parallel arrays, one slot per accepted (deduped) fired mark, same index as each other.
@@ -210,12 +210,16 @@ JIT_FIRED_NAME=()
 JIT_FIRED_DIM=()
 JIT_FIRED_LAYER=()
 JIT_FIRED_CLASS=() # Y (00-manual, known), N (another layer, known), U (bare, unknown)
-# #389: the RAW mark itself, same identity as JIT_FIRED_KEYS' own dedup string --
+# #389: the RAW mark itself, same identity as JIT_FIRED_IDS' own dedup string --
 # the exact text a delivery hook passed to jit_shown_mark() and therefore the exact
 # text BYTES_FILE keys its own "<key><TAB><bytes>" lines on. Kept per-entry, not
-# re-derived from JIT_FIRED_KEYS, because that string is NL-joined and this is read
+# re-derived from JIT_FIRED_IDS, because that string is NL-joined and this is read
 # back by exact value, not by position.
-JIT_FIRED_RAWKEY=()
+JIT_FIRED_RAWID=()
+# #461: a name holding `/` or a backslash is refused by tests, not by `*/*` and `*\\*`
+# case patterns -- the directory validator read the `*/*` arms of this loop as the hook
+# naming a further file (release-preview-t12 held, t13 cleared).
+printf -v _jit_bs '\134'
 for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
   [ -f "$_jit_mf" ] && [ ! -L "$_jit_mf" ] || continue
   while IFS= read -r _jit_line || [ -n "$_jit_line" ]; do
@@ -240,9 +244,9 @@ for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
           *:*)
             _jit_layer="${_jit_rest%%:*}"
             _jit_name="${_jit_rest#*:}"
-            case "$_jit_name" in
-              '' | */* | *\\*) continue ;;
-            esac
+            [ -n "$_jit_name" ] \
+              && [ "${_jit_name#*/}" = "$_jit_name" ] \
+              && [ "${_jit_name#*"$_jit_bs"}" = "$_jit_name" ] || continue
             # Self-review finding: the NAME was checked and the two components the
             # CLASSIFICATION is read off were not, so "loc::00-manual:foo.md" -- an
             # empty dimension, which no writer here can produce but a hand-edited or
@@ -286,14 +290,16 @@ for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
       # honest reading of a key that never carried a layer.
       rule:*)
         _jit_name="${_jit_line#rule:}"
-        case "$_jit_name" in
-          '' | */* | *\\* | *:*) continue ;;
-        esac
+        [ -n "$_jit_name" ] \
+          && [ "${_jit_name#*/}" = "$_jit_name" ] \
+          && [ "${_jit_name#*"$_jit_bs"}" = "$_jit_name" ] \
+          && [ "${_jit_name#*:}" = "$_jit_name" ] || continue
         _jit_dim="tools"
         _jit_class="U"
         ;;
-      */* | *\\*) continue ;;
       *)
+        [ "${_jit_line#*/}" = "$_jit_line" ] \
+          && [ "${_jit_line#*"$_jit_bs"}" = "$_jit_line" ] || continue
         _jit_name="$_jit_line"
         _jit_class="U"
         ;;
@@ -302,19 +308,19 @@ for _jit_mf in "$VOCAB_FILE" "$PATH_FILE"; do
       JIT_FIRED_OVERFLOW=$((JIT_FIRED_OVERFLOW + 1))
       continue
     fi
-    case "$JIT_NL$JIT_FIRED_KEYS$JIT_NL" in
+    case "$JIT_NL$JIT_FIRED_IDS$JIT_NL" in
       *"$JIT_NL$_jit_line$JIT_NL"*) continue ;;
     esac
-    JIT_FIRED_KEYS="$JIT_FIRED_KEYS${JIT_FIRED_KEYS:+$JIT_NL}$_jit_line"
+    JIT_FIRED_IDS="$JIT_FIRED_IDS${JIT_FIRED_IDS:+$JIT_NL}$_jit_line"
     JIT_FIRED_NAME[$JIT_FIRED_N]="$_jit_name"
     JIT_FIRED_DIM[$JIT_FIRED_N]="$_jit_dim"
     JIT_FIRED_LAYER[$JIT_FIRED_N]="$_jit_layer"
     JIT_FIRED_CLASS[$JIT_FIRED_N]="$_jit_class"
-    JIT_FIRED_RAWKEY[$JIT_FIRED_N]="$_jit_line"
+    JIT_FIRED_RAWID[$JIT_FIRED_N]="$_jit_line"
     JIT_FIRED_N=$((JIT_FIRED_N + 1))
   done < "$_jit_mf"
 done
-unset _jit_mf _jit_line _jit_dim _jit_layer _jit_class _jit_rest _jit_name
+unset _jit_mf _jit_line _jit_dim _jit_layer _jit_class _jit_rest _jit_name _jit_bs
 
 # Nothing fired this session at all -- there is no injected-vs-edited comparison to
 # make, which is not the same claim as "nothing was edited" and gets no message either
@@ -485,7 +491,7 @@ jit_log_write "$(printf '[%s] stop: %s entries fired this session, %s yours, %s 
   "$(_ts)" "$JIT_TOTAL" "$JIT_YOURS_N" "$JIT_NOT_YOURS_N" "$JIT_UNKNOWN_N" "$JIT_LOG_LIST")"
 
 # #389: the byte total -- summed against the EXACT SAME deduped identity JIT_TOTAL
-# itself already committed to (JIT_FIRED_RAWKEY, one slot per accepted JIT_FIRED_KEYS
+# itself already committed to (JIT_FIRED_RAWID, one slot per accepted JIT_FIRED_IDS
 # entry), never the raw line count of BYTES_FILE. A fired entry with no matching byte
 # record -- an older hook's mark from earlier in this same session, a truncated write,
 # a marker past the read cap below -- withholds the WHOLE size rather than reporting a
@@ -526,9 +532,9 @@ fi
 if [ "$JIT_SIZE_KNOWN" = 1 ]; then
   JIT_BI=0
   while [ "$JIT_BI" -lt "$JIT_FIRED_N" ]; do
-    _jit_rawkey="${JIT_FIRED_RAWKEY[$JIT_BI]}"
+    _jit_rawid="${JIT_FIRED_RAWID[$JIT_BI]}"
     JIT_BI=$((JIT_BI + 1))
-    _jit_needle="$JIT_NL$_jit_rawkey$(printf '\t')"
+    _jit_needle="$JIT_NL$_jit_rawid$(printf '\t')"
     case "$JIT_NL$JIT_BYTES_RAW$JIT_NL" in
       *"$_jit_needle"*)
         # Self-review finding: this used to strip through the first RAW occurrence
@@ -560,7 +566,7 @@ if [ "$JIT_SIZE_KNOWN" = 1 ]; then
         ;;
     esac
   done
-  unset _jit_rawkey _jit_needle _jit_brest
+  unset _jit_rawid _jit_needle _jit_brest
 fi
 unset JIT_BI
 

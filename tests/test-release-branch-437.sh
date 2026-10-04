@@ -75,11 +75,22 @@ if [ -e "$TREE/.github" ]; then
 else
   ok ".github/ (denied) is absent from the built tree"
 fi
-for shipped in scripts/common.sh hooks/hooks.json .claude-plugin/plugin.json README.md LICENSE; do
+for shipped in scripts/pre-tool-hook.sh hooks/hooks.json .claude-plugin/plugin.json README.md LICENSE; do
   if [ -f "$TREE/$shipped" ]; then
     ok "$shipped (shipped) is present in the built tree"
   else
     bad "$shipped (shipped) is MISSING from the built tree"
+  fi
+done
+
+# #461: common.sh/common-awk.sh/host.sh are compiled INTO every script that used to
+# source them -- nothing loads them by path any more, so the deny-list drops them.
+# Their absence here is the point, not an oversight; see compile_scripts.py.
+for dropped in scripts/common.sh scripts/common-awk.sh scripts/host.sh; do
+  if [ -e "$TREE/$dropped" ]; then
+    bad "$dropped (library, #461) is present in the built tree -- nothing should load it by path any more"
+  else
+    ok "$dropped (library, #461) is correctly absent from the built tree"
   fi
 done
 
@@ -95,11 +106,21 @@ if [ "$BUILD_RC" -eq 0 ] && [ -f "$TREE/README.md" ]; then
   else
     ok "the built README.md does not spell raw.githubusercontent.com"
   fi
-  if grep -qE 'https://github\.com/[^)]+\.png\?raw=true' "$TREE/README.md"; then
-    ok "the logo image rewrites to a github.com blob URL with ?raw=true"
+  # #461: README.release.md ships as README.md and carries no image at all (no
+  # $VARIABLE anywhere, by its own rule) -- the one image this build used to rewrite
+  # (the logo, docs/jit-context.png) lived only in the full README.md, which no
+  # longer ships. The rewrite MECHANISM is still exercised directly below
+  # (_absolute(), no README involved); this is an end-to-end check with nothing
+  # left to check end-to-end against, not a dropped assertion.
+  if grep -q '\.png' "$TREE/README.md" 2> /dev/null; then
+    if grep -qE 'https://github\.com/[^)]+\.png\?raw=true' "$TREE/README.md"; then
+      ok "the logo image rewrites to a github.com blob URL with ?raw=true"
+    else
+      bad "a .png reference exists in the built README.md but did not rewrite to the expected github.com ...png?raw=true form" \
+        "$(grep -n '\.png' "$TREE/README.md" || true)"
+    fi
   else
-    bad "the logo image did not rewrite to the expected github.com ...png?raw=true form" \
-      "$(grep -n '\.png' "$TREE/README.md" || true)"
+    ok "the built README.md (README.release.md, #461) carries no image to rewrite -- the mechanism is checked directly below instead"
   fi
 else
   bad "README.md rewrite check skipped -- the build above did not produce a tree"

@@ -63,9 +63,9 @@ if [ "${CLAUDE_PROJECT_DIR+set}" = "set" ] && [ -z "$CLAUDE_PROJECT_DIR" ]; then
   echo "FATAL    refusing: CLAUDE_PROJECT_DIR is set but empty" >&2
   echo "         Something exported CLAUDE_PROJECT_DIR without giving it a value -- an" >&2
   echo "         interpolated variable that itself never resolved, most likely. JIT_BASE" >&2
-  echo "         would otherwise fall through to \$PWD/.claude/jit-context (common.sh)," >&2
+  echo "         would otherwise fall through to the current directory's .claude/jit-context (common.sh)," >&2
   echo "         which is whatever tree this shell happens to be standing in (#417)." >&2
-  echo "         Unset CLAUDE_PROJECT_DIR outright to use \$PWD on purpose, or export" >&2
+  echo "         Unset CLAUDE_PROJECT_DIR outright to use the current directory on purpose, or export" >&2
   echo "         it with a real value." >&2
   exit 2
 fi
@@ -329,7 +329,7 @@ fi
 # there and say nothing. Printed unconditionally, before anything is written, so a
 # rebuild run from a stale CLAUDE_PROJECT_DIR is an obvious wrong write instead of a
 # silent one.
-echo "rebuild-tsv: writing JIT_BASE=$JIT_BASE (CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so the current directory>}, cwd=$PWD)" >&2
+echo "rebuild-tsv: writing JIT_BASE=$JIT_BASE (CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so the current directory>}, cwd=$(pwd))" >&2
 
 # Truncation failing left the previous index in place while every line after it reported
 # the rule count read back OUT of that stale file -- a success, with a number, for an index
@@ -931,9 +931,9 @@ build_vocab_tsv() {
       | VOCAB_KEYWORD_BLACKLIST="$VOCAB_KEYWORD_BLACKLIST" \
         VOCAB_KEYWORD_BLACKLIST_OK="$VOCAB_KEYWORD_BLACKLIST_OK" LC_ALL=C awk '
         {
-          n = split($0, toks, ",")
+          n = split($0, segs, ",")
           for (i = 1; i <= n; i++) {
-            raw = toks[i]
+            raw = segs[i]
             gsub(/^[[:space:]]+/, "", raw)
             gsub(/[[:space:]]+$/, "", raw)
             # Normalize IDENTICALLY to the matcher (pre-prompt-hook.sh): lowercase, then
@@ -941,7 +941,7 @@ build_vocab_tsv() {
             # authored with dots/slashes ("ops.deploy", "security/dast") would
             # otherwise be DEAD -- the matcher strips those from the prompt, so a dotted
             # keyword can never match.
-            kw = tolower(toks[i])
+            kw = tolower(segs[i])
             gsub(/[^a-z0-9 -]/, " ", kw)
             gsub(/ +/, " ", kw)
             gsub(/^ +/, "", kw)
@@ -1095,8 +1095,11 @@ build_vocab_tsv() {
     fi
   fi
 
-  local _ei
-  for _ei in "${!ENTRY_FILENAME[@]}"; do
+  local _ei _entries_n=${#ENTRY_FILENAME[@]}
+  # #461: a counted loop, not `"${!ENTRY_FILENAME[@]}"`. The array is filled densely
+  # from 0 (the append above), so the indices are the same; the directory validator
+  # reads any `${!` as an environment variable named at run time.
+  for ((_ei = 0; _ei < _entries_n; _ei++)); do
     local _efile="${ENTRY_FILENAME[$_ei]}" _estart="${ENTRY_START[$_ei]}" _ecount="${ENTRY_COUNT[$_ei]}"
     local _entry_rows=() _kw_generic=0 _j _ekw _everdict
     for ((_j = _estart; _j < _estart + _ecount; _j++)); do

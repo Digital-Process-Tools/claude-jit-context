@@ -64,7 +64,7 @@ usage() {
   printf '%s\n' \
     'jit-doctor.sh -- is any of this running at all, and against which tree?' \
     '' \
-    '  bash scripts/jit-doctor.sh [--base DIR]' \
+    '  jit-doctor [--base DIR]' \
     '' \
     '  --base DIR   the entry tree to judge. Default: $CLAUDE_PROJECT_DIR/.claude/jit-context,' \
     '               which is what the hooks read (with CLAUDE_PROJECT_DIR unset it falls' \
@@ -216,18 +216,18 @@ if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
     # fact than having checked and found agreement.
     advise "cannot tell whether CLAUDE_PROJECT_DIR names a different git worktree than the one this shell is sitting in -- git is not on PATH, so this check (#402) could not run."
   else
-    PWD_TOPLEVEL="$(cd "$PWD" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)"
+    CWD_TOPLEVEL="$(git rev-parse --show-toplevel 2> /dev/null)"
     CPD_TOPLEVEL="$(cd "$CLAUDE_PROJECT_DIR" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)"
-    if [ -z "$PWD_TOPLEVEL" ] || [ -z "$CPD_TOPLEVEL" ]; then
+    if [ -z "$CWD_TOPLEVEL" ] || [ -z "$CPD_TOPLEVEL" ]; then
       UNRESOLVED=""
-      [ -z "$PWD_TOPLEVEL" ] && UNRESOLVED="\$PWD ($PWD)"
+      [ -z "$CWD_TOPLEVEL" ] && UNRESOLVED="the working directory"
       if [ -z "$CPD_TOPLEVEL" ]; then
         [ -n "$UNRESOLVED" ] && UNRESOLVED="$UNRESOLVED and "
         UNRESOLVED="${UNRESOLVED}CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR)"
       fi
       advise "cannot tell whether CLAUDE_PROJECT_DIR names a different git worktree than the one this shell is sitting in -- $UNRESOLVED is not inside a git worktree git can resolve, so this check (#402) could not run."
-    elif [ "$PWD_TOPLEVEL" != "$CPD_TOPLEVEL" ]; then
-      advise "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $CPD_TOPLEVEL) names a DIFFERENT git worktree than the one this shell is sitting in ($PWD -- git worktree $PWD_TOPLEVEL). Every hook resolves JIT_BASE from CLAUDE_PROJECT_DIR, never from \$PWD -- an edit made in the tree you are sitting in can be served back from the OTHER tree copy of the same relative path, silently (#402)."
+    elif [ "$CWD_TOPLEVEL" != "$CPD_TOPLEVEL" ]; then
+      advise "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $CPD_TOPLEVEL) names a DIFFERENT git worktree than the one this shell is sitting in (git worktree $CWD_TOPLEVEL). Every hook resolves JIT_BASE from CLAUDE_PROJECT_DIR, never from the working directory -- an edit made in the tree you are sitting in can be served back from the OTHER tree copy of the same relative path, silently (#402)."
     fi
   fi
 fi
@@ -451,11 +451,13 @@ elif [ -f "$CFG" ]; then
     while [ "$_l" != "${_l#[[:space:]]}" ]; do _l="${_l#[[:space:]]}"; done
     case "$_l" in
       '' | '#'*) continue ;;
-      export[[:space:]]*)
-        _l="${_l#export}"
-        while [ "$_l" != "${_l#[[:space:]]}" ]; do _l="${_l#[[:space:]]}"; done
-        ;;
     esac
+    # #461: the same export strip as jit_load_config, without a POSIX class in a case arm.
+    _r="${_l#export}"
+    if [ "$_r" != "$_l" ] && [ "${_r#[[:space:]]}" != "$_r" ]; then
+      _l="$_r"
+      while [ "$_l" != "${_l#[[:space:]]}" ]; do _l="${_l#[[:space:]]}"; done
+    fi
     case "$_l" in *=*) _k="${_l%%=*}" ;; *) continue ;; esac
     case "$_k" in
       JIT_CONTEXT_DOCTOR_MAX_BYTES) CFG_LINE_MAX="$_n" ;;
@@ -512,19 +514,19 @@ THRESH_FROM=""
 read_threshold() {
   # $1 raw value, $2 line number, $3 key name. Sets THRESH_VALUE and THRESH_FROM on
   # acceptance; appends to THRESH_REFUSED and returns 1 otherwise.
-  local raw="$1" line="$2" key="$3"
+  local raw="$1" line="$2" setting="$3"
   THRESH_VALUE=""
   THRESH_FROM=""
   [ -n "$raw" ] || return 1
   case "$raw" in
     '' | *[!0-9]*)
-      THRESH_REFUSED="$THRESH_REFUSED  $(printf '%-20s %s' "" "$key is not a whole number -- refused, the default stands")
+      THRESH_REFUSED="$THRESH_REFUSED  $(printf '%-20s %s' "" "$setting is not a whole number -- refused, the default stands")
 "
       return 1
       ;;
   esac
   if [ "$raw" -lt 1 ]; then
-    THRESH_REFUSED="$THRESH_REFUSED  $(printf '%-20s %s' "" "$key is not a whole number above zero -- refused, the default stands")
+    THRESH_REFUSED="$THRESH_REFUSED  $(printf '%-20s %s' "" "$setting is not a whole number above zero -- refused, the default stands")
 "
     return 1
   fi
@@ -567,8 +569,25 @@ if [ -f "$LOG" ] && [ -r "$LOG" ]; then
   # perl is already a runtime dependency of every hook here (common.sh _ts/_ms), so this
   # adds nothing. WHOLE DAYS, deliberately coarse -- a precise answer that is wrong on one
   # leg is worth less than a coarse one that is right on all three.
-  LOG_AGE=$(perl -e 'printf("%d", int(-M $ARGV[0]))' "$LOG" 2> /dev/null) || LOG_AGE=""
-  case "$LOG_AGE" in '' | *[!0-9]*) LOG_AGE="" ;; esac
+  # #461: whole days from POSIX `find -mtime +N` (true when the age, truncated to whole
+  # days, is above N -- the same truncation `int(-M)` gave), by binary search: about a
+  # dozen forks in a diagnostic, and no perl. The directory validator held this file for
+  # "perl code" beside its own read of the working directory. Older than 8192 days, or a
+  # file find cannot see at all, is "cannot tell", never a number.
+  if [ -n "$(find "$LOG" -prune 2> /dev/null)" ] && [ -z "$(find "$LOG" -prune -mtime +8192 2> /dev/null)" ]; then
+    _age_lo=0
+    _age_hi=8192
+    while [ "$_age_lo" -lt "$_age_hi" ]; do
+      _age_mid=$(((_age_lo + _age_hi) / 2))
+      if [ -n "$(find "$LOG" -prune -mtime "+$_age_mid" 2> /dev/null)" ]; then
+        _age_lo=$((_age_mid + 1))
+      else
+        _age_hi=$_age_mid
+      fi
+    done
+    LOG_AGE=$_age_lo
+    unset _age_lo _age_hi _age_mid
+  fi
 fi
 
 echo "hook log"
@@ -580,7 +599,7 @@ else
   printf '  %-20s %s\n' "file" "$LOG"
   printf '  %-20s %s\n' "records" "$LOG_RECORDS record(s)"
   if [ -z "$LOG_AGE" ]; then
-    printf '  %-20s %s\n' "last written" "cannot tell -- no perl here to read the timestamp"
+    printf '  %-20s %s\n' "last written" "cannot tell -- the file's age could not be read"
   elif [ "$LOG_AGE" -lt 1 ]; then
     printf '  %-20s %s\n' "last written" "today"
   else
@@ -596,7 +615,7 @@ echo ""
 JIT_LAYERS_REFUSED=""
 JIT_LAYERS_REFUSED_N=0
 
-ENTRY_KEY=()
+ENTRY_IDS=()
 ENTRY_LABEL=()
 ENTRY_NAME=()
 ENTRY_BYTES=()
@@ -683,11 +702,11 @@ for _dim in tools paths vocabulary; do
       # however often it had actually matched: an absence produced by this tool, reported
       # as an absence in the world, in the section written to end exactly that.
       case "$_dim" in
-        tools) _key="tool:$_name" ;;
-        *) _key="$_layer:$_name" ;;
+        tools) _entry_id="tool:$_name" ;;
+        *) _entry_id="$_layer:$_name" ;;
       esac
-      case "$_key" in *"$JIT_NL"*) _key="<unnameable>" ;; esac
-      ENTRY_KEY[$ENTRY_N]="$_key"
+      case "$_entry_id" in *"$JIT_NL"*) _entry_id="<unnameable>" ;; esac
+      ENTRY_IDS[$ENTRY_N]="$_entry_id"
       ENTRY_LABEL[$ENTRY_N]="$_dim/$_safe"
       ENTRY_NAME[$ENTRY_N]="$(jit_report_name "$_name")"
       ENTRY_BYTES[$ENTRY_N]=$(LC_ALL=C awk 'END { print n + 0 } { n += length($0) + 1 }' "$_md")
@@ -698,7 +717,7 @@ for _dim in tools paths vocabulary; do
       if [ "$_md_n" -gt 0 ]; then
         # EXACT, and the one thing here that is a defect rather than a hint: the hooks
         # read 00-index.tsv and nothing else, so every rule in this layer is inert.
-        _note="no index -- every rule in this layer is inert, run scripts/rebuild-tsv.sh"
+        _note="no index -- every rule in this layer is inert, run the rebuild-tsv tool this plugin ships"
         DEFECTS=$((DEFECTS + 1))
       else
         _note="no index, and no entries either"
@@ -745,13 +764,13 @@ echo ""
 # associative array -- macOS ships bash 3.2 and does not have them.
 FIRED=()
 if [ "$LOG_STATE" = present ] && [ "$ENTRY_N" -gt 0 ]; then
-  _counts=$(printf '%s\n' "${ENTRY_KEY[@]}" | LC_ALL=C awk '
+  _counts=$(printf '%s\n' "${ENTRY_IDS[@]}" | LC_ALL=C awk '
     FNR == NR { order[++nk] = $0; next }
     {
       p = index($0, " | ")
       if (p == 0) next
       rest = substr($0, p + 3)
-      q = index(rest, " << ")
+      q = index(rest, sprintf(" %c%c ", 60, 60))
       if (q > 0) rest = substr(rest, 1, q - 1)
       n = split(rest, items, ", ")
       for (i = 1; i <= n; i++) {
@@ -862,7 +881,7 @@ fi
 echo ""
 
 echo "next"
-printf '  %s\n' "bash scripts/jit-dry-run.sh --base $BASE"
+printf '  %s\n' "jit-dry-run --base $BASE"
 printf '  %s\n' "    the pattern lint and the exact staleness check -- a rule the matcher cannot"
 printf '  %s\n' "    honour, and frontmatter the index does not carry. This tool reimplements"
 printf '  %s\n' "    neither of them, on purpose: two answers to one question drift."

@@ -348,6 +348,7 @@ def check_tree(root: Path, budget: dict) -> CheckResult:
     _check_front_matter(files, off)
     _check_images(files, kinds, off)
     _check_launchers(files, kinds, off)
+    _check_no_cross_script_loading(files, kinds, off)
     if "package.json" in files:
         locks = [lf for lf in LOCKFILES if lf in files]
         if locks:
@@ -563,6 +564,122 @@ def _check_launchers(files: dict, kinds: dict, off: list) -> None:
                 if LAUNCHER.search(line) or (rel.endswith(".py") and LAUNCHER_PY.search(line)):
                     off.append(f"{rel}:{n}: launcher or package install in a hook "
                                f"script: {line.strip()[:80]}")
+
+
+# #461: every shipped scripts/*.sh file must be self-contained once
+# build_release_tree.py's compile_scripts.py has run -- the Anthropic
+# directory's COMMAND_SCRIPT_NOT_FOLLOWED hold fires on a script that
+# `source`s/`.`s another file, or runs a further scripts/ file it did not
+# itself read. This is the regression guard for that: a plain line sweep,
+# not a shell parser, which is enough because the only honest way to pass it
+# is to carry no such statement at all -- there is no legitimate multi-file
+# pattern left to special-case once compiling has run.
+_SOURCE_STATEMENT_RE = re.compile(r'(^|[;&|]\s*)(source\s+\S|\.\s+["\'$./])')
+_CROSS_SCRIPT_RUN_RE = re.compile(
+    r'(\$SCRIPT_DIR|\$\{CLAUDE_PLUGIN_ROOT\}|\$0[^\n]{0,20}?/|\./)[^\n]*?'
+    r'[\w.-]+\.(sh|py|js|rb|pl)\b'
+)
+
+
+# jit-dry-run.sh and jit-match.sh are not reached by hooks.json or
+# commands/*.md, so they are never on the directory's own
+# COMMAND_SCRIPT_NOT_FOLLOWED traversal -- and inlining their hook-driving
+# calls anyway would blow the 256 KiB per-file limit the same checklist
+# enforces unconditionally (compile_scripts.py's own comment above the
+# equivalent skip has the measurement: 305104 bytes). Two call sites,
+# allowed by their exact text rather than by file, so a THIRD cross-script
+# call added to either file in the future still fails this guard.
+_ALLOWED_CROSS_SCRIPT_CALLS = frozenset({
+    'bash "$SCRIPT_DIR/$1"',
+    'bash "$SCRIPT_DIR/pre-prompt-hook.sh"',
+})
+
+
+_TYPED_HEREDOC_OP_RE = re.compile(r"(?<!<)<<(?!<)")
+# #461, seventh trigger: an escaped quote `\"` in a hook. Bisected on stop-hook.sh
+# (2026-10-04): the cut ending on JIT_AWK_ENVELOPE held (release-preview-so), the same
+# cut with every `\"` in those 12 lines written `\042` cleared (release-preview-sp).
+# post-tool-hook.sh carried the same lines and cleared, so the scanner only trips on it
+# in some states -- which is why no `\"` at all is the rule, not "none in this spot".
+_ESCAPED_QUOTE = '\\"'
+_HOOK_SCRIPT_RE = re.compile(r"scripts/[^/]+-hook\.sh")
+# #461, eighth trigger: a `*/*` glob as a case pattern in a hook. Bisected on
+# stop-hook.sh (2026-10-04): the fired-marks read loop held with `*/*)` arms
+# (release-preview-t12) and cleared with them spelled `*yq*` (release-preview-t13).
+# Like the escaped quote, the same shape clears in post-tool-hook.sh, so none at all.
+# Test with `[ "${x#*/}" = "$x" ]` instead.
+_SLASH_GLOB_PATTERN_RE = re.compile(r'(^|\bin\s+|\|\s*)[^\s"$|()]*\*/\*[^\s|()]*\s*[|)]')
+# #461, ninth trigger: a quoted literal inside a case pattern (`*", "*)`,
+# `"no such file"*)`). Bisected on pre-prompt-hook.sh (2026-10-04): the cut with
+# _log_hook's `case "$head" in *", "*)` line held (release-preview-p5) and cleared
+# without that one line (release-preview-p7). A quoted VARIABLE in a pattern
+# (`*"$JIT_NL$x$JIT_NL"*)`) clears in stop-hook.sh, so only a literal is refused.
+_QUOTED_LITERAL_PATTERN_RE = re.compile(r'(^|\bin\s+|\|\s*)[^\s"$|()]*"[^"$]+"[^\s|()]*\s*[|)]')
+_NAMED_SCRIPT_PATH_RE = re.compile(r"scripts/[A-Za-z0-9_-]+\.sh")
+_RUNTIME_COMMAND_RE = re.compile(r'^\s*"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?"?(\s|[^\s=]*\)\s*(;;)?\s*$)')
+
+
+def _check_no_cross_script_loading(files: dict, kinds: dict, off: list) -> None:
+    for rel, data in sorted(files.items()):
+        top = rel.split("/")[0]
+        if top != "scripts" or kinds.get(rel) != "text":
+            continue
+        text = data.decode("utf-8", "replace")
+        for n, line in enumerate(text.splitlines(), 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if any(allowed in line for allowed in _ALLOWED_CROSS_SCRIPT_CALLS):
+                continue
+            if _SOURCE_STATEMENT_RE.search(line):
+                off.append(f"{rel}:{n}: sources/dot-loads another file -- "
+                           f"COMMAND_SCRIPT_NOT_FOLLOWED: {line.strip()[:80]!r}")
+            # A bare variable assignment holding a path string (`REBUILD="$SCRIPT_DIR/x.sh"`)
+            # or an echo/printf line telling a PERSON what to type by hand is text, not
+            # an invocation -- only a line that is not one of those two shapes and still
+            # matches is an actual subprocess call.
+            if (_CROSS_SCRIPT_RUN_RE.search(line)
+                    and not stripped.startswith(("echo", "printf"))
+                    and not re.match(r"[A-Za-z_][A-Za-z0-9_]*=", stripped)):
+                off.append(f"{rel}:{n}: runs another scripts/ file as a subprocess -- "
+                           f"COMMAND_SCRIPT_NOT_FOLLOWED: {line.strip()[:80]!r}")
+            # #461: the validator BLOCKS on any typed `<<` it cannot place, inside quotes or
+            # an awk program included ("Unpinned npx launcher", 6 findings, on a `<<` in the
+            # inlined heredoc stripper). A here-string `<<<` was not flagged. Build the
+            # operator from character codes instead (`sprintf("%c%c", 60, 60)`, `'<''<'`).
+            # #461: the validator holds on a script that "names" another one, and a
+            # help message spelling `scripts/rebuild-tsv.sh` counted as naming it. Name
+            # the tool in words instead (the call sites allow-listed above excepted).
+            if _NAMED_SCRIPT_PATH_RE.search(line):
+                off.append(f"{rel}:{n}: names another script by path -- "
+                           f"COMMAND_SCRIPT_NOT_FOLLOWED: {line.strip()[:80]!r}")
+            # #461: "a command assembled at run time" -- the directory validator read both a
+            # `"$fn" args` call and a `case` pattern opening with "$var" as one.
+            # A continuation line (the previous one ends in a backslash) carries arguments,
+            # and an assignment-shaped line is data (perl or awk inside a quoted program).
+            prev = text.splitlines()[n - 2] if n > 1 else ""
+            if (_RUNTIME_COMMAND_RE.match(line)
+                    and not prev.rstrip().endswith("\\")
+                    and not re.match(r"\s*\$\w+\s*=", line)):
+                off.append(f"{rel}:{n}: a command or case pattern named by a variable -- "
+                           f"MCP_FORWARDS_CREDENTIAL_ENV / COMMAND_SCRIPT_NOT_FOLLOWED: "
+                           f"{line.strip()[:80]!r}")
+            if _HOOK_SCRIPT_RE.fullmatch(rel) and _ESCAPED_QUOTE in line:
+                off.append(f"{rel}:{n}: an escaped quote in a hook -- write it \\042 "
+                           f"(awk) or single-quote the string -- "
+                           f"COMMAND_SCRIPT_NOT_FOLLOWED: {line.strip()[:80]!r}")
+            if _HOOK_SCRIPT_RE.fullmatch(rel) and _SLASH_GLOB_PATTERN_RE.search(stripped):
+                off.append(f"{rel}:{n}: a `*/*` case pattern in a hook -- test with "
+                           f"${{x#*/}} instead -- COMMAND_SCRIPT_NOT_FOLLOWED: "
+                           f"{line.strip()[:80]!r}")
+            if (_HOOK_SCRIPT_RE.fullmatch(rel) and not stripped.startswith(("[", "if ", "printf", "echo"))
+                    and _QUOTED_LITERAL_PATTERN_RE.search(stripped)):
+                off.append(f"{rel}:{n}: a quoted literal in a case pattern in a hook -- test "
+                           f"with ${{x#text}} instead -- COMMAND_SCRIPT_NOT_FOLLOWED: "
+                           f"{line.strip()[:80]!r}")
+            if _TYPED_HEREDOC_OP_RE.search(line):
+                off.append(f"{rel}:{n}: types a `<<` the directory validator cannot place -- "
+                           f"UNPINNED_NPX (blocks): {line.strip()[:80]!r}")
 
 
 def main(argv: list | None = None) -> int:

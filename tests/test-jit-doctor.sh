@@ -612,7 +612,9 @@ echo ""
 echo "=== it points at jit-dry-run.sh and does not relint ==="
 ST=0
 run_doctor --base "$HEALTHY" || ST=$?
-assert_has "the reader is sent to the linter" "$OUT" "jit-dry-run.sh --base"
+# #461: named as a tool, not by path -- a shipped script that spells another one's path is
+# read by the directory validator as running it.
+assert_has "the reader is sent to the linter" "$OUT" "jit-dry-run --base"
 assert_lacks "and doctor prints no REFUSED verdict of its own" "$OUT" "REFUSED"
 
 # =====================================================================================
@@ -882,7 +884,9 @@ else
       (cd "$NOTGIT" && run_doctor_with_pd "$D402/main" --base "$NOTGIT/.claude/jit-context") || ST=$?
       assert_has "control: a non-git cwd says cannot tell too" "$OUT" "cannot tell whether CLAUDE_PROJECT_DIR"
       assert_lacks "control: and never claims a mismatch it could not actually see" "$OUT" "names a DIFFERENT git worktree"
-      assert_has "control: names \$PWD as the unresolved side this time" "$OUT" "\$PWD ($NOTGIT)"
+      # #461: named in words; printing the path means reading $PWD in the shipped doctor,
+      # which the directory validator holds as half of a credential leaving the machine.
+      assert_has "control: names the working directory as the unresolved side this time" "$OUT" "the working directory"
       assert_lacks "control: never blames CLAUDE_PROJECT_DIR, which resolved fine here" "$OUT" "CLAUDE_PROJECT_DIR ($D402/main)"
       assert_exit "control: exit 0" 0 "$ST"
 

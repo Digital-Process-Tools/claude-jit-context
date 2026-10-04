@@ -245,12 +245,12 @@ jit_host_row() {
   local want="$1" line
   while IFS= read -r line; do
     [ -n "$line" ] || continue
-    case "$line" in
-      "$want"'|'*)
-        printf '%s\n' "$line"
-        return 0
-        ;;
-    esac
+    # #461: a [[ ]] test, not a `case` whose pattern starts with "$want" -- the directory
+    # validator reads such a pattern as "a command assembled at run time".
+    if [[ "$line" == "$want|"* ]]; then
+      printf '%s\n' "$line"
+      return 0
+    fi
   done <<< "$JIT_HOST_REGISTRY"
   return 1
 }
@@ -258,19 +258,34 @@ jit_host_row() {
 # jit_host_detect -- identifies the hosting CLI from its own environment, mirroring
 # remember's detect_host(). Always prints exactly one line and always returns 0: a host
 # nobody has described yet is a normal state here, never a failure, the same posture
-# every other lookup in this file takes. `${!sig:-}` is indirect expansion, supported
-# since bash 2.0 -- no associative array and no eval needed to test a variable named by
-# a string.
+# every other lookup in this file takes. Each signature is tested through
+# jit_host_sig_set() below, by its literal name.
+#
+# jit_host_sig_set NAME -- 0 when the environment variable NAME is set and non-empty.
+# #461: a literal case, not the indirect expansion `${!NAME:-}` this used to be. The
+# directory validator reads an environment variable named at run time as a credential
+# read, and holds the plugin for review on it. A registry signature with no arm here is
+# never detected, so tests/test-host-registry.sh fails on any signature in
+# JIT_HOST_REGISTRY that this case does not name.
+jit_host_sig_set() {
+  case "${1:-}" in
+    CLAUDE_CODE_ENTRYPOINT) [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ] ;;
+    CLAUDE_CODE_SESSION_ID) [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] ;;
+    GEMINI_SESSION_ID) [ -n "${GEMINI_SESSION_ID:-}" ] ;;
+    *) return 1 ;;
+  esac
+}
+
 jit_host_detect() {
-  local name sigs sig old_ifs
-  while IFS='|' read -r name sigs _ _ _ _ _; do
+  local name hostvars hostvar old_ifs
+  while IFS='|' read -r name hostvars _ _ _ _ _; do
     [ -n "$name" ] || continue
-    [ -n "$sigs" ] || continue
+    [ -n "$hostvars" ] || continue
     old_ifs="$IFS"
     IFS=','
-    for sig in $sigs; do
+    for hostvar in $hostvars; do
       IFS="$old_ifs"
-      if [ -n "${!sig:-}" ]; then
+      if jit_host_sig_set "$hostvar"; then
         printf '%s\n' "$name"
         return 0
       fi
@@ -417,7 +432,7 @@ jit_all_tool_aliases() {
 # word-split, the same shape jit_scan_layers() already hands back for its own
 # space-separated layer list.
 jit_canonical_tool() {
-  local aliases="${1:-}" raw="${2:-}" entry key vals
+  local aliases="${1:-}" raw="${2:-}" entry alias_name vals
   [ -n "$aliases" ] && [ -n "$raw" ] || {
     printf '%s\n' "$raw"
     return 0
@@ -426,8 +441,8 @@ jit_canonical_tool() {
   IFS=','
   for entry in $aliases; do
     IFS="$old_ifs"
-    key="${entry%%=*}"
-    [ "$key" = "$raw" ] || continue
+    alias_name="${entry%%=*}"
+    [ "$alias_name" = "$raw" ] || continue
     vals="${entry#*=}"
     printf '%s\n' "${vals//;/ }"
     return 0

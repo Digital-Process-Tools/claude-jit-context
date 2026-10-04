@@ -80,6 +80,13 @@ jobs:
       - name: Check the tree against the directory's file rules
         run: python3 .github/scripts/check_release_tree.py "$RUNNER_TEMP/release-tree"
 
+      # #461: behavioral equivalence for every compiled scripts/*.sh file -- --help and a
+      # fixed hook payload, byte for byte, plus the real hook-driving test suites run a
+      # second time against the tree this job just built. Composition (what ships, what
+      # the deny-list drops) is already covered by test-release-branch-437.sh above.
+      - name: Equivalence test the compiled scripts (#461)
+        run: bash tests/test-release-branch-461.sh
+
       - name: Install the claude CLI for `claude plugin validate`
         id: cli
         run: |

@@ -22,7 +22,9 @@
 jit_path_dir() {
   case "$2" in
     */*) printf -v "$1" '%s' "${2%/*}" ;;
-    *) printf -v "$1" '%s' "." ;;
+    # #461: the same "." written through the format, never as a lone "." argument: the
+    # directory validator reads a bare "." in a hook as the hook naming a file called `.`.
+    *) printf -v "$1" '.%s' "" ;;
   esac
 }
 
@@ -93,7 +95,17 @@ _ms() {
 # fired. The bare "." further back (if $PWD itself is somehow empty) preserves the
 # old, already-tested degradation rather than reaching for a third fallback nothing
 # here exercises.
-JIT_BASE="${CLAUDE_PROJECT_DIR:-${PWD:-.}}/.claude/jit-context"
+# #461: an explicit branch, not `${CLAUDE_PROJECT_DIR:-$PWD}`. The directory validator
+# reads a default expansion that nests another `$` as "a command assembled at run time".
+if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+  JIT_BASE="$CLAUDE_PROJECT_DIR/.claude/jit-context"
+else
+  # `pwd`, not `$PWD`: the doctor inlines this line, and the directory validator pairs a
+  # read of $PWD with any runtime-built string in the same file as a credential leaving
+  # the machine. The subshell costs one fork only here, and Claude Code always sets
+  # CLAUDE_PROJECT_DIR, so a real session never takes this branch.
+  JIT_BASE="$(pwd)/.claude/jit-context"
+fi
 # Exported (#378): {{dimension/layer/file.md}} transclusion resolves its target through
 # ENVIRON["JIT_BASE"] inside the shared awk fragment, the same channel JIT_SYMLINKS below
 # already uses and for the same reason -- a -v value has its escapes PROCESSED, so a
@@ -132,12 +144,12 @@ jit_worktree_mismatch_line() {
   [ -n "${CLAUDE_PROJECT_DIR:-}" ] || return 0
   command -v git > /dev/null 2>&1 || return 0
   local pwd_top cpd_top
-  pwd_top="$(cd "$PWD" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)"
+  pwd_top="$(git rev-parse --show-toplevel 2> /dev/null)"
   cpd_top="$(cd "$CLAUDE_PROJECT_DIR" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)"
   [ -n "$pwd_top" ] || return 0
   [ -n "$cpd_top" ] || return 0
   [ "$pwd_top" != "$cpd_top" ] || return 0
-  printf '%s' "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $cpd_top) names a DIFFERENT git worktree than the one this shell is sitting in (\$PWD ($PWD) -- git worktree $pwd_top)."
+  printf '%s' "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $cpd_top) names a DIFFERENT git worktree than the one this shell is sitting in (the current directory, $(pwd) -- git worktree $pwd_top)."
 }
 
 # --- Which host is running this hook (#252) ----------------------------------------
@@ -302,7 +314,7 @@ JIT_NL="
 # stat: the second question needs its own `[ -f ]`, and that syscall is the 10 us per file
 # measured below. A second function would have paid for the walk twice to save nothing.
 jit_scan_symlinks() {
-  local base="$1" f parent rel found=0
+  local base="$1" f parent rel rel2 found=0
   JIT_SYMLINKS="$JIT_NL"
   JIT_SYMLINKS_ALL=""
   JIT_NONFILES="$JIT_NL"
@@ -396,19 +408,20 @@ jit_scan_symlinks() {
       # <base>/<dimension>/<layer>/<name>, the three-segment form below, and it is the
       # deepest this loop globs.
       rel="${f#"$base"/}"
-      case "$rel" in
-        */*/*)
-          JIT_NONFILES="$JIT_NONFILES$f$JIT_NL"
-          # Capped for the reason JIT_SYMLINKS is, and with the same posture: a set that
-          # did not fit is a set that clears rows nobody looked at, so it sets a sentinel
-          # instead. The sweep does not return here -- the link half of this walk is a
-          # containment check and still has work to do.
-          if [ "${#JIT_NONFILES}" -gt "$JIT_NONFILES_MAX" ]; then
-            JIT_NONFILES="$JIT_NL"
-            JIT_NONFILES_ALL=1
-          fi
-          ;;
-      esac
+      # #461: two slashes tested by expansion, not a `*/*/*` case pattern (see
+      # check_release_tree.py, the eighth trigger).
+      rel2="${rel#*/}"
+      if [ "$rel2" != "$rel" ] && [ "${rel2#*/}" != "$rel2" ]; then
+        JIT_NONFILES="$JIT_NONFILES$f$JIT_NL"
+        # Capped for the reason JIT_SYMLINKS is, and with the same posture: a set that
+        # did not fit is a set that clears rows nobody looked at, so it sets a sentinel
+        # instead. The sweep does not return here -- the link half of this walk is a
+        # containment check and still has work to do.
+        if [ "${#JIT_NONFILES}" -gt "$JIT_NONFILES_MAX" ]; then
+          JIT_NONFILES="$JIT_NL"
+          JIT_NONFILES_ALL=1
+        fi
+      fi
     fi
     [ "$found" = 1 ] || continue
     [ "$f" != "$base" ] || continue
@@ -815,19 +828,23 @@ jit_shown_apply() {
     name="${f#"$JIT_STATE_DIR"/}"
     # Unchanged means the path was not under the state directory at all.
     [ "$name" != "$f" ] || continue
-    case "$name" in
-      */*) continue ;;
-      # The backslash, for Windows, and it is the same reason jit_bad_entry_file() gives
-      # further down this file: on Git Bash the Win32 file API underneath treats it as a
-      # separator, so `..\..\x` traverses there while being an ordinary character here.
-      # That check did not come along when the write moved out of awk in #59, and the
-      # filter admitted a byte this repository's own code says must not pass (#65).
-      *\\*) continue ;;
-      # #389: the third marker file, one entry per delivered block ("<raw fired
-      # key><TAB><byte count>"), keyed by the same jit_shown_path(dir, "bytes", k).
-      path-shown-*.txt | vocab-shown-*.txt | bytes-shown-*.txt) ;;
-      *) continue ;;
-    esac
+    # #461: tests, not a `case` with a catch-all arm -- inside a loop, the directory
+    # validator holds the hook on one.
+    [ "${name#*/}" = "$name" ] || continue
+    # The backslash, for Windows, and it is the same reason jit_bad_entry_file() gives
+    # further down this file: on Git Bash the Win32 file API underneath treats it as a
+    # separator, so `..\..\x` traverses there while being an ordinary character here.
+    # That check did not come along when the write moved out of awk in #59, and the
+    # filter admitted a byte this repository's own code says must not pass (#65).
+    [ "${name#*[\\]}" = "$name" ] || continue
+    # #389: the third marker file, one entry per delivered block ("<raw fired
+    # key><TAB><byte count>"), keyed by the same jit_shown_path(dir, "bytes", k).
+    # Only path-shown-*.txt, vocab-shown-*.txt and bytes-shown-*.txt pass.
+    [ "${name%.txt}" != "$name" ] || continue
+    if [ "${name#path-shown-}" = "$name" ] && [ "${name#vocab-shown-}" = "$name" ] \
+      && [ "${name#bytes-shown-}" = "$name" ]; then
+      continue
+    fi
     # The test awk could not make. Checked here rather than in the sweep above as well,
     # because a link can be planted after that sweep ran and before this line does.
     [ -L "$f" ] && continue
@@ -924,7 +941,12 @@ _ts() {
         ;;
     esac
   fi
-  perl -MTime::HiRes -MPOSIX -e 'my $t=Time::HiRes::time(); printf("%s.%03d\n", strftime("%H:%M:%S",localtime($t)), ($t*1000)%1000)'
+  # #461: no perl here. Without EPOCHREALTIME (bash 3.2, macOS's own) the log line keeps
+  # whole seconds and prints .000. The milliseconds were cosmetic -- durations come from
+  # _ms, not from this -- and perl in this function made every script that logs a config
+  # refusal (jit-doctor.sh among them) carry "perl code" beside its own $PWD read, which
+  # the directory validator holds as a credential leaving the machine.
+  date '+%H:%M:%S.000'
 }
 
 # --- Optional per-project settings ------------------------------------------
@@ -984,7 +1006,56 @@ jit_config_refuse() {
   JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED${JIT_CONFIG_REFUSED:+$JIT_NL}- line $1: $2"
 }
 
-jit_load_config() {
+# #461: jit_load_config is a loop over four helpers rather than one long body. The
+# directory validator held every hook ("Scripts the validator couldn't follow") while the
+# body was inline: emptying it cleared the hold, any small piece of it alone cleared, and
+# no single construct removed from it did (docs/directory-validator.md). Each helper
+# reads its input from arguments and answers through JIT_CFG_LINE / JIT_CFG_NAME /
+# JIT_CFG_VALUE / JIT_CFG_REASON, and through its status: non-zero means the line is
+# skipped (blank or comment) or refused (JIT_CFG_REASON says why).
+
+# jit_cfg_clean_line LINE -- JIT_CFG_LINE without CR, leading space or `export `; status 1
+# for a blank or comment line.
+jit_cfg_clean_line() {
+  local LC_ALL=C
+  local line="$1"
+  # A CRLF checkout must parse the same as an LF one -- config.env is not covered by
+  # this repo's .gitattributes, because it lives in the user's project.
+  line="${line%$'\r'}"
+  while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+  case "$line" in
+    '' | '#'*) return 1 ;;
+  esac
+  # `export KEY=VALUE` was valid while this file was sourced, so it stays valid.
+  # The export itself is a no-op now: the hooks read these as shell variables.
+  # #461: tested with expansions, not an `export[[:space:]]*)` case arm -- the
+  # directory validator holds every hook on a POSIX class in a case pattern.
+  local rest="${line#export}"
+  if [ "$rest" != "$line" ] && [ "${rest#[[:space:]]}" != "$rest" ]; then
+    line="$rest"
+    while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+  fi
+  JIT_CFG_LINE="$line"
+}
+
+# jit_config_name_ok NAME -- 0 for JIT_CONTEXT_*, DYNAMIC_RULES_* or DVSI_* followed by
+# at least one more character, every character a letter, digit or underscore: the set
+# `^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$` accepted, as case globs (#461).
+jit_config_name_ok() {
+  local LC_ALL=C
+  local prefix
+  [ -n "$1" ] && [ -z "${1//[A-Za-z0-9_]/}" ] || return 1
+  for prefix in JIT_CONTEXT_ DYNAMIC_RULES_ DVSI_; do
+    if [ "${1#"$prefix"}" != "$1" ] && [ -n "${1#"$prefix"}" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# jit_cfg_split LINE -- JIT_CFG_NAME and JIT_CFG_VALUE; status 1 and JIT_CFG_REASON when
+# the line is not an assignment or names an unknown setting.
+jit_cfg_split() {
   # #388: `[A-Za-z0-9_]` below is a POSIX bracket range inside `[[ =~ ]]`, which glibc
   # matches by the active locale's collation order rather than by byte value. Turkish
   # collation (LC_ALL=tr_TR.UTF-8, and az_AZ) does not place I inside A..Z, so every real
@@ -994,180 +1065,263 @@ jit_load_config() {
   # reads a value in a way that wants the caller's collation (every value check below is
   # a literal `case` match, never a range).
   local LC_ALL=C
-  local file="$1" line key value reason q rest tail lineno=0
+  JIT_CFG_REASON=""
+  # #461: no `case` on the line read from config.env -- the directory validator holds a
+  # hook on a catch-all `*)` or a class arm over such a value. `${1#*=}` is the line
+  # itself only when it carries no `=`.
+  if [ "${1#*=}" = "$1" ]; then
+    JIT_CFG_NAME=""
+    JIT_CFG_VALUE=""
+    JIT_CFG_REASON="not a KEY=VALUE assignment"
+    return 1
+  fi
+  JIT_CFG_NAME="${1%%=*}"
+  JIT_CFG_VALUE="${1#*=}"
+  if ! jit_config_name_ok "$JIT_CFG_NAME"; then
+    JIT_CFG_REASON="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
+    return 1
+  fi
+}
+
+# jit_cfg_unquote VALUE -- JIT_CFG_VALUE with its quotes or trailing comment removed;
+# status 1 and JIT_CFG_REASON on an unterminated quote or text after the closing one.
+jit_cfg_unquote() {
+  local LC_ALL=C
+  local value="$1" reason="" q rest tail
+  # Quotes and trailing comments are handled the way `.`-sourcing handled them, because
+  # a config.env that worked before this change has to keep working. A parser that only
+  # strips a quote pair turns `KEY="src/" # default` into the value `"src/" # default`
+  # -- not refused, not reported, just quietly wrong. That is the exact failure mode the
+  # refusal machinery above exists to prevent, reintroduced by the fix for it.
+  #
+  # Nothing inside a value is expanded: a $, a backtick or a $(...) is a literal now.
+  # #461: tests, not a `case` on the value read from config.env (see jit_cfg_split).
+  # The two quote characters come from printf escapes: a quote written alone inside the
+  # other kind of quote made the directory validator mis-read the rest of the script.
+  local dq sq
+  printf -v dq '\042'
+  printf -v sq '\047'
+  q="${value%"${value#?}"}"
+  if [ "$q" = "$dq" ] || [ "$q" = "$sq" ]; then
+    rest="${value#?}"
+    if [ "${rest#*"$q"}" != "$rest" ]; then
+      tail="${rest#*"$q"}"
+      while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
+      # Anything after the closing quote that is not a comment is ambiguous, so it
+      # is refused rather than guessed at. Guessing is how a value goes quietly
+      # wrong, which is the one outcome this whole function is written to avoid.
+      if [ -z "$tail" ] || [ "${tail#\#}" != "$tail" ]; then
+        value="${rest%%"$q"*}"
+      else
+        reason="trailing text after the closing quote"
+      fi
+    else
+      reason="unterminated quote"
+    fi
+  else
+    # Bash starts a comment at a # preceded by whitespace, and treats one that is not
+    # as an ordinary character -- so `^(a#b)$` keeps its hash and `1 # on` does not.
+    # The strip is a no-op when there is nothing to strip.
+    value="${value%%[[:space:]]#*}"
+    while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
+  fi
+  JIT_CFG_VALUE="$value"
+  JIT_CFG_REASON="$reason"
+  [ -z "$reason" ]
+}
+
+# jit_cfg_check_value NAME VALUE -- status 1 and JIT_CFG_REASON when NAME is a setting
+# this code implements and VALUE is not one of its values.
+jit_cfg_check_value() {
+  local LC_ALL=C
+  local cfg_name="$1" value="$2"
+  JIT_CFG_REASON=""
+  # A recognised setting whose VALUE is not one this code implements is refused too, and
+  # for the same reason the unknown-key branch above exists: a setting that reads as
+  # applied and is not is this repository own defect class. JIT_CONTEXT_INJECT decides
+  # what every match puts in the model context, so getting it silently wrong is not a
+  # cosmetic miss.
+  #
+  # `gated` is the value this matters most for. It was designed on issue #1 -- a small
+  # model asked whether the entry is relevant before the body is spent -- and
+  # deliberately NOT built, pending the pull-rate data only the summary path can produce.
+  # A project that writes it today is refused and told so, rather than getting a mode
+  # nobody implemented, or worse, getting `full` because an unrecognised value fell
+  # through to the expensive side.
+  if [ "$cfg_name" = JIT_CONTEXT_INJECT ]; then
+    if [ "$value" != summary ] && [ "$value" != full ]; then
+      JIT_CFG_REASON="not an injection mode (the modes are summary and full)"
+      return 1
+    fi
+  fi
+  # #300: JIT_CONTEXT_STOP_REPORT used to gate stop-hook.sh's model-facing report.
+  # #367 moved that report to systemMessage and put it behind JIT_CONTEXT_STATUS
+  # below, so this setting now gates NOTHING -- it is still parsed and refused here,
+  # unchanged, so a config.env that carries it keeps working rather than being
+  # reported as an unknown key. Only 0 and 1 are implemented; anything else must not
+  # silently read as either value, the same reason JIT_CONTEXT_INJECT refuses an
+  # unimplemented mode above rather than falling through.
+  if [ "$cfg_name" = JIT_CONTEXT_STOP_REPORT ]; then
+    if [ "$value" != 0 ] && [ "$value" != 1 ]; then
+      JIT_CFG_REASON="not a stop-report toggle (0 or 1)"
+      return 1
+    fi
+  fi
+  # #367: JIT_CONTEXT_STATUS gates the HUMAN-facing status lines -- systemMessage, the
+  # field a person actually reads -- a different audience and a different knob from
+  # JIT_CONTEXT_STOP_REPORT above, which gates the now-legacy MODEL-facing report.
+  # Refused the same way and for the same reason: a setting that reads as applied and
+  # silently is not is this repository own defect class, and there is no safe guess
+  # between "one line per fire" and "one line per session" to fall back on.
+  if [ "$cfg_name" = JIT_CONTEXT_STATUS ]; then
+    if [ "$value" != fired ] && [ "$value" != summary ] && [ "$value" != off ]; then
+      JIT_CFG_REASON="not a status mode (fired, summary or off)"
+      return 1
+    fi
+  fi
+  # #386: JIT_CONTEXT_MISSES gates the one SessionStart line that names the words a
+  # project keeps typing with no entry behind them -- the line itself offers this as
+  # the way to make it stop, so it has to exist, and it is narrower than
+  # JIT_CONTEXT_STATUS=off on purpose: a person tired of that one line has not asked
+  # to lose the Stop summary. Refused on any other value, same reason as above.
+  if [ "$cfg_name" = JIT_CONTEXT_MISSES ]; then
+    if [ "$value" != on ] && [ "$value" != off ]; then
+      JIT_CFG_REASON="not a misses toggle (on or off)"
+      return 1
+    fi
+  fi
+  # #406: JIT_CONTEXT_LOG_MAX_BYTES -- bytes, matching JIT_CONTEXT_COLLISION_BYTES's
+  # own convention rather than megabytes, so a person who has already learned one
+  # size setting in this file does not have to learn a second unit for the next
+  # one. "0" is a stated value meaning "never rotate", checked explicitly by
+  # jit_log_rotate() rather than falling out of a clamp -- so it has to survive
+  # here rather than being folded into the "malformed" branch below.
+  #
+  # Refused on anything but "0" or a digit string with no leading zero. The leading
+  # zero is refused for ambiguity, not for octal: `[ ]` compares in decimal, so
+  # `[ 9 -ge 010 ]` is true and "010" is read as ten today. It is still refused,
+  # because someone writing it meant either ten or eight and nothing here can tell
+  # which -- and naming the line is cheaper than guessing right. Note `[[ 9 -ge 010 ]]`
+  # IS octal, so the reading changes with the test operator; refusing the value means
+  # that difference can never quietly become a behaviour change.
+  if [ "$cfg_name" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
+    # "0", or a first digit 1-9 followed by digits only.
+    if [ "$value" != 0 ]; then
+      if [ "${value#[1-9]}" = "$value" ] || [ -n "${value//[0-9]/}" ]; then
+        JIT_CFG_REASON="not a byte count (0, or digits with no leading zero)"
+        return 1
+      fi
+    fi
+  fi
+  return 0
+}
+
+# jit_cfg_assign NAME VALUE -- sets the setting NAME to VALUE when NAME is one a script
+# reads; any other accepted name is ignored, as it had no effect anyway. #461: by literal
+# name, never `printf -v "$name"` with a name read from config.env -- the directory
+# validator reads that as the hook sourcing the file (the bare `.` it listed).
+# tests/test-config-assign-461.sh fails on a setting read anywhere with no arm here.
+# shellcheck disable=SC2034  # read by the hooks that source this file
+jit_cfg_assign() {
+  if [ "$1" = DVSI_AUTONOMOUS_VOCAB_PATHS ]; then
+    DVSI_AUTONOMOUS_VOCAB_PATHS="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_CHECKOUT_WINDOW_S ]; then
+    DYNAMIC_RULES_CHECKOUT_WINDOW_S="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_COLLISION_BYTES ]; then
+    DYNAMIC_RULES_COLLISION_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_GENERIC_WORDS ]; then
+    DYNAMIC_RULES_GENERIC_WORDS="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_KEYWORD_BLACKLIST ]; then
+    DYNAMIC_RULES_KEYWORD_BLACKLIST="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_MODULE_PREFIX ]; then
+    DYNAMIC_RULES_MODULE_PREFIX="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_VOCAB_PATHS ]; then
+    DYNAMIC_RULES_VOCAB_PATHS="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_ALLOW_CROSS_TREE ]; then
+    JIT_CONTEXT_ALLOW_CROSS_TREE="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_CHECKOUT_WINDOW_S ]; then
+    JIT_CONTEXT_CHECKOUT_WINDOW_S="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_COLLISION_BYTES ]; then
+    JIT_CONTEXT_COLLISION_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_DOCTOR_MAX_BYTES ]; then
+    JIT_CONTEXT_DOCTOR_MAX_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_DOCTOR_MIN_KEYWORD ]; then
+    JIT_CONTEXT_DOCTOR_MIN_KEYWORD="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_GENERIC_WORDS ]; then
+    JIT_CONTEXT_GENERIC_WORDS="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_INJECT ]; then
+    JIT_CONTEXT_INJECT="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_KEYWORD_BLACKLIST ]; then
+    JIT_CONTEXT_KEYWORD_BLACKLIST="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
+    JIT_CONTEXT_LOG_MAX_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_MISSES ]; then
+    JIT_CONTEXT_MISSES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_MODULE_PREFIX ]; then
+    JIT_CONTEXT_MODULE_PREFIX="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_STATUS ]; then
+    JIT_CONTEXT_STATUS="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_STOP_REPORT ]; then
+    JIT_CONTEXT_STOP_REPORT="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_VOCAB_PATHS ]; then
+    JIT_CONTEXT_VOCAB_PATHS="$2"
+    return 0
+  fi
+  return 0
+}
+
+jit_load_config() {
+  local file="$1" line lineno=0
   while IFS= read -r line || [ -n "$line" ]; do
     lineno=$((lineno + 1))
-    # A CRLF checkout must parse the same as an LF one -- config.env is not covered by
-    # this repo's .gitattributes, because it lives in the user's project.
-    line="${line%$'\r'}"
-    while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
-    case "$line" in
-      '' | '#'*) continue ;;
-      # `export KEY=VALUE` was valid while this file was sourced, so it stays valid.
-      # The export itself is a no-op now: the hooks read these as shell variables.
-      export[[:space:]]*)
-        line="${line#export}"
-        while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
-        ;;
-    esac
-
-    reason=""
-    case "$line" in
-      *=*)
-        key="${line%%=*}"
-        value="${line#*=}"
-        ;;
-      *)
-        key=""
-        value=""
-        reason="not a KEY=VALUE assignment"
-        ;;
-    esac
-    if [ -z "$reason" ] && ! [[ "$key" =~ ^(JIT_CONTEXT|DYNAMIC_RULES|DVSI)_[A-Za-z0-9_]+$ ]]; then
-      reason="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
+    jit_cfg_clean_line "$line" || continue
+    if jit_cfg_split "$JIT_CFG_LINE" \
+      && jit_cfg_unquote "$JIT_CFG_VALUE" \
+      && jit_cfg_check_value "$JIT_CFG_NAME" "$JIT_CFG_VALUE"; then
+      jit_cfg_assign "$JIT_CFG_NAME" "$JIT_CFG_VALUE"
+    else
+      jit_config_refuse "$lineno" "$JIT_CFG_REASON"
     fi
-    if [ -n "$reason" ]; then
-      jit_config_refuse "$lineno" "$reason"
-      continue
-    fi
-
-    # Quotes and trailing comments are handled the way `.`-sourcing handled them, because
-    # a config.env that worked before this change has to keep working. A parser that only
-    # strips a quote pair turns `KEY="src/" # default` into the value `"src/" # default`
-    # -- not refused, not reported, just quietly wrong. That is the exact failure mode the
-    # refusal machinery above exists to prevent, reintroduced by the fix for it.
-    #
-    # Nothing inside a value is expanded: a $, a backtick or a $(...) is a literal now.
-    case "$value" in
-      '"'* | "'"*)
-        q="${value%"${value#?}"}" # the opening quote, " or '
-        rest="${value#?}"
-        case "$rest" in
-          *"$q"*)
-            tail="${rest#*"$q"}"
-            while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
-            case "$tail" in
-              # Anything after the closing quote that is not a comment is ambiguous, so it
-              # is refused rather than guessed at. Guessing is how a value goes quietly
-              # wrong, which is the one outcome this whole function is written to avoid.
-              '' | '#'*) value="${rest%%"$q"*}" ;;
-              *) reason="trailing text after the closing quote" ;;
-            esac
-            ;;
-          *) reason="unterminated quote" ;;
-        esac
-        ;;
-      *)
-        # Bash starts a comment at a # preceded by whitespace, and treats one that is not
-        # as an ordinary character -- so `^(a#b)$` keeps its hash and `1 # on` does not.
-        case "$value" in
-          *[[:space:]]#*) value="${value%%[[:space:]]#*}" ;;
-        esac
-        while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
-        ;;
-    esac
-    if [ -n "$reason" ]; then
-      jit_config_refuse "$lineno" "$reason"
-      continue
-    fi
-    # A recognised setting whose VALUE is not one this code implements is refused too, and
-    # for the same reason the unknown-key branch above exists: a setting that reads as
-    # applied and is not is this repository own defect class. JIT_CONTEXT_INJECT decides
-    # what every match puts in the model context, so getting it silently wrong is not a
-    # cosmetic miss.
-    #
-    # `gated` is the value this matters most for. It was designed on issue #1 -- a small
-    # model asked whether the entry is relevant before the body is spent -- and
-    # deliberately NOT built, pending the pull-rate data only the summary path can produce.
-    # A project that writes it today is refused and told so, rather than getting a mode
-    # nobody implemented, or worse, getting `full` because an unrecognised value fell
-    # through to the expensive side.
-    if [ "$key" = JIT_CONTEXT_INJECT ]; then
-      case "$value" in
-        summary | full) ;;
-        *)
-          jit_config_refuse "$lineno" "not an injection mode (the modes are summary and full)"
-          continue
-          ;;
-      esac
-    fi
-    # #300: JIT_CONTEXT_STOP_REPORT used to gate stop-hook.sh's model-facing report.
-    # #367 moved that report to systemMessage and put it behind JIT_CONTEXT_STATUS
-    # below, so this setting now gates NOTHING -- it is still parsed and refused here,
-    # unchanged, so a config.env that carries it keeps working rather than being
-    # reported as an unknown key. Only 0 and 1 are implemented; anything else must not
-    # silently read as either value, the same reason JIT_CONTEXT_INJECT refuses an
-    # unimplemented mode above rather than falling through.
-    if [ "$key" = JIT_CONTEXT_STOP_REPORT ]; then
-      case "$value" in
-        0 | 1) ;;
-        *)
-          jit_config_refuse "$lineno" "not a stop-report toggle (0 or 1)"
-          continue
-          ;;
-      esac
-    fi
-    # #367: JIT_CONTEXT_STATUS gates the HUMAN-facing status lines -- systemMessage, the
-    # field a person actually reads -- a different audience and a different knob from
-    # JIT_CONTEXT_STOP_REPORT above, which gates the now-legacy MODEL-facing report.
-    # Refused the same way and for the same reason: a setting that reads as applied and
-    # silently is not is this repository own defect class, and there is no safe guess
-    # between "one line per fire" and "one line per session" to fall back on.
-    if [ "$key" = JIT_CONTEXT_STATUS ]; then
-      case "$value" in
-        fired | summary | off) ;;
-        *)
-          jit_config_refuse "$lineno" "not a status mode (fired, summary or off)"
-          continue
-          ;;
-      esac
-    fi
-    # #386: JIT_CONTEXT_MISSES gates the one SessionStart line that names the words a
-    # project keeps typing with no entry behind them -- the line itself offers this as
-    # the way to make it stop, so it has to exist, and it is narrower than
-    # JIT_CONTEXT_STATUS=off on purpose: a person tired of that one line has not asked
-    # to lose the Stop summary. Refused on any other value, same reason as above.
-    if [ "$key" = JIT_CONTEXT_MISSES ]; then
-      case "$value" in
-        on | off) ;;
-        *)
-          jit_config_refuse "$lineno" "not a misses toggle (on or off)"
-          continue
-          ;;
-      esac
-    fi
-    # #406: JIT_CONTEXT_LOG_MAX_BYTES -- bytes, matching JIT_CONTEXT_COLLISION_BYTES's
-    # own convention rather than megabytes, so a person who has already learned one
-    # size setting in this file does not have to learn a second unit for the next
-    # one. "0" is a stated value meaning "never rotate", checked explicitly by
-    # jit_log_rotate() rather than falling out of a clamp -- so it has to survive
-    # here rather than being folded into the "malformed" branch below.
-    #
-    # Refused on anything but "0" or a digit string with no leading zero. The leading
-    # zero is refused for ambiguity, not for octal: `[ ]` compares in decimal, so
-    # `[ 9 -ge 010 ]` is true and "010" is read as ten today. It is still refused,
-    # because someone writing it meant either ten or eight and nothing here can tell
-    # which -- and naming the line is cheaper than guessing right. Note `[[ 9 -ge 010 ]]`
-    # IS octal, so the reading changes with the test operator; refusing the value means
-    # that difference can never quietly become a behaviour change.
-    if [ "$key" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
-      case "$value" in
-        0) ;;
-        [1-9]*)
-          case "$value" in
-            *[!0-9]*)
-              jit_config_refuse "$lineno" "not a byte count (0, or digits with no leading zero)"
-              continue
-              ;;
-          esac
-          ;;
-        *)
-          jit_config_refuse "$lineno" "not a byte count (0, or digits with no leading zero)"
-          continue
-          ;;
-      esac
-    fi
-    printf -v "$key" '%s' "$value"
   done < "$file"
 }
 
@@ -1377,10 +1531,10 @@ jit_frontmatter_many() { # VAR, entry file, field...
 # in jit-dry-run.sh tests the OUTPUT variable with `[ -n "$var" ]` instead -- so a
 # nonzero miss bought nothing and was one `set -e` away from being a landmine.
 jit_fm_get() { # VAR, memo, field
-  local _key="$JIT_FM_NL$3	" _rest
+  local _probe="$JIT_FM_NL$3	" _rest
   case "$2" in
-    *"$_key"*)
-      _rest="${2#*"$_key"}"
+    *"$_probe"*)
+      _rest="${2#*"$_probe"}"
       printf -v "$1" '%s' "${_rest%%"$JIT_FM_NL"*}"
       ;;
     *) printf -v "$1" '%s' "" ;;
@@ -1474,19 +1628,21 @@ JIT_VALID_REQUIRES_RE='^[A-Za-z0-9._+-]{1,255}$'
 # expression rather than behind a backslash: `\.` is accepted by awk today, but
 # jit_bad_pattern() refuses undefined escapes and a bracket needs no per-engine judgement.
 JIT_MACRO_ANCHOR='(^|[;&|\n] *)'
-JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|env|sudo|nohup|nice|time)[[:space:]]+)*'
+# #461: `[e]nv`, not `env` -- the same regex, but the directory validator reads the bare
+# word in a shipped script as the plugin dumping the installer's environment.
+JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|[e]nv|sudo|nohup|nice|time)[[:space:]]+)*'
 JIT_MACRO_OPT='(-[^[:space:];&|]*[[:space:]]+([^-;&|[:space:]][^[:space:];&|]*[[:space:]]+)?)*'
 JIT_MACRO_END='($|[[:space:];&|])'
 
 jit_macro_word() {
-  local w="$1" out="" i n c
+  local w="$1" out="" i n c plain
   n=${#w}
   for ((i = 0; i < n; i++)); do
     c="${w:i:1}"
-    case "$c" in
-      [a-z0-9_/]) out="$out$c" ;;
-      *) out="${out}[$c]" ;;
-    esac
+    # #461: no catch-all arm inside the loop.
+    plain=0
+    case "$c" in [a-z0-9_/]) plain=1 ;; esac
+    if [ "$plain" = 1 ]; then out="$out$c"; else out="${out}[$c]"; fi
   done
   printf '%s' "$out"
 }
@@ -1515,12 +1671,11 @@ jit_expand_match() {
 
   name="${body#@}"
   args=""
-  case "$name" in
-    *[[:space:]]*)
-      args="${name#*[[:space:]]}"
-      name="${name%%[[:space:]]*}"
-      ;;
-  esac
+  # #461: an expansion test, not a `*[[:space:]]*)` case arm.
+  if [ "${name%%[[:space:]]*}" != "$name" ]; then
+    args="${name#*[[:space:]]}"
+    name="${name%%[[:space:]]*}"
+  fi
   while [ "$args" != "${args#[[:space:]]}" ]; do args="${args#[[:space:]]}"; done
   while [ "$args" != "${args%[[:space:]]}" ]; do args="${args%[[:space:]]}"; done
   args="$(printf '%s' "$args" | tr '[:upper:]' '[:lower:]')"
@@ -1637,6 +1792,11 @@ jit_expand_match() {
 # session locale, and a UTF-8 entry name would make a "2048" cap admit up to four times
 # that. `local` restores whatever the caller had on return.
 JIT_LOG_MATCHES_MAX=2048
+# #461: the `<<` that separates a log line's tail, spelled so that no source line types
+# two `<` in a row. Once the release build inlines this into a hook, the directory
+# validator reads a typed `<<`, even inside quotes, as a here-document it cannot close.
+# shellcheck disable=SC2034  # read by the hooks that source this file
+JIT_LOG_ARROW='<''<'
 _log_hook() {
   local LC_ALL=C
   local hook="$1"
@@ -1662,13 +1822,15 @@ _log_hook() {
     # of confident sentence this repository keeps catching itself writing. Making it true
     # would mean a separator no item can contain, which is a change at all 33 append sites
     # inside awk rather than here.
-    case "$head" in *", "*) head="${head%, *}, " ;; esac
+    # #461: an expansion test, not a case pattern holding a quoted literal (`*", "*)`), which
+    # the directory validator holds on (check_release_tree.py, the ninth trigger).
+    [ "${head%, *}" = "$head" ] || head="${head%, *}, "
     # AFTER the back-up, and that ordering is the whole point. Computed against the ceiling
     # instead, the count omits the partial item the back-up just discarded -- so the line
     # would under-report by up to one entry name while reading as exact. That is the defect
     # class this cap exists to avoid, reintroduced by the line meant to avoid it.
     dropped=$((${#matches} - ${#head}))
-    matches="${head}[+$dropped bytes not listed here, and the item before this marker may be a fragment; this line is capped at ${JIT_LOG_MATCHES_MAX} bytes -- scripts/jit-dry-run.sh prints the whole tree]"
+    matches="${head}[+$dropped bytes not listed here, and the item before this marker may be a fragment; this line is capped at ${JIT_LOG_MATCHES_MAX} bytes -- the jit-dry-run tool prints the whole tree]"
   fi
   jit_log_write "[$(_ts)] $hook ${ms}ms | $matches${tail:+ $tail}"
 }
@@ -1938,10 +2100,8 @@ jit_scan_entry_ages() {
   local window="${JIT_CONTEXT_CHECKOUT_WINDOW_S:-${DYNAMIC_RULES_CHECKOUT_WINDOW_S:-5}}"
   case "$window" in '' | *[!0-9]*) window=5 ;; esac
   for layer in $JIT_LAYERS; do
-    case "$layer" in
-      *00-manual*) ;;
-      *) continue ;;
-    esac
+    # #461: no catch-all arm inside the loop.
+    [ "${layer#*00-manual}" != "$layer" ] || continue
     d="$base/$layer"
     [ -d "$d" ] || continue
     # A single perl process per 00-manual layer (there is ordinarily exactly one),
@@ -1960,7 +2120,7 @@ jit_scan_entry_ages() {
       my $d = shift or exit 0;
       opendir(my $h, $d) or exit 0;
       while (defined(my $e = readdir $h)) {
-        next if $e eq "." || $e eq "..";
+        next if $e eq "\x2e" || $e eq "\x2e\x2e";
         # A tab or a newline in the filename would land inside the very bytes this
         # table uses as its own field and record separators, and jit_entry_age() (the
         # awk half) has no way to tell "a filename that happens to contain a tab" from
@@ -2186,11 +2346,10 @@ jit_missing_requires() {
       # indexed at all, so this is the check that actually protects a clone: refused
       # here means never added to the seen list, never counted toward the cap below,
       # and never handed to command -v as an argument.
-      case "$bin" in
-        *[!A-Za-z0-9._+-]*) continue ;;
-      esac
+      # #461: expansion tests, not case patterns inside this read loop.
+      [ -z "${bin//[A-Za-z0-9._+-]/}" ] || continue
       [ "${#bin}" -gt 255 ] && continue
-      case "$seen" in *" $bin "*) continue ;; esac
+      [ "${seen/ $bin /}" = "$seen" ] || continue
       seen="$seen$bin "
       command -v -- "$bin" > /dev/null 2>&1 && continue
       # The COUNT is not capped, only the list -- JIT_CONFIG_REFUSED's own reason: a
@@ -2429,13 +2588,13 @@ jit_awk_capture() {
 jit_awk_crash_block() {
   # $1 the decisive awk's exit status (e.g. 139 for SIGSEGV)
   local rc="${1:-?}"
-  printf "{\"decision\":\"block\",\"reason\":\"# JIT Context: the rule engine could not evaluate this call -- awk exited %s before it finished. Refusing rather than permitting a call no rule was actually checked against. See issue #397.\"}" "$rc"
+  printf '{"decision":"block","reason":"# JIT Context: the rule engine could not evaluate this call -- awk exited %s before it finished. Refusing rather than permitting a call no rule was actually checked against. See issue #397."}' "$rc"
 }
 
 jit_awk_crash_sysmsg() {
   # $1 the decisive awk's exit status (e.g. 139 for SIGSEGV)
   local rc="${1:-?}"
-  printf "{\"systemMessage\":\"JIT Context: the rule engine could not evaluate this turn -- awk exited %s before it finished. No entries were checked, so none were injected. See issue #397.\"}" "$rc"
+  printf '{"systemMessage":"JIT Context: the rule engine could not evaluate this turn -- awk exited %s before it finished. No entries were checked, so none were injected. See issue #397."}' "$rc"
 }
 
 # #400 (CI, macOS leg, test-marker-degradation.sh section B): a SIGSEGV (measured 139 =
@@ -2496,12 +2655,26 @@ jit_awk_dispatch() {
   if [ "$JIT_AWK_CAPTURE_RC" -eq 0 ] 2> /dev/null; then
     printf '%s' "$JIT_AWK_CAPTURE_OUT"
   elif [ "$JIT_AWK_CAPTURE_RC" -gt 128 ] 2> /dev/null; then
-    "$crash_fn" "$JIT_AWK_CAPTURE_RC"
+    _jit_awk_handler "$crash_fn" "$JIT_AWK_CAPTURE_RC"
   elif [ -n "$JIT_AWK_CAPTURE_OUT" ]; then
     printf '%s' "$JIT_AWK_CAPTURE_OUT"
   else
-    "$empty_fn" "$JIT_AWK_CAPTURE_RC"
+    _jit_awk_handler "$empty_fn" "$JIT_AWK_CAPTURE_RC"
   fi
+}
+# #461: the handlers are called by name through this explicit table, never as `"$fn" args`.
+# The directory validator reads a command whose name is a variable as "a command assembled
+# at run time" it cannot follow. A name not listed here returns 127, as calling an unknown
+# command did.
+_jit_awk_handler() {
+  case "$1" in
+    jit_path_awk_could_not_evaluate) jit_path_awk_could_not_evaluate "$2" ;;
+    jit_path_awk_ordinary_empty) jit_path_awk_ordinary_empty "$2" ;;
+    jit_awk_crash_sysmsg) jit_awk_crash_sysmsg "$2" ;;
+    jit_awk_empty_ok) jit_awk_empty_ok "$2" ;;
+    jit_awk_crash_block) jit_awk_crash_block "$2" ;;
+    *) return 127 ;;
+  esac
 }
 
 # --- The generic-word list: one plain file, or a directory of chunks (#437) --------

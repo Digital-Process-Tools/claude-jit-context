@@ -142,8 +142,40 @@ straight from git (`git ls-tree` and `git cat-file`; never the working tree, and
   `hooks/`, `scripts/`, `data/`, `.claude-plugin/`, `.codex-plugin/`, `LICENSE`,
   `NOTICE`, `README.md`, `SECURITY.md` and `CODE_OF_CONDUCT.md` ship.
 - **It cuts CHANGELOG.md** to the latest released `## [x.y.z]` section.
-- **It rewrites links** in every shipped `.md` file that point at a removed path (the
-  README's `docs/` links and its logo) to absolute URLs on `main`.
+- **It rewrites links** in every shipped `.md` file that point at a removed path to
+  absolute URLs on `main`.
+- **`README.release.md` ships AS `README.md`** (#461): a short, listing-only README with
+  no `$VARIABLE`/`${...}`/`$PWD` anywhere, so the directory's `MCP_FORWARDS_CREDENTIAL_ENV`
+  scan has no env-var mention to pair with the full README's own `github.com` links. The
+  full README (with the logo image, the install options and the token-cost receipt) stays
+  on `main` for GitHub/marketplace visitors; `README.release.md` itself is on the
+  deny-list's removal list too, once its content is already copied onto `README.md` --
+  it never ships under its own name.
+- **Every shipped `scripts/*.sh` file that sourced another file, or ran another
+  `scripts/` file, is compiled into one self-contained file** (#461,
+  `.github/scripts/compile_scripts.py`): `common.sh`/`common-awk.sh`/`host.sh` are
+  inlined into each of the six hooks and `jit-doctor.sh`/`jit-stats.sh`/
+  `jit-match.sh`/`jit-dry-run.sh`/`rebuild-tsv.sh`, and `jit-misses.sh`/`rebuild-tsv.sh`'s
+  own subprocess calls (from `session-start-hook.sh`, `jit-stats.sh`, `jit-init.sh`) are
+  replaced with a function defined with a `()` (subshell) body, called in place of the
+  external process it replaces -- same argv, stdout, stderr and exit-status contract.
+  Whole-line comments and blank lines are stripped from the result (conservatively: only
+  where the scan can prove, by tracking bash quoting state across the whole file, that a
+  line sits outside every string), which is what keeps a compiled hook under the
+  directory's 256 KiB per-file limit despite carrying several files' worth of content.
+  `main` keeps the commented, multi-file sources untouched -- this only runs at build
+  time, against git blobs. `common.sh`, `common-awk.sh` and `host.sh` themselves are then
+  added to the deny-list's removal set: nothing loads them by path any more. Two
+  documented exceptions stay real subprocess calls rather than being inlined --
+  `jit-dry-run.sh` and `jit-match.sh` drive the hooks directly for their own dry-run/
+  cross-check feature, from neither of which hooks.json nor commands/*.md ever reaches
+  them, and inlining would blow the 256 KiB budget on its own (measured at 305 KB) to
+  solve a hold that was never reachable from either file in the first place --
+  `check_release_tree.py`'s own guard names both allowed call sites explicitly, so a
+  third one added later still fails it.
+- **`check_release_tree.py` fails if any shipped `scripts/*.sh` file still sources or
+  dot-loads another file, or runs another `scripts/` file as a subprocess** (#461), with
+  the same two named exceptions above allow-listed by their exact text.
 - **`data/generic-words.txt` was split into `data/generic-words/chunk-NN.txt`** (#437),
   each comfortably under 256 KiB, specifically so it survives the directory's per-file
   limit without being denied -- `rebuild-tsv.sh` and `jit-misses.sh` both read it on a
@@ -151,9 +183,11 @@ straight from git (`git ls-tree` and `git cat-file`; never the working tree, and
   tree. Concatenating the chunks in name order reproduces the original file byte for
   byte; see `data/generic-words/README.md`.
 
-**Observed locally (#437):** building from this branch's own `HEAD` produced 42 files
-kept and 167 removed by the deny-list, 12 links rewritten in `README.md`, and
-`check_release_tree.py` passed clean against that tree.
+**Observed locally (#461):** building from this branch's own `HEAD` produced 45 files
+kept and 181 removed by the deny-list, and `check_release_tree.py` passed clean against
+that tree -- the largest compiled script measured under 100 KB, well inside the 256 KiB
+limit. `claude plugin validate --strict` and `smoke_release_tree.py --validate require`
+both passed against the same built tree, with CLI 2.1.287.
 
 ## When the workflow fails
 
@@ -175,7 +209,12 @@ python3 .github/scripts/smoke_release_tree.py /tmp/release-tree --validate auto
 ```
 
 `tests/test-release-branch-437.sh` runs the same three scripts against the current
-commit as a regression guard, and is part of `bash tests/run-all.sh`.
+commit as a composition regression guard (what ships, what the deny-list drops, the
+directory's own checklist), and is part of `bash tests/run-all.sh`.
+`tests/test-release-branch-461.sh` is the companion BEHAVIORAL guard: --help and a
+fixed hook payload, byte for byte, source vs compiled, plus the real hook-driving test
+suites run a second time against the tree it builds. Both run in `release-branch.yml`'s
+`verify` job before a tag is ever published, not only locally.
 
 ## How the directory decides what to read
 

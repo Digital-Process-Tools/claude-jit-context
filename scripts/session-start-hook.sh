@@ -187,9 +187,9 @@ if [ "$MISSES_RC" = 0 ]; then
       if (n !~ /^[0-9]+$/) next
       tail = substr(rest, xi + 1)
       if (substr(tail, 1, 2) != "  ") next
-      tok = substr(tail, 3)
-      if (tok == "") next
-      out = out (out == "" ? "" : ", ") "\\\"" tok "\\\" x" n
+      seg = substr(tail, 3)
+      if (seg == "") next
+      out = out (out == "" ? "" : ", ") "\134\042" seg "\134\042 x" n
       c++
       if (c >= top) exit
     }
@@ -222,21 +222,24 @@ else
   # unreadable, not a regular file, a log that is not this tool's log at all, one with
   # records but none from pre-prompt -- means jit-misses.sh tried and could not, and that
   # is the case #247 is about: it says so instead of reading as "nothing recurs".
-  case "$JIT_SKIP_REASON" in
-    # #406: a log that was just rotated (by THIS session, above, or an earlier one)
-    # and has no records yet is the same ordinary shape as a brand new project -- not
-    # "something is wrong", just "no data since the last thing that cleared it". Older
-    # records are still on disk in hooks.log.1; jit-misses.sh names that explicitly in
-    # its own SKIPPED reason, read back here, so this silencing does not depend on
-    # this file re-deriving what "rotated" means.
-    "no such file"* | "the file is empty"* | "hooks.log was rotated"*) JIT_SKIP_REASON="" ;;
-  esac
+  # #406: a log that was just rotated (by THIS session, above, or an earlier one)
+  # and has no records yet is the same ordinary shape as a brand new project -- not
+  # "something is wrong", just "no data since the last thing that cleared it". Older
+  # records are still on disk in hooks.log.1; jit-misses.sh names that explicitly in
+  # its own SKIPPED reason, read back here, so this silencing does not depend on
+  # this file re-deriving what "rotated" means.
+  # #461: prefix tests, not a case pattern holding quoted literals (the ninth trigger).
+  if [ "${JIT_SKIP_REASON#no such file}" != "$JIT_SKIP_REASON" ] \
+    || [ "${JIT_SKIP_REASON#the file is empty}" != "$JIT_SKIP_REASON" ] \
+    || [ "${JIT_SKIP_REASON#hooks.log was rotated}" != "$JIT_SKIP_REASON" ]; then
+    JIT_SKIP_REASON=""
+  fi
   if [ -n "$JIT_SKIP_REASON" ]; then
     # The reason is prose jit-misses.sh chose, not a token restricted to [a-z0-9-] like
     # JIT_RECUR's, so it is escaped for the JSON string it lands inside -- a literal
     # backslash or double quote would otherwise break the surrounding object, and a hook
     # must never fail hard on a string it did not choose the shape of.
-    JIT_SKIP_REASON="$(printf '%s' "$JIT_SKIP_REASON" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
+    JIT_SKIP_REASON="$(printf '%s' "$JIT_SKIP_REASON" | LC_ALL=C awk '{ gsub("\134\134", "\134\134"); gsub("\042", "\134\042"); print }')"
   fi
 fi
 
@@ -258,7 +261,7 @@ if [ -n "$JIT_SIZE_NOTE" ]; then
   # Prose jit-misses.sh chose, so it is escaped the same way JIT_SKIP_REASON is above --
   # a literal backslash or double quote would otherwise break the JSON string it lands
   # inside, and a hook must never fail hard on a string it did not choose the shape of.
-  JIT_SIZE_NOTE="$(printf '%s' "$JIT_SIZE_NOTE" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
+  JIT_SIZE_NOTE="$(printf '%s' "$JIT_SIZE_NOTE" | LC_ALL=C awk '{ gsub("\134\134", "\134\134"); gsub("\042", "\134\042"); print }')"
 fi
 
 # #386: one report, one action, nothing else. The line before this read "recurring
@@ -280,6 +283,9 @@ if [ "$JIT_STATUS" = "off" ]; then
   echo '{}'
 else
   JIT_LINES=""
+  # #461: the JSON "\n" between two lines, built once -- a `\\n` written into each
+  # string is a backslash pair the directory validator holds on.
+  printf -v JIT_JNL '\134n'
   if [ -n "$JIT_RECUR" ] && [ "$JIT_MISSES" != "off" ]; then
     JIT_LINES="JIT : you use these words a lot and no entry matches them: $JIT_RECUR. Write one with /jit-context:vocabulary <word>, or turn this off with JIT_CONTEXT_MISSES=off in .claude/jit-context/config.env"
   elif [ -n "$JIT_SKIP_REASON" ] && [ "$JIT_MISSES" != "off" ]; then
@@ -291,7 +297,7 @@ else
     # file jit-misses.sh just read, so the action names the file to act on. The bytes
     # were already JSON-escaped above; the path is escaped here for the same reason.
     JIT_MB="$(printf '%s' "$JIT_SIZE_NOTE" | LC_ALL=C awk '{ printf "%.1f", $1 / 1000000 }')"
-    JIT_LOG_ESC="$(printf '%s' "$LOG_FILE" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
+    JIT_LOG_ESC="$(printf '%s' "$LOG_FILE" | LC_ALL=C awk '{ gsub("\134\134", "\134\134"); gsub("\042", "\134\042"); print }')"
     # #406: this line used to say "Delete or rotate it" -- the exact instruction this
     # issue exists to stop giving, since delete loses the corpus jit-misses.sh reads
     # and nothing here ever said so. Rotation past JIT_CONTEXT_LOG_MAX_BYTES is now
@@ -305,7 +311,7 @@ else
     # rotation explicitly off (JIT_CONTEXT_LOG_MAX_BYTES=0, handled below), or a value
     # jit_log_rotate() refused, so rotation did NOT run this session.
     if [ "$JIT_CONTEXT_LOG_MAX_BYTES" = 0 ]; then
-      JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. Automatic rotation is off (JIT_CONTEXT_LOG_MAX_BYTES=0) -- delete or rotate it yourself: $JIT_LOG_ESC"
+      JIT_LINES="${JIT_LINES:+$JIT_LINES$JIT_JNL}JIT : hooks.log is $JIT_MB MB. Automatic rotation is off (JIT_CONTEXT_LOG_MAX_BYTES=0) -- delete or rotate it yourself: $JIT_LOG_ESC"
     else
       # #423: JIT_CONTEXT_LOG_MAX_BYTES arrives here with no validation -- it can be
       # exported straight into the environment, bypassing jit_load_config()'s own
@@ -317,8 +323,9 @@ else
       # just finished refusing -- formatting a refused value through
       # awk '{ printf "%.1f", $1 / 1000000 }' silently reads it as 0 (or -0 for a
       # leading "-"), which is indistinguishable from a real, tiny, working max.
-      case "$JIT_CONTEXT_LOG_MAX_BYTES" in
-        "" | *[!0-9]* | 0*)
+      # #461: tests rather than a case with a quoted empty pattern and a class.
+      if [ -z "$JIT_CONTEXT_LOG_MAX_BYTES" ] || [ -n "${JIT_CONTEXT_LOG_MAX_BYTES//[0-9]/}" ] \
+        || [ "${JIT_CONTEXT_LOG_MAX_BYTES#0}" != "$JIT_CONTEXT_LOG_MAX_BYTES" ]; then
           # Self-review (oss:auditor): this refused value is exactly the kind of input
           # #423's own comment above says "can be exported straight into the
           # environment" -- i.e. it never passed jit_load_config()'s validation, so it
@@ -326,10 +333,9 @@ else
           # always is. Escaped the same way $LOG_FILE is escaped into JIT_LOG_ESC just
           # above (a literal " or \\ in the value would otherwise break the JSON this
           # line is embedded in at the printf below).
-          JIT_MAX_ESC="$(printf '%s' "$JIT_CONTEXT_LOG_MAX_BYTES" | LC_ALL=C awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); print }')"
-          JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. JIT_CONTEXT_LOG_MAX_BYTES=$JIT_MAX_ESC is not a byte count automatic rotation accepts, so it did NOT rotate this session -- delete or rotate it yourself: $JIT_LOG_ESC"
-          ;;
-      esac
+          JIT_MAX_ESC="$(printf '%s' "$JIT_CONTEXT_LOG_MAX_BYTES" | LC_ALL=C awk '{ gsub("\134\134", "\134\134"); gsub("\042", "\134\042"); print }')"
+          JIT_LINES="${JIT_LINES:+$JIT_LINES$JIT_JNL}JIT : hooks.log is $JIT_MB MB. JIT_CONTEXT_LOG_MAX_BYTES=$JIT_MAX_ESC is not a byte count automatic rotation accepts, so it did NOT rotate this session -- delete or rotate it yourself: $JIT_LOG_ESC"
+      fi
     fi
   fi
   if [ -n "$JIT_LINES" ]; then

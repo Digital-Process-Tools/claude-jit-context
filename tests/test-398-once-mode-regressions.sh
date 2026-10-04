@@ -8,7 +8,7 @@
 #    file (#394's own changelog leans on this), so one delivery appended the same line
 #    twice. Invisible below stop-hook.sh's 500-key cap (the total still comes out
 #    exact), visible only past it, where JIT_FIRED_OVERFLOW is incremented before the
-#    JIT_FIRED_KEYS dedup runs.
+#    JIT_FIRED_IDS dedup runs.
 #
 # 2. `mode: once` degraded to firing on EVERY call, with an unbounded marker file, when
 #    the payload carries no transcript_path. #394 moved the dedup CHECK from `shown` to
