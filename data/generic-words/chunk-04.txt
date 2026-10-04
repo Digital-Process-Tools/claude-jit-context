@@ -10498,7 +10498,6 @@ talismanique
 talismans
 talith
 talitre
-talk
 talkative
 talked
 talker
@@ -20296,7 +20295,6 @@ yard
 yards
 yardstick
 yardsticks
-yarn
 yarns
 yatagan
 yawl

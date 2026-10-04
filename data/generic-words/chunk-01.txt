@@ -2877,7 +2877,6 @@ curious
 curiously
 curiste
 curium
-curl
 curled
 curling
 curls
@@ -7688,7 +7687,6 @@ diffusionniste
 diffusivite
 diffusometre
 difluor
-dig
 digamma
 digastrique
 digerable
@@ -9733,7 +9731,6 @@ drifter
 drifting
 drifts
 driftwood
-drill
 drille
 drilled
 driller
@@ -11603,7 +11600,6 @@ ellipticite
 elliptique
 elliptiquement
 elliptocytose
-elm
 elms
 elocution
 elodee
@@ -17373,7 +17369,6 @@ festoyer
 festoyeur
 feta
 fetard
-fetch
 fetched
 fetches
 fetching
@@ -17832,7 +17827,6 @@ finassier
 finaud
 finauderie
 finaux
-finch
 finches
 find
 finding
@@ -17851,7 +17845,6 @@ finesses
 finessing
 finest
 finette
-finger
 fingered
 fingering
 fingernail
@@ -20139,7 +20132,6 @@ frutti
 fry
 frying
 ft
-ftp
 fucale
 fuchsia
 fuchsien

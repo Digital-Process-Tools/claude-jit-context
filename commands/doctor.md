@@ -1,12 +1,12 @@
 ---
 description: Diagnose jit-context -- is any of this running at all, and against which tree?
-allowed-tools: Bash(bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-doctor.sh:*)
+allowed-tools: Bash(bash "${CLAUDE_PLUGIN_ROOT}/scripts/jit-doctor.sh":*)
 ---
 
 Run the diagnostic and relay its output verbatim:
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/scripts/jit-doctor.sh --arguments-string '$ARGUMENTS'
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/jit-doctor.sh" --arguments-string '$ARGUMENTS'
 ```
 
 **The whole typed `$ARGUMENTS` string is handed through one synthetic `--arguments-string`

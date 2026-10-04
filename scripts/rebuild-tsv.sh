@@ -1,84 +1,1472 @@
 #!/bin/bash
-# Regenerate all 00-index.tsv files.
-# - Tool rules: from config.json (structured, different format)
-# - Vocabulary: from YAML frontmatter in .md files (keywords: line)
-# - Paths: from YAML frontmatter in .md files (match: line)
-#
-# Usage: bash .claude/claude-jit-context/scripts/rebuild-tsv.sh
-
-source "$(dirname "$0")/common.sh"
-# Consumed by _log() in common.sh, which shellcheck cannot see across the source.
-# shellcheck disable=SC2034
+_ms() {
+  local e="${EPOCHREALTIME:-}" s f
+  case "$e" in
+    *[.,]*)
+      s="${e%%[.,]*}"
+      f="${e##*[.,]}000000"
+      f="${f:0:6}"
+      case "$s$f" in
+        '' | *[!0-9]*) ;;
+        *)
+          printf '%s\n' "$((s * 1000 + 10#$f / 1000))"
+          return
+          ;;
+      esac
+      ;;
+  esac
+  perl -MTime::HiRes -e 'printf("%.0f\n",Time::HiRes::time()*1000)'
+}
+if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+  JIT_BASE="$CLAUDE_PROJECT_DIR/.claude/jit-context"
+else
+  JIT_BASE="$(pwd)/.claude/jit-context"
+fi
+export JIT_BASE
+JIT_HOST="unknown"
+JIT_HOST_REFUSAL_STATE="refusal-not-established"
+JIT_TOOL_ALIASES=""
+JIT_HOST_REGISTRY='
+claude-code|CLAUDE_CODE_ENTRYPOINT,CLAUDE_CODE_SESSION_ID|CLAUDE_PROJECT_DIR|CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block|
+codex||CLAUDE_PROJECT_DIR|PLUGIN_ROOT,CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block|apply_patch=Edit;Write
+gemini-cli|GEMINI_SESSION_ID|GEMINI_PROJECT_DIR,CLAUDE_PROJECT_DIR||UNKNOWN|UNKNOWN|refusal-not-established|
+'
+jit_host_row() {
+  local want="$1" line
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if [[ "$line" == "$want|"* ]]; then
+      printf '%s\n' "$line"
+      return 0
+    fi
+  done <<< "$JIT_HOST_REGISTRY"
+  return 1
+}
+jit_host_sig_set() {
+  case "${1:-}" in
+    CLAUDE_CODE_ENTRYPOINT) [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ] ;;
+    CLAUDE_CODE_SESSION_ID) [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] ;;
+    GEMINI_SESSION_ID) [ -n "${GEMINI_SESSION_ID:-}" ] ;;
+    *) return 1 ;;
+  esac
+}
+jit_host_detect() {
+  local name hostvars hostvar old_ifs
+  while IFS='|' read -r name hostvars _ _ _ _ _; do
+    [ -n "$name" ] || continue
+    [ -n "$hostvars" ] || continue
+    old_ifs="$IFS"
+    IFS=','
+    for hostvar in $hostvars; do
+      IFS="$old_ifs"
+      if jit_host_sig_set "$hostvar"; then
+        printf '%s\n' "$name"
+        return 0
+      fi
+    done
+    IFS="$old_ifs"
+  done <<< "$JIT_HOST_REGISTRY"
+  printf 'unknown\n'
+  return 0
+}
+jit_host_refusal_state() {
+  local name="${1:-}" row refusal
+  [ -n "$name" ] || {
+    printf 'refusal-not-established\n'
+    return 0
+  }
+  row=$(jit_host_row "$name") || {
+    printf 'refusal-not-established\n'
+    return 0
+  }
+  IFS='|' read -r _ _ _ _ _ _ refusal _ <<< "$row"
+  printf '%s\n' "${refusal:-refusal-not-established}"
+}
+jit_all_tool_aliases() {
+  local line aliases all="" sep=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    aliases="${line##*|}"
+    [ -n "$aliases" ] || continue
+    all="$all$sep$aliases"
+    sep=","
+  done <<< "$JIT_HOST_REGISTRY"
+  printf '%s\n' "$all"
+}
+JIT_HOST="$(jit_host_detect 2> /dev/null)" \
+  && JIT_HOST_REFUSAL_STATE="$(jit_host_refusal_state "$JIT_HOST" 2> /dev/null)"
+[ -n "$JIT_HOST" ] || JIT_HOST="unknown"
+[ -n "$JIT_HOST_REFUSAL_STATE" ] || JIT_HOST_REFUSAL_STATE="refusal-not-established"
+JIT_TOOL_ALIASES="$(jit_all_tool_aliases 2> /dev/null)"
+[ -n "$JIT_TOOL_ALIASES" ] || JIT_TOOL_ALIASES=""
+export JIT_HOST JIT_HOST_REFUSAL_STATE JIT_TOOL_ALIASES
+export JIT_SYMLINKS=""
+JIT_SYMLINKS_MAX=8192
+export JIT_SYMLINKS_ALL=""
+export JIT_NONFILES=""
+export JIT_NONFILES_ALL=""
+JIT_NONFILES_MAX=4096
+JIT_NL="
+"
+jit_scan_symlinks() {
+  local base="$1" f parent rel rel2 found=0
+  JIT_SYMLINKS="$JIT_NL"
+  JIT_SYMLINKS_ALL=""
+  JIT_NONFILES="$JIT_NL"
+  JIT_NONFILES_ALL=""
+  if [ "${base%/*}" != "$base" ] && [ -L "${base%/*}" ]; then
+    JIT_SYMLINKS="$JIT_SYMLINKS${base%/*}$JIT_NL$base$JIT_NL"
+    found=1
+  fi
+  for f in "$base" "$base"/* "$base"/.* "$base"/*/* "$base"/*/.* "$base"/*/*/* "$base"/*/*/.*; do
+    case "$f" in
+      */. | */..) continue ;;
+    esac
+    if [ -L "$f" ]; then
+      JIT_SYMLINKS="$JIT_SYMLINKS$f$JIT_NL"
+      found=1
+      if [ "${#JIT_SYMLINKS}" -gt "$JIT_SYMLINKS_MAX" ]; then
+        JIT_SYMLINKS="$JIT_NL"
+        JIT_SYMLINKS_ALL=1
+        JIT_NONFILES="$JIT_NL"
+        JIT_NONFILES_ALL=1
+        export JIT_SYMLINKS JIT_SYMLINKS_ALL JIT_NONFILES JIT_NONFILES_ALL
+        return 0
+      fi
+      continue
+    fi
+    if [ ! -f "$f" ] && [ -e "$f" ] && [ "$f" != "$base" ]; then
+      rel="${f#"$base"/}"
+      rel2="${rel#*/}"
+      if [ "$rel2" != "$rel" ] && [ "${rel2#*/}" != "$rel2" ]; then
+        JIT_NONFILES="$JIT_NONFILES$f$JIT_NL"
+        if [ "${#JIT_NONFILES}" -gt "$JIT_NONFILES_MAX" ]; then
+          JIT_NONFILES="$JIT_NL"
+          JIT_NONFILES_ALL=1
+        fi
+      fi
+    fi
+    [ "$found" = 1 ] || continue
+    [ "$f" != "$base" ] || continue
+    parent="${f%/*}"
+    case "$JIT_SYMLINKS" in
+      *"$JIT_NL$parent$JIT_NL"*)
+        JIT_SYMLINKS="$JIT_SYMLINKS$f$JIT_NL"
+        if [ "${#JIT_SYMLINKS}" -gt "$JIT_SYMLINKS_MAX" ]; then
+          JIT_SYMLINKS="$JIT_NL"
+          JIT_SYMLINKS_ALL=1
+          JIT_NONFILES="$JIT_NL"
+          JIT_NONFILES_ALL=1
+          export JIT_SYMLINKS JIT_SYMLINKS_ALL JIT_NONFILES JIT_NONFILES_ALL
+          return 0
+        fi
+        ;;
+    esac
+  done
+  export JIT_SYMLINKS JIT_SYMLINKS_ALL JIT_NONFILES JIT_NONFILES_ALL
+}
+jit_scan_symlinks "$JIT_BASE"
+JIT_LOG_DISABLED=0
+LOG_DIR="$JIT_BASE/.discovery/logs"
+LOG_FILE="$LOG_DIR/hooks.log"
+for _jit_p in "${JIT_BASE%/*}" "$JIT_BASE" "$JIT_BASE/.discovery" "$LOG_DIR"; do
+  if [ -L "$_jit_p" ]; then JIT_LOG_DISABLED=1; fi
+done
+unset _jit_p
+if [ "${JIT_SAMPLE_CALL:-}" = "1" ]; then JIT_LOG_DISABLED=1; fi
+if [ ! -d "$JIT_BASE" ]; then JIT_LOG_DISABLED=1; fi
+if [ "$JIT_LOG_DISABLED" = 0 ]; then
+  [ -d "$LOG_DIR" ] || mkdir -p "$LOG_DIR" 2> /dev/null
+  if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
+fi
+jit_log_write() {
+  if [ "$JIT_LOG_DISABLED" = 0 ]; then
+    printf '%s\n' "$1" 2> /dev/null >> "$LOG_FILE"
+  fi
+}
+JIT_STATE_DIR="$JIT_BASE/.discovery/state"
+for _jit_p in "${JIT_BASE%/*}" "$JIT_BASE" "$JIT_BASE/.discovery" "$JIT_STATE_DIR"; do
+  if [ -L "$_jit_p" ]; then JIT_STATE_DIR=""; fi
+done
+unset _jit_p
+if [ -n "$JIT_STATE_DIR" ] && [ -d "$JIT_BASE" ] && [ ! -d "$JIT_STATE_DIR" ]; then
+  if [ -d "$JIT_BASE/.discovery" ]; then
+    if [ -w "$JIT_BASE/.discovery" ]; then mkdir -p "$JIT_STATE_DIR" 2> /dev/null; fi
+  elif [ -w "$JIT_BASE" ]; then
+    mkdir -p "$JIT_STATE_DIR" 2> /dev/null
+  fi
+fi
+if [ ! -d "$JIT_STATE_DIR" ] || [ ! -w "$JIT_STATE_DIR" ]; then JIT_STATE_DIR=""; fi
+JIT_MARK_END='--jit-marks-end--'
+export JIT_MARK_END
+JIT_MARKS_IN=()
+JIT_MARKS_OK=0
+JIT_TMP=""
+_jit_printf_time=0
+if printf -v _jit_probe '%(%H:%M:%S)T' -1 2> /dev/null; then
+  case "$_jit_probe" in
+    [0-9][0-9]:[0-9][0-9]:[0-9][0-9]) _jit_printf_time=1 ;;
+  esac
+fi
+unset _jit_probe
+_ts() {
+  local e="${EPOCHREALTIME:-}" s f out
+  if [ "$_jit_printf_time" = 1 ]; then
+    case "$e" in
+      *[.,]*)
+        s="${e%%[.,]*}"
+        f="${e##*[.,]}000000"
+        f="${f:0:6}"
+        case "$s$f" in
+          '' | *[!0-9]*) ;;
+          *)
+            printf -v out '%(%H:%M:%S)T' "$s"
+            printf '%s.%03d\n' "$out" "$((10#$f / 1000))"
+            return
+            ;;
+        esac
+        ;;
+    esac
+  fi
+  date '+%H:%M:%S.000'
+}
+JIT_CONFIG_REFUSED_MAX=4096
+export JIT_CONFIG_REFUSED=""
+export JIT_CONFIG_REFUSED_N=0
+JIT_CONFIG_REFUSED_CUT=0
+jit_config_refuse() {
+  JIT_CONFIG_REFUSED_N=$((JIT_CONFIG_REFUSED_N + 1))
+  if [ "${#JIT_CONFIG_REFUSED}" -gt "$JIT_CONFIG_REFUSED_MAX" ]; then
+    if [ "$JIT_CONFIG_REFUSED_CUT" = 0 ]; then
+      JIT_CONFIG_REFUSED_CUT=1
+      JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED$JIT_NL- the remaining refused lines are not listed here; the count above is the whole total"
+    fi
+    return 0
+  fi
+  JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED${JIT_CONFIG_REFUSED:+$JIT_NL}- line $1: $2"
+}
+jit_cfg_clean_line() {
+  local LC_ALL=C
+  local line="$1"
+  line="${line%$'\r'}"
+  while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+  case "$line" in
+    '' | '#'*) return 1 ;;
+  esac
+  local rest="${line#export}"
+  if [ "$rest" != "$line" ] && [ "${rest#[[:space:]]}" != "$rest" ]; then
+    line="$rest"
+    while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+  fi
+  JIT_CFG_LINE="$line"
+}
+jit_config_name_ok() {
+  local LC_ALL=C
+  local prefix
+  [ -n "$1" ] && [ -z "${1//[A-Za-z0-9_]/}" ] || return 1
+  for prefix in JIT_CONTEXT_ DYNAMIC_RULES_ DVSI_; do
+    if [ "${1#"$prefix"}" != "$1" ] && [ -n "${1#"$prefix"}" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+jit_cfg_split() {
+  local LC_ALL=C
+  JIT_CFG_REASON=""
+  if [ "${1#*=}" = "$1" ]; then
+    JIT_CFG_NAME=""
+    JIT_CFG_VALUE=""
+    JIT_CFG_REASON="not a KEY=VALUE assignment"
+    return 1
+  fi
+  JIT_CFG_NAME="${1%%=*}"
+  JIT_CFG_VALUE="${1#*=}"
+  if ! jit_config_name_ok "$JIT_CFG_NAME"; then
+    JIT_CFG_REASON="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
+    return 1
+  fi
+}
+jit_cfg_unquote() {
+  local LC_ALL=C
+  local value="$1" reason="" q rest tail
+  local dq sq
+  printf -v dq '\042'
+  printf -v sq '\047'
+  q="${value%"${value#?}"}"
+  if [ "$q" = "$dq" ] || [ "$q" = "$sq" ]; then
+    rest="${value#?}"
+    if [ "${rest#*"$q"}" != "$rest" ]; then
+      tail="${rest#*"$q"}"
+      while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
+      if [ -z "$tail" ] || [ "${tail#\#}" != "$tail" ]; then
+        value="${rest%%"$q"*}"
+      else
+        reason="trailing text after the closing quote"
+      fi
+    else
+      reason="unterminated quote"
+    fi
+  else
+    value="${value%%[[:space:]]#*}"
+    while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
+  fi
+  JIT_CFG_VALUE="$value"
+  JIT_CFG_REASON="$reason"
+  [ -z "$reason" ]
+}
+jit_cfg_check_value() {
+  local LC_ALL=C
+  local cfg_name="$1" value="$2"
+  JIT_CFG_REASON=""
+  if [ "$cfg_name" = JIT_CONTEXT_INJECT ]; then
+    if [ "$value" != summary ] && [ "$value" != full ]; then
+      JIT_CFG_REASON="not an injection mode (the modes are summary and full)"
+      return 1
+    fi
+  fi
+  if [ "$cfg_name" = JIT_CONTEXT_STOP_REPORT ]; then
+    if [ "$value" != 0 ] && [ "$value" != 1 ]; then
+      JIT_CFG_REASON="not a stop-report toggle (0 or 1)"
+      return 1
+    fi
+  fi
+  if [ "$cfg_name" = JIT_CONTEXT_STATUS ]; then
+    if [ "$value" != fired ] && [ "$value" != summary ] && [ "$value" != off ]; then
+      JIT_CFG_REASON="not a status mode (fired, summary or off)"
+      return 1
+    fi
+  fi
+  if [ "$cfg_name" = JIT_CONTEXT_MISSES ]; then
+    if [ "$value" != on ] && [ "$value" != off ]; then
+      JIT_CFG_REASON="not a misses toggle (on or off)"
+      return 1
+    fi
+  fi
+  if [ "$cfg_name" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
+    if [ "$value" != 0 ]; then
+      if [ "${value#[1-9]}" = "$value" ] || [ -n "${value//[0-9]/}" ]; then
+        JIT_CFG_REASON="not a byte count (0, or digits with no leading zero)"
+        return 1
+      fi
+    fi
+  fi
+  return 0
+}
+jit_cfg_assign() {
+  if [ "$1" = DVSI_AUTONOMOUS_VOCAB_PATHS ]; then
+    DVSI_AUTONOMOUS_VOCAB_PATHS="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_CHECKOUT_WINDOW_S ]; then
+    DYNAMIC_RULES_CHECKOUT_WINDOW_S="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_COLLISION_BYTES ]; then
+    DYNAMIC_RULES_COLLISION_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_GENERIC_WORDS ]; then
+    DYNAMIC_RULES_GENERIC_WORDS="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_KEYWORD_BLACKLIST ]; then
+    DYNAMIC_RULES_KEYWORD_BLACKLIST="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_MODULE_PREFIX ]; then
+    DYNAMIC_RULES_MODULE_PREFIX="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_VOCAB_PATHS ]; then
+    DYNAMIC_RULES_VOCAB_PATHS="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_ALLOW_CROSS_TREE ]; then
+    JIT_CONTEXT_ALLOW_CROSS_TREE="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_CHECKOUT_WINDOW_S ]; then
+    JIT_CONTEXT_CHECKOUT_WINDOW_S="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_COLLISION_BYTES ]; then
+    JIT_CONTEXT_COLLISION_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_DOCTOR_MAX_BYTES ]; then
+    JIT_CONTEXT_DOCTOR_MAX_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_DOCTOR_MIN_KEYWORD ]; then
+    JIT_CONTEXT_DOCTOR_MIN_KEYWORD="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_GENERIC_WORDS ]; then
+    JIT_CONTEXT_GENERIC_WORDS="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_INJECT ]; then
+    JIT_CONTEXT_INJECT="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_KEYWORD_BLACKLIST ]; then
+    JIT_CONTEXT_KEYWORD_BLACKLIST="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
+    JIT_CONTEXT_LOG_MAX_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_MISSES ]; then
+    JIT_CONTEXT_MISSES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_MODULE_PREFIX ]; then
+    JIT_CONTEXT_MODULE_PREFIX="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_STATUS ]; then
+    JIT_CONTEXT_STATUS="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_STOP_REPORT ]; then
+    JIT_CONTEXT_STOP_REPORT="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_VOCAB_PATHS ]; then
+    JIT_CONTEXT_VOCAB_PATHS="$2"
+    return 0
+  fi
+  return 0
+}
+jit_load_config() {
+  local file="$1" line lineno=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    lineno=$((lineno + 1))
+    jit_cfg_clean_line "$line" || continue
+    if jit_cfg_split "$JIT_CFG_LINE" \
+      && jit_cfg_unquote "$JIT_CFG_VALUE" \
+      && jit_cfg_check_value "$JIT_CFG_NAME" "$JIT_CFG_VALUE"; then
+      jit_cfg_assign "$JIT_CFG_NAME" "$JIT_CFG_VALUE"
+    else
+      jit_config_refuse "$lineno" "$JIT_CFG_REASON"
+    fi
+  done < "$file"
+}
+if [ -L "$JIT_BASE/config.env" ]; then
+  JIT_CONFIG_REFUSED_N=1
+  JIT_CONFIG_REFUSED="- the file itself: config.env is a symbolic link, so it was not read"
+  jit_log_write "$(printf '[%s] config.env | refused: symbolic link' "$(_ts)")"
+elif [ -f "$JIT_BASE/config.env" ]; then
+  jit_load_config "$JIT_BASE/config.env"
+  if [ "$JIT_CONFIG_REFUSED_N" -gt 0 ]; then
+    jit_log_write "$(printf '[%s] config.env | %d line(s) refused\n%s' \
+      "$(_ts)" "$JIT_CONFIG_REFUSED_N" "$JIT_CONFIG_REFUSED")"
+  fi
+fi
+JIT_INJECT="${JIT_CONTEXT_INJECT:-full}"
+case "$JIT_INJECT" in
+  summary | full) ;;
+  *) JIT_INJECT=full ;;
+esac
+JIT_STOP_REPORT="${JIT_CONTEXT_STOP_REPORT:-0}"
+case "$JIT_STOP_REPORT" in
+  0 | 1) ;;
+  *) JIT_STOP_REPORT=0 ;;
+esac
+JIT_STATUS="${JIT_CONTEXT_STATUS:-summary}"
+case "$JIT_STATUS" in
+  fired | summary | off) ;;
+  *) JIT_STATUS=summary ;;
+esac
+JIT_MISSES="${JIT_CONTEXT_MISSES:-on}"
+case "$JIT_MISSES" in
+  on | off) ;;
+  *) JIT_MISSES=on ;;
+esac
+_log() {
+  local line="$1 ${2}ms | $3"
+  jit_log_write "[$(_ts)] $line"
+  echo "$line"
+}
+JIT_FM_NL="
+"
+JIT_AWK_FRONTMATTER='
+  BEGIN { nf = split(fl, want, " ") }
+  /^---$/ { n++; if (n == 2) exit; next }
+  n == 1 {
+    for (i = 1; i <= nf; i++) {
+      f = want[i]
+      if (f == "" || seen[f]) continue
+      if (index($0, f ":") != 1) continue
+      line = $0
+      sub("^" f ": *", "", line)
+      if (f == "mode") { gsub(/ /, "", line) }
+      else {
+        v = line
+        sub(/[ \t\n\v\f\r]+$/, "", v)
+        if (v ~ /^"[^"]*"$/) line = substr(v, 2, length(v) - 2)
+      }
+      seen[f] = 1
+      printf "%s\t%s\n", f, line
+      next
+    }
+  }
+'
+JIT_AWK_GUARD='
+function jit_bad_pattern(p,   i, n, c, nx, depth, inbr, brpos) {
+  if (p ~ /^@[A-Za-z][A-Za-z0-9-]*([[:space:]]|$)/) return "unexpanded macro -- rebuild the index with the rebuild-tsv tool this plugin ships"
+  n = length(p)
+  depth = 0
+  inbr = 0
+  brpos = 0
+  for (i = 1; i <= n; i++) {
+    c = substr(p, i, 1)
+    if (c == "\134") {
+      nx = substr(p, i + 1, 1)
+      if (nx == "") return "trailing backslash"
+      if (nx ~ /[[:alnum:]]/ && nx !~ /^[ntr]$/) return "undefined escape \134" nx
+      if (nx > "\177") return "undefined escape \\ before a non-ASCII byte"
+      i++
+      continue
+    }
+    if (inbr) {
+      nx = substr(p, i + 1, 1)
+      if (c == "[" && nx != "" && index(sprintf("%c%c%c", 58, 46, 61), nx) > 0) {
+        k = index(substr(p, i + 2), substr(p, i + 1, 1) "]")
+        if (k == 0) return "unterminated [" substr(p, i + 1, 1) " element inside a character class"
+        i = i + 2 + k
+        continue
+      }
+      if (c == "]" && i != brpos + 1 && !(i == brpos + 2 && substr(p, brpos + 1, 1) == "^")) inbr = 0
+      continue
+    }
+    if (c == "[") { inbr = 1; brpos = i; continue }
+    if (c == "(") { depth++; continue }
+    if (c == ")") { if (depth > 0) depth--; continue }
+  }
+  if (inbr) return "unterminated character class"
+  if (depth > 0) return "unbalanced parenthesis"
+  return ""
+}
+'
+JIT_AWK_ENTRY='
+function jit_row_id(layer, rown) {
+  return layer " row " rown
+}
+function jit_entry_age(ident,   raw, n, i, ln, tp) {
+  if (!jit_age_loaded) {
+    jit_age_loaded = 1
+    raw = ENVIRON["JIT_ENTRY_AGES"]
+    if (raw != "") {
+      n = split(raw, jit_age_lines, "\n")
+      for (i = 1; i <= n; i++) {
+        ln = jit_age_lines[i]
+        if (ln == "") continue
+        tp = index(ln, "\t")
+        if (tp == 0) continue
+        jit_age[substr(ln, 1, tp - 1)] = substr(ln, tp + 1) + 0
+      }
+    }
+  }
+  if (ident in jit_age) return jit_age[ident]
+  return ""
+}
+function jit_log_text(s) {
+  gsub(/[\n\r]/, " ", s)
+  return s
+}
+function jit_log_name(f, layer, rown, why) {
+  return (why == "not a bare file name") ? jit_row_id(layer, rown) : f
+}
+function jit_symlinked(p,   n, i, a) {
+  if (ENVIRON["JIT_SYMLINKS_ALL"] == "1") return 1
+  if (!jit_sym_init) {
+    jit_sym_init = 1
+    n = split(ENVIRON["JIT_SYMLINKS"], a, "\n")
+    for (i = 1; i <= n; i++) if (a[i] != "") jit_sym[a[i]] = 1
+  }
+  return (p in jit_sym)
+}
+function jit_nonfile(p,   n, i, a) {
+  if (ENVIRON["JIT_NONFILES_ALL"] == "1") return 1
+  if (!jit_nf_init) {
+    jit_nf_init = 1
+    n = split(ENVIRON["JIT_NONFILES"], a, "\n")
+    for (i = 1; i <= n; i++) if (a[i] != "") jit_nf[a[i]] = 1
+  }
+  return (p in jit_nf)
+}
+function jit_bad_entry_file(f, dir) {
+  if (f == "") return ""
+  if (index(f, "/") > 0 || index(f, "\134") > 0) return "not a bare file name"
+  if (f == "\056" || f == "\056\056") return "not a bare file name"
+  if (substr(f, 1, 1) == "\056") return "the entry file name begins with a dot, so rename it without one"
+  if (dir != "") {
+    if (ENVIRON["JIT_SYMLINKS_ALL"] == "1") return "this tree has too many symbolic links to check, so every row in it is refused"
+    if (jit_symlinked(dir)) return "its layer directory is a symbolic link"
+    if (jit_symlinked(dir "/" f)) return "the entry file is a symbolic link"
+  }
+  return ""
+}
+function jit_utf8_init(   k) {
+  if (jit_utf8_ready) return
+  jit_utf8_ready = 1
+  for (k = 1; k <= 255; k++) jit_ord[sprintf("%c", k)] = k
+  jit_hi_re = "[" sprintf("%c", 128) "-" sprintf("%c", 255) "]"
+  jit_nul = sprintf("%c", 0)
+}
+function jit_bad_utf8(s,   i, n, b, need, lo, hi, j, cb) {
+  jit_utf8_init()
+  if (s !~ jit_hi_re) return 0
+  n = length(s)
+  for (i = 1; i <= n; i++) {
+    b = jit_ord[substr(s, i, 1)] + 0
+    if (b < 128) continue
+    if (b < 194 || b > 244) return 1
+    if (b < 224) { need = 1; lo = 128; hi = 191 }
+    else if (b < 240) { need = 2; lo = (b == 224) ? 160 : 128; hi = (b == 237) ? 159 : 191 }
+    else { need = 3; lo = (b == 240) ? 144 : 128; hi = (b == 244) ? 143 : 191 }
+    if (i + need > n) return 1
+    for (j = 1; j <= need; j++) {
+      cb = jit_ord[substr(s, i + j, 1)] + 0
+      if (j == 1) { if (cb < lo || cb > hi) return 1 }
+      else if (cb < 128 || cb > 191) return 1
+    }
+    i += need
+  }
+  return 0
+}
+function jit_bad_bytes(s, what) {
+  jit_utf8_init()
+  if (length(jit_nul) == 1 && index(s, jit_nul) > 0) return what " contains a NUL byte"
+  if (jit_bad_utf8(s)) return what " is not valid UTF-8"
+  return ""
+}
+function jit_entry_why(path) {
+  if (substr(path, length(path), 1) == "/") return "the row names no entry file"
+  if (jit_nonfile(path)) return "the entry file is not a regular file"
+  return ""
+}
+function jit_read_body(path,   line, r, first) {
+  JIT_BODY = ""
+  if ((r = jit_entry_why(path)) != "") return r
+  first = 1
+  while ((r = (getline line < path)) > 0) {
+    JIT_BODY = JIT_BODY (first ? "" : "\n") line
+    first = 0
+  }
+  close(path)
+  if (r < 0) return "the entry file could not be read"
+  return jit_bad_utf8(JIT_BODY) ? "the entry file is not valid UTF-8" : ""
+}
+function jit_refuse_add(list, item) {
+  if (length(list) > 4096) {
+    if (jit_refuse_cut) return list
+    jit_refuse_cut = 1
+    return list "\n- the remaining refused rows are not listed here; the count above is the whole total"
+  }
+  return list (list == "" ? "- " : "\n- ") item
+}
+function jit_unreached_add(list, item) {
+  if (length(list) > 4096) {
+    if (jit_unreached_cut) return list
+    jit_unreached_cut = 1
+    return list "\n- the remaining unreachable rows are not listed here; the count above is the whole total"
+  }
+  return list (list == "" ? "- " : "\n- ") item
+}
+function jit_refusal_notice(list, n) {
+  return "# JIT Context: " n " rule(s) could not be evaluated, so they did NOT run\n" list \
+    "\nA pattern the matcher cannot honour is not a rule that did not match, and until now the two looked identical. Lint the tree that owns these rules with the jit-dry-run tool this plugin ships, --base <tree>/.claude/jit-context"
+}
+function jit_layers_notice(list, n) {
+  return "# JIT Context: " n " jit-context layer director" (n == 1 ? "y" : "ies") " could not be read, so no rule inside them ran\n" list "\nThese are directories under .claude/jit-context/<dimension>/ that exist and hold rules the matcher never opened. A layer that was never loaded and a layer whose rules never matched look identical from a session, which is why this says so. Name a layer directory with letters, digits, dot, underscore and hyphen only, and lint the tree with the jit-dry-run tool this plugin ships, --base <tree>/.claude/jit-context"
+}
+function jit_no_subject_notice(list, n) {
+  return "# JIT Context: " n " tools rule(s) name this tool, but the hook could build no subject to match them against, so they did NOT run\n" list \
+    "\nA tools rule is matched against a subject built from the tool_input keys `command`, `skill`, `file_path`, `pattern` and `subagent_type`. This dispatch carried none of them, so the rules above were indexed and counted and never consulted. Either they name a tool whose input this hook cannot read, or they name the wrong tool. A rule that cannot be reached is not a rule that did not match, and until now the two looked identical."
+}
+function jit_config_notice(list, n) {
+  return "# JIT Context: " n " line(s) in .claude/jit-context/config.env were refused, so they did NOT take effect\n" list \
+    "\nconfig.env is read as plain KEY=VALUE and is never executed. Only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* settings are read; anything else, shell included, is refused. If a refused line is not one you wrote, treat that file as hostile -- it arrived with the repository."
+}
+function jit_worktree_notice(line) {
+  return "# JIT Context: CLAUDE_PROJECT_DIR names a different git worktree than this shell is sitting in\n" line \
+    "\nEvery hook resolves rules from CLAUDE_PROJECT_DIR, never from the working directory -- content injected below (or on any call in this session) can be served from the copy in the OTHER tree, silently (#402). Run /jit-context:doctor"
+}
+'
+JIT_AWK_INJECT='
+function jit_clip(s, n,   i) {
+  if (length(s) <= n) return s
+  s = substr(s, 1, n)
+  if (length("é") > 1) {
+    if (!jit_cont) {
+      for (i = 128; i <= 191; i++) jit_cont = jit_cont sprintf("%c", i)
+      for (i = 192; i <= 253; i++) jit_lead = jit_lead sprintf("%c", i)
+    }
+    i = 0
+    while (i < 3 && length(s) > 0 && index(jit_cont, substr(s, length(s), 1)) > 0) {
+      s = substr(s, 1, length(s) - 1)
+      i++
+    }
+    if (length(s) > 0 && index(jit_lead, substr(s, length(s), 1)) > 0) s = substr(s, 1, length(s) - 1)
+  }
+  sub(/\r$/, "", s)
+  sub(/[ \t\n\v\f\r]+$/, "", s)
+  return s " [clipped]"
+}
+BEGIN {
+  JIT_TRANSCLUDE_DEPTH_MAX = 3
+  JIT_TRANSCLUDE_TOTAL_MAX = 12
+}
+function jit_transclude_component_ok(s) {
+  if (s == "" || s == "\056" || s == "\056\056") return 0
+  if (substr(s, 1, 1) == "\056") return 0
+  if (s ~ /[^A-Za-z0-9._-]/) return 0
+  return 1
+}
+function jit_transclude_resolve(spec,   n, parts, dim, layer, file, dir, path, why) {
+  jit_transclude_why = ""
+  n = split(spec, parts, "/")
+  if (n != 3) { jit_transclude_why = "not a dimension/layer/file.md path"; return "" }
+  dim = parts[1]; layer = parts[2]; file = parts[3]
+  if (!jit_transclude_component_ok(dim) || !jit_transclude_component_ok(layer) || !jit_transclude_component_ok(file) || file !~ /\.md$/) {
+    jit_transclude_why = "not a dimension/layer/file.md path"
+    return ""
+  }
+  dir = ENVIRON["JIT_BASE"] "/" dim "/" layer
+  why = jit_bad_entry_file(file, dir)
+  if (why == "") {
+    path = dir "/" file
+    why = jit_entry_why(path)
+  }
+  if (why != "") { jit_transclude_why = why; return "" }
+  return path
+}
+function jit_transclude_strip_frontmatter(body,   lines, n, i, out, closed, first, ln) {
+  n = split(body, lines, "\n")
+  if (n == 0) return body
+  ln = lines[1]; sub(/\r$/, "", ln)
+  if (ln != "---") return body
+  closed = 0
+  for (i = 2; i <= n; i++) {
+    ln = lines[i]; sub(/\r$/, "", ln)
+    if (ln == "---") { closed = 1; i++; break }
+  }
+  if (!closed) return body
+  out = ""; first = 1
+  for (; i <= n; i++) { out = out (first ? "" : "\n") lines[i]; first = 0 }
+  return out
+}
+function jit_expand_transclusions(body, depth,   out, i, n, lines, first) {
+  n = split(body, lines, "\n")
+  out = ""; first = 1
+  for (i = 1; i <= n; i++) {
+    out = out (first ? "" : "\n") jit_transclude_expand_line(lines[i], depth)
+    first = 0
+  }
+  return out
+}
+function jit_transclude_expand_line(line, depth,   trimmed, out, i, n, start, endp, spec, path, tent, expanded, saved_infence) {
+  trimmed = line
+  sub(/^[[:space:]]+/, "", trimmed)
+  if (trimmed ~ /^```/) { jit_infence = !jit_infence; return line }
+  if (jit_infence) return line
+  if (index(line, "{{") == 0) return line
+  out = ""
+  n = length(line)
+  i = 1
+  while (i <= n) {
+    start = index(substr(line, i), "{{")
+    if (start == 0) { out = out substr(line, i); break }
+    start = i + start - 1
+    out = out substr(line, i, start - i)
+    if (start > 1 && substr(line, start - 1, 1) == "$") {
+      out = out "{{"
+      i = start + 2
+      continue
+    }
+    endp = index(substr(line, start + 2), "}}")
+    if (endp == 0) { out = out substr(line, start); break }
+    endp = start + 2 + endp - 1
+    spec = substr(line, start + 2, endp - (start + 2))
+    gsub(/^[[:space:]]+/, "", spec)
+    gsub(/[[:space:]]+$/, "", spec)
+    i = endp + 2
+    if (jit_transclude_total >= JIT_TRANSCLUDE_TOTAL_MAX) {
+      out = out "{{" spec "}} [jit] transclusion refused: this fire already spliced in " JIT_TRANSCLUDE_TOTAL_MAX " file(s), so this one was left as a pointer"
+      continue
+    }
+    if (depth >= JIT_TRANSCLUDE_DEPTH_MAX) {
+      out = out "{{" spec "}} [jit] transclusion refused: nested " JIT_TRANSCLUDE_DEPTH_MAX " deep already, so this one was left as a pointer"
+      continue
+    }
+    path = jit_transclude_resolve(spec)
+    if (path == "") {
+      out = out "{{" spec "}} [jit] transclusion refused: " jit_transclude_why
+      continue
+    }
+    if (index(jit_transclude_stack, "\n" path "\n") > 0) {
+      out = out "{{" spec "}} [jit] transclusion refused: this would include itself (a cycle)"
+      continue
+    }
+    if (!jit_entry_load(path, "full", 1, tent)) {
+      out = out "{{" spec "}} [jit] transclusion refused: " (tent["why"] != "" ? tent["why"] : "the entry file is empty")
+      continue
+    }
+    jit_transclude_total++
+    jit_transclude_stack = jit_transclude_stack path "\n"
+    saved_infence = jit_infence
+    jit_infence = 0
+    expanded = jit_expand_transclusions(jit_transclude_strip_frontmatter(tent["body"]), depth + 1)
+    jit_infence = saved_infence
+    jit_transclude_stack = substr(jit_transclude_stack, 1, length(jit_transclude_stack) - length(path) - 1)
+    out = out expanded
+  }
+  return out
+}
+function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, ident, val, nread, r) {
+  e["body"] = ""; e["title"] = ""; e["desc"] = ""
+  e["mode"] = def; e["fm"] = 0; e["badmode"] = 0; e["read"] = 0; e["injseen"] = 0
+  e["pin"] = 0
+  e["why"] = jit_entry_why(path)
+  if (e["why"] != "") return 0
+  nfm = 0; want = 1; nread = 0
+  while ((r = (getline line < path)) > 0) {
+    nread++
+    e["read"] = 1
+    if (want) e["body"] = e["body"] (nread == 1 ? "" : "\n") line
+    ln = line
+    sub(/\r$/, "", ln)
+    if (ln == "---") {
+      if (nfm == 0) {
+        if (nread != 1) continue
+        nfm = 1; e["fm"] = 1; continue
+      }
+      if (nfm == 1) {
+        nfm = 2
+        if (!keepbody && e["mode"] != "full") { e["body"] = ""; want = 0; break }
+        continue
+      }
+      continue
+    }
+    if (nfm != 1) continue
+    if (index(ln, ":") == 0) continue
+    ident = substr(ln, 1, index(ln, ":") - 1)
+    if (ident ~ /[^A-Za-z0-9_-]/) continue
+    val = substr(ln, index(ln, ":") + 1)
+    sub(/^[[:space:]]+/, "", val)
+    sub(/[[:space:]]+$/, "", val)
+    if (val ~ /^"[^"]*"$/) val = substr(val, 2, length(val) - 2)
+    if (ident == "title") { if (e["title"] == "") e["title"] = val }
+    else if (ident == "description") { if (e["desc"] == "") e["desc"] = val }
+    else if (ident == "inject" && !e["injseen"]) {
+      e["injseen"] = 1
+      gsub(/[[:space:]]/, "", val)
+      val = tolower(val)
+      if (val == "summary" || val == "full") { e["mode"] = val; e["pin"] = 1 }
+      else if (val != "") e["badmode"] = 1
+    }
+  }
+  close(path)
+  if (r < 0) { e["why"] = "the entry file could not be read"; return 0 }
+  if (jit_bad_utf8(e["body"] e["title"] e["desc"])) {
+    e["why"] = "the entry file is not valid UTF-8"
+    return 0
+  }
+  if (!e["fm"]) { e["mode"] = "full"; e["pin"] = 1 }
+  return e["read"]
+}
+function jit_badmode_note(e) {
+  if (!e["badmode"]) return ""
+  return "\n[jit] The inject: value in this entry is not summary or full, so the project default applied."
+}
+function jit_inject_text(e, rel, selfpath,   out, tbody) {
+  if (e["mode"] == "full") {
+    if (e["body"] != "" && e["body"] ~ /^[[:space:]]*$/) return "[jit] The entry file has no text to inject." jit_badmode_note(e)
+    jit_transclude_total = 0
+    jit_transclude_stack = (selfpath != "" ? "\n" selfpath "\n" : "\n")
+    jit_infence = 0
+    tbody = (index(e["body"], "{{") > 0) ? jit_expand_transclusions(e["body"], 0) : e["body"]
+    return tbody jit_badmode_note(e)
+  }
+  out = ""
+  if (e["title"] != "") out = jit_clip(e["title"], 160)
+  if (e["desc"] != "") out = out (out == "" ? "" : "\n") jit_clip(e["desc"], 400)
+  else out = out (out == "" ? "" : "\n") "[jit] There is no description: in this entry, so a match can only name it. Add one and the next match will say what it holds."
+  out = out jit_badmode_note(e)
+  return out "\n[jit] Summary only -- read " rel " for the entry."
+}
+function jit_inject_tag(e,   t) {
+  if (e["mode"] == "full") t = "[full"
+  else if (e["desc"] == "") t = "[summary:no-description"
+  else t = "[summary"
+  return t (e["badmode"] ? ":badmode" : "") "]"
+}
+'
+JIT_AWK_FOLD='
+function jit_fold_latin1(s,   i, p, out) {
+  if (_jit_fold_n == 0)
+    _jit_fold_n = split("á a à a â a ä a ã a å a æ ae ç c é e è e ê e ë e í i ì i î i ï i ñ n " \
+                        "ó o ò o ô o ö o õ o œ oe ß ss ú u ù u û u ü u ý y ÿ y " \
+                        "Á a À a Â a Ä a Ã a Å a Æ ae Ç c É e È e Ê e Ë e Í i Ì i Î i Ï i Ñ n " \
+                        "Ó o Ò o Ô o Ö o Õ o Œ oe Ú u Ù u Û u Ü u Ý y", _jit_fold_tr, "[ ]")
+  for (i = 1; i + 1 <= _jit_fold_n; i += 2) {
+    out = ""
+    while ((p = index(s, _jit_fold_tr[i])) > 0) {
+      out = out substr(s, 1, p - 1) _jit_fold_tr[i+1]
+      s = substr(s, p + length(_jit_fold_tr[i]))
+    }
+    s = out s
+  }
+  return s
+}
+'
+JIT_AWK_HEREDOC='
+function jit_heredoc_opener_is_suppressed(prefix, state0,    i, c, state, n, q1, q2, bs) {
+  q1 = sprintf("%c", 39)
+  q2 = sprintf("%c", 34)
+  bs = sprintf("%c", 92)
+  state = state0
+  n = length(prefix)
+  for (i = 1; i <= n; i++) {
+    c = substr(prefix, i, 1)
+    if (state == 0) {
+      if (c == q1) state = 1
+      else if (c == q2) state = 2
+      else if (c == "#") return 1
+      else if (c == bs) i++
+    } else if (state == 1) {
+      if (c == q1) state = 0
+    } else if (state == 2) {
+      if (c == bs) i++
+      else if (c == q2) state = 0
+    }
+  }
+  return (state != 0)
+}
+function jit_heredoc_line_exit_state(line, state0,    i, c, len, q1, q2, bs, state) {
+  q1 = sprintf("%c", 39)
+  q2 = sprintf("%c", 34)
+  bs = sprintf("%c", 92)
+  state = state0
+  len = length(line)
+  for (i = 1; i <= len; i++) {
+    c = substr(line, i, 1)
+    if (state == 0) {
+      if (c == q1) state = 1
+      else if (c == q2) state = 2
+      else if (c == "#") break
+      else if (c == bs) i++
+    } else if (state == 1) {
+      if (c == q1) state = 0
+    } else if (state == 2) {
+      if (c == bs) i++
+      else if (c == q2) state = 0
+    }
+  }
+  return state
+}
+function jit_heredoc_quote_states(lines, n, qin,    i, state) {
+  state = 0
+  for (i = 1; i <= n; i++) {
+    qin[i] = state
+    state = jit_heredoc_line_exit_state(lines[i], state)
+  }
+}
+function jit_strip_heredoc_body(s, unconditional,    n, lines, i, j, out, strip_tabs, delim, line, rest, probed, op, word, prefix, q1, q2, q3, qclass, close_i, quote_in, lt2) {
+  lt2 = sprintf("%c%c", 60, 60)
+  q1 = sprintf("%c", 39)
+  q2 = sprintf("%c", 34)
+  q3 = sprintf("%c%c", 92, 92)
+  qclass = "[" q1 q2 q3 "]?"
+  n = split(s, lines, "\n")
+  jit_heredoc_quote_states(lines, n, quote_in)
+  out = ""
+  i = 1
+  while (i <= n) {
+    line = lines[i]
+    probed = " " line
+    close_i = 0
+    if (match(probed, "[^<]" lt2 "-?[ \t]*" qclass "[A-Za-z_][A-Za-z0-9_]*" qclass)) {
+      prefix = substr(probed, 1, RSTART)
+      if (!jit_heredoc_opener_is_suppressed(prefix, quote_in[i])) {
+        op = substr(probed, RSTART + 1, RLENGTH - 1)
+        strip_tabs = (substr(op, 1, 3) == lt2 "-")
+        word = op
+        sub("^" lt2 "-?[ \t]*", "", word)
+        gsub("[" q1 q2 q3 "]", "", word)
+        if (word != "" && (unconditional || jit_heredoc_opener_is_known_sink(line))) {
+          delim = word
+          for (j = i + 1; j <= n; j++) {
+            rest = lines[j]
+            sub(/\r$/, "", rest)
+            if (strip_tabs) sub(/^\t+/, "", rest)
+            if (rest == delim) { close_i = j; break }
+          }
+        }
+      }
+    }
+    out = (out == "") ? line : out "\n" line
+    if (close_i > 0) {
+      i = close_i + 1
+    } else {
+      i++
+    }
+  }
+  return out
+}
+function jit_heredoc_opener_has_danger_token(line) {
+  if (index(line, "|") > 0) return 1
+  if (index(line, "$(") > 0) return 1
+  if (index(line, "`") > 0) return 1
+  if (index(line, ">(") > 0) return 1
+  if (index(line, "<(") > 0) return 1
+  return 0
+}
+function jit_heredoc_opener_is_known_sink(line) {
+  if (jit_heredoc_opener_has_danger_token(line)) return 0
+  if (line ~ /(^|[;&|])[ \t]*cat([ \t]|$)/ && line ~ />/) return 1
+  if (line ~ /(^|[;&|])[ \t]*tee[ \t]+[^ \t;&|\n]/) return 1
+  if (line ~ /(^|[;&|])[ \t]*(\.\/)?supertool([ \t]|$)/) return 1
+  if (line ~ /(^|[;&|])[ \t]*git[ \t]+commit([ \t]|$)/ && line ~ /(^|[ \t])(-F|--file)[ \t]*-([ \t]|$)/) return 1
+  if (line ~ /(^|[;&|])[ \t]*gh([ \t]|$)/ && line ~ /(^|[ \t])(--body-file|-F)[ \t]*-([ \t]|$)/) return 1
+  return 0
+}
+'
+JIT_AWK_JSON='
+function jit_trailing_backslashes(s,   c, n) {
+  n = length(s); c = 0
+  while (c < n && substr(s, n - c, 1) == "\134") c++
+  return c
+}
+function jit_json_fields(s, raw, fs, fe,   n, i, k) {
+  n = split(s, raw, "\042")
+  k = 1
+  fs[1] = 1
+  for (i = 1; i < n; i++) {
+    if (jit_trailing_backslashes(raw[i]) % 2 == 1) continue
+    fe[k] = i
+    k++
+    fs[k] = i + 1
+  }
+  fe[k] = n
+  return k
+}
+function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth, ti_depth, pending_ident, pending_key_depth, i, c, ch, txt, val, nxt, is_ident) {
+  depth = 0
+  ti_depth = -1
+  pending_ident = ""
+  pending_key_depth = -1
+  for (i = 1; i <= n; i++) {
+    if (i % 2 == 1) {
+      txt = raw[fs[i]]
+      for (c = 1; c <= length(txt); c++) {
+        ch = substr(txt, c, 1)
+        if (ch == "{") {
+          depth++
+          if (pending_ident == "tool_input" && pending_key_depth == 1 && ti_depth == -1) ti_depth = depth
+        } else if (ch == "}") {
+          if (depth == ti_depth) ti_depth = -1
+          depth--
+        }
+      }
+      continue
+    }
+    if (fs[i] != fe[i]) { pending_ident = ""; pending_key_depth = -1; continue }
+    val = raw[fs[i]]
+    is_ident = 0
+    if (i + 1 <= n) {
+      nxt = raw[fs[i+1]]
+      if (nxt ~ /^[[:space:]]*:/) is_ident = 1
+    }
+    if (!is_ident) { pending_ident = ""; pending_key_depth = -1; continue }
+    pending_ident = val
+    pending_key_depth = depth
+    if (i + 2 > n) continue
+    if (depth == 1) {
+      if ((val in top_wanted) && !(val in TOP)) TOP[val] = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
+    } else if (depth == ti_depth) {
+      if ((val in ti_wanted) && !(val in TI)) TI[val] = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
+    }
+  }
+}
+function jit_session_key(raw, fs, fe, n,   i, k) {
+  for (i = 2; i + 2 <= n; i += 2) {
+    if (fs[i] != fe[i]) continue
+    if (raw[fs[i]] != "session_id") continue
+    if (fs[i+2] != fe[i+2]) return ""
+    k = raw[fs[i+2]]
+    if (k == "" || length(k) > 64) return ""
+    if (k ~ /[^A-Za-z0-9_-]/) return ""
+    return k
+  }
+  return ""
+}
+function jit_agent_key(raw, fs, fe, n,   i, v, base) {
+  for (i = 2; i + 2 <= n; i += 2) {
+    if (fs[i] != fe[i]) continue
+    if (raw[fs[i]] != "transcript_path") continue
+    if (fs[i+2] != fe[i+2]) return ""
+    v = raw[fs[i+2]]
+    if (v == "") return ""
+    base = v
+    gsub(/.*[\/\\]/, "", base)
+    sub(/\.jsonl$/, "", base)
+    if (base == "" || length(base) > 64) return ""
+    if (base ~ /[^A-Za-z0-9_-]/) return ""
+    return base
+  }
+  return ""
+}
+function jit_stop_hook_active(raw, fs, fe, n,   i) {
+  for (i = 2; i <= n; i += 2) {
+    if (fs[i] != fe[i]) continue
+    if (raw[fs[i]] != "stop_hook_active") continue
+    return (raw[fe[i] + 1] ~ /^[[:space:]]*:[[:space:]]*true/) ? 1 : 0
+  }
+  return 0
+}
+function jit_shown_file(dir, kind, raw, fs, fe, n,   k) {
+  return jit_shown_path(dir, kind, jit_session_key(raw, fs, fe, n))
+}
+function jit_agent_shown_file(dir, kind, raw, fs, fe, n,   k) {
+  k = jit_agent_key(raw, fs, fe, n)
+  if (k == "") k = jit_session_key(raw, fs, fe, n)
+  return jit_shown_path(dir, kind, k)
+}
+function jit_shown_path(dir, kind, k) {
+  if (dir == "" || k == "") return ""
+  return dir "/" kind "-shown-" k ".txt"
+}
+function jit_shown_load(file, set,   line) {
+  if (file == "") return
+  while ((getline line < file) > 0) set[line] = 1
+}
+function jit_shown_mark(file, ident) {
+  if (file == "") return
+  JIT_MARKS = JIT_MARKS file "\t" ident "\n"
+}
+function jit_loc_key(dim, layer, file) {
+  return "loc:" dim ":" layer ":" file
+}
+function jit_shown_flush(out) {
+  printf "%s%s\n", JIT_MARKS, ENVIRON["JIT_MARK_END"] > out
+}
+function jit_field(raw, a, b,   o, i) {
+  if (a == "" || b == "" || a > b) return ""
+  if (a == b) return raw[a]
+  o = raw[a]
+  for (i = a + 1; i <= b; i++) o = o "\042" raw[i]
+  return o
+}
+function jit_unescape(s,   n, i, c, nx, o) {
+  if (index(s, "\134") == 0) return s
+  n = length(s); o = ""
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (c != "\134" || i == n) { o = o c; continue }
+    nx = substr(s, i + 1, 1)
+    if (nx == "n") o = o "\n"
+    else if (nx == "t") o = o "\t"
+    else if (nx == "r") o = o "\r"
+    else if (nx == "b") o = o "\b"
+    else if (nx == "f") o = o "\f"
+    else if (nx == "\042") o = o "\042"
+    else if (nx == "/") o = o "/"
+    else if (nx == "\134") o = o "\134"
+    else { o = o c nx; i++; continue }
+    i++
+  }
+  return o
+}
+'
+JIT_AWK_BLK_BUILD='
+function jit_blk_prepend(text,   i) {
+  for (i = nblk; i >= 1; i--) blk[i + 1] = blk[i]
+  blk[1] = text
+  nblk++
+}
+function jit_blk_join(   bi, out, manifest) {
+  if (nblk == 0) return ""
+  manifest = "# JIT-CTX-BLOCKS " nblk
+  out = ""
+  for (bi = 1; bi <= nblk; bi++) {
+    manifest = manifest " " length(blk[bi])
+    out = (out == "") ? blk[bi] : out "\n---\n" blk[bi]
+  }
+  return manifest "\n" out
+}
+'
+JIT_AWK_BLOCKS='
+function jit_unescape_blocks(s,   n, i, c, nx, hx, v, o) {
+  if (index(s, "\134") == 0) return s
+  n = length(s); o = ""
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (c != "\134" || i == n) { o = o c; continue }
+    nx = substr(s, i + 1, 1)
+    if (nx == "n") { o = o "\n"; i++; continue }
+    if (nx == "t") { o = o "\t"; i++; continue }
+    if (nx == "r") { o = o "\r"; i++; continue }
+    if (nx == "b") { o = o "\b"; i++; continue }
+    if (nx == "f") { o = o "\f"; i++; continue }
+    if (nx == "\042") { o = o "\042"; i++; continue }
+    if (nx == "/") { o = o "/"; i++; continue }
+    if (nx == "\134") { o = o "\134"; i++; continue }
+    if (nx == "u" && substr(s, i, 6) ~ /^\\u00[0-9a-fA-F][0-9a-fA-F]$/) {
+      hx = tolower(substr(s, i + 4, 2))
+      v = index("0123456789abcdef", substr(hx, 1, 1)) - 1
+      v = v * 16 + index("0123456789abcdef", substr(hx, 2, 1)) - 1
+      if (v <= 31) { o = o sprintf("%c", v); i += 5; continue }
+    }
+    o = o c nx; i++; continue
+  }
+  return o
+}
+function jit_split_ctx_blocks(ctx,   nl_pos, header, body_rest, hn, hf, declared_n, pos, bi, blen, rest, p1, p2, p) {
+  jit_blk_n = 0
+  jit_blk_manifest_ok = 0
+  delete jit_blk_body
+  if (substr(ctx, 1, 17) == "# JIT-CTX-BLOCKS ") {
+    nl_pos = index(ctx, "\n")
+    if (nl_pos > 0) {
+      header = substr(ctx, 1, nl_pos - 1)
+      body_rest = substr(ctx, nl_pos + 1)
+      hn = split(header, hf, " ")
+      declared_n = hf[3] + 0
+      if (hn == 3 + declared_n && declared_n >= 0 && hf[1] == "#" && hf[2] == "JIT-CTX-BLOCKS") {
+        jit_blk_manifest_ok = 1
+        pos = 1
+        for (bi = 1; bi <= declared_n; bi++) {
+          blen = hf[3 + bi] + 0
+          if (blen < 0 || pos + blen - 1 > length(body_rest)) { jit_blk_manifest_ok = 0; break }
+          jit_blk_body[bi] = substr(body_rest, pos, blen)
+          pos += blen
+          if (bi < declared_n) {
+            if (substr(body_rest, pos, 5) != "\n---\n") { jit_blk_manifest_ok = 0; break }
+            pos += 5
+          }
+        }
+        if (jit_blk_manifest_ok && pos - 1 != length(body_rest)) jit_blk_manifest_ok = 0
+        if (jit_blk_manifest_ok) jit_blk_n = declared_n
+      }
+    }
+  }
+  if (!jit_blk_manifest_ok) {
+    rest = ctx
+    jit_blk_n = 0
+    while (1) {
+      p1 = index(rest, "\n---\n# Vocabulary: ")
+      p2 = index(rest, "\n---\n# JIT Context: ")
+      if (p1 == 0 && p2 == 0) { jit_blk_n++; jit_blk_body[jit_blk_n] = rest; break }
+      if (p1 == 0) p = p2
+      else if (p2 == 0) p = p1
+      else p = (p1 < p2) ? p1 : p2
+      jit_blk_n++
+      jit_blk_body[jit_blk_n] = substr(rest, 1, p - 1)
+      rest = substr(rest, p + 5)
+    }
+  }
+}
+'
+JIT_AWK_ENVELOPE='
+function jit_envelope_inject(event, text_escaped) {
+  if (text_escaped == "") return "{}"
+  return "{\042hookSpecificOutput\042:{\042hookEventName\042:\042" event "\042,\042additionalContext\042:\042" text_escaped "\042}}"
+}
+function jit_envelope_block(reason_escaped) {
+  return "{\042decision\042:\042block\042,\042reason\042:\042" reason_escaped "\042}"
+}
+function jit_envelope_empty() {
+  return "{}"
+}
+'
+JIT_AWK_ENVELOPE_SYSMSG='
+function jit_fmt_bytes(n) {
+  if (n < 1000) return n "b"
+  return sprintf("%.1fk", n / 1000)
+}
+function jit_envelope_inject_sysmsg(event, text_escaped, sysmsg_escaped) {
+  if (text_escaped == "" && sysmsg_escaped == "") return "{}"
+  if (text_escaped == "") return "{\042systemMessage\042:\042" sysmsg_escaped "\042}"
+  if (sysmsg_escaped == "") return jit_envelope_inject(event, text_escaped)
+  return "{\042hookSpecificOutput\042:{\042hookEventName\042:\042" event "\042,\042additionalContext\042:\042" text_escaped "\042},\042systemMessage\042:\042" sysmsg_escaped "\042}"
+}
+function jit_envelope_block_sysmsg(reason_escaped, sysmsg_escaped) {
+  if (sysmsg_escaped == "") return jit_envelope_block(reason_escaped)
+  return "{\042decision\042:\042block\042,\042reason\042:\042" reason_escaped "\042,\042systemMessage\042:\042" sysmsg_escaped "\042}"
+}
+'
+jit_frontmatter_many() { # VAR, entry file, field...
+  local _v="$1" _file="$2" _fields="${*:3}"
+  printf -v "$_v" '%s%s' "$JIT_FM_NL" \
+    "$(LC_ALL=C awk -v fl="$_fields" "$JIT_AWK_FRONTMATTER" "$_file")"
+}
+jit_fm_get() { # VAR, memo, field
+  local _probe="$JIT_FM_NL$3	" _rest
+  case "$2" in
+    *"$_probe"*)
+      _rest="${2#*"$_probe"}"
+      printf -v "$1" '%s' "${_rest%%"$JIT_FM_NL"*}"
+      ;;
+    *) printf -v "$1" '%s' "" ;;
+  esac
+}
+jit_frontmatter() {
+  local _out
+  _out="$(LC_ALL=C awk -v fl="$1" "$JIT_AWK_FRONTMATTER" "$2")"
+  [ -n "$_out" ] || return 0
+  printf '%s\n' "${_out#*	}"
+}
+JIT_VALID_MODE_RE='^(remind|block|once)(,(remind|block|once))*$'
+JIT_VALID_REQUIRES_RE='^[A-Za-z0-9._+-]{1,255}$'
+JIT_MACRO_ANCHOR='(^|[;&|\n] *)'
+JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|[e]nv|sudo|nohup|nice|time)[[:space:]]+)*'
+JIT_MACRO_OPT='(-[^[:space:];&|]*[[:space:]]+([^-;&|[:space:]][^[:space:];&|]*[[:space:]]+)?)*'
+JIT_MACRO_END='($|[[:space:];&|])'
+jit_macro_word() {
+  local w="$1" out="" i n c plain
+  n=${#w}
+  for ((i = 0; i < n; i++)); do
+    c="${w:i:1}"
+    plain=0
+    case "$c" in [a-z0-9_/]) plain=1 ;; esac
+    if [ "$plain" = 1 ]; then out="$out$c"; else out="${out}[$c]"; fi
+  done
+  printf '%s' "$out"
+}
+jit_expand_match() {
+  local raw="$1" dim="${2:-tools}" label="${3:-<entry>}"
+  local body name args reason="" out word first=1
+  case "$raw" in '~'*) body="${raw#\~}" ;; *) body="$raw" ;; esac
+  case "$body" in '@'*) ;; *)
+    printf '%s' "$raw"
+    return 0
+    ;;
+  esac
+  name="${body#@}"
+  args=""
+  if [ "${name%%[[:space:]]*}" != "$name" ]; then
+    args="${name#*[[:space:]]}"
+    name="${name%%[[:space:]]*}"
+  fi
+  while [ "$args" != "${args#[[:space:]]}" ]; do args="${args#[[:space:]]}"; done
+  while [ "$args" != "${args%[[:space:]]}" ]; do args="${args%[[:space:]]}"; done
+  args="$(printf '%s' "$args" | tr '[:upper:]' '[:lower:]')"
+  if [ "$dim" != "tools" ]; then
+    reason="@$name describes a COMMAND, and a $dim rule is matched against a file path"
+  elif [ "$name" != "invocation" ] && [ "$name" != "invocation-quoted-arg" ]; then
+    reason="unknown macro @$name -- the macros are @invocation and @invocation-quoted-arg"
+  elif [ -z "$args" ]; then
+    reason="@$name needs the command it targets, e.g. 'match: ~@$name git push'"
+  else
+    case "$args" in
+      *[!a-z0-9._/:+\ -]*) reason="@$name takes plain command words, and this one carries a character that is not one" ;;
+    esac
+  fi
+  if [ -n "$reason" ]; then
+    printf '%s' "$raw"
+    printf 'REFUSED  %s: %s\n' "$label" "$reason" >&2
+    printf '         written through unexpanded, so the hook refuses that row by name rather than matching nothing.\n' >&2
+    return 1
+  fi
+  out="$JIT_MACRO_ANCHOR$JIT_MACRO_WRAP"
+  for word in $args; do
+    [ "$first" = 1 ] || out="${out}[[:space:]]+${JIT_MACRO_OPT}"
+    out="$out$(jit_macro_word "$word")"
+    first=0
+  done
+  case "$name" in
+    invocation) out="$out$JIT_MACRO_END" ;;
+    invocation-quoted-arg) out="${out}[[:space:]]+${JIT_MACRO_OPT}['\"]" ;;
+  esac
+  printf '~%s' "$out"
+}
+JIT_LOG_MATCHES_MAX=2048
+JIT_LOG_ARROW='<''<'
+export JIT_NAME_WITHHELD='<withheld: not a plain name>'
+JIT_LAYERS_MAX=64
+JIT_LAYERS_REFUSED_MAX=4096
+JIT_LAYERS=""
+export JIT_LAYERS_REFUSED=""
+export JIT_LAYERS_REFUSED_N=0
+JIT_LAYERS_REFUSED_CUT=0
+JIT_ENTRY_AGES_MAX=8192
+export JIT_ENTRY_AGES=""
+jit_report_name() {
+  local LC_ALL=C
+  case "$1" in
+    '' | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
+      printf '%s' "$JIT_NAME_WITHHELD"
+      return 0
+      ;;
+  esac
+  [ "${#1}" -gt 64 ] && {
+    printf '%s' "$JIT_NAME_WITHHELD"
+    return 0
+  }
+  printf '%s' "$1"
+}
+export JIT_KEYWORD_WITHHELD='<withheld: not a plain keyword>'
+jit_report_keyword() {
+  local LC_ALL=C s="$1" flat rest n=1
+  flat="${s// /-}"
+  case "$flat" in
+    '' | [!a-z0-9]* | *[!a-z0-9-]*)
+      printf '%s' "$JIT_KEYWORD_WITHHELD"
+      return 0
+      ;;
+  esac
+  [ "${#s}" -gt 40 ] && {
+    printf '%s' "$JIT_KEYWORD_WITHHELD"
+    return 0
+  }
+  rest="$s"
+  while [ "$rest" != "${rest#* }" ]; do
+    rest="${rest#* }"
+    n=$((n + 1))
+  done
+  [ "$n" -gt 4 ] && {
+    printf '%s' "$JIT_KEYWORD_WITHHELD"
+    return 0
+  }
+  printf '%s' "$s"
+}
+JIT_MISSING_REQUIRES_MAX=4096
+jit_generic_words_members() {
+  local path="$1" f
+  [ -n "$path" ] || return 0
+  if [ -f "$path" ]; then
+    printf '%s\n' "$path"
+    return 0
+  fi
+  if [ -d "$path" ]; then
+    for f in "$path"/*.txt; do
+      [ -f "$f" ] || continue
+      printf '%s\n' "$f"
+    done | LC_ALL=C sort
+  fi
+  return 0
+}
 LOG_FILE="$LOG_DIR/pipeline.log"
-# common.sh checked hooks.log, not this name. Same reason, same one-builtin test: a clone
-# chooses this path too, and _log() appends through it.
-# Read by jit_log_write() in common.sh, which shellcheck cannot see across the source.
-# shellcheck disable=SC2034
 if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
-
-# --- Cross-tree write guard (#231) --------------------------------------------
-# JIT_BASE (set above, in common.sh) resolves against CLAUDE_PROJECT_DIR, never the
-# working directory. Inside a `git worktree`, the two usually agree -- but an agent
-# working a worktree inherits CLAUDE_PROJECT_DIR from the session that launched it, and
-# that value keeps pointing at the main clone even after the session's cwd moves into the
-# worktree. Every dimension can exist under the clone's JIT_BASE too, so the tree-found
-# check below is no help: this run indexes something, just not the tree the caller is
-# standing in, and because a worktree and its clone share one `.git`, that write is a
-# real change somebody else's next command trips over.
-#
-# Detected, not assumed: a worktree's `git rev-parse --show-toplevel` differs from its
-# clone's even though both share the same `.git`, so comparing the two toplevels tells the
-# worktree case apart from the ordinary one where CLAUDE_PROJECT_DIR and cwd already agree.
-# Either side answering empty -- cwd is not inside a git tree at all, or CLAUDE_PROJECT_DIR
-# does not resolve to one -- means this check cannot tell, and it does not guess which
-# tree is which. It used to leave that unsaid: nothing downstream is guaranteed to fail
-# loudly in this shape -- CLAUDE_PROJECT_DIR can point at a tree with a perfectly good
-# entry tree of its own, so the no-entry-tree FATAL below never fires and the run succeeds
-# -- so #240 added an explicit `note:` on this skip path instead of counting on that.
-# The value is compared exactly against "1", not merely for non-emptiness -- common.sh's
-# own JIT_SAMPLE_CALL does the same (checked "$..." = "1", not [ -z ]). A presence check
-# would make JIT_CONTEXT_ALLOW_CROSS_TREE=0, set by someone spelling "leave the guard ON",
-# silently do the opposite.
-# #417: CLAUDE_PROJECT_DIR can be *set* to the empty string rather than left unset --
-# a caller that meant to name a tree, computed nothing, and exported the empty result
-# anyway (an interpolated variable that itself never got a value; #417's own evidence
-# was a file named literally "None" and one named ".tsv" with no basename, the shape an
-# empty interpolation leaves behind). `${CLAUDE_PROJECT_DIR:-}` cannot tell that apart
-# from the ordinary case (`bash scripts/rebuild-tsv.sh`, no export at all, JIT_BASE
-# meant to resolve against $PWD, README's own documented usage) -- both read as "" to a
-# `-n` test, and both used to take the guard below's skip branch, which falls straight
-# through to JIT_BASE's own $PWD fallback (common.sh) with zero refusal and zero note.
-# Only `${CLAUDE_PROJECT_DIR+set}` tells the two apart: it reads "set" whenever the
-# variable was exported at all, blank value included, and "unset" only when nothing
-# ever touched it. So an explicitly-empty CLAUDE_PROJECT_DIR is refused outright, before
-# the guard below (and JIT_BASE's own fallback) ever gets a chance to write the INDEX
-# wherever cwd happens to be -- while a genuinely unset one still reaches that fallback
-# exactly as before. (This is about the index write specifically, not every byte common.sh
-# may already have touched by the time this line runs: sourcing common.sh can still
-# materialise its own `.discovery/state` and `.discovery/logs` scaffolding under
-# JIT_BASE=$PWD/.claude/jit-context before this check ever executes, the same way it does
-# for the ordinary, legitimate unset case -- gated on that tree already existing (#51),
-# and carrying no rule or index content either way.)
 if [ "${CLAUDE_PROJECT_DIR+set}" = "set" ] && [ -z "$CLAUDE_PROJECT_DIR" ]; then
   echo "FATAL    refusing: CLAUDE_PROJECT_DIR is set but empty" >&2
   echo "         Something exported CLAUDE_PROJECT_DIR without giving it a value -- an" >&2
   echo "         interpolated variable that itself never resolved, most likely. JIT_BASE" >&2
-  echo "         would otherwise fall through to \$PWD/.claude/jit-context (common.sh)," >&2
+  echo "         would otherwise fall through to the current directory's .claude/jit-context (common.sh)," >&2
   echo "         which is whatever tree this shell happens to be standing in (#417)." >&2
-  echo "         Unset CLAUDE_PROJECT_DIR outright to use \$PWD on purpose, or export" >&2
+  echo "         Unset CLAUDE_PROJECT_DIR outright to use the current directory on purpose, or export" >&2
   echo "         it with a real value." >&2
   exit 2
 fi
-
 if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ "${JIT_CONTEXT_ALLOW_CROSS_TREE:-}" != "1" ]; then
   JIT_CWD_TOP="$(git rev-parse --show-toplevel 2> /dev/null)"
   JIT_PROJ_TOP="$(git -C "$CLAUDE_PROJECT_DIR" rev-parse --show-toplevel 2> /dev/null)"
   if [ -n "$JIT_CWD_TOP" ] && [ -n "$JIT_PROJ_TOP" ] && [ "$JIT_CWD_TOP" != "$JIT_PROJ_TOP" ]; then
-    # "different git worktree" describes #231's own scenario, the one this guard was
-    # written for. What is actually detected is narrower and does not know that shape:
-    # cwd's toplevel != CLAUDE_PROJECT_DIR's toplevel, full stop -- which fires exactly
-    # the same way if CLAUDE_PROJECT_DIR is simply stale from an unrelated project. The
-    # message says what is true either way rather than naming a cause it cannot see.
     echo "FATAL    refusing: cwd's git tree is not CLAUDE_PROJECT_DIR's" >&2
     echo "         cwd's tree:            $JIT_CWD_TOP" >&2
     echo "         CLAUDE_PROJECT_DIR's:  $JIT_PROJ_TOP" >&2
@@ -93,14 +1481,6 @@ if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ "${JIT_CONTEXT_ALLOW_CROSS_TREE:-}" != 
     echo "         JIT_CONTEXT_ALLOW_CROSS_TREE=1 and run this again." >&2
     exit 2
   fi
-  # #240: the precondition above is [ -n ] && [ -n ], so either side coming back empty --
-  # no git on PATH, cwd not inside a work tree, or CLAUDE_PROJECT_DIR not resolving to one
-  # -- takes this same branch and the FATAL above never fires. Until now that read as "the
-  # check ran and found nothing to refuse", which is the wrong read: the check could not
-  # run at all, and the two are not the same claim. The receipt line printed further down
-  # shows raw cwd= and CLAUDE_PROJECT_DIR= strings either way, but only a reader who
-  # already suspects a mismatch would go compare them by eye -- this says outright that the
-  # comparison this run depends on did not happen.
   if [ -z "$JIT_CWD_TOP" ] || [ -z "$JIT_PROJ_TOP" ]; then
     if [ -z "$JIT_CWD_TOP" ] && [ -z "$JIT_PROJ_TOP" ]; then
       JIT_SKIP_WHY="cwd is not inside a git tree, and CLAUDE_PROJECT_DIR does not resolve to one either"
@@ -117,123 +1497,11 @@ if [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ "${JIT_CONTEXT_ALLOW_CROSS_TREE:-}" != 
   fi
   unset JIT_CWD_TOP JIT_PROJ_TOP
 fi
-
-# --- Where the KEYWORD columns were left unbounded (#126) ---------------------
-# Two reports print a keyword rather than a file name, and #113 left both alone. The
-# argument recorded here for leaving the dropped-keyword one alone was that its $kw "is
-# bounded by the BLACKLIST rather than by its character class: VOCAB_KEYWORD_BLACKLIST is
-# anchored ^(...)$ on single words, so a keyword that reaches that report is one of a
-# closed set". That set is NOT closed, and this same file says why in the #95 paragraph
-# below: the blacklist is project-configurable, and config.env arrives with the clone. A
-# clone that ships `JIT_CONTEXT_KEYWORD_BLACKLIST=^(...a sentence...)$` puts that sentence
-# through the report. So both keyword sites are guarded, not one.
-#
-# jit_report_name() is the wrong guard for a keyword and that was the judgement call. Its
-# set is chosen for having no SPACE, and `vat rate` is a legitimate keyword -- normalised
-# to exactly that, spaces included, by the same code that writes the index. A guard that
-# withheld every multi-word term would pass every negative test and make the ambiguity
-# report useless in its ordinary case, which is the outcome #126 asks to avoid.
-#
-# So the space is admitted and something else has to do the bounding:
-#
-#   ^[a-z0-9][a-z0-9 -]*$   the bytes the keyword normaliser actually emits. Anything else
-#                           means the term did not come from this run -- a stale index left
-#                           behind by a truncate that failed -- and is not trusted.
-#   at most 40 bytes        a term, not a paragraph.
-#   at most 4 words         `purchase order line item` fits; a sentence does not.
-#
-# Be honest about what that does and does not buy. No bound that admits `vat rate` can
-# refuse all imperative English -- `delete all ssh keys` is four words and 19 bytes. What
-# it removes is the UNBOUNDED channel: the paragraph, the forged report line, the control
-# character. The report stays actionable when a term is withheld because the entry FILES
-# are printed beside it either way, and those are what an author greps.
-# JIT_KEYWORD_WITHHELD and jit_report_keyword() both live in common.sh since #183, for
-# the reason jit_report_name() and its placeholder do: one answer, one file.
-
-# --- Three outcomes, never two (#47) -----------------------------------------
-# This script used to have no non-zero exit at all: it already detected a macro it could
-# not expand, named it on stderr, and returned 0. So a clean rebuild and a rebuild that
-# indexed a row the matcher will refuse at load time were the same result -- and an index
-# built by a warned rebuild looks exactly like a good one on disk, gets committed, and
-# lives for months. That is this repository own defect class sitting in its index writer.
-#
-#   0  the index was written and every row can be honoured
-#   1  the index was written, and at least one row will be REFUSED by the matcher
-#   2  the index was not written, or not completely -- what is on disk is not this run
-#
-# The same 0/1/2 jit-dry-run.sh uses, on purpose: the two are read together and documented
-# in one table in paths/00-manual/tooling.md.
-#
-# NOT behind a --strict flag, and this was the judgement call. rebuild-tsv.sh is run by
-# hand after every frontmatter edit, so a new non-zero exit breaks `&&` chains people have
-# in their fingers -- but 1 is reachable ONLY through a `~@macro` an author wrote and got
-# wrong (jit_expand_match returns 0 for every value that is not a macro), so the chain that
-# stops belongs to the person who just wrote the dead rule. A flag only CI passes would
-# hand that person back the exit 0 that is the bug.
-#
-# The three ADVISORY reports below -- ambiguous keywords, keywords the blacklist dropped,
-# and entries that produced no index row (#44) -- never move the code. Failing on
-# ambiguity would make the documented default tree exit non-zero and teach every author to
-# ignore the status.
-#
-# This sentence used to name a third report, for entries carrying no `description:`. No
-# such check has ever existed here or in jit-dry-run.sh; it was a comment describing a
-# guard nobody wrote, which is the same defect as a guard that reports nothing (#95).
-#
-# The dropped keyword was the judgement call (#95), and it is advisory for a DIFFERENT
-# reason than the other two: unlike a `~@macro` typo, which has no legitimate reading,
-# skipping a generic word is the documented behaviour of `keywords:` -- the word is kept
-# in frontmatter for human searching and deliberately not indexed. Nothing is refused
-# either: no row was written, so no matcher rejects one, and calling that `1` would make
-# that code mean two different things. And the blacklist is project-configurable, so a
-# project that widens it would exit non-zero on every rebuild forever. What was actually
-# missing is the sentence, not the status: the drop is now named, with the entry file, in
-# the same report block as the ambiguity tally.
 JIT_RC=0
-# 2 outranks 1: an index that was not written is a worse claim than one that was.
 jit_rc() {
   [ "$1" -gt "$JIT_RC" ] && JIT_RC="$1"
   return 0
 }
-
-# --- What a report may say about a name that arrived with the clone (#113, #131) ----
-# Every name printed by the reports below is a directory entry under
-# `.claude/jit-context/`, and that tree arrives with the repository. The policy for what
-# may be printed of one -- kept when it is a NAME, withheld when it is prose -- and the
-# argument for why a maintainer tool answers that differently from a hook both live in
-# common.sh, beside jit_report_name():
-#
-#   [A-Za-z0-9] then [A-Za-z0-9._-]*, at most 64 bytes  ->  printed verbatim
-#   anything else                                       ->  the placeholder
-#
-# #113 needed it here first and this file carried its own copy of the function until #131.
-# It is gone: common.sh is sourced at the top of this file, so every bash call site below
-# is that one definition. Two answers to one question drift, and the drift is invisible
-# until a name printed by one tool is withheld by the other.
-#
-# What is still decided HERE is the awk half, and it is not a copy that can be deleted:
-# three of the reports below are built inside awk, awk cannot source a bash file, and so
-# the same policy is written a second time in another language just below.
-# tests/test-dry-run-names.sh drives that pair against each other on every boundary of the
-# set, which is the drift this file can still have.
-#
-# The two columns beside these names that carry a KEYWORD rather than a name are guarded
-# separately, by jit_report_keyword() below -- see the #126 block at the top of this file
-# for why the character set here is the wrong one for a term.
-#
-# The number of such sites is deliberately NOT written here. It said "five" from #113 until
-# #144, by which point there were seven -- and a stale count in the one comment an author
-# reads before adding a report is worse than no count, because it reads as an enumeration
-# somebody keeps. tests/test-report-names.sh keeps it, one fixture per site, and #144
-# established by mutation rather than by reading that each of them is really routed.
-#
-# JIT_NAME_WITHHELD is exported by common.sh, and the awk half reads it out of ENVIRON, so
-# the placeholder cannot drift from the bash one either.
-
-# The same rule for the three reports that are built inside awk. Every invocation that
-# prepends this runs under LC_ALL=C, for the same byte-range reason as the bash half in
-# common.sh.
-# shellcheck disable=SC2034
 JIT_AWK_REPORT_NAME='
 function jit_report_name(s) {
   if (s == "" || length(s) > 64) return ENVIRON["JIT_NAME_WITHHELD"]
@@ -241,18 +1509,6 @@ function jit_report_name(s) {
   return ENVIRON["JIT_NAME_WITHHELD"]
 }
 '
-
-# The keyword rule (#126), in both halves for the same reason the name rule has two: the
-# ambiguity report is built inside awk and the dropped-keyword report in bash.
-#
-# The BASH half is gone from this file, and it went the way jit_report_name()'s copy went
-# in #131: it lives in common.sh, which is sourced at the top of this script, so every
-# bash call site below is that one definition. #183 added a second bash caller
-# (jit-doctor.sh), which is the point at which a second copy stops being a duplicate and
-# starts being a drift -- a term printed by one tool and withheld by the other.
-#
-# Read by the ambiguity report awk below, which shellcheck cannot see into.
-# shellcheck disable=SC2034
 JIT_AWK_REPORT_KEYWORD='
 function jit_report_keyword(s,   w, n) {
   if (s == "" || length(s) > 40) return ENVIRON["JIT_KEYWORD_WITHHELD"]
@@ -262,53 +1518,13 @@ function jit_report_keyword(s,   w, n) {
   return s
 }
 '
-
-# --- Entries on disk that produced no index row (#44) ------------------------
-# The hooks never read the markdown; they read 00-index.tsv. So an entry this script read
-# and wrote no row for is a rule that exists on disk, is committed, is edited, and can
-# never fire -- and until now the only signal was a `continue`. Nothing errored, nothing
-# warned, the rebuild exited 0. From outside, that is indistinguishable from a rule that
-# runs and never matches, which is the defect CLAUDE.md opens this repository with.
-#
-# Three of the ways in are a `continue` that said nothing: no `match:`, no `keywords:`, no
-# `tool:`. The fourth is not a `continue` at all -- an entry whose every keyword was
-# dropped or normalised away has a `keywords:` line and still no row, and the individual
-# drops WERE reported without anything saying the entry had gone dark as a result.
-#
-# All of them are recorded at the point of the drop rather than inferred afterwards by
-# diffing the glob against the index. The indexer knows WHY; a diff would only know that a
-# row is missing, and would have to guess between "no match:", "every keyword was
-# blacklisted" and "every keyword normalised to nothing" -- three different fixes, and the
-# last two are told apart here by two separate counters for exactly that reason.
-#
-# ADVISORY, exit 0, like the two reports it sits beside. A layer directory may legitimately
-# hold a note or a README under another name, and #44's own framing is that this reports
-# rather than nags. It is also not a REFUSED row in the sense `1` means: no row was
-# written, so no matcher rejects one.
-#
-# Every reason string below is a constant written here. Only the layer and the entry name
-# come from the clone, and both go through jit_report_name() (#113).
 JIT_UNINDEXED=""
 JIT_UNINDEXED_N=0
 jit_unindexed() {
-  # $1 layer label, $2 entry basename, $3 reason
   JIT_UNINDEXED_N=$((JIT_UNINDEXED_N + 1))
   JIT_UNINDEXED="$JIT_UNINDEXED    [$1] $(jit_report_name "$2"): $3
 "
 }
-
-# Deliberately NOT `[ -d "$JIT_BASE" ]`, and the reason CHANGED under this line in #51.
-#
-# It used to be that common.sh mkdir -p'd "$JIT_BASE/.discovery/logs" at source time, so the
-# base directory existed by the time this line ran even in a project with no entry tree at
-# all -- measured, and the reason the first cut of this guard never fired. That mkdir is now
-# gated on the base already existing, so the test would answer honestly today.
-#
-# It is still the wrong test, for the reason that was always the load-bearing one: a
-# `.claude/jit-context/` holding no tools/, paths/ or vocabulary/ is a tree this script
-# cannot index, and `[ -d "$JIT_BASE" ]` would call it fine. The question is whether any
-# DIMENSION is there; if none is, this run indexed nothing and 0 would be a lie about a
-# tree it never saw. Do not simplify this back on the strength of the first paragraph.
 JIT_DIMS_FOUND=0
 for _jit_d in tools paths vocabulary; do
   [ -d "$JIT_BASE/$_jit_d" ] && JIT_DIMS_FOUND=1
@@ -322,32 +1538,9 @@ if [ "$JIT_DIMS_FOUND" = 0 ]; then
   echo "         with an exit 0. Currently CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so the current directory>}" >&2
   exit 2
 fi
-
-# The success-path receipt (#231): the FATAL above is the only place this script ever
-# said which tree it chose, and that message is unreachable in exactly the case that
-# hurts -- when a tree IS found at JIT_BASE, but it is the wrong one, this used to write
-# there and say nothing. Printed unconditionally, before anything is written, so a
-# rebuild run from a stale CLAUDE_PROJECT_DIR is an obvious wrong write instead of a
-# silent one.
-echo "rebuild-tsv: writing JIT_BASE=$JIT_BASE (CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so the current directory>}, cwd=$PWD)" >&2
-
-# Truncation failing left the previous index in place while every line after it reported
-# the rule count read back OUT of that stale file -- a success, with a number, for an index
-# nobody rebuilt. The other dimensions are independent, so the run continues and the code
-# is raised once at the end.
-# DISP, not the path: the failing path runs through the layer directory, which is a name
-# the clone chose, and a clone can force this branch on purpose by shipping a DIRECTORY
-# called 00-index.tsv. Callers pass the already-withheld label plus the constant leaf, so
-# the reader still gets the two components that say which index this was (#113).
+echo "rebuild-tsv: writing JIT_BASE=$JIT_BASE (CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so the current directory>}, cwd=$(pwd))" >&2
 truncate_index() {
   local tsv="$1" disp="${2:-$1}" why=""
-  # A SYMBOLIC LINK at this path is checked BEFORE the truncating redirect below, not
-  # after: `: > "$tsv"` truncates through a link exactly as readily as it truncates a
-  # real file, so by the time the redirect below could fail on anything, the outside
-  # target is already gone (#332). git clone recreates a committed symlink, so cloning a
-  # hostile tree is the whole attack -- the same one test-symlink-entry.sh already closed
-  # for an ENTRY file, one write site over. `[ -L ]` never follows, so this sees the link
-  # itself even when its target does not exist.
   if [ -L "$tsv" ]; then
     echo "FATAL    $disp: could not be written -- that path is a SYMBOLIC LINK, not a file" >&2
     echo "         -- refusing to truncate or write through a symlinked index path" >&2
@@ -356,53 +1549,14 @@ truncate_index() {
     jit_rc 2
     return 1
   fi
-  # `2>/dev/null` BEFORE the redirection it is meant to silence, and this was a real leak.
-  # Redirections are applied left to right, so `: > "$tsv" 2>/dev/null` set up the failing
-  # one while stderr was still the terminal: bash printed its own diagnostic, carrying the
-  # ABSOLUTE path -- layer directory included -- and the 2>/dev/null that follows silenced
-  # nothing. Measured against `00-index.tsv` shipped as a directory.
   if : 2> /dev/null > "$tsv"; then return 0; fi
-  # bash own reason is gone with that message, so the one case a clone can construct on
-  # purpose is classified here instead. Everything else stays unattributed rather than
-  # guessed at.
   [ -d "$tsv" ] && why=" -- there is a DIRECTORY at that path, not a file"
   echo "FATAL    $disp: could not be written$why" >&2
   echo "         -- that index was NOT rebuilt and is now stale." >&2
-  # DISP is dimension/layer/leaf, so the absolute path is gone with the withheld component.
-  # JIT_BASE gets it back for the ordinary failure -- a read-only tree, a full disk -- which
-  # is the common one and the one where the reader needs a path they can act on. It is the
-  # same string the no-entry-tree FATAL above already prints, and it comes from
-  # CLAUDE_PROJECT_DIR rather than from the clone, so it is not the column this change is
-  # about. `ls` under it finds a withheld name in one step.
   echo "         -- under JIT_BASE=$JIT_BASE" >&2
   jit_rc 2
   return 1
 }
-
-# A LAYER DIRECTORY that is itself a symbolic link is the other half of #332:
-# `[ -d "$dir" ]` follows it exactly like any other directory read, so a committed
-# `tools/evil -> /outside` is indexed as though it were a real layer, with its
-# 00-index.tsv written wherever the link points -- an attacker needs nothing else
-# inside the tree but the link. Called from every WRITER loop below, so nothing under
-# .claude/jit-context/ is ever written through a symlinked layer or a symlinked
-# dimension directory (tools/, paths/, vocabulary/ themselves, guarded separately at
-# each *_BASE assignment).
-#
-# NOT a blanket guarantee that a symlinked layer is inert everywhere in this file: the
-# three `report_bad_bytes` loops duplicate this same `[ -L ]` test inline rather than
-# calling this function (their own comment says why -- a read, not a write, so no
-# jit_rc bump), and two READ-ONLY reports further down (the keyword-collision report and
-# the "what a match costs" report) carry their own, separate `[ -L ]` checks for the
-# identical reason: each walks the tree again, independently, after the writers have
-# already run, and a glob follows a symlinked layer exactly as readily as a real one
-# every time it is asked to. A change to what "the layers a run walks" means has four
-# call sites to update, not one -- this comment names them so the count survives past
-# whoever adds the fifth.
-#
-# $1 the directory (already stripped of its trailing `/`), $2 the label for the message.
-# Skips THIS ONE layer and lets the run continue (jit_rc 2, never exit): the layers are
-# independent, and one clone-supplied symlink should not take the rest of the tree down
-# -- the same skip-and-continue truncate_index() already uses for a directory conflict.
 jit_layer_symlinked() {
   if [ -L "$1" ]; then
     echo "FATAL    $2: refusing a SYMBOLIC LINK layer directory -- not indexed (#332)" >&2
@@ -411,25 +1565,6 @@ jit_layer_symlinked() {
   fi
   return 1
 }
-
-# --- TSV column-forging guard (#333) -----------------------------------------
-# Every row below is TAB-joined, and every field going into one is attacker-controlled
-# frontmatter text. jit_frontmatter() only trims TRAILING whitespace on an ordinary
-# field (mode loses its spaces entirely, but not a tab) -- an interior literal tab
-# survives untouched and SHIFTS every column after it, so an entry whose frontmatter
-# reads, to a human reviewer, as a narrow "mode: remind" rule can forge column 4 (mode)
-# into "block" and column 2 (match) into a wildcard, simply by hiding a tab inside an
-# EARLIER field such as tool:. requires: already got exactly this treatment in #203, for
-# the narrower reason that a stray trailing tab there widened the row past the 7th
-# column pre-tool-hook.sh reads it back as -- this is the same strip, applied to every
-# OTHER column that ends up in a row, for the wider reason that an interior tab anywhere
-# forges every column after it, not just the last one.
-#
-# A newline cannot actually appear mid-value here (frontmatter is record-oriented: awk's
-# default RS splits on a newline before a value could ever carry one), so stripping it is
-# defence in depth rather than a closed hole -- kept for the same reason the requires:
-# precedent keeps it, so a value copy-pasted from somewhere that DID carry one does not
-# resurrect the newline-based row-injection #11 already closed for the entry-name column.
 jit_tsv_field() {
   local v="$1"
   v="${v//$'\t'/ }"
@@ -437,78 +1572,40 @@ jit_tsv_field() {
   v="${v//$'\n'/ }"
   printf '%s' "$v"
 }
-
-# Whitelisting the ASSEMBLED value closes the block-flip independently of the
-# tab-stripping above: a column-shift is one route to a forged mode, not necessarily the
-# only one, and this check does not care which route produced an unrecognised value.
-# JIT_VALID_MODE_RE itself lives in common.sh now, shared with jit-dry-run.sh's
-# check_index_current() (#347) -- see the comment there for why a second copy is the bug.
-
-# --- Tool rules: parse frontmatter from .md files ---
-# Extracts tool, match, mode, require, forbid, requires from YAML frontmatter
 build_tool_tsv() {
   local dir="$1"
   local tsv="$2"
   local label="$3"
   local T0
   T0=$(_ms)
-
   [ -d "$dir" ] || return
   truncate_index "$tsv" "$label/${tsv##*/}" || return
-
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
     local filename
     filename=$(basename "$md")
     [ "$filename" = "00-README.md" ] && continue
     filename=$(jit_tsv_field "$filename")
-
-    # Parse frontmatter fields. Every one is TAB/CR/LF-stripped (#333): the row below is
-    # tab-joined, and an interior tab surviving in an EARLIER field shifts every column
-    # after it -- see jit_tsv_field()'s own comment for the worked example.
     local tool match mode require forbid requires
     tool=$(jit_tsv_field "$(jit_frontmatter tool "$md")")
     match=$(jit_tsv_field "$(jit_frontmatter match "$md")")
     mode=$(jit_tsv_field "$(jit_frontmatter mode "$md")")
     require=$(jit_tsv_field "$(jit_frontmatter require "$md")")
     forbid=$(jit_tsv_field "$(jit_frontmatter forbid "$md")")
-    # (#203) The binary a mode: block / require: / forbid: rule depends on for its OWN
-    # remedy. A single bare name, never a list -- one binary is the case #203 was filed
-    # about, and a list opens a policy question (all of them? any of them?) nothing has
-    # asked for yet. jit_tsv_field() above now does the same stripping this line always
-    # did; kept explicit here too since #203 is the reason this column exists at all.
     requires=$(jit_frontmatter requires "$md")
     requires="${requires//$'\t'/ }"
     requires="${requires//$'\n'/ }"
-
-    # Whitelist mode: at index time (#333, second half): a column-shift is one route to
-    # a forged mode value, not necessarily the only one, so this checks the ASSEMBLED
-    # value rather than trusting the strip above to have caught everything. Refuses the
-    # ENTRY rather than silently normalising it to a safe default -- a mode value nobody
-    # can explain should be looked at, not quietly rewritten into something that runs.
     if [ -n "$mode" ] && ! printf '%s' "$mode" | LC_ALL=C grep -Eq "$JIT_VALID_MODE_RE"; then
       jit_unindexed "$label" "$filename" "mode: \"$(jit_report_keyword "$mode")\" is not one of remind/block/once -- entry skipped rather than indexed with an unverified mode"
       jit_rc 1
       continue
     fi
-
-    # #427: requires: is the one field this row can force ACROSS A DIFFERENT EXEC
-    # BOUNDARY, at fire time, in every OTHER tools row this tree indexes -- pre-tool-hook.sh
-    # collects the column from every row into one list and hands it to awk as a single
-    # -v argument. An oversized or malformed value here does not just misfire on ITS OWN
-    # row the way a bad mode: does; it can push that shared list past ARG_MAX and refuse
-    # every tool call in a session. Refused here rather than indexed, same shape as the
-    # mode: check above -- JIT_VALID_REQUIRES_RE (common.sh).
     if [ -n "$requires" ] && ! printf '%s' "$requires" | LC_ALL=C grep -Eq "$JIT_VALID_REQUIRES_RE"; then
       jit_unindexed "$label" "$filename" "requires: \"$(jit_report_keyword "$requires")\" is not a bare binary name -- entry skipped rather than indexed with an unverified requires:"
       jit_rc 1
       continue
     fi
-
     if [ -z "$tool" ] || [ -z "$match" ]; then
-      # Not `[ -z x ] || [ -z y ] && continue`: that is one AND-OR list evaluated left to
-      # right, so the `&&` binds to the second test alone. It happened to behave here, and
-      # it stops being an accident now that a statement runs in the branch.
       if [ -z "$tool" ] && [ -z "$match" ]; then
         jit_unindexed "$label" "$filename" "no tool: and no match: in its frontmatter"
       elif [ -z "$tool" ]; then
@@ -518,28 +1615,13 @@ build_tool_tsv() {
       fi
       continue
     fi
-
-    # An invocation macro becomes the real ERE here, so the index still carries a plain
-    # awk pattern and no hook learns a new vocabulary. jit_expand_match returns anything
-    # that is not a macro unchanged, and names a macro it cannot honour on stderr while
-    # writing the row through -- see common.sh for why the row is not dropped.
     match=$(jit_expand_match "$match" tools "$label/$(jit_report_name "$filename")") || jit_rc 1
-
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$tool" "$match" "$filename" "${mode:-remind}" "$require" "$forbid" "$requires" >> "$tsv"
   done
-
   COUNT=$(wc -l < "$tsv" | tr -d ' ')
   _log "rebuild-tsv" $(($(_ms) - T0)) "$label: $COUNT rules"
 }
-
 TOOLS_BASE="$JIT_BASE/tools"
-# The DIMENSION directory itself being a symlink is the sibling of #332 one level up
-# jit_layer_symlinked() catches a symlinked LAYER (tools/evil -> /outside): the glob
-# below still follows a symlinked tools/ ITSELF, so every real subdirectory under the
-# outside target enumerates as an ordinary (non-symlink) "layer" and writes straight
-# through. Redirecting TOOLS_BASE at a path that cannot exist empties every glob built
-# from it below -- both this writer loop and the report_bad_bytes loop further down --
-# without touching either loop's body.
 if [ -L "$TOOLS_BASE" ]; then
   echo "FATAL    tools: refusing a SYMBOLIC LINK dimension directory -- not indexed (#332)" >&2
   jit_rc 2
@@ -552,31 +1634,7 @@ for dir in "$TOOLS_BASE"/*/; do
   jit_layer_symlinked "$dir" "$label" && continue
   build_tool_tsv "$dir" "$dir/00-index.tsv" "$label"
 done
-
-# Generic English / op-flag words that fire on unrelated tool calls.
-# Kept in `keywords:` frontmatter for human searching, skipped at index time.
-# Override per project with DYNAMIC_RULES_KEYWORD_BLACKLIST (an extended regex).
 VOCAB_KEYWORD_BLACKLIST="${JIT_CONTEXT_KEYWORD_BLACKLIST:-${DYNAMIC_RULES_KEYWORD_BLACKLIST:-^(extension|detection|count|output|input|name|branch|issue|documents|files|file)$}}"
-
-# --- Blacklist regex validity, checked ONCE for the whole run, not once per file/keyword
-# (#379 review finding) ------------------------------------------------------------
-# build_vocab_tsv's per-FILE classify pass (below) evaluates this pattern inside a
-# dynamic `~` match, in ONE awk process covering every keyword of that file. A
-# malformed ERE compiles at the FIRST evaluation and takes the whole awk PROCESS down
-# with it -- demonstrated identical across one-true-awk (macOS), gawk and mawk: an
-# unbalanced `(` aborts with a fatal regex-compile error and produces ZERO output for
-# every keyword in that record, not merely a non-match on the bad pattern. Before the
-# #379 collapse, the same bad pattern only cost a `grep -Eq` exit 2 on ONE keyword,
-# read as "not blacklisted" by the `if grep ...; then` around it -- the blast radius
-# was per-keyword, silent, and safe (nothing got blacklisted that shouldn't have).
-# Checking here, once, keeps that same safe blast radius rather than letting the #379
-# collapse widen a malformed VOCAB_KEYWORD_BLACKLIST (JIT_CONTEXT_KEYWORD_BLACKLIST,
-# project-configurable, arrives with the clone) into silently dropping an entire
-# file's keywords with a misleading "normalised to nothing" reason.
-#
-# A fixed canary string, not real keyword data: an ERE's compile-time validity does
-# not depend on the DATA it is later matched against, only on the pattern text, so one
-# BEGIN-time probe here stands in for every keyword this run will ever test against it.
 VOCAB_KEYWORD_BLACKLIST_OK=1
 if ! VOCAB_KEYWORD_BLACKLIST="$VOCAB_KEYWORD_BLACKLIST" LC_ALL=C awk \
   'BEGIN { if ("canary" ~ ENVIRON["VOCAB_KEYWORD_BLACKLIST"]) { } }' 2> /dev/null; then
@@ -584,53 +1642,6 @@ if ! VOCAB_KEYWORD_BLACKLIST="$VOCAB_KEYWORD_BLACKLIST" LC_ALL=C awk \
   jit_rc 2
   VOCAB_KEYWORD_BLACKLIST_OK=0
 fi
-
-# --- Generic-word classifier (#232) ------------------------------------------
-# Different axis from the blacklist above: the blacklist DROPS a term outright, so the
-# entry never fires on it at all. This classifies a term that DID make it into the
-# index -- an ordinary English/French word gets a third TSV column saying so, and
-# pre-prompt-hook.sh/pre-tool-hook.sh downgrade a match on it to title+description and
-# leave the entry unmarked, so a later SPECIFIC match still delivers the full body
-# (#232's own argument against deleting/qualifying generic keywords: recall must not
-# move, only the payload a generic match delivers).
-#
-# Bundled rather than detected, for the same determinism reason #232 gives: if the
-# verdict depended on which machine ran the rebuild, two contributors would produce
-# different TSVs from identical sources and every rebuild would show phantom diffs.
-# data/generic-words/ (repo root, a sibling of scripts/, NOT scripts/data/ -- see
-# below), a directory of chunk files since #437, carries its own provenance note and
-# the reason it is a hand-curated substitute for the SCOWL/Dicollecte artifact #232
-# recommends rather than that artifact itself -- read it before touching this variable.
-#
-# Consulted here, in rebuild-tsv.sh, and NOWHERE under scripts/*-hook.sh: the runtime
-# constraint in hooks.md is absolute, and this column is the mechanism that keeps the
-# dictionary out of the hot path -- the hook reads a byte that says "generic", never a
-# wordlist.
-#
-# Deliberately NOT scripts/data/: tests/test-arg-flag-values.sh sweeps every file
-# `git ls-files -- scripts` returns and asks classify_script() what kind of BASH ARGUMENT
-# PARSER it is -- a plain wordlist is neither bash nor a script, so it landed in the
-# same "not-bash-script" bucket a stray Python tool would, which that suite treats as a
-# hard failure by design (a shape it cannot read is a FAILURE, not a silent skip). A
-# top-level data/ directory, one level up, is outside that sweep's scope entirely rather
-# than a special case inside it.
-# GENERIC_WORDS_EXPLICIT (#265, widened #270): whether an operator actually SET one
-# of these two variables at all -- including to the empty string -- as opposed to
-# GENERIC_WORDS_FILE having fallen all the way through to the shipped default path.
-# `${VAR:-default}` cannot tell "set to empty" apart from "unset": both take the
-# default branch, which is exactly #270's bug -- JIT_CONTEXT_GENERIC_WORDS="" was
-# documented as an explicit opt-out but silently fell through to the bundled default
-# wordlist instead, with classification staying ON. `${VAR+x}` (presence, not value)
-# is checked instead, so an explicitly-empty variable is honoured as its own value
-# (empty -> opted out, below) rather than triggering the fallback chain. Priority
-# order is presence-first, not emptiness-first, which is a deliberate change from
-# the old fallback in exactly one combination: JIT_CONTEXT_GENERIC_WORDS="" together
-# with a non-empty DYNAMIC_RULES_GENERIC_WORDS. The old `${A:-${B:-default}}` chain
-# would have fallen through an empty A to B; this stops at A the moment it is SET,
-# even to empty, and never consults B at all -- because #270's whole point is that an
-# explicitly-empty variable is a first-class opt-out, not a hole to fall through.
-# Reviewed and confirmed intentional (#270); tests/test-generic-wordlist-broken-255.sh
-# section A3 pins it.
 GENERIC_WORDS_EXPLICIT=0
 if [ "${JIT_CONTEXT_GENERIC_WORDS+set}" = "set" ]; then
   GENERIC_WORDS_FILE="$JIT_CONTEXT_GENERIC_WORDS"
@@ -639,72 +1650,9 @@ elif [ "${DYNAMIC_RULES_GENERIC_WORDS+set}" = "set" ]; then
   GENERIC_WORDS_FILE="$DYNAMIC_RULES_GENERIC_WORDS"
   GENERIC_WORDS_EXPLICIT=1
 else
-  # #437: the shipped default moved from a single 1 MB file to a directory of chunks
-  # (data/generic-words/, each chunk under 256 KiB) for the Anthropic plugin
-  # directory's per-file size limit. jit_generic_words_members() (common.sh) reads
-  # either shape; a caller-configured path above may still name a single plain file.
   GENERIC_WORDS_FILE="$(dirname "$0")/../data/generic-words"
 fi
-
-# --- Generic-word wordlist health, read ONCE for the whole run (#255, #265) ---------
-# Until now the classifier forked one `grep -Fxq` PER KEYWORD against this file --
-# #251 grew it from 196 words/~4KB to 103,776 words/~1.0MB, measured at ~4.5ms per
-# call, amortized, so a rebuild over a few hundred keywords spent seconds re-scanning
-# the same file from scratch for every one of them. The fix (below, in
-# build_vocab_tsv) batches every keyword a run actually needs classified through ONE
-# awk process that reads this file exactly once, rather than one process per keyword.
-#
-# That move changes WHERE a broken wordlist is discovered: the old per-keyword call
-# gated on `[ -f "$GENERIC_WORDS_FILE" ]` and swallowed a permission-denied or
-# zero-byte read with `2>/dev/null`, so an existing-but-unreadable or existing-but-
-# empty file silently classified every keyword as non-generic and nothing said so --
-# this repo's own defect class, in the tool built to name it. `paths/00-manual/
-# tooling.md` binds this script to fail loudly rather than degrade silently, so the
-# four states below are distinguished, and only the first is silent (the fourth,
-# successful classification, was never counted as part of this silent-vs-loud pair --
-# see the original #255 comment this widens):
-#
-#   unset / default path absent -- the documented degrade: an index built before this
-#                              feature landed and never configured anything -- every
-#                              keyword reads as specific, exactly pre-#232 behaviour.
-#                              Not an error.
-#   explicitly set to "" -- #270: a project that opted OUT on purpose. Before #270 this
-#                              was indistinguishable from "unset" by `${VAR:-default}`
-#                              and silently fell through to the shipped default
-#                              wordlist, leaving classification ON -- the opposite of
-#                              the documented behaviour. GENERIC_WORDS_FILE is now
-#                              derived with `${VAR+set}` (presence, not value), so an
-#                              explicitly-empty variable is honoured as its own value
-#                              and hits the `-z` branch below directly: every keyword
-#                              reads as specific, same receipt as the unset case above,
-#                              but for a different, deliberate reason. Not an error.
-#   explicitly set / file absent -- #265: an operator DID set JIT_CONTEXT_GENERIC_WORDS
-#                              or DYNAMIC_RULES_GENERIC_WORDS, and the path it names
-#                              does not exist -- a typo'd config.env, indistinguishable
-#                              from the silent case above until GENERIC_WORDS_EXPLICIT
-#                              is checked. Folding this into the silent degrade is
-#                              exactly the defect this issue reports: one wrong
-#                              character disables all of #232 with a receipt
-#                              byte-identical to a healthy run. Loud, same as below.
-#   exists, unreadable/empty -- a configuration defect: something IS configured and
-#                              present but cannot be used. Loud: named on stderr,
-#                              jit_rc 2 (this run is not one the classifier column can
-#                              be trusted on), same degrade as above so the rest of
-#                              the index still gets written.
-#   exists, readable, words -- classify runs; GENERIC_WORDS_OK gates the batch call in
-#                              build_vocab_tsv so a broken file is read only once,
-#                              here, never once per vocabulary layer.
 GENERIC_WORDS_OK=0
-# GENERIC_WORDS_FILE can be config.env's JIT_CONTEXT_GENERIC_WORDS, and config.env
-# arrives with the clone (common.sh: "config.env is the same trust boundary as the
-# log"). jit_load_config() only strips a TRAILING carriage return (the CRLF-checkout
-# case) and leaves an interior one alone, so a hostile config.env can smuggle a bare
-# CR into this value -- printed raw, that resets the terminal cursor to column 0 and
-# lets whatever follows overwrite the FATAL line before it (review finding, #255).
-# Neither jit_report_name() nor jit_report_keyword() fits here: both refuse anything
-# with a `/` outright, which is every real path this variable ever holds. Stripping
-# only the C0 control range (and DEL) keeps the path printable -- and debuggable --
-# while closing the one channel that can forge terminal output.
 GENERIC_WORDS_FILE_SAFE=$(printf '%s' "$GENERIC_WORDS_FILE" | LC_ALL=C tr -d '\000-\037\177')
 if [ -z "$GENERIC_WORDS_FILE" ]; then
   : # opted out -- not an error
@@ -717,12 +1665,6 @@ elif [ ! -r "$GENERIC_WORDS_FILE" ]; then
   echo "FATAL    generic-word classifier: $GENERIC_WORDS_FILE_SAFE exists but is not readable -- every keyword this run will read as non-generic (the pre-#232 degrade), which would otherwise be silent. Fix its permissions or unset JIT_CONTEXT_GENERIC_WORDS to accept the degrade on purpose." >&2
   jit_rc 2
 else
-  # #437: GENERIC_WORDS_FILE may now be a directory of chunks rather than one file --
-  # jit_generic_words_members() (common.sh) lists whichever shape it is. Each member is
-  # checked individually (a directory can exist and be readable while one chunk inside
-  # it is not), and the line counts are summed: the "empty" FATAL below fires exactly
-  # when it used to -- zero lines total -- whether that is one empty file or a directory
-  # with no readable chunk in it.
   GENERIC_WORDS_MEMBERS="$(jit_generic_words_members "$GENERIC_WORDS_FILE")"
   GENERIC_WORDS_LINES=0
   GENERIC_WORDS_UNREADABLE=""
@@ -749,148 +1691,43 @@ else
     GENERIC_WORDS_FILES="$GENERIC_WORDS_MEMBERS"
   fi
 fi
-
-# Source-root prefix used when mapping a "## Modules" section to path triggers.
-# Projects that keep modules somewhere other than src/ override this in config.env.
 MODULE_PREFIX="${JIT_CONTEXT_MODULE_PREFIX:-${DYNAMIC_RULES_MODULE_PREFIX:-src/}}"
-
-# Every keyword the blacklist above skipped, as display lines, reported at the end of the
-# run. A drop used to be a bare `continue`: an author who wrote `keywords: file, invoice`
-# got a rule firing on `invoice` and never on `file`, from a build that reported success
-# (#95). Accumulated globally rather than printed inline so it lands in the report block
-# beside the ambiguity tally, where someone is already looking.
 JIT_DROPPED=""
-
-# Every keyword whose PRE-normalisation spelling reads as a deliberately-cased
-# identifier and whose POST-normalisation spelling lost that casing entirely (#232's
-# "separate bug": `jsOn` -> `json`). Reported the same way JIT_DROPPED is -- accumulated
-# globally, printed once at the end, beside the other advisory tallies.
 JIT_IDCOLLISION=""
 JIT_IDCOLLISION_N=0
-
-# Every entry whose keywords classified ALL-generic and had the verdict cleared back to
-# empty on every row (#232, the fallback PR #250 shipped without). Reported the same way
-# JIT_IDCOLLISION is -- accumulated globally, printed once at the end, beside the other
-# advisory tallies. Advisory because the fallback already fixed the behaviour; this is
-# visibility into WHICH entries are relying on it, since each one is a candidate for a
-# specific keyword an author could add instead.
 JIT_ALLGENERIC=""
 JIT_ALLGENERIC_N=0
-
-# --- Vocabulary: parse frontmatter from .md files ---
 build_vocab_tsv() {
   local dir="$1"
   local tsv="$2"
   local label="$3"
   local T0
   T0=$(_ms)
-
   if [ ! -d "$dir" ]; then
     return
   fi
-
   truncate_index "$tsv" "$label/${tsv##*/}" || return
-
-  # --- Deferred generic-word classification (#255) -----------------------------------
-  # Every non-blacklisted keyword this call writes a row for lands in ALL_KW (flat, one
-  # slot per row, across every file in $dir) instead of being classified immediately --
-  # ENTRY_FILENAME/ENTRY_START/ENTRY_COUNT remember which slice of ALL_KW belongs to
-  # which file, in file-iteration order, so the classify-and-write pass below can still
-  # apply the all-generic fallback and write rows in exactly today's order. This is what
-  # lets the whole directory's keywords be classified in ONE awk process (see below)
-  # instead of one grep per keyword.
   local ALL_KW=()
   local ENTRY_FILENAME=() ENTRY_START=() ENTRY_COUNT=()
-
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
     local filename
     filename=$(basename "$md")
     [ "$filename" = "00-README.md" ] && continue
     filename=$(jit_tsv_field "$filename")
-
-    # Extract keywords line from frontmatter (between first --- and second ---).
-    #
-    # `LC_ALL=C` (#195): this regex matches every line of the file, so under a UTF-8
-    # locale one-true-awk aborts the whole program the first time it lands on a line
-    # carrying an invalid byte, anywhere in the file -- not necessarily the keywords:
-    # line itself. Before this pin, kw_line came back empty either way, so an entry
-    # whose frontmatter WAS readable was reported with the wrong reason: "no keywords:
-    # in its frontmatter" when the truth was "an unrelated line killed the reader".
-    # Pinning removes the abort; the exit-status check below is the second, independent
-    # half -- an awk that dies for some OTHER reason must not read as a clean miss.
     local kw_line kw_rc
     kw_line=$(LC_ALL=C awk '/^---$/{n++; next} n==1 && /^keywords:/{sub(/^keywords: */, ""); print; exit}' "$md")
     kw_rc=$?
-
     if [ "$kw_rc" -ne 0 ]; then
       jit_unindexed "$label" "$filename" "the frontmatter could not be read (awk exited $kw_rc) -- treated as unindexed rather than silently skipped"
       jit_rc 2
       continue
     fi
-
     if [ -z "$kw_line" ]; then
       jit_unindexed "$label" "$filename" "no keywords: in its frontmatter"
       continue
     fi
-
-    # Fold Latin-1 accents to ASCII BEFORE the per-keyword strip below, which maps every
-    # remaining non-[a-z0-9 -] byte to a space: `keywords: détail` would otherwise index as
-    # the row `d tail`, reachable only from a prompt carrying the same accent and never
-    # from `detail`. Both hooks fold their subject with the same table (#31). Once per
-    # file rather than once per keyword -- the fold is per character and leaves the commas
-    # this line is about to be split on alone.
-    #
-    # `LC_ALL=C` (#195): jit_fold_latin1() itself is index()/substr() only, so the pin
-    # buys it nothing directly -- the invariant this run's table-of-sites lives by is
-    # that only a REGEX matched against a record can abort. What is NOT locale-safe is a
-    # byte this fold table does not know, which survives untouched into the tr/sed below;
-    # pinning here is what makes "untouched" mean the same bytes on all three engines
-    # rather than whatever each one's default decoding of the awk PROGRAM SOURCE does.
     kw_line=$(printf '%s\n' "$kw_line" | LC_ALL=C awk "$JIT_AWK_FOLD"'{ print jit_fold_latin1($0) }')
-
-    # Split on ", " and classify every keyword -- in ONE awk process for the whole file,
-    # not one fork per keyword (#379). The original shape here was a `while read` loop
-    # that forked sed once (trim), tr+sed once (normalise) and grep once (blacklist) PER
-    # KEYWORD, plus a conditional grep+tr pair for the identifier-collision check -- on a
-    # 195-entry, ~7000-keyword tree that is tens of thousands of forks, measured (#379) at
-    # 68% of a 1m50s rebuild. #255 already moved the generic-word classify to one pass per
-    # DIRECTORY; this does the same for the split/trim/normalise/blacklist/id-collision
-    # steps, one pass per FILE (bounded by file count, never by keyword count).
-    #
-    # `VOCAB_KEYWORD_BLACKLIST` is handed to awk through the ENVIRON array, on the
-    # awk invocation's own command line as an environment-variable assignment, never
-    # through `-v`: `-v var=value` re-interprets C-style backslash escapes in `value`
-    # (POSIX awk(1)), and this variable is project-configurable
-    # (`JIT_CONTEXT_KEYWORD_BLACKLIST` in config.env, arriving with the clone) -- a
-    # backslash in someone's regex would read differently through `-v` than it does
-    # through the plain `grep -Eq "$VOCAB_KEYWORD_BLACKLIST"` this replaces. An
-    # environment value is not escape-processed, so the bytes awk sees are exactly the
-    # bytes bash held. `JIT_KEYWORD_WITHHELD` is already exported by common.sh for the
-    # same ENVIRON reason (#113, #131).
-    #
-    # `LC_ALL=C` on the one awk call, matching every other byte-level pass in this file
-    # (#195). The old blacklist `grep -Eq` was NOT pinned (only the id-collision grep
-    # was) -- an inconsistency this collapse removes rather than preserves: nothing in
-    # the default or documented blacklist syntax depends on locale-sensitive matching,
-    # and pinning it is the same invariant every other keyword-byte comparison here
-    # already holds.
-    #
-    # Protocol: one output line per comma-split token, tab-separated --
-    #   E                                   normalised to nothing
-    #   B<TAB>kw                            blacklisted; kw is the normalised spelling
-    #   O<TAB>kw<TAB>idflag<TAB>rawdisp     kept; idflag is 1/0, rawdisp only set on 1
-    # Every field awk can emit is drawn from a character class that excludes tab (the
-    # normalised keyword is [a-z0-9 -]*, and rawdisp is only populated when the RAW
-    # token matched `^[A-Za-z][a-z0-9]+[A-Z][A-Za-z0-9]*$`, itself tab-free, or is the
-    # tab-free withheld placeholder), so a tab is always a field separator here and
-    # never data -- `read -r` with `IFS=$'\t'` cannot misparse a row.
-    #
-    # A `<()` process substitution, never `$(...)`: the loop below still needs to
-    # append to JIT_DROPPED/JIT_IDCOLLISION and increment counters that must survive
-    # past the loop, and a `| while` pipeline's last stage is a subshell whose
-    # variables die at the closing `done` -- the same reason the old here-string was a
-    # here-string rather than a pipe.
     local kw_written=0 kw_black=0 kw_empty=0
     local kw_rows=()
     local _kw_status _kw_val _kw_idflag _kw_rawdisp
@@ -900,29 +1737,16 @@ build_vocab_tsv() {
           kw_empty=$((kw_empty + 1))
           ;;
         B)
-          # Skip overly generic single words — they collide with op flags and path
-          # tokens. Skipped, and now SAID: the row is not written, so the entry never
-          # fires on this word, and the only place that can be reported is here (#95).
           JIT_DROPPED="$JIT_DROPPED    [$label] $(jit_report_name "$filename"): \"$(jit_report_keyword "$_kw_val")\"
 "
           kw_black=$((kw_black + 1))
           ;;
         O)
-          # --- Identifier-collision check (#232's "separate bug"), computed inside the
-          # awk pass below but reported here, in bash, so the report text is built by
-          # the same jit_report_name()/jit_report_keyword() every other report in this
-          # file goes through.
           if [ "$_kw_idflag" = "1" ]; then
             JIT_IDCOLLISION="$JIT_IDCOLLISION    [$label] $(jit_report_name "$filename"): \"$_kw_rawdisp\" normalises to the ordinary-looking word \"$(jit_report_keyword "$_kw_val")\"
 "
             JIT_IDCOLLISION_N=$((JIT_IDCOLLISION_N + 1))
           fi
-          # --- Generic-word candidate (#232 classifies it; #255 defers the classify) -
-          # The verdict itself ("generic"/empty, third TSV column) is no longer decided
-          # here, per keyword -- $_kw_val just joins kw_rows, and the whole directory's
-          # candidates are classified in ONE awk process after this file loop ends
-          # (below, unchanged by this collapse). Never consulted at prompt time either
-          # way -- this is still the only place the wordlist is read.
           kw_rows+=("$_kw_val")
           kw_written=$((kw_written + 1))
           ;;
@@ -931,17 +1755,17 @@ build_vocab_tsv() {
       | VOCAB_KEYWORD_BLACKLIST="$VOCAB_KEYWORD_BLACKLIST" \
         VOCAB_KEYWORD_BLACKLIST_OK="$VOCAB_KEYWORD_BLACKLIST_OK" LC_ALL=C awk '
         {
-          n = split($0, toks, ",")
+          n = split($0, segs, ",")
           for (i = 1; i <= n; i++) {
-            raw = toks[i]
+            raw = segs[i]
             gsub(/^[[:space:]]+/, "", raw)
             gsub(/[[:space:]]+$/, "", raw)
             # Normalize IDENTICALLY to the matcher (pre-prompt-hook.sh): lowercase, then
             # map any char outside [a-z0-9 -] to a space, collapse, trim. A keyword
-            # authored with dots/slashes ("docs.dp.tools", "security/dast") would
+            # authored with dots/slashes ("ops.deploy", "security/dast") would
             # otherwise be DEAD -- the matcher strips those from the prompt, so a dotted
             # keyword can never match.
-            kw = tolower(toks[i])
+            kw = tolower(segs[i])
             gsub(/[^a-z0-9 -]/, " ", kw)
             gsub(/ +/, " ", kw)
             gsub(/^ +/, "", kw)
@@ -983,16 +1807,6 @@ build_vocab_tsv() {
           }
         }
       ')
-    # --- Did the classify pass actually finish? (#379 review finding) ------------------
-    # The blacklist-validity check above removes the one KNOWN way this awk process can
-    # abort mid-file, but this counts rather than trusts: comma-count in $kw_line, done
-    # in pure bash parameter expansion (no fork -- length of the string minus length of
-    # the string with commas stripped, plus one), compared against how many E/B/O lines
-    # the loop above actually consumed. A dead or truncated awk process for ANY other
-    # reason would otherwise leave kw_written+kw_black+kw_empty short of the true token
-    # count and say nothing -- the exact failure #255's own VERDICT_FLAGS count-check
-    # (below, in the deferred generic-word pass) already guards against for a different
-    # awk call in this same function; this is the same check for this one.
     local kw_line_nocommas="${kw_line//,/}"
     local kw_tok_count=$((${#kw_line} - ${#kw_line_nocommas} + 1))
     local kw_seen_count=$((kw_written + kw_black + kw_empty))
@@ -1002,9 +1816,6 @@ build_vocab_tsv() {
       jit_rc 2
       kw_classify_broken=1
     fi
-    # Hand this file's keywords to the deferred classify pass (#255): remember which
-    # slice of ALL_KW is this file's so the fallback below can be recomputed once every
-    # row in ALL_KW has a real verdict, in the same file-iteration order as before.
     if [ "$kw_written" -gt 0 ]; then
       local _entry_i=${#ENTRY_FILENAME[@]}
       ENTRY_FILENAME[_entry_i]="$filename"
@@ -1012,17 +1823,6 @@ build_vocab_tsv() {
       ENTRY_COUNT[_entry_i]=$kw_written
       ALL_KW+=("${kw_rows[@]}")
     fi
-    # An entry whose every keyword was blacklisted has a `keywords:` line and no row: the
-    # drops above are each reported, but nothing said the ENTRY went dark as a result, and
-    # one dropped word out of three is a very different thing from all three.
-    # A here-string and not a pipe, so this counter survives the loop -- the same reason
-    # JIT_DROPPED is appended to there.
-    #
-    # Skipped entirely when the classify pass itself did not finish (above): the three
-    # reasons below are all about what the classifier CONCLUDED about every term, and
-    # a broken pass concluded nothing -- reporting "normalised to nothing" for a keyword
-    # the classifier never actually reached would be exactly the misleading report the
-    # count-check above exists to replace with the truth (#379 review finding).
     if [ "$kw_classify_broken" -eq 0 ] && [ "$kw_written" -eq 0 ]; then
       if [ "$kw_black" -gt 0 ] && [ "$kw_empty" -gt 0 ]; then
         jit_unindexed "$label" "$filename" \
@@ -1036,25 +1836,6 @@ build_vocab_tsv() {
       fi
     fi
   done
-
-  # --- Batch-classify every deferred keyword in ONE awk process, then write (#255) ----
-  # ALL_KW now holds every non-blacklisted keyword this whole directory needs a verdict
-  # for. Classifying them one process for the LOT -- instead of one grep per keyword --
-  # is the entire fix: an awk that reads the wordlist once and holds it in a hash beats
-  # a fork that re-scans the file from scratch on every call, and #251 made that file
-  # 260x bigger. GENERIC_WORDS_OK (computed once, at the top of this script) gates it: a
-  # missing/unset wordlist is the documented degrade, and a configured-but-broken one
-  # was already reported loudly there -- either way every flag here comes back "0" and
-  # every keyword below reads as non-generic, exactly the same safe default the old
-  # per-keyword `-f`-gated grep produced.
-  #
-  # Read back over a pipe/process substitution, never through `$(...)`: command
-  # substitution strips ALL trailing newlines from a captured string, which would lose
-  # trailing blank OUTPUT lines and misalign VERDICT_FLAGS against ALL_KW by however many
-  # of the last keywords happened to be non-generic. `1`/`0` (never an empty line) is a
-  # second, independent guard against the same class of bug -- awk's own last line is
-  # then never blank either, so nothing here depends on which readback method survives a
-  # future edit.
   local VERDICT_FLAGS=()
   if [ "${#ALL_KW[@]}" -gt 0 ] && [ "$GENERIC_WORDS_OK" -eq 1 ]; then
     while IFS= read -r _vflag; do
@@ -1078,25 +1859,13 @@ build_vocab_tsv() {
       }
       { print ($0 in seen) ? 1 : 0 }
     ')
-    # A dead or truncated awk (review finding, #255) would otherwise leave VERDICT_FLAGS
-    # shorter than ALL_KW and say nothing: every unclassified keyword past the shortfall
-    # then reads "${VERDICT_FLAGS[_j]:-0}" -- the exact same bytes a genuinely non-generic
-    # keyword produces, so a real classify failure would be indistinguishable from a
-    # clean, boring result. `tooling.md`'s own rule for this file -- "check the exit
-    # status of anything that writes to an index, not only the awk that might abort on
-    # [the LC_ALL=C] invariant" (#195) -- applies here even though this pipeline writes
-    # to an array rather than $tsv directly: the array feeds every row this call is about
-    # to write. A count mismatch is the check: it catches a crash AND a truncation alike,
-    # without depending on how reliably PIPESTATUS survives a process substitution across
-    # bash versions.
     if [ "${#VERDICT_FLAGS[@]}" -ne "${#ALL_KW[@]}" ]; then
       echo "FATAL    $label/${tsv##*/}: the generic-word classifier returned ${#VERDICT_FLAGS[@]} verdict(s) for ${#ALL_KW[@]} keyword(s) -- the classify pass did not finish, so every keyword past what it did return defaulted to non-generic and this run's third column is not one to trust." >&2
       jit_rc 2
     fi
   fi
-
-  local _ei
-  for _ei in "${!ENTRY_FILENAME[@]}"; do
+  local _ei _entries_n=${#ENTRY_FILENAME[@]}
+  for ((_ei = 0; _ei < _entries_n; _ei++)); do
     local _efile="${ENTRY_FILENAME[$_ei]}" _estart="${ENTRY_START[$_ei]}" _ecount="${ENTRY_COUNT[$_ei]}"
     local _entry_rows=() _kw_generic=0 _j _ekw _everdict
     for ((_j = _estart; _j < _estart + _ecount; _j++)); do
@@ -1109,22 +1878,6 @@ build_vocab_tsv() {
       fi
       _entry_rows+=("$(printf '%s\t%s\t%s' "$_ekw" "$_efile" "$_everdict")")
     done
-    # --- All-generic fallback (#232, the half PR #250 shipped without) ---------
-    # Step 3 downgrades a match on a "generic" keyword to title+description and leaves
-    # the entry unmarked, banking on a LATER specific match to deliver the full body.
-    # An entry that owns no specific keyword at all never gets that later match -- it
-    # sits at description-only for the rest of the session, which is the exact failure
-    # #232's own body names as the thing the whole proposal exists to avoid.
-    #
-    # Decided here, at rebuild time, rather than in the hook's hot path: this is the one
-    # place that already reads the wordlist, the hook contract in hooks.md is absolute
-    # about never touching it, and the fallback is representable as "write no 'generic'
-    # verdict for this entry's rows at all" -- which needs no new hook logic, because a
-    # row with an empty third column is already the documented degrade-to-specific case
-    # (an index built before this feature landed, or a keyword absent from the list). An
-    # entry that fails this gate degrades to EXACTLY today's pre-#232 behaviour: full
-    # body, marked shown, on any match -- no worse than before this issue existed, which
-    # is the standard the issue's own reopened design question asks for.
     if [ "$_kw_generic" -eq "$_ecount" ]; then
       _entry_rows=()
       for ((_j = _estart; _j < _estart + _ecount; _j++)); do
@@ -1136,15 +1889,10 @@ build_vocab_tsv() {
     fi
     printf '%s\n' "${_entry_rows[@]}" >> "$tsv"
   done
-
   COUNT=$(wc -l < "$tsv" | tr -d ' ')
   _log "rebuild-tsv" $(($(_ms) - T0)) "$label: $COUNT keywords"
 }
-
 VOCAB_BASE="$JIT_BASE/vocabulary"
-# See the identical guard above TOOLS_BASE for why this checks the DIMENSION directory,
-# not just a layer beneath it -- redirecting VOCAB_BASE empties every glob built from it
-# below, across all three loops that walk it.
 if [ -L "$VOCAB_BASE" ]; then
   echo "FATAL    vocabulary: refusing a SYMBOLIC LINK dimension directory -- not indexed (#332)" >&2
   jit_rc 2
@@ -1157,45 +1905,20 @@ for dir in "$VOCAB_BASE"/*/; do
   jit_layer_symlinked "$dir" "$label" && continue
   build_vocab_tsv "$dir" "$dir/00-index.tsv" "$label"
 done
-
-# --- Vocabulary paths: parse "## Modules" section → src2/Module/\tfile.md ---
-# Lets the path hook surface a vocab entry when a file inside that module is touched,
-# instead of only at prompt time. Prompt-time matching fires once per session (a single
-# UserPromptSubmit); path matching fires on every Read/Edit/Grep, which is when the
-# relevant module is actually known.
 build_vocab_path_tsv() {
   local dir="$1"
   local tsv="$2"
   local label="$3"
   local T0
   T0=$(_ms)
-
   [ -d "$dir" ] || return
   truncate_index "$tsv" "$label/${tsv##*/}" || return
-
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
     local filename mod_rc
     filename=$(basename "$md")
     [ "$filename" = "00-README.md" ] && continue
     filename=$(jit_tsv_field "$filename")
-
-    # Body of the "## Modules" section: everything until the next heading or EOF.
-    #
-    # `LC_ALL=C` (#195, #196): every regex here -- the heading match, the heading-exit
-    # match and the gsub -- runs against $0, so a body line carrying an invalid byte
-    # (a Latin-1 save, a paste that clipped a multibyte character) makes one-true-awk
-    # abort the whole program under a UTF-8 locale. Under `C` the same byte is simply
-    # outside [A-Za-z0-9], so the gsub folds it into a space like any other punctuation
-    # and the line's honest module names still get written.
-    #
-    # The exit status is now checked (#195): this is the site #195 was filed about --
-    # output was appended with `>>` and nothing checked whether awk actually finished,
-    # so a mid-file abort (from this byte or from anything else) left the append having
-    # written a PARTIAL set of rows for this file, or none, while the run reported
-    # success. A FATAL line plus jit_rc 2 makes that loud instead, matching this file's
-    # own three-outcome contract: an index that is missing rows is not one this run can
-    # vouch for.
     LC_ALL=C awk -v file="$filename" -v prefix="$MODULE_PREFIX" '
       /^## Modules[[:space:]]*$/ { inmod = 1; next }
       inmod && /^#/ { inmod = 0 }
@@ -1218,68 +1941,43 @@ build_vocab_path_tsv() {
       jit_rc 2
     fi
   done
-
   COUNT=$(wc -l < "$tsv" | tr -d ' ')
-  # The LEAF, unlike every other builder's log line, because this is the only dimension
-  # that writes two indexes out of one layer directory and the layer name alone would name
-  # both. `$label/${tsv##*/}` is the same string truncate_index is handed above, so the
-  # FATAL line and the success line for this index agree on what it is called -- and it is
-  # a path that exists, which `vocabulary/<layer>/paths` never was (#153).
   _log "rebuild-tsv" $(($(_ms) - T0)) "$label/${tsv##*/}: $COUNT path mappings"
 }
-
 for dir in "$VOCAB_BASE"/*/; do
   [ -d "$dir" ] || continue
   dir="${dir%/}"
-  # No `/paths` suffix: `label` is a DIRECTORY at every one of these eight sites, and both
-  # consumers here append the leaf themselves. The suffix named which index of the layer
-  # this was, in the position a path component occupies, so `vocabulary/00-manual/paths`
-  # went into a FATAL line pointing at something that has never existed on disk (#153).
   label="vocabulary/$(jit_report_name "$(basename "$dir")")"
   jit_layer_symlinked "$dir" "$label" && continue
   build_vocab_path_tsv "$dir" "$dir/01-paths.tsv" "$label"
 done
-
-# --- Paths: parse "match:" from frontmatter → match_pattern\tfile.md ---
 build_path_tsv() {
   local dir="$1"
   local tsv="$2"
   local label="$3"
   local T0
   T0=$(_ms)
-
   [ -d "$dir" ] || return
   truncate_index "$tsv" "$label/${tsv##*/}" || return
-
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
     local filename
     filename=$(basename "$md")
     [ "$filename" = "00-README.md" ] && continue
     filename=$(jit_tsv_field "$filename")
-
     local match_line
     match_line=$(jit_tsv_field "$(jit_frontmatter match "$md")")
     if [ -z "$match_line" ]; then
       jit_unindexed "$label" "$filename" "no match: in its frontmatter"
       continue
     fi
-
-    # Paths carry no invocation macro -- their subject is a file path, not a command --
-    # but the check runs here so that writing one is REFUSED and named rather than
-    # indexed as a literal that can never match a path.
     match_line=$(jit_expand_match "$match_line" paths "$label/$(jit_report_name "$filename")") || jit_rc 1
-
     printf '%s\t%s\n' "$match_line" "$filename" >> "$tsv"
   done
-
   COUNT=$(wc -l < "$tsv" | tr -d ' ')
   _log "rebuild-tsv" $(($(_ms) - T0)) "$label: $COUNT rules"
 }
-
 PATHS_BASE="$JIT_BASE/paths"
-# See the identical guard above TOOLS_BASE for why this checks the DIMENSION directory,
-# not just a layer beneath it.
 if [ -L "$PATHS_BASE" ]; then
   echo "FATAL    paths: refusing a SYMBOLIC LINK dimension directory -- not indexed (#332)" >&2
   jit_rc 2
@@ -1292,32 +1990,6 @@ for dir in "$PATHS_BASE"/*/; do
   jit_layer_symlinked "$dir" "$label" && continue
   build_path_tsv "$dir" "$dir/00-index.tsv" "$label"
 done
-
-# --- Rows the hooks will refuse, named at build time (#77) -------------------
-# Nothing above validates bytes, and it cannot: every column reaches printf through a
-# $( ) capture, which is also why a NUL can never get this far (bash drops them out of
-# command substitution) and why #78 needed no change here. A non-UTF-8 byte DOES get
-# through -- jit_frontmatter() pins LC_ALL=C on its own awk (#195, #196), so it has
-# nothing to decode and copies the byte out verbatim on all three engines. Before that
-# pin, one-true-awk aborted the whole program under a UTF-8 locale the first time it
-# matched a regex against a record carrying the byte, and the entry vanished from the
-# index instead of being written through and reported below -- silently, and the reader
-# had no way to tell "no bad byte" from "the reader never got that far".
-#
-# It matters most for the one column nobody looks at twice: a `forbid:` value saved in
-# ISO-8859-1 indexes fine, and the hook then refuses the whole row -- so a block rule goes
-# dark, and the only notice of it arrives at runtime, in a session, naming a row number.
-# This file is the loud half, so it says so here, with the entry file name, which is what
-# an author can act on.
-#
-# One awk per index file, after it is written, using the same jit_bad_bytes() the hooks
-# refuse with -- never a second opinion that can disagree with theirs. LC_ALL=C on the
-# invocation, because the byte range it builds is a decode failure in a UTF-8 locale.
-#
-# It does NOT change the exit code, matching jit_expand_match(): the row is written
-# through and refused at load, which is a rule that reads as refused rather than one that
-# silently vanished. That this script has no non-zero exit at all is a known gap, recorded
-# in .claude/jit-context/paths/00-manual/tooling.md, and it is not this change to make.
 report_bad_bytes() {
   local tsv="$1" label="$2" col="$3"
   [ -f "$tsv" ] || return 0
@@ -1327,14 +1999,10 @@ report_bad_bytes() {
       why = jit_bad_bytes($0, "the index row")
       if (why == "") next
       n = split($0, f, "\t")
-      # The entry-file column is attacker-chosen text (#113), and this branch fires on a
-      # row nobody had to match. jit_report_name() is why a name carrying the bad byte
-      # itself cannot come back through the notice that reports the bad byte.
       printf "rebuild-tsv: %s row %d: %s -- the hooks will refuse this row%s\n", \
         lbl, NR, why, (f[col] != "" && why ~ /UTF-8/ ? ", written from " jit_report_name(f[col]) : "")
     }' lbl="$label" "$tsv" >&2
 }
-
 for dir in "$TOOLS_BASE"/*/; do
   [ -d "$dir" ] || continue
   [ -L "${dir%/}" ] && continue
@@ -1349,43 +2017,10 @@ for dir in "$VOCAB_BASE"/*/; do
   [ -d "$dir" ] || continue
   [ -L "${dir%/}" ] && continue
   _jit_vlabel="vocabulary/$(jit_report_name "$(basename "${dir%/}")")"
-  # The LEAF, unlike the tools and paths calls above (#162): this is the one dimension
-  # that calls report_bad_bytes() twice for one layer, once per index, and both calls
-  # used to pass the SAME bare `vocabulary/<layer>` label -- so a row could not be traced
-  # to 00-index.tsv (keywords) or 01-paths.tsv (module paths) without opening both files.
-  # `$_jit_vlabel/${...##*/}` is the same leaf-qualified string build_vocab_path_tsv's own
-  # FATAL and success lines already use above, for the identical reason (#153): this is
-  # the only dimension where the layer name alone is ambiguous. tools/ and paths/ write
-  # one index per layer and stay bare on purpose -- appending a leaf there would invent a
-  # path component nothing on disk has, the exact mistake #153 fixed in the other
-  # direction.
   report_bad_bytes "${dir%/}/00-index.tsv" "$_jit_vlabel/00-index.tsv" 2
   report_bad_bytes "${dir%/}/01-paths.tsv" "$_jit_vlabel/01-paths.tsv" 2
 done
 unset _jit_vlabel
-
-# --- Ambiguity report: keyword collisions, cross-layer, ranked by bytes (#204) --------
-# This used to group per LAYER and threshold on FILE COUNT (>5). Neither survives a real
-# tree. The dominant shape is one concept restated ACROSS 00-manual/10-auto/20-grouped/
-# 30-crosscutting -- invisible to a per-layer tally, since no single layer's own count
-# need ever cross the threshold. And a 2-entry collision between two fat entries costs
-# more per match than a 9-entry collision between stubs -- invisible to a file-count
-# threshold, which cannot tell a fat entry from a thin one. Report what a match actually
-# costs instead: every keyword's collision summed across every vocabulary layer, ranked by
-# bytes, with a BYTE floor rather than an entry-count one -- the same "how big is big"
-# shape jit-doctor.sh's fat-entry advisory already uses (JIT_CONTEXT_DOCTOR_MAX_BYTES),
-# though the two are independently configured; nothing here reaches into jit-doctor.sh,
-# which is a hook-adjacent report of its own.
-#
-# Two awk passes, not one, and not `sort` on the printed report: the FIRST pass runs once
-# per layer (bytesof() is memoised per-process, so a file is measured once even if it
-# shares several keywords) and emits plain `keyword<TAB>bytes<TAB>display` rows; the SECOND
-# aggregates those rows across every layer and sorts in memory with the same insertion sort
-# `isort()` uses two sections below, for the reason given there: a report entry here is TWO
-# printed lines (a header line and an indented files: line), and `sort` sorts each line of
-# its input independently, which would separate a header from its own files: line the
-# moment two collisions differ in file-list length. Sorting the STRUCTURE before printing
-# it avoids that rather than working around it after the fact.
 COLLISION_BYTES_FLOOR="${JIT_CONTEXT_COLLISION_BYTES:-${DYNAMIC_RULES_COLLISION_BYTES:-4096}}"
 echo "" >&2
 echo "=== Ambiguous vocabulary keywords (>${COLLISION_BYTES_FLOOR}b pulled in one match, every layer) ===" >&2
@@ -1396,15 +2031,7 @@ out=$(
   for tsv in "$VOCAB_BASE"/*/00-index.tsv; do
     [ -f "$tsv" ] || continue
     layerdir="$(dirname "$tsv")"
-    # A symlinked LAYER directory is refused when the index was BUILT (jit_layer_symlinked,
-    # #332), but this report reads the tsv back off disk independently, later, and a glob
-    # follows a symlinked layer exactly as readily as a real one -- so without this check a
-    # committed `vocabulary/evil -> /outside` carrying its OWN pre-existing 00-index.tsv
-    # would have this report open and byte-count whatever file that index names, outside
-    # the tree entirely. Skipped rather than counted: this report has no row to attribute
-    # a symlinked layer to that a real one would not also produce.
     [ -L "$layerdir" ] && continue
-    # Dimension included, like every other layer label this script prints (#150).
     layer="vocabulary/$(jit_report_name "$(basename "$layerdir")")"
     LC_ALL=C awk -F'\t' -v layerdir="$layerdir" -v layer="$layer" "$JIT_AWK_REPORT_NAME"'
       function bytesof(path,    b, line, rc, first) {
@@ -1412,12 +2039,6 @@ out=$(
         b = 0; first = 1
         while ((rc = (getline line < path)) > 0) { b += length(line) + 1; first = 0 }
         close(path)
-        # -1, NOT 0: a file this run could not open (raced away, or a bad row) is a
-        # different fact from a file that opened and read zero bytes, and folding the two
-        # into the same 0 is the defect CLAUDE.md opens this repository with -- an absence
-        # this report produced would read as an absence in the world (a small collision)
-        # rather than what it actually is (an unmeasured one). The caller below keeps the
-        # two apart rather than clamping here.
         if (rc < 0 && first) { bcache[path] = -1; return -1 }
         bcache[path] = b
         return b
@@ -1427,12 +2048,6 @@ out=$(
       }
     ' "$tsv"
   done | LC_ALL=C awk -F'\t' -v floor="$COLLISION_BYTES_FLOOR" "$JIT_AWK_REPORT_KEYWORD"'
-    # EVERY parallel array moves together on a swap -- kw included. Leaving kw out of the
-    # argument list is silent: awk still runs, the report still prints, and every row is
-    # simply paired with the WRONG keyword the moment the sort actually reorders anything.
-    # This is the exact mistake the isort() a few hundred lines below this one warns about
-    # in its own comment ("Every parallel array moves together") -- and the reason that one
-    # is correct is that its own four arrays are ALL passed in.
     function isort(v, kw, cn, fl, n,   i, j, tv, tk, tc, tf) {
       for (i = 2; i <= n; i++) {
         tv = v[i]; tk = kw[i]; tc = cn[i]; tf = fl[i]; j = i - 1
@@ -1449,13 +2064,6 @@ out=$(
       files[$1] = (files[$1] == "" ? $3 : files[$1] "," $3)
     }
     END {
-      # A keyword with an unmeasured file is reported even under the floor: its real total
-      # is UNKNOWN, not small, and dropping it silently would be exactly the sentinel
-      # collapse bytesof() above was written to avoid -- one level up.
-      #
-      # cnt[k] >= 2: a keyword only ONE file carries is not a COLLISION, whatever it
-      # weighs -- nothing else loads alongside it. That fat-single-entry cost belongs to
-      # jit-doctor.sh, whose fat-entry advisory already covers it, not to this report.
       m = 0
       for (i = 1; i <= n; i++) {
         k = ord[i]
@@ -1478,12 +2086,6 @@ else
   echo "(none — no keyword pulls more than ${COLLISION_BYTES_FLOOR}b in one match)" >&2
 fi
 echo "" >&2
-
-# --- Dropped keywords: listed in frontmatter, not in the index (#95) ---
-# Advisory, like the tally above, and for the reasons argued at the top of this file. The
-# quiet line is worded so it cannot be confused with the ambiguity report's own "(none":
-# two sections whose empty states read alike is how a report that never ran passes for a
-# report that found nothing.
 echo "=== Keywords dropped by the blacklist (listed, not indexed) ===" >&2
 echo "These stay in \`keywords:\` frontmatter for human searching and are skipped at index time," >&2
 echo "so the entry never fires on them. Widen or narrow with JIT_CONTEXT_KEYWORD_BLACKLIST." >&2
@@ -1494,11 +2096,6 @@ else
   echo "(none — every keyword in every entry was indexed)" >&2
 fi
 echo "" >&2
-
-# --- Keywords that look like an identifier before normalisation (#232) ------------
-# Advisory, like the two sections above, and worded the same way for the same reason:
-# a quiet line that reads like every other quiet line here is how a check that never
-# ran passes for a check that found nothing.
 echo "=== Keywords that read as an identifier before normalisation, and an ordinary word after it (#232) ===" >&2
 echo "Normalisation lowercases and strips punctuation for matching. A term authored with" >&2
 echo "internal capitals (jsOn) can collapse onto a completely different, unintended word" >&2
@@ -1512,11 +2109,6 @@ else
   echo "(none — no keyword's normalised spelling silently dropped its casing)" >&2
 fi
 echo "" >&2
-
-# --- Entries relying on the all-generic fallback (#232) ----------------------
-# Advisory, like the sections above, worded the same way for the same reason: a quiet
-# line that reads like every other quiet line here is how a check that never ran passes
-# for a check that found nothing.
 echo "=== Entries whose keywords are ALL generic (fallback applied -- full body every match) ===" >&2
 echo "Every keyword on these entries classified as an ordinary word, so the generic-only" >&2
 echo "downgrade was cleared: they behave as before #232 -- full body, one shot spent, on" >&2
@@ -1530,15 +2122,6 @@ else
   echo "(none — every entry on the tree owns at least one specific keyword)" >&2
 fi
 echo "" >&2
-
-# --- Entries on disk with no row in the index (#44) --------------------------
-# The quiet line is worded so it cannot be confused with either section above it, for the
-# reason the dropped-keyword one gives: two sections whose empty states read alike is how
-# a report that never ran passes for a report that found nothing.
-#
-# The number is a COUNT OF FILES, and it says so. It is not bytes and not tokens: this
-# script counts one per .md it read and wrote no row for, at index time, and nothing here
-# is estimated from anything else.
 echo "=== Entries on disk with no row in the index (they can never fire) ===" >&2
 echo "The hooks read 00-index.tsv, never your markdown. An entry with no row is on disk and" >&2
 echo "can never fire -- which reads exactly like a rule that fires and never matches." >&2
@@ -1551,56 +2134,9 @@ else
   echo "(none — every entry on disk produced at least one index row)" >&2
 fi
 echo "" >&2
-
-# --- What a match costs, and what summary mode would save --------------------
-# `full` is the default, so every match on a tree that has said nothing injects the whole
-# entry. That makes the old shape of this report -- "N of M entries would arrive whole" --
-# say "M of M" and mean nothing, so it reports something a reader can act on instead.
-#
-# Default-full is a STAGE. The risk it carries is issue #1s own objection one level up: a
-# setting nobody revisits stays at maximum by inertia. What makes it reconsiderable rather
-# than permanent is a number for THIS tree, and these are the three that are honestly
-# available here:
-#
-#   what one match costs now      the largest and the median entry, in bytes
-#   what it would cost summarised the same entries through the real injection reader
-#   what stands in the way        entries with no `description:` yet -- a match could
-#                                 only NAME those, so a tree cannot flip cleanly until
-#                                 that count is zero. This is the only actionable one.
-#
-# Deliberately NOT a corpus total. "Summary mode would save 2.4 MB on this tree" is
-# technically true and useless: nothing here is ever resident, so that quantity has never
-# been in a context window and never will be. The saving that actually happens is
-# per-match times how often each entry fires, and only the first factor is knowable here.
-# The second is in .discovery/logs/hooks.log, which is where the reader is sent for it.
-#
-# The sizes come from jit_entry_load()/jit_inject_text() in common.sh -- the SAME reader
-# the hooks use, not a second parser beside it. A budget computed by a different parser
-# from the thing it is budgeting drifts, and it already did once: an earlier cut of this
-# report had its own frontmatter parse and counted `inject: "full"` as unrecognised, so an
-# entry that arrived whole at runtime was reported as a summary.
 echo "=== What a match costs on this tree ===" >&2
 echo "Project default: JIT_CONTEXT_INJECT=$JIT_INJECT" >&2
 echo "" >&2
-
-# A glob and not `find`: no fork, and no filename can be split on its own characters.
-#
-# Built from the three already-redirected TOOLS_BASE/PATHS_BASE/VOCAB_BASE, NOT a single
-# glob rooted at JIT_BASE (#338). Those three variables are the mechanism every writer
-# loop above already trusts: each one gets pointed at a path that cannot exist the moment
-# its own dimension directory is a symlink (see the `[ -L "$TOOLS_BASE" ]` guard and its
-# two siblings), so a glob built FROM them is empty for that dimension by construction --
-# no second `[ -L ]` check to keep in sync with those three, and no fourth call site added
-# the day this loop existed if a fourth dimension ever does. A single `"$JIT_BASE"/*/*/*.md`
-# does not get that for free: it follows a symlinked DIMENSION directory exactly as
-# readily as a real one, so every real file reachable through it enumerated here and had
-# its path and exact byte size printed to this run's own stderr -- a disclosure leak, not
-# a write, but a leak all the same, and a different cell of the same 2x2 the `[ -L
-# "$(dirname "$md")" ]` check right below still closes: THAT one is the LAYER directory
-# one level down, the sibling of #332's write-side fix, and it stays for the ordinary case
-# of a symlinked layer under an otherwise-real dimension -- the *_BASE redirection above
-# only ever empties a glob for a symlinked DIMENSION, never for a symlinked LAYER beneath
-# a real one.
 INJ_LIST=()
 for md in "$TOOLS_BASE"/*/*.md "$PATHS_BASE"/*/*.md "$VOCAB_BASE"/*/*.md; do
   [ -f "$md" ] || continue
@@ -1608,50 +2144,15 @@ for md in "$TOOLS_BASE"/*/*.md "$PATHS_BASE"/*/*.md "$VOCAB_BASE"/*/*.md; do
   [ -L "$(dirname "$md")" ] && continue
   INJ_LIST[${#INJ_LIST[@]}]="$md"
 done
-
 if [ "${#INJ_LIST[@]}" -eq 0 ]; then
   echo "(no entries)" >&2
 else
-  # Everything happens in BEGIN over ARGV, and the files are never read as awk INPUT.
-  # jit_entry_load() opens each one itself with getline, so letting awk read them too
-  # would double every read; and taking the list through ARGV rather than through stdin
-  # means a file name can never be split on a character it happens to contain.
-  # JIT_AWK_ENTRY comes first because jit_entry_load() calls into it: the two pre-read
-  # guards through jit_entry_why(), and jit_bad_utf8() on what it read. Without it this
-  # awk aborts with "calling undefined function" -- loudly, which is this file contract,
-  # and the report is then silently absent rather than wrong.
-  # LC_ALL=C for the same reason every hook awk sets it: jit_utf8_init() builds a byte
-  # range out of sprintf("%c", 128) and sprintf("%c", 255), and under a UTF-8 locale
-  # one-true-awk tries to decode that as a character range and aborts with "multibyte
-  # conversion failure". It also makes length() count BYTES on both engines, which is
-  # the unit the hooks clip in and the unit this report prints.
   LC_ALL=C awk -v def="$JIT_INJECT" "$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_REPORT_NAME"'
-# Every component this prints came off the .md glob three levels down, so all three are
-# names the clone chose (#113). Dimension and layer are kept when they are names, for the
-# same reason the file is: a withheld leaf beside a real directory is what tells the
-# reader which `ls` to run.
-#
-# The separator is BRACKETED, and that is not decoration (#133). A one-character separator
-# is a regex to gawk and a plain string to one-true-awk -- and one-true-awk splits a plain
-# one-character separator on the NEWLINE as well:
-#
-#   awk  split("a<LF>b/c", x, "/")    -> 3 fields
-#   gawk split("a<LF>b/c", x, "/")    -> 2 fields
-#   both split("a<LF>b/c", x, "[/]")  -> 2 fields
-#
-# An entry file name may contain a newline, so on the awk macOS ships the path was torn
-# into extra components BEFORE the guard below ran: a[n-2] a[n-1] a[n] then addressed the
-# tail of the NAME instead of dimension/layer/file, the dimension fell off the left, and
-# the report printed a path nobody could open with two clone-chosen tokens standing in
-# positions labelled as directories. The guard was vetting fragments, not names.
 function relpath(p,   n, a) {
   n = split(p, a, "[/]")
   if (n < 3) return jit_report_name(p)
   return ".claude/jit-context/" jit_report_name(a[n-2]) "/" jit_report_name(a[n-1]) "/" jit_report_name(a[n])
 }
-# Largest first. Every parallel array moves together -- sorting the sizes and leaving the
-# names and the summarised figures behind would print one entry name beside another
-# entry numbers, which is a report that is wrong in the way nobody checks.
 function isort(v, nm, sm, ef, n,   i, j, tv, tn, ts, te) {
   for (i = 2; i <= n; i++) {
     tv = v[i]; tn = nm[i]; ts = sm[i]; te = ef[i]; j = i - 1
@@ -1665,38 +2166,22 @@ BEGIN {
   n = 0
   for (ai = 1; ai < ARGC; ai++) {
     path = ARGV[ai]
-    # keepbody = 1: the body is what full mode costs, so it has to be read even for an
-    # entry whose effective mode is summary.
     if (!jit_entry_load(path, def, 1, e)) continue
     n++
     rel = relpath(path)
     fullb[n] = length(e["body"])
     eff[n] = e["mode"]
     name[n] = rel
-    # The real renderer, with the mode forced, so the summarised figure is the string
-    # that would actually be injected rather than an estimate of it.
     keep = e["mode"]
     e["mode"] = "summary"
     sumb[n] = length(jit_inject_text(e, rel, path))
     e["mode"] = keep
     if (eff[n] == "full") { nfull++; bfull += fullb[n] }
-    # An entry with no description: could only be summarised into its own name, so it is
-    # what stands between this tree and being able to flip.
-    #
-    # Unless it can never be summarised at all. An entry PINNED to full -- by its own
-    # `inject: full`, or by having no frontmatter for the rebuild to have indexed -- stays
-    # whole whatever the project sets, so naming it here would send an author to write a
-    # description that nothing will ever read. The two cases are indistinguishable from
-    # the mode alone when the default and the override agree, which is why jit_entry_load
-    # reports the pin separately.
     if (e["desc"] == "" && !(e["pin"] && e["mode"] == "full")) { nodesc++; nd[nodesc] = rel }
   }
-
   if (n == 0) { print "(no entries)"; exit }
-
   isort(fullb, name, sumb, eff, n)
   mid = int((n + 1) / 2)
-
   if (def == "full") {
     print "Every match injects the whole entry. Per match, on this tree:"
     print ""
@@ -1708,7 +2193,6 @@ BEGIN {
     for (i = 1; i <= n && shown < 5; i++) if (eff[i] == "full") { printf "%8d  %s\n", fullb[i], name[i]; shown++ }
     if (nfull > shown) printf "         ... and %d more\n", nfull - shown
   }
-
   if (nodesc > 0) {
     printf "\n%d entr(ies) carry no description:, so a match could only NAME them.\n", nodesc
     for (i = 1; i <= nodesc && i <= 10; i++) print "  " nd[i]
@@ -1719,7 +2203,6 @@ BEGIN {
     print "\nEvery entry carries a description:, so this tree can move to summary whenever"
     print "you decide the trade is worth it: JIT_CONTEXT_INJECT=summary in config.env."
   }
-
   print ""
   print "This is the cost of ONE match, not a total -- nothing here is ever resident, and"
   print "how often each entry fires is in .discovery/logs/hooks.log, not in this tree."
@@ -1729,9 +2212,6 @@ BEGIN {
 ' "${INJ_LIST[@]}" >&2
 fi
 echo "" >&2
-# One line saying which of the three this run was. The REFUSED and FATAL lines above are
-# the detail, but they scroll past inside two reports; this is what is on screen when the
-# shell hands the prompt back, and it is the only place the number itself is spelled out.
 case "$JIT_RC" in
   1)
     echo "rebuild-tsv: exit 1 -- the index was written, and at least one row above will be REFUSED" >&2

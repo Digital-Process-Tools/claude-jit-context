@@ -1,126 +1,1453 @@
 #!/bin/bash
-# jit-context -- is any of this running at all, and against which tree?
-#
-# The other four tools under scripts/ answer three good questions: can this pattern be
-# honoured (jit-dry-run.sh), what does a match cost (rebuild-tsv.sh), what does the agent
-# keep failing to find (jit-misses.sh). All three are downstream of one nobody asked.
-#
-# This repository own worst trap is the reason (#183). `.claude/settings.json` registers
-# `enabledPlugins`, so the hooks firing in a contributor session are served from the plugin
-# cache, while JIT_BASE resolves against $CLAUDE_PROJECT_DIR -- the ENTRIES are the checkout
-# and the CODE reading them is not. Nothing errors. Every observable signal reports health.
-#
-# Usage:
-#   bash scripts/jit-doctor.sh [--base DIR]
-#
-# --base defaults to $CLAUDE_PROJECT_DIR/.claude/jit-context -- the tree the HOOKS would
-# read, which is the subject of the question, and not the tree you are standing in.
-#
-# Exit: 0 nothing inert | 1 a layer holds entries the matcher can never load | 2 could not
-#       evaluate the tree at all. ADVISORY findings never move the exit code -- #47 has CI
-#       consuming these, and failing a project over a two-character keyword is a breaking
-#       change nobody filed.
-#
-# --- Where the line with jit-dry-run.sh falls, and why it falls there -------------------
-#
-# #183 asks for no second linter, and this POINTS AT that tool rather than calling it.
-# Calling it would fold two verdicts into one status: doctor `1` would then mean either
-# "your rules are inert" or "one pattern is unhonourable", which is the collapsed-outcome
-# defect this repository is named after, arriving through the exit code. It would also make
-# doctor inherit that tool per-row untrusted-text surface, and its runtime, to answer a
-# question about whether anything runs at all. The two subjects are different: this one is
-# "is it live", that one is "are the rules any good". So REFUSED and STALE stay there, this
-# prints neither word, and the `next` section sends the reader over with the tree already
-# named.
-#
-# --- What it does NOT claim ------------------------------------------------------------
-#
-# The settings scan is TEXTUAL. There is no jq in this plugin (CLAUDE.md: bash, awk, perl,
-# nothing else), Claude Code merges settings from locations no script in a repository can
-# enumerate, and a confident wrong answer here is worse than none -- this is the exact
-# check the tool exists for, so its own third state matters more than any other line it
-# prints. `cannot tell` is a first-class verdict and is not `nothing is registered`.
-#
-# --- One thing it creates, and it is not a verdict of its own ---------------------------
-#
-# It sources common.sh, which mkdir -p's $CLAUDE_PROJECT_DIR/.claude/jit-context/.discovery/
-# logs when that tree already exists. jit-misses.sh refuses to source common.sh for exactly
-# this reason -- a reporting tool that creates the thing it reports cannot be trusted. The
-# cost is accepted here and is smaller than it looks: what gets created is a DIRECTORY, and
-# every verdict below about the log is about the log FILE, which is never created. What is
-# bought is jit_scan_layers() and jit_report_name(), the functions the hooks themselves use,
-# so "which layers would load" is measured against the matcher rather than described.
-
 set -uo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck source=/dev/null
-. "$SCRIPT_DIR/common.sh"
-
+if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+  JIT_BASE="$CLAUDE_PROJECT_DIR/.claude/jit-context"
+else
+  JIT_BASE="$(pwd)/.claude/jit-context"
+fi
+export JIT_BASE
+JIT_HOST="unknown"
+JIT_HOST_REFUSAL_STATE="refusal-not-established"
+JIT_TOOL_ALIASES=""
+JIT_HOST_REGISTRY='
+claude-code|CLAUDE_CODE_ENTRYPOINT,CLAUDE_CODE_SESSION_ID|CLAUDE_PROJECT_DIR|CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block|
+codex||CLAUDE_PROJECT_DIR|PLUGIN_ROOT,CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block|apply_patch=Edit;Write
+gemini-cli|GEMINI_SESSION_ID|GEMINI_PROJECT_DIR,CLAUDE_PROJECT_DIR||UNKNOWN|UNKNOWN|refusal-not-established|
+'
+jit_host_row() {
+  local want="$1" line
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if [[ "$line" == "$want|"* ]]; then
+      printf '%s\n' "$line"
+      return 0
+    fi
+  done <<< "$JIT_HOST_REGISTRY"
+  return 1
+}
+jit_host_sig_set() {
+  case "${1:-}" in
+    CLAUDE_CODE_ENTRYPOINT) [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ] ;;
+    CLAUDE_CODE_SESSION_ID) [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] ;;
+    GEMINI_SESSION_ID) [ -n "${GEMINI_SESSION_ID:-}" ] ;;
+    *) return 1 ;;
+  esac
+}
+jit_host_detect() {
+  local name hostvars hostvar old_ifs
+  while IFS='|' read -r name hostvars _ _ _ _ _; do
+    [ -n "$name" ] || continue
+    [ -n "$hostvars" ] || continue
+    old_ifs="$IFS"
+    IFS=','
+    for hostvar in $hostvars; do
+      IFS="$old_ifs"
+      if jit_host_sig_set "$hostvar"; then
+        printf '%s\n' "$name"
+        return 0
+      fi
+    done
+    IFS="$old_ifs"
+  done <<< "$JIT_HOST_REGISTRY"
+  printf 'unknown\n'
+  return 0
+}
+jit_host_refusal_state() {
+  local name="${1:-}" row refusal
+  [ -n "$name" ] || {
+    printf 'refusal-not-established\n'
+    return 0
+  }
+  row=$(jit_host_row "$name") || {
+    printf 'refusal-not-established\n'
+    return 0
+  }
+  IFS='|' read -r _ _ _ _ _ _ refusal _ <<< "$row"
+  printf '%s\n' "${refusal:-refusal-not-established}"
+}
+jit_all_tool_aliases() {
+  local line aliases all="" sep=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    aliases="${line##*|}"
+    [ -n "$aliases" ] || continue
+    all="$all$sep$aliases"
+    sep=","
+  done <<< "$JIT_HOST_REGISTRY"
+  printf '%s\n' "$all"
+}
+JIT_HOST="$(jit_host_detect 2> /dev/null)" \
+  && JIT_HOST_REFUSAL_STATE="$(jit_host_refusal_state "$JIT_HOST" 2> /dev/null)"
+[ -n "$JIT_HOST" ] || JIT_HOST="unknown"
+[ -n "$JIT_HOST_REFUSAL_STATE" ] || JIT_HOST_REFUSAL_STATE="refusal-not-established"
+JIT_TOOL_ALIASES="$(jit_all_tool_aliases 2> /dev/null)"
+[ -n "$JIT_TOOL_ALIASES" ] || JIT_TOOL_ALIASES=""
+export JIT_HOST JIT_HOST_REFUSAL_STATE JIT_TOOL_ALIASES
+export JIT_SYMLINKS=""
+JIT_SYMLINKS_MAX=8192
+export JIT_SYMLINKS_ALL=""
+export JIT_NONFILES=""
+export JIT_NONFILES_ALL=""
+JIT_NONFILES_MAX=4096
+JIT_NL="
+"
+jit_scan_symlinks() {
+  local base="$1" f parent rel rel2 found=0
+  JIT_SYMLINKS="$JIT_NL"
+  JIT_SYMLINKS_ALL=""
+  JIT_NONFILES="$JIT_NL"
+  JIT_NONFILES_ALL=""
+  if [ "${base%/*}" != "$base" ] && [ -L "${base%/*}" ]; then
+    JIT_SYMLINKS="$JIT_SYMLINKS${base%/*}$JIT_NL$base$JIT_NL"
+    found=1
+  fi
+  for f in "$base" "$base"/* "$base"/.* "$base"/*/* "$base"/*/.* "$base"/*/*/* "$base"/*/*/.*; do
+    case "$f" in
+      */. | */..) continue ;;
+    esac
+    if [ -L "$f" ]; then
+      JIT_SYMLINKS="$JIT_SYMLINKS$f$JIT_NL"
+      found=1
+      if [ "${#JIT_SYMLINKS}" -gt "$JIT_SYMLINKS_MAX" ]; then
+        JIT_SYMLINKS="$JIT_NL"
+        JIT_SYMLINKS_ALL=1
+        JIT_NONFILES="$JIT_NL"
+        JIT_NONFILES_ALL=1
+        export JIT_SYMLINKS JIT_SYMLINKS_ALL JIT_NONFILES JIT_NONFILES_ALL
+        return 0
+      fi
+      continue
+    fi
+    if [ ! -f "$f" ] && [ -e "$f" ] && [ "$f" != "$base" ]; then
+      rel="${f#"$base"/}"
+      rel2="${rel#*/}"
+      if [ "$rel2" != "$rel" ] && [ "${rel2#*/}" != "$rel2" ]; then
+        JIT_NONFILES="$JIT_NONFILES$f$JIT_NL"
+        if [ "${#JIT_NONFILES}" -gt "$JIT_NONFILES_MAX" ]; then
+          JIT_NONFILES="$JIT_NL"
+          JIT_NONFILES_ALL=1
+        fi
+      fi
+    fi
+    [ "$found" = 1 ] || continue
+    [ "$f" != "$base" ] || continue
+    parent="${f%/*}"
+    case "$JIT_SYMLINKS" in
+      *"$JIT_NL$parent$JIT_NL"*)
+        JIT_SYMLINKS="$JIT_SYMLINKS$f$JIT_NL"
+        if [ "${#JIT_SYMLINKS}" -gt "$JIT_SYMLINKS_MAX" ]; then
+          JIT_SYMLINKS="$JIT_NL"
+          JIT_SYMLINKS_ALL=1
+          JIT_NONFILES="$JIT_NL"
+          JIT_NONFILES_ALL=1
+          export JIT_SYMLINKS JIT_SYMLINKS_ALL JIT_NONFILES JIT_NONFILES_ALL
+          return 0
+        fi
+        ;;
+    esac
+  done
+  export JIT_SYMLINKS JIT_SYMLINKS_ALL JIT_NONFILES JIT_NONFILES_ALL
+}
+jit_scan_symlinks "$JIT_BASE"
+JIT_LOG_DISABLED=0
+LOG_DIR="$JIT_BASE/.discovery/logs"
+LOG_FILE="$LOG_DIR/hooks.log"
+for _jit_p in "${JIT_BASE%/*}" "$JIT_BASE" "$JIT_BASE/.discovery" "$LOG_DIR"; do
+  if [ -L "$_jit_p" ]; then JIT_LOG_DISABLED=1; fi
+done
+unset _jit_p
+if [ "${JIT_SAMPLE_CALL:-}" = "1" ]; then JIT_LOG_DISABLED=1; fi
+if [ ! -d "$JIT_BASE" ]; then JIT_LOG_DISABLED=1; fi
+if [ "$JIT_LOG_DISABLED" = 0 ]; then
+  [ -d "$LOG_DIR" ] || mkdir -p "$LOG_DIR" 2> /dev/null
+  if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
+fi
+jit_log_write() {
+  if [ "$JIT_LOG_DISABLED" = 0 ]; then
+    printf '%s\n' "$1" 2> /dev/null >> "$LOG_FILE"
+  fi
+}
+JIT_STATE_DIR="$JIT_BASE/.discovery/state"
+for _jit_p in "${JIT_BASE%/*}" "$JIT_BASE" "$JIT_BASE/.discovery" "$JIT_STATE_DIR"; do
+  if [ -L "$_jit_p" ]; then JIT_STATE_DIR=""; fi
+done
+unset _jit_p
+if [ -n "$JIT_STATE_DIR" ] && [ -d "$JIT_BASE" ] && [ ! -d "$JIT_STATE_DIR" ]; then
+  if [ -d "$JIT_BASE/.discovery" ]; then
+    if [ -w "$JIT_BASE/.discovery" ]; then mkdir -p "$JIT_STATE_DIR" 2> /dev/null; fi
+  elif [ -w "$JIT_BASE" ]; then
+    mkdir -p "$JIT_STATE_DIR" 2> /dev/null
+  fi
+fi
+if [ ! -d "$JIT_STATE_DIR" ] || [ ! -w "$JIT_STATE_DIR" ]; then JIT_STATE_DIR=""; fi
+JIT_MARK_END='--jit-marks-end--'
+export JIT_MARK_END
+JIT_MARKS_IN=()
+JIT_MARKS_OK=0
+JIT_TMP=""
+_jit_printf_time=0
+if printf -v _jit_probe '%(%H:%M:%S)T' -1 2> /dev/null; then
+  case "$_jit_probe" in
+    [0-9][0-9]:[0-9][0-9]:[0-9][0-9]) _jit_printf_time=1 ;;
+  esac
+fi
+unset _jit_probe
+_ts() {
+  local e="${EPOCHREALTIME:-}" s f out
+  if [ "$_jit_printf_time" = 1 ]; then
+    case "$e" in
+      *[.,]*)
+        s="${e%%[.,]*}"
+        f="${e##*[.,]}000000"
+        f="${f:0:6}"
+        case "$s$f" in
+          '' | *[!0-9]*) ;;
+          *)
+            printf -v out '%(%H:%M:%S)T' "$s"
+            printf '%s.%03d\n' "$out" "$((10#$f / 1000))"
+            return
+            ;;
+        esac
+        ;;
+    esac
+  fi
+  date '+%H:%M:%S.000'
+}
+JIT_CONFIG_REFUSED_MAX=4096
+export JIT_CONFIG_REFUSED=""
+export JIT_CONFIG_REFUSED_N=0
+JIT_CONFIG_REFUSED_CUT=0
+jit_config_refuse() {
+  JIT_CONFIG_REFUSED_N=$((JIT_CONFIG_REFUSED_N + 1))
+  if [ "${#JIT_CONFIG_REFUSED}" -gt "$JIT_CONFIG_REFUSED_MAX" ]; then
+    if [ "$JIT_CONFIG_REFUSED_CUT" = 0 ]; then
+      JIT_CONFIG_REFUSED_CUT=1
+      JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED$JIT_NL- the remaining refused lines are not listed here; the count above is the whole total"
+    fi
+    return 0
+  fi
+  JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED${JIT_CONFIG_REFUSED:+$JIT_NL}- line $1: $2"
+}
+jit_cfg_clean_line() {
+  local LC_ALL=C
+  local line="$1"
+  line="${line%$'\r'}"
+  while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+  case "$line" in
+    '' | '#'*) return 1 ;;
+  esac
+  local rest="${line#export}"
+  if [ "$rest" != "$line" ] && [ "${rest#[[:space:]]}" != "$rest" ]; then
+    line="$rest"
+    while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+  fi
+  JIT_CFG_LINE="$line"
+}
+jit_config_name_ok() {
+  local LC_ALL=C
+  local prefix
+  [ -n "$1" ] && [ -z "${1//[A-Za-z0-9_]/}" ] || return 1
+  for prefix in JIT_CONTEXT_ DYNAMIC_RULES_ DVSI_; do
+    if [ "${1#"$prefix"}" != "$1" ] && [ -n "${1#"$prefix"}" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+jit_cfg_split() {
+  local LC_ALL=C
+  JIT_CFG_REASON=""
+  if [ "${1#*=}" = "$1" ]; then
+    JIT_CFG_NAME=""
+    JIT_CFG_VALUE=""
+    JIT_CFG_REASON="not a KEY=VALUE assignment"
+    return 1
+  fi
+  JIT_CFG_NAME="${1%%=*}"
+  JIT_CFG_VALUE="${1#*=}"
+  if ! jit_config_name_ok "$JIT_CFG_NAME"; then
+    JIT_CFG_REASON="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
+    return 1
+  fi
+}
+jit_cfg_unquote() {
+  local LC_ALL=C
+  local value="$1" reason="" q rest tail
+  local dq sq
+  printf -v dq '\042'
+  printf -v sq '\047'
+  q="${value%"${value#?}"}"
+  if [ "$q" = "$dq" ] || [ "$q" = "$sq" ]; then
+    rest="${value#?}"
+    if [ "${rest#*"$q"}" != "$rest" ]; then
+      tail="${rest#*"$q"}"
+      while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
+      if [ -z "$tail" ] || [ "${tail#\#}" != "$tail" ]; then
+        value="${rest%%"$q"*}"
+      else
+        reason="trailing text after the closing quote"
+      fi
+    else
+      reason="unterminated quote"
+    fi
+  else
+    value="${value%%[[:space:]]#*}"
+    while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
+  fi
+  JIT_CFG_VALUE="$value"
+  JIT_CFG_REASON="$reason"
+  [ -z "$reason" ]
+}
+jit_cfg_check_value() {
+  local LC_ALL=C
+  local cfg_name="$1" value="$2"
+  JIT_CFG_REASON=""
+  if [ "$cfg_name" = JIT_CONTEXT_INJECT ]; then
+    if [ "$value" != summary ] && [ "$value" != full ]; then
+      JIT_CFG_REASON="not an injection mode (the modes are summary and full)"
+      return 1
+    fi
+  fi
+  if [ "$cfg_name" = JIT_CONTEXT_STOP_REPORT ]; then
+    if [ "$value" != 0 ] && [ "$value" != 1 ]; then
+      JIT_CFG_REASON="not a stop-report toggle (0 or 1)"
+      return 1
+    fi
+  fi
+  if [ "$cfg_name" = JIT_CONTEXT_STATUS ]; then
+    if [ "$value" != fired ] && [ "$value" != summary ] && [ "$value" != off ]; then
+      JIT_CFG_REASON="not a status mode (fired, summary or off)"
+      return 1
+    fi
+  fi
+  if [ "$cfg_name" = JIT_CONTEXT_MISSES ]; then
+    if [ "$value" != on ] && [ "$value" != off ]; then
+      JIT_CFG_REASON="not a misses toggle (on or off)"
+      return 1
+    fi
+  fi
+  if [ "$cfg_name" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
+    if [ "$value" != 0 ]; then
+      if [ "${value#[1-9]}" = "$value" ] || [ -n "${value//[0-9]/}" ]; then
+        JIT_CFG_REASON="not a byte count (0, or digits with no leading zero)"
+        return 1
+      fi
+    fi
+  fi
+  return 0
+}
+jit_cfg_assign() {
+  if [ "$1" = DVSI_AUTONOMOUS_VOCAB_PATHS ]; then
+    DVSI_AUTONOMOUS_VOCAB_PATHS="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_CHECKOUT_WINDOW_S ]; then
+    DYNAMIC_RULES_CHECKOUT_WINDOW_S="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_COLLISION_BYTES ]; then
+    DYNAMIC_RULES_COLLISION_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_GENERIC_WORDS ]; then
+    DYNAMIC_RULES_GENERIC_WORDS="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_KEYWORD_BLACKLIST ]; then
+    DYNAMIC_RULES_KEYWORD_BLACKLIST="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_MODULE_PREFIX ]; then
+    DYNAMIC_RULES_MODULE_PREFIX="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_VOCAB_PATHS ]; then
+    DYNAMIC_RULES_VOCAB_PATHS="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_ALLOW_CROSS_TREE ]; then
+    JIT_CONTEXT_ALLOW_CROSS_TREE="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_CHECKOUT_WINDOW_S ]; then
+    JIT_CONTEXT_CHECKOUT_WINDOW_S="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_COLLISION_BYTES ]; then
+    JIT_CONTEXT_COLLISION_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_DOCTOR_MAX_BYTES ]; then
+    JIT_CONTEXT_DOCTOR_MAX_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_DOCTOR_MIN_KEYWORD ]; then
+    JIT_CONTEXT_DOCTOR_MIN_KEYWORD="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_GENERIC_WORDS ]; then
+    JIT_CONTEXT_GENERIC_WORDS="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_INJECT ]; then
+    JIT_CONTEXT_INJECT="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_KEYWORD_BLACKLIST ]; then
+    JIT_CONTEXT_KEYWORD_BLACKLIST="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
+    JIT_CONTEXT_LOG_MAX_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_MISSES ]; then
+    JIT_CONTEXT_MISSES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_MODULE_PREFIX ]; then
+    JIT_CONTEXT_MODULE_PREFIX="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_STATUS ]; then
+    JIT_CONTEXT_STATUS="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_STOP_REPORT ]; then
+    JIT_CONTEXT_STOP_REPORT="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_VOCAB_PATHS ]; then
+    JIT_CONTEXT_VOCAB_PATHS="$2"
+    return 0
+  fi
+  return 0
+}
+jit_load_config() {
+  local file="$1" line lineno=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    lineno=$((lineno + 1))
+    jit_cfg_clean_line "$line" || continue
+    if jit_cfg_split "$JIT_CFG_LINE" \
+      && jit_cfg_unquote "$JIT_CFG_VALUE" \
+      && jit_cfg_check_value "$JIT_CFG_NAME" "$JIT_CFG_VALUE"; then
+      jit_cfg_assign "$JIT_CFG_NAME" "$JIT_CFG_VALUE"
+    else
+      jit_config_refuse "$lineno" "$JIT_CFG_REASON"
+    fi
+  done < "$file"
+}
+if [ -L "$JIT_BASE/config.env" ]; then
+  JIT_CONFIG_REFUSED_N=1
+  JIT_CONFIG_REFUSED="- the file itself: config.env is a symbolic link, so it was not read"
+  jit_log_write "$(printf '[%s] config.env | refused: symbolic link' "$(_ts)")"
+elif [ -f "$JIT_BASE/config.env" ]; then
+  jit_load_config "$JIT_BASE/config.env"
+  if [ "$JIT_CONFIG_REFUSED_N" -gt 0 ]; then
+    jit_log_write "$(printf '[%s] config.env | %d line(s) refused\n%s' \
+      "$(_ts)" "$JIT_CONFIG_REFUSED_N" "$JIT_CONFIG_REFUSED")"
+  fi
+fi
+JIT_INJECT="${JIT_CONTEXT_INJECT:-full}"
+case "$JIT_INJECT" in
+  summary | full) ;;
+  *) JIT_INJECT=full ;;
+esac
+JIT_STOP_REPORT="${JIT_CONTEXT_STOP_REPORT:-0}"
+case "$JIT_STOP_REPORT" in
+  0 | 1) ;;
+  *) JIT_STOP_REPORT=0 ;;
+esac
+JIT_STATUS="${JIT_CONTEXT_STATUS:-summary}"
+case "$JIT_STATUS" in
+  fired | summary | off) ;;
+  *) JIT_STATUS=summary ;;
+esac
+JIT_MISSES="${JIT_CONTEXT_MISSES:-on}"
+case "$JIT_MISSES" in
+  on | off) ;;
+  *) JIT_MISSES=on ;;
+esac
+JIT_FM_NL="
+"
+JIT_AWK_FRONTMATTER='
+  BEGIN { nf = split(fl, want, " ") }
+  /^---$/ { n++; if (n == 2) exit; next }
+  n == 1 {
+    for (i = 1; i <= nf; i++) {
+      f = want[i]
+      if (f == "" || seen[f]) continue
+      if (index($0, f ":") != 1) continue
+      line = $0
+      sub("^" f ": *", "", line)
+      if (f == "mode") { gsub(/ /, "", line) }
+      else {
+        v = line
+        sub(/[ \t\n\v\f\r]+$/, "", v)
+        if (v ~ /^"[^"]*"$/) line = substr(v, 2, length(v) - 2)
+      }
+      seen[f] = 1
+      printf "%s\t%s\n", f, line
+      next
+    }
+  }
+'
+JIT_AWK_GUARD='
+function jit_bad_pattern(p,   i, n, c, nx, depth, inbr, brpos) {
+  if (p ~ /^@[A-Za-z][A-Za-z0-9-]*([[:space:]]|$)/) return "unexpanded macro -- rebuild the index with the rebuild-tsv tool this plugin ships"
+  n = length(p)
+  depth = 0
+  inbr = 0
+  brpos = 0
+  for (i = 1; i <= n; i++) {
+    c = substr(p, i, 1)
+    if (c == "\134") {
+      nx = substr(p, i + 1, 1)
+      if (nx == "") return "trailing backslash"
+      if (nx ~ /[[:alnum:]]/ && nx !~ /^[ntr]$/) return "undefined escape \134" nx
+      if (nx > "\177") return "undefined escape \\ before a non-ASCII byte"
+      i++
+      continue
+    }
+    if (inbr) {
+      nx = substr(p, i + 1, 1)
+      if (c == "[" && nx != "" && index(sprintf("%c%c%c", 58, 46, 61), nx) > 0) {
+        k = index(substr(p, i + 2), substr(p, i + 1, 1) "]")
+        if (k == 0) return "unterminated [" substr(p, i + 1, 1) " element inside a character class"
+        i = i + 2 + k
+        continue
+      }
+      if (c == "]" && i != brpos + 1 && !(i == brpos + 2 && substr(p, brpos + 1, 1) == "^")) inbr = 0
+      continue
+    }
+    if (c == "[") { inbr = 1; brpos = i; continue }
+    if (c == "(") { depth++; continue }
+    if (c == ")") { if (depth > 0) depth--; continue }
+  }
+  if (inbr) return "unterminated character class"
+  if (depth > 0) return "unbalanced parenthesis"
+  return ""
+}
+'
+JIT_AWK_ENTRY='
+function jit_row_id(layer, rown) {
+  return layer " row " rown
+}
+function jit_entry_age(ident,   raw, n, i, ln, tp) {
+  if (!jit_age_loaded) {
+    jit_age_loaded = 1
+    raw = ENVIRON["JIT_ENTRY_AGES"]
+    if (raw != "") {
+      n = split(raw, jit_age_lines, "\n")
+      for (i = 1; i <= n; i++) {
+        ln = jit_age_lines[i]
+        if (ln == "") continue
+        tp = index(ln, "\t")
+        if (tp == 0) continue
+        jit_age[substr(ln, 1, tp - 1)] = substr(ln, tp + 1) + 0
+      }
+    }
+  }
+  if (ident in jit_age) return jit_age[ident]
+  return ""
+}
+function jit_log_text(s) {
+  gsub(/[\n\r]/, " ", s)
+  return s
+}
+function jit_log_name(f, layer, rown, why) {
+  return (why == "not a bare file name") ? jit_row_id(layer, rown) : f
+}
+function jit_symlinked(p,   n, i, a) {
+  if (ENVIRON["JIT_SYMLINKS_ALL"] == "1") return 1
+  if (!jit_sym_init) {
+    jit_sym_init = 1
+    n = split(ENVIRON["JIT_SYMLINKS"], a, "\n")
+    for (i = 1; i <= n; i++) if (a[i] != "") jit_sym[a[i]] = 1
+  }
+  return (p in jit_sym)
+}
+function jit_nonfile(p,   n, i, a) {
+  if (ENVIRON["JIT_NONFILES_ALL"] == "1") return 1
+  if (!jit_nf_init) {
+    jit_nf_init = 1
+    n = split(ENVIRON["JIT_NONFILES"], a, "\n")
+    for (i = 1; i <= n; i++) if (a[i] != "") jit_nf[a[i]] = 1
+  }
+  return (p in jit_nf)
+}
+function jit_bad_entry_file(f, dir) {
+  if (f == "") return ""
+  if (index(f, "/") > 0 || index(f, "\134") > 0) return "not a bare file name"
+  if (f == "\056" || f == "\056\056") return "not a bare file name"
+  if (substr(f, 1, 1) == "\056") return "the entry file name begins with a dot, so rename it without one"
+  if (dir != "") {
+    if (ENVIRON["JIT_SYMLINKS_ALL"] == "1") return "this tree has too many symbolic links to check, so every row in it is refused"
+    if (jit_symlinked(dir)) return "its layer directory is a symbolic link"
+    if (jit_symlinked(dir "/" f)) return "the entry file is a symbolic link"
+  }
+  return ""
+}
+function jit_utf8_init(   k) {
+  if (jit_utf8_ready) return
+  jit_utf8_ready = 1
+  for (k = 1; k <= 255; k++) jit_ord[sprintf("%c", k)] = k
+  jit_hi_re = "[" sprintf("%c", 128) "-" sprintf("%c", 255) "]"
+  jit_nul = sprintf("%c", 0)
+}
+function jit_bad_utf8(s,   i, n, b, need, lo, hi, j, cb) {
+  jit_utf8_init()
+  if (s !~ jit_hi_re) return 0
+  n = length(s)
+  for (i = 1; i <= n; i++) {
+    b = jit_ord[substr(s, i, 1)] + 0
+    if (b < 128) continue
+    if (b < 194 || b > 244) return 1
+    if (b < 224) { need = 1; lo = 128; hi = 191 }
+    else if (b < 240) { need = 2; lo = (b == 224) ? 160 : 128; hi = (b == 237) ? 159 : 191 }
+    else { need = 3; lo = (b == 240) ? 144 : 128; hi = (b == 244) ? 143 : 191 }
+    if (i + need > n) return 1
+    for (j = 1; j <= need; j++) {
+      cb = jit_ord[substr(s, i + j, 1)] + 0
+      if (j == 1) { if (cb < lo || cb > hi) return 1 }
+      else if (cb < 128 || cb > 191) return 1
+    }
+    i += need
+  }
+  return 0
+}
+function jit_bad_bytes(s, what) {
+  jit_utf8_init()
+  if (length(jit_nul) == 1 && index(s, jit_nul) > 0) return what " contains a NUL byte"
+  if (jit_bad_utf8(s)) return what " is not valid UTF-8"
+  return ""
+}
+function jit_entry_why(path) {
+  if (substr(path, length(path), 1) == "/") return "the row names no entry file"
+  if (jit_nonfile(path)) return "the entry file is not a regular file"
+  return ""
+}
+function jit_read_body(path,   line, r, first) {
+  JIT_BODY = ""
+  if ((r = jit_entry_why(path)) != "") return r
+  first = 1
+  while ((r = (getline line < path)) > 0) {
+    JIT_BODY = JIT_BODY (first ? "" : "\n") line
+    first = 0
+  }
+  close(path)
+  if (r < 0) return "the entry file could not be read"
+  return jit_bad_utf8(JIT_BODY) ? "the entry file is not valid UTF-8" : ""
+}
+function jit_refuse_add(list, item) {
+  if (length(list) > 4096) {
+    if (jit_refuse_cut) return list
+    jit_refuse_cut = 1
+    return list "\n- the remaining refused rows are not listed here; the count above is the whole total"
+  }
+  return list (list == "" ? "- " : "\n- ") item
+}
+function jit_unreached_add(list, item) {
+  if (length(list) > 4096) {
+    if (jit_unreached_cut) return list
+    jit_unreached_cut = 1
+    return list "\n- the remaining unreachable rows are not listed here; the count above is the whole total"
+  }
+  return list (list == "" ? "- " : "\n- ") item
+}
+function jit_refusal_notice(list, n) {
+  return "# JIT Context: " n " rule(s) could not be evaluated, so they did NOT run\n" list \
+    "\nA pattern the matcher cannot honour is not a rule that did not match, and until now the two looked identical. Lint the tree that owns these rules with the jit-dry-run tool this plugin ships, --base <tree>/.claude/jit-context"
+}
+function jit_layers_notice(list, n) {
+  return "# JIT Context: " n " jit-context layer director" (n == 1 ? "y" : "ies") " could not be read, so no rule inside them ran\n" list "\nThese are directories under .claude/jit-context/<dimension>/ that exist and hold rules the matcher never opened. A layer that was never loaded and a layer whose rules never matched look identical from a session, which is why this says so. Name a layer directory with letters, digits, dot, underscore and hyphen only, and lint the tree with the jit-dry-run tool this plugin ships, --base <tree>/.claude/jit-context"
+}
+function jit_no_subject_notice(list, n) {
+  return "# JIT Context: " n " tools rule(s) name this tool, but the hook could build no subject to match them against, so they did NOT run\n" list \
+    "\nA tools rule is matched against a subject built from the tool_input keys `command`, `skill`, `file_path`, `pattern` and `subagent_type`. This dispatch carried none of them, so the rules above were indexed and counted and never consulted. Either they name a tool whose input this hook cannot read, or they name the wrong tool. A rule that cannot be reached is not a rule that did not match, and until now the two looked identical."
+}
+function jit_config_notice(list, n) {
+  return "# JIT Context: " n " line(s) in .claude/jit-context/config.env were refused, so they did NOT take effect\n" list \
+    "\nconfig.env is read as plain KEY=VALUE and is never executed. Only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* settings are read; anything else, shell included, is refused. If a refused line is not one you wrote, treat that file as hostile -- it arrived with the repository."
+}
+function jit_worktree_notice(line) {
+  return "# JIT Context: CLAUDE_PROJECT_DIR names a different git worktree than this shell is sitting in\n" line \
+    "\nEvery hook resolves rules from CLAUDE_PROJECT_DIR, never from the working directory -- content injected below (or on any call in this session) can be served from the copy in the OTHER tree, silently (#402). Run /jit-context:doctor"
+}
+'
+JIT_AWK_INJECT='
+function jit_clip(s, n,   i) {
+  if (length(s) <= n) return s
+  s = substr(s, 1, n)
+  if (length("é") > 1) {
+    if (!jit_cont) {
+      for (i = 128; i <= 191; i++) jit_cont = jit_cont sprintf("%c", i)
+      for (i = 192; i <= 253; i++) jit_lead = jit_lead sprintf("%c", i)
+    }
+    i = 0
+    while (i < 3 && length(s) > 0 && index(jit_cont, substr(s, length(s), 1)) > 0) {
+      s = substr(s, 1, length(s) - 1)
+      i++
+    }
+    if (length(s) > 0 && index(jit_lead, substr(s, length(s), 1)) > 0) s = substr(s, 1, length(s) - 1)
+  }
+  sub(/\r$/, "", s)
+  sub(/[ \t\n\v\f\r]+$/, "", s)
+  return s " [clipped]"
+}
+BEGIN {
+  JIT_TRANSCLUDE_DEPTH_MAX = 3
+  JIT_TRANSCLUDE_TOTAL_MAX = 12
+}
+function jit_transclude_component_ok(s) {
+  if (s == "" || s == "\056" || s == "\056\056") return 0
+  if (substr(s, 1, 1) == "\056") return 0
+  if (s ~ /[^A-Za-z0-9._-]/) return 0
+  return 1
+}
+function jit_transclude_resolve(spec,   n, parts, dim, layer, file, dir, path, why) {
+  jit_transclude_why = ""
+  n = split(spec, parts, "/")
+  if (n != 3) { jit_transclude_why = "not a dimension/layer/file.md path"; return "" }
+  dim = parts[1]; layer = parts[2]; file = parts[3]
+  if (!jit_transclude_component_ok(dim) || !jit_transclude_component_ok(layer) || !jit_transclude_component_ok(file) || file !~ /\.md$/) {
+    jit_transclude_why = "not a dimension/layer/file.md path"
+    return ""
+  }
+  dir = ENVIRON["JIT_BASE"] "/" dim "/" layer
+  why = jit_bad_entry_file(file, dir)
+  if (why == "") {
+    path = dir "/" file
+    why = jit_entry_why(path)
+  }
+  if (why != "") { jit_transclude_why = why; return "" }
+  return path
+}
+function jit_transclude_strip_frontmatter(body,   lines, n, i, out, closed, first, ln) {
+  n = split(body, lines, "\n")
+  if (n == 0) return body
+  ln = lines[1]; sub(/\r$/, "", ln)
+  if (ln != "---") return body
+  closed = 0
+  for (i = 2; i <= n; i++) {
+    ln = lines[i]; sub(/\r$/, "", ln)
+    if (ln == "---") { closed = 1; i++; break }
+  }
+  if (!closed) return body
+  out = ""; first = 1
+  for (; i <= n; i++) { out = out (first ? "" : "\n") lines[i]; first = 0 }
+  return out
+}
+function jit_expand_transclusions(body, depth,   out, i, n, lines, first) {
+  n = split(body, lines, "\n")
+  out = ""; first = 1
+  for (i = 1; i <= n; i++) {
+    out = out (first ? "" : "\n") jit_transclude_expand_line(lines[i], depth)
+    first = 0
+  }
+  return out
+}
+function jit_transclude_expand_line(line, depth,   trimmed, out, i, n, start, endp, spec, path, tent, expanded, saved_infence) {
+  trimmed = line
+  sub(/^[[:space:]]+/, "", trimmed)
+  if (trimmed ~ /^```/) { jit_infence = !jit_infence; return line }
+  if (jit_infence) return line
+  if (index(line, "{{") == 0) return line
+  out = ""
+  n = length(line)
+  i = 1
+  while (i <= n) {
+    start = index(substr(line, i), "{{")
+    if (start == 0) { out = out substr(line, i); break }
+    start = i + start - 1
+    out = out substr(line, i, start - i)
+    if (start > 1 && substr(line, start - 1, 1) == "$") {
+      out = out "{{"
+      i = start + 2
+      continue
+    }
+    endp = index(substr(line, start + 2), "}}")
+    if (endp == 0) { out = out substr(line, start); break }
+    endp = start + 2 + endp - 1
+    spec = substr(line, start + 2, endp - (start + 2))
+    gsub(/^[[:space:]]+/, "", spec)
+    gsub(/[[:space:]]+$/, "", spec)
+    i = endp + 2
+    if (jit_transclude_total >= JIT_TRANSCLUDE_TOTAL_MAX) {
+      out = out "{{" spec "}} [jit] transclusion refused: this fire already spliced in " JIT_TRANSCLUDE_TOTAL_MAX " file(s), so this one was left as a pointer"
+      continue
+    }
+    if (depth >= JIT_TRANSCLUDE_DEPTH_MAX) {
+      out = out "{{" spec "}} [jit] transclusion refused: nested " JIT_TRANSCLUDE_DEPTH_MAX " deep already, so this one was left as a pointer"
+      continue
+    }
+    path = jit_transclude_resolve(spec)
+    if (path == "") {
+      out = out "{{" spec "}} [jit] transclusion refused: " jit_transclude_why
+      continue
+    }
+    if (index(jit_transclude_stack, "\n" path "\n") > 0) {
+      out = out "{{" spec "}} [jit] transclusion refused: this would include itself (a cycle)"
+      continue
+    }
+    if (!jit_entry_load(path, "full", 1, tent)) {
+      out = out "{{" spec "}} [jit] transclusion refused: " (tent["why"] != "" ? tent["why"] : "the entry file is empty")
+      continue
+    }
+    jit_transclude_total++
+    jit_transclude_stack = jit_transclude_stack path "\n"
+    saved_infence = jit_infence
+    jit_infence = 0
+    expanded = jit_expand_transclusions(jit_transclude_strip_frontmatter(tent["body"]), depth + 1)
+    jit_infence = saved_infence
+    jit_transclude_stack = substr(jit_transclude_stack, 1, length(jit_transclude_stack) - length(path) - 1)
+    out = out expanded
+  }
+  return out
+}
+function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, ident, val, nread, r) {
+  e["body"] = ""; e["title"] = ""; e["desc"] = ""
+  e["mode"] = def; e["fm"] = 0; e["badmode"] = 0; e["read"] = 0; e["injseen"] = 0
+  e["pin"] = 0
+  e["why"] = jit_entry_why(path)
+  if (e["why"] != "") return 0
+  nfm = 0; want = 1; nread = 0
+  while ((r = (getline line < path)) > 0) {
+    nread++
+    e["read"] = 1
+    if (want) e["body"] = e["body"] (nread == 1 ? "" : "\n") line
+    ln = line
+    sub(/\r$/, "", ln)
+    if (ln == "---") {
+      if (nfm == 0) {
+        if (nread != 1) continue
+        nfm = 1; e["fm"] = 1; continue
+      }
+      if (nfm == 1) {
+        nfm = 2
+        if (!keepbody && e["mode"] != "full") { e["body"] = ""; want = 0; break }
+        continue
+      }
+      continue
+    }
+    if (nfm != 1) continue
+    if (index(ln, ":") == 0) continue
+    ident = substr(ln, 1, index(ln, ":") - 1)
+    if (ident ~ /[^A-Za-z0-9_-]/) continue
+    val = substr(ln, index(ln, ":") + 1)
+    sub(/^[[:space:]]+/, "", val)
+    sub(/[[:space:]]+$/, "", val)
+    if (val ~ /^"[^"]*"$/) val = substr(val, 2, length(val) - 2)
+    if (ident == "title") { if (e["title"] == "") e["title"] = val }
+    else if (ident == "description") { if (e["desc"] == "") e["desc"] = val }
+    else if (ident == "inject" && !e["injseen"]) {
+      e["injseen"] = 1
+      gsub(/[[:space:]]/, "", val)
+      val = tolower(val)
+      if (val == "summary" || val == "full") { e["mode"] = val; e["pin"] = 1 }
+      else if (val != "") e["badmode"] = 1
+    }
+  }
+  close(path)
+  if (r < 0) { e["why"] = "the entry file could not be read"; return 0 }
+  if (jit_bad_utf8(e["body"] e["title"] e["desc"])) {
+    e["why"] = "the entry file is not valid UTF-8"
+    return 0
+  }
+  if (!e["fm"]) { e["mode"] = "full"; e["pin"] = 1 }
+  return e["read"]
+}
+function jit_badmode_note(e) {
+  if (!e["badmode"]) return ""
+  return "\n[jit] The inject: value in this entry is not summary or full, so the project default applied."
+}
+function jit_inject_text(e, rel, selfpath,   out, tbody) {
+  if (e["mode"] == "full") {
+    if (e["body"] != "" && e["body"] ~ /^[[:space:]]*$/) return "[jit] The entry file has no text to inject." jit_badmode_note(e)
+    jit_transclude_total = 0
+    jit_transclude_stack = (selfpath != "" ? "\n" selfpath "\n" : "\n")
+    jit_infence = 0
+    tbody = (index(e["body"], "{{") > 0) ? jit_expand_transclusions(e["body"], 0) : e["body"]
+    return tbody jit_badmode_note(e)
+  }
+  out = ""
+  if (e["title"] != "") out = jit_clip(e["title"], 160)
+  if (e["desc"] != "") out = out (out == "" ? "" : "\n") jit_clip(e["desc"], 400)
+  else out = out (out == "" ? "" : "\n") "[jit] There is no description: in this entry, so a match can only name it. Add one and the next match will say what it holds."
+  out = out jit_badmode_note(e)
+  return out "\n[jit] Summary only -- read " rel " for the entry."
+}
+function jit_inject_tag(e,   t) {
+  if (e["mode"] == "full") t = "[full"
+  else if (e["desc"] == "") t = "[summary:no-description"
+  else t = "[summary"
+  return t (e["badmode"] ? ":badmode" : "") "]"
+}
+'
+JIT_AWK_FOLD='
+function jit_fold_latin1(s,   i, p, out) {
+  if (_jit_fold_n == 0)
+    _jit_fold_n = split("á a à a â a ä a ã a å a æ ae ç c é e è e ê e ë e í i ì i î i ï i ñ n " \
+                        "ó o ò o ô o ö o õ o œ oe ß ss ú u ù u û u ü u ý y ÿ y " \
+                        "Á a À a Â a Ä a Ã a Å a Æ ae Ç c É e È e Ê e Ë e Í i Ì i Î i Ï i Ñ n " \
+                        "Ó o Ò o Ô o Ö o Õ o Œ oe Ú u Ù u Û u Ü u Ý y", _jit_fold_tr, "[ ]")
+  for (i = 1; i + 1 <= _jit_fold_n; i += 2) {
+    out = ""
+    while ((p = index(s, _jit_fold_tr[i])) > 0) {
+      out = out substr(s, 1, p - 1) _jit_fold_tr[i+1]
+      s = substr(s, p + length(_jit_fold_tr[i]))
+    }
+    s = out s
+  }
+  return s
+}
+'
+JIT_AWK_HEREDOC='
+function jit_heredoc_opener_is_suppressed(prefix, state0,    i, c, state, n, q1, q2, bs) {
+  q1 = sprintf("%c", 39)
+  q2 = sprintf("%c", 34)
+  bs = sprintf("%c", 92)
+  state = state0
+  n = length(prefix)
+  for (i = 1; i <= n; i++) {
+    c = substr(prefix, i, 1)
+    if (state == 0) {
+      if (c == q1) state = 1
+      else if (c == q2) state = 2
+      else if (c == "#") return 1
+      else if (c == bs) i++
+    } else if (state == 1) {
+      if (c == q1) state = 0
+    } else if (state == 2) {
+      if (c == bs) i++
+      else if (c == q2) state = 0
+    }
+  }
+  return (state != 0)
+}
+function jit_heredoc_line_exit_state(line, state0,    i, c, len, q1, q2, bs, state) {
+  q1 = sprintf("%c", 39)
+  q2 = sprintf("%c", 34)
+  bs = sprintf("%c", 92)
+  state = state0
+  len = length(line)
+  for (i = 1; i <= len; i++) {
+    c = substr(line, i, 1)
+    if (state == 0) {
+      if (c == q1) state = 1
+      else if (c == q2) state = 2
+      else if (c == "#") break
+      else if (c == bs) i++
+    } else if (state == 1) {
+      if (c == q1) state = 0
+    } else if (state == 2) {
+      if (c == bs) i++
+      else if (c == q2) state = 0
+    }
+  }
+  return state
+}
+function jit_heredoc_quote_states(lines, n, qin,    i, state) {
+  state = 0
+  for (i = 1; i <= n; i++) {
+    qin[i] = state
+    state = jit_heredoc_line_exit_state(lines[i], state)
+  }
+}
+function jit_strip_heredoc_body(s, unconditional,    n, lines, i, j, out, strip_tabs, delim, line, rest, probed, op, word, prefix, q1, q2, q3, qclass, close_i, quote_in, lt2) {
+  lt2 = sprintf("%c%c", 60, 60)
+  q1 = sprintf("%c", 39)
+  q2 = sprintf("%c", 34)
+  q3 = sprintf("%c%c", 92, 92)
+  qclass = "[" q1 q2 q3 "]?"
+  n = split(s, lines, "\n")
+  jit_heredoc_quote_states(lines, n, quote_in)
+  out = ""
+  i = 1
+  while (i <= n) {
+    line = lines[i]
+    probed = " " line
+    close_i = 0
+    if (match(probed, "[^<]" lt2 "-?[ \t]*" qclass "[A-Za-z_][A-Za-z0-9_]*" qclass)) {
+      prefix = substr(probed, 1, RSTART)
+      if (!jit_heredoc_opener_is_suppressed(prefix, quote_in[i])) {
+        op = substr(probed, RSTART + 1, RLENGTH - 1)
+        strip_tabs = (substr(op, 1, 3) == lt2 "-")
+        word = op
+        sub("^" lt2 "-?[ \t]*", "", word)
+        gsub("[" q1 q2 q3 "]", "", word)
+        if (word != "" && (unconditional || jit_heredoc_opener_is_known_sink(line))) {
+          delim = word
+          for (j = i + 1; j <= n; j++) {
+            rest = lines[j]
+            sub(/\r$/, "", rest)
+            if (strip_tabs) sub(/^\t+/, "", rest)
+            if (rest == delim) { close_i = j; break }
+          }
+        }
+      }
+    }
+    out = (out == "") ? line : out "\n" line
+    if (close_i > 0) {
+      i = close_i + 1
+    } else {
+      i++
+    }
+  }
+  return out
+}
+function jit_heredoc_opener_has_danger_token(line) {
+  if (index(line, "|") > 0) return 1
+  if (index(line, "$(") > 0) return 1
+  if (index(line, "`") > 0) return 1
+  if (index(line, ">(") > 0) return 1
+  if (index(line, "<(") > 0) return 1
+  return 0
+}
+function jit_heredoc_opener_is_known_sink(line) {
+  if (jit_heredoc_opener_has_danger_token(line)) return 0
+  if (line ~ /(^|[;&|])[ \t]*cat([ \t]|$)/ && line ~ />/) return 1
+  if (line ~ /(^|[;&|])[ \t]*tee[ \t]+[^ \t;&|\n]/) return 1
+  if (line ~ /(^|[;&|])[ \t]*(\.\/)?supertool([ \t]|$)/) return 1
+  if (line ~ /(^|[;&|])[ \t]*git[ \t]+commit([ \t]|$)/ && line ~ /(^|[ \t])(-F|--file)[ \t]*-([ \t]|$)/) return 1
+  if (line ~ /(^|[;&|])[ \t]*gh([ \t]|$)/ && line ~ /(^|[ \t])(--body-file|-F)[ \t]*-([ \t]|$)/) return 1
+  return 0
+}
+'
+JIT_AWK_JSON='
+function jit_trailing_backslashes(s,   c, n) {
+  n = length(s); c = 0
+  while (c < n && substr(s, n - c, 1) == "\134") c++
+  return c
+}
+function jit_json_fields(s, raw, fs, fe,   n, i, k) {
+  n = split(s, raw, "\042")
+  k = 1
+  fs[1] = 1
+  for (i = 1; i < n; i++) {
+    if (jit_trailing_backslashes(raw[i]) % 2 == 1) continue
+    fe[k] = i
+    k++
+    fs[k] = i + 1
+  }
+  fe[k] = n
+  return k
+}
+function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth, ti_depth, pending_ident, pending_key_depth, i, c, ch, txt, val, nxt, is_ident) {
+  depth = 0
+  ti_depth = -1
+  pending_ident = ""
+  pending_key_depth = -1
+  for (i = 1; i <= n; i++) {
+    if (i % 2 == 1) {
+      txt = raw[fs[i]]
+      for (c = 1; c <= length(txt); c++) {
+        ch = substr(txt, c, 1)
+        if (ch == "{") {
+          depth++
+          if (pending_ident == "tool_input" && pending_key_depth == 1 && ti_depth == -1) ti_depth = depth
+        } else if (ch == "}") {
+          if (depth == ti_depth) ti_depth = -1
+          depth--
+        }
+      }
+      continue
+    }
+    if (fs[i] != fe[i]) { pending_ident = ""; pending_key_depth = -1; continue }
+    val = raw[fs[i]]
+    is_ident = 0
+    if (i + 1 <= n) {
+      nxt = raw[fs[i+1]]
+      if (nxt ~ /^[[:space:]]*:/) is_ident = 1
+    }
+    if (!is_ident) { pending_ident = ""; pending_key_depth = -1; continue }
+    pending_ident = val
+    pending_key_depth = depth
+    if (i + 2 > n) continue
+    if (depth == 1) {
+      if ((val in top_wanted) && !(val in TOP)) TOP[val] = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
+    } else if (depth == ti_depth) {
+      if ((val in ti_wanted) && !(val in TI)) TI[val] = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
+    }
+  }
+}
+function jit_session_key(raw, fs, fe, n,   i, k) {
+  for (i = 2; i + 2 <= n; i += 2) {
+    if (fs[i] != fe[i]) continue
+    if (raw[fs[i]] != "session_id") continue
+    if (fs[i+2] != fe[i+2]) return ""
+    k = raw[fs[i+2]]
+    if (k == "" || length(k) > 64) return ""
+    if (k ~ /[^A-Za-z0-9_-]/) return ""
+    return k
+  }
+  return ""
+}
+function jit_agent_key(raw, fs, fe, n,   i, v, base) {
+  for (i = 2; i + 2 <= n; i += 2) {
+    if (fs[i] != fe[i]) continue
+    if (raw[fs[i]] != "transcript_path") continue
+    if (fs[i+2] != fe[i+2]) return ""
+    v = raw[fs[i+2]]
+    if (v == "") return ""
+    base = v
+    gsub(/.*[\/\\]/, "", base)
+    sub(/\.jsonl$/, "", base)
+    if (base == "" || length(base) > 64) return ""
+    if (base ~ /[^A-Za-z0-9_-]/) return ""
+    return base
+  }
+  return ""
+}
+function jit_stop_hook_active(raw, fs, fe, n,   i) {
+  for (i = 2; i <= n; i += 2) {
+    if (fs[i] != fe[i]) continue
+    if (raw[fs[i]] != "stop_hook_active") continue
+    return (raw[fe[i] + 1] ~ /^[[:space:]]*:[[:space:]]*true/) ? 1 : 0
+  }
+  return 0
+}
+function jit_shown_file(dir, kind, raw, fs, fe, n,   k) {
+  return jit_shown_path(dir, kind, jit_session_key(raw, fs, fe, n))
+}
+function jit_agent_shown_file(dir, kind, raw, fs, fe, n,   k) {
+  k = jit_agent_key(raw, fs, fe, n)
+  if (k == "") k = jit_session_key(raw, fs, fe, n)
+  return jit_shown_path(dir, kind, k)
+}
+function jit_shown_path(dir, kind, k) {
+  if (dir == "" || k == "") return ""
+  return dir "/" kind "-shown-" k ".txt"
+}
+function jit_shown_load(file, set,   line) {
+  if (file == "") return
+  while ((getline line < file) > 0) set[line] = 1
+}
+function jit_shown_mark(file, ident) {
+  if (file == "") return
+  JIT_MARKS = JIT_MARKS file "\t" ident "\n"
+}
+function jit_loc_key(dim, layer, file) {
+  return "loc:" dim ":" layer ":" file
+}
+function jit_shown_flush(out) {
+  printf "%s%s\n", JIT_MARKS, ENVIRON["JIT_MARK_END"] > out
+}
+function jit_field(raw, a, b,   o, i) {
+  if (a == "" || b == "" || a > b) return ""
+  if (a == b) return raw[a]
+  o = raw[a]
+  for (i = a + 1; i <= b; i++) o = o "\042" raw[i]
+  return o
+}
+function jit_unescape(s,   n, i, c, nx, o) {
+  if (index(s, "\134") == 0) return s
+  n = length(s); o = ""
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (c != "\134" || i == n) { o = o c; continue }
+    nx = substr(s, i + 1, 1)
+    if (nx == "n") o = o "\n"
+    else if (nx == "t") o = o "\t"
+    else if (nx == "r") o = o "\r"
+    else if (nx == "b") o = o "\b"
+    else if (nx == "f") o = o "\f"
+    else if (nx == "\042") o = o "\042"
+    else if (nx == "/") o = o "/"
+    else if (nx == "\134") o = o "\134"
+    else { o = o c nx; i++; continue }
+    i++
+  }
+  return o
+}
+'
+JIT_AWK_BLK_BUILD='
+function jit_blk_prepend(text,   i) {
+  for (i = nblk; i >= 1; i--) blk[i + 1] = blk[i]
+  blk[1] = text
+  nblk++
+}
+function jit_blk_join(   bi, out, manifest) {
+  if (nblk == 0) return ""
+  manifest = "# JIT-CTX-BLOCKS " nblk
+  out = ""
+  for (bi = 1; bi <= nblk; bi++) {
+    manifest = manifest " " length(blk[bi])
+    out = (out == "") ? blk[bi] : out "\n---\n" blk[bi]
+  }
+  return manifest "\n" out
+}
+'
+JIT_AWK_BLOCKS='
+function jit_unescape_blocks(s,   n, i, c, nx, hx, v, o) {
+  if (index(s, "\134") == 0) return s
+  n = length(s); o = ""
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (c != "\134" || i == n) { o = o c; continue }
+    nx = substr(s, i + 1, 1)
+    if (nx == "n") { o = o "\n"; i++; continue }
+    if (nx == "t") { o = o "\t"; i++; continue }
+    if (nx == "r") { o = o "\r"; i++; continue }
+    if (nx == "b") { o = o "\b"; i++; continue }
+    if (nx == "f") { o = o "\f"; i++; continue }
+    if (nx == "\042") { o = o "\042"; i++; continue }
+    if (nx == "/") { o = o "/"; i++; continue }
+    if (nx == "\134") { o = o "\134"; i++; continue }
+    if (nx == "u" && substr(s, i, 6) ~ /^\\u00[0-9a-fA-F][0-9a-fA-F]$/) {
+      hx = tolower(substr(s, i + 4, 2))
+      v = index("0123456789abcdef", substr(hx, 1, 1)) - 1
+      v = v * 16 + index("0123456789abcdef", substr(hx, 2, 1)) - 1
+      if (v <= 31) { o = o sprintf("%c", v); i += 5; continue }
+    }
+    o = o c nx; i++; continue
+  }
+  return o
+}
+function jit_split_ctx_blocks(ctx,   nl_pos, header, body_rest, hn, hf, declared_n, pos, bi, blen, rest, p1, p2, p) {
+  jit_blk_n = 0
+  jit_blk_manifest_ok = 0
+  delete jit_blk_body
+  if (substr(ctx, 1, 17) == "# JIT-CTX-BLOCKS ") {
+    nl_pos = index(ctx, "\n")
+    if (nl_pos > 0) {
+      header = substr(ctx, 1, nl_pos - 1)
+      body_rest = substr(ctx, nl_pos + 1)
+      hn = split(header, hf, " ")
+      declared_n = hf[3] + 0
+      if (hn == 3 + declared_n && declared_n >= 0 && hf[1] == "#" && hf[2] == "JIT-CTX-BLOCKS") {
+        jit_blk_manifest_ok = 1
+        pos = 1
+        for (bi = 1; bi <= declared_n; bi++) {
+          blen = hf[3 + bi] + 0
+          if (blen < 0 || pos + blen - 1 > length(body_rest)) { jit_blk_manifest_ok = 0; break }
+          jit_blk_body[bi] = substr(body_rest, pos, blen)
+          pos += blen
+          if (bi < declared_n) {
+            if (substr(body_rest, pos, 5) != "\n---\n") { jit_blk_manifest_ok = 0; break }
+            pos += 5
+          }
+        }
+        if (jit_blk_manifest_ok && pos - 1 != length(body_rest)) jit_blk_manifest_ok = 0
+        if (jit_blk_manifest_ok) jit_blk_n = declared_n
+      }
+    }
+  }
+  if (!jit_blk_manifest_ok) {
+    rest = ctx
+    jit_blk_n = 0
+    while (1) {
+      p1 = index(rest, "\n---\n# Vocabulary: ")
+      p2 = index(rest, "\n---\n# JIT Context: ")
+      if (p1 == 0 && p2 == 0) { jit_blk_n++; jit_blk_body[jit_blk_n] = rest; break }
+      if (p1 == 0) p = p2
+      else if (p2 == 0) p = p1
+      else p = (p1 < p2) ? p1 : p2
+      jit_blk_n++
+      jit_blk_body[jit_blk_n] = substr(rest, 1, p - 1)
+      rest = substr(rest, p + 5)
+    }
+  }
+}
+'
+JIT_AWK_ENVELOPE='
+function jit_envelope_inject(event, text_escaped) {
+  if (text_escaped == "") return "{}"
+  return "{\042hookSpecificOutput\042:{\042hookEventName\042:\042" event "\042,\042additionalContext\042:\042" text_escaped "\042}}"
+}
+function jit_envelope_block(reason_escaped) {
+  return "{\042decision\042:\042block\042,\042reason\042:\042" reason_escaped "\042}"
+}
+function jit_envelope_empty() {
+  return "{}"
+}
+'
+JIT_AWK_ENVELOPE_SYSMSG='
+function jit_fmt_bytes(n) {
+  if (n < 1000) return n "b"
+  return sprintf("%.1fk", n / 1000)
+}
+function jit_envelope_inject_sysmsg(event, text_escaped, sysmsg_escaped) {
+  if (text_escaped == "" && sysmsg_escaped == "") return "{}"
+  if (text_escaped == "") return "{\042systemMessage\042:\042" sysmsg_escaped "\042}"
+  if (sysmsg_escaped == "") return jit_envelope_inject(event, text_escaped)
+  return "{\042hookSpecificOutput\042:{\042hookEventName\042:\042" event "\042,\042additionalContext\042:\042" text_escaped "\042},\042systemMessage\042:\042" sysmsg_escaped "\042}"
+}
+function jit_envelope_block_sysmsg(reason_escaped, sysmsg_escaped) {
+  if (sysmsg_escaped == "") return jit_envelope_block(reason_escaped)
+  return "{\042decision\042:\042block\042,\042reason\042:\042" reason_escaped "\042,\042systemMessage\042:\042" sysmsg_escaped "\042}"
+}
+'
+jit_frontmatter_many() { # VAR, entry file, field...
+  local _v="$1" _file="$2" _fields="${*:3}"
+  printf -v "$_v" '%s%s' "$JIT_FM_NL" \
+    "$(LC_ALL=C awk -v fl="$_fields" "$JIT_AWK_FRONTMATTER" "$_file")"
+}
+jit_fm_get() { # VAR, memo, field
+  local _probe="$JIT_FM_NL$3	" _rest
+  case "$2" in
+    *"$_probe"*)
+      _rest="${2#*"$_probe"}"
+      printf -v "$1" '%s' "${_rest%%"$JIT_FM_NL"*}"
+      ;;
+    *) printf -v "$1" '%s' "" ;;
+  esac
+}
+JIT_VALID_MODE_RE='^(remind|block|once)(,(remind|block|once))*$'
+JIT_VALID_REQUIRES_RE='^[A-Za-z0-9._+-]{1,255}$'
+JIT_MACRO_ANCHOR='(^|[;&|\n] *)'
+JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|[e]nv|sudo|nohup|nice|time)[[:space:]]+)*'
+JIT_MACRO_OPT='(-[^[:space:];&|]*[[:space:]]+([^-;&|[:space:]][^[:space:];&|]*[[:space:]]+)?)*'
+JIT_MACRO_END='($|[[:space:];&|])'
+JIT_LOG_MATCHES_MAX=2048
+JIT_LOG_ARROW='<''<'
+export JIT_NAME_WITHHELD='<withheld: not a plain name>'
+JIT_LAYERS_MAX=64
+JIT_LAYERS_REFUSED_MAX=4096
+JIT_LAYERS=""
+export JIT_LAYERS_REFUSED=""
+export JIT_LAYERS_REFUSED_N=0
+JIT_LAYERS_REFUSED_CUT=0
+jit_layer_refuse() {
+  JIT_LAYERS_REFUSED_N=$((JIT_LAYERS_REFUSED_N + 1))
+  if [ "${#JIT_LAYERS_REFUSED}" -gt "$JIT_LAYERS_REFUSED_MAX" ]; then
+    if [ "$JIT_LAYERS_REFUSED_CUT" = 0 ]; then
+      JIT_LAYERS_REFUSED_CUT=1
+      JIT_LAYERS_REFUSED="$JIT_LAYERS_REFUSED$JIT_NL- the remaining refused layer directories are not listed here; the count above is the whole total"
+    fi
+    return 0
+  fi
+  JIT_LAYERS_REFUSED="$JIT_LAYERS_REFUSED${JIT_LAYERS_REFUSED:+$JIT_NL}- $1: $2"
+}
+jit_scan_layers() {
+  local base="$1" dim="$2" d name tsv seen=0 kept=0 cut=0
+  local LC_ALL=C
+  JIT_LAYERS=""
+  for d in "$base"/*/; do
+    [ -d "$d" ] || continue
+    d="${d%/}"
+    name="${d##*/}"
+    seen=$((seen + 1))
+    if [ "$kept" -ge "$JIT_LAYERS_MAX" ]; then
+      if [ "$cut" = 0 ]; then
+        cut=1
+        jit_layer_refuse "$dim" "the layer directories after the first $JIT_LAYERS_MAX were not read"
+      fi
+      continue
+    fi
+    case "$name" in
+      '' | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
+        jit_layer_refuse "$dim" "layer directory $seen was not read: the directory name is not a plain name"
+        continue
+        ;;
+    esac
+    if [ "${#name}" -gt 64 ]; then
+      jit_layer_refuse "$dim" "layer directory $seen was not read: the directory name is longer than 64 bytes"
+      continue
+    fi
+    if [ ! -r "$d" ] || [ ! -x "$d" ]; then
+      jit_layer_refuse "$dim" "layer directory $seen was not read: the directory could not be opened"
+      continue
+    fi
+    for tsv in "$d/00-index.tsv" "$d/01-paths.tsv"; do
+      [ -e "$tsv" ] || continue
+      if [ ! -r "$tsv" ]; then
+        jit_layer_refuse "$dim" "layer directory $seen was not read: an index inside it could not be opened"
+        continue 2
+      fi
+    done
+    JIT_LAYERS="$JIT_LAYERS${JIT_LAYERS:+ }$name"
+    kept=$((kept + 1))
+  done
+}
+JIT_ENTRY_AGES_MAX=8192
+export JIT_ENTRY_AGES=""
+jit_report_name() {
+  local LC_ALL=C
+  case "$1" in
+    '' | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
+      printf '%s' "$JIT_NAME_WITHHELD"
+      return 0
+      ;;
+  esac
+  [ "${#1}" -gt 64 ] && {
+    printf '%s' "$JIT_NAME_WITHHELD"
+    return 0
+  }
+  printf '%s' "$1"
+}
+export JIT_KEYWORD_WITHHELD='<withheld: not a plain keyword>'
+jit_report_keyword() {
+  local LC_ALL=C s="$1" flat rest n=1
+  flat="${s// /-}"
+  case "$flat" in
+    '' | [!a-z0-9]* | *[!a-z0-9-]*)
+      printf '%s' "$JIT_KEYWORD_WITHHELD"
+      return 0
+      ;;
+  esac
+  [ "${#s}" -gt 40 ] && {
+    printf '%s' "$JIT_KEYWORD_WITHHELD"
+    return 0
+  }
+  rest="$s"
+  while [ "$rest" != "${rest#* }" ]; do
+    rest="${rest#* }"
+    n=$((n + 1))
+  done
+  [ "$n" -gt 4 ] && {
+    printf '%s' "$JIT_KEYWORD_WITHHELD"
+    return 0
+  }
+  printf '%s' "$s"
+}
+JIT_MISSING_REQUIRES_MAX=4096
 BASE=""
 BASE_FROM=""
-
 usage() {
-  cat << 'EOF'
-jit-doctor.sh -- is any of this running at all, and against which tree?
-
-  bash scripts/jit-doctor.sh [--base DIR]
-
-  --base DIR   the entry tree to judge. Default: $CLAUDE_PROJECT_DIR/.claude/jit-context,
-               which is what the hooks read (with CLAUDE_PROJECT_DIR unset it falls
-               back to the current directory).
-  --help       this text.
-
-What it reports
-
-  tree         JIT_BASE as resolved, and what it resolved from
-  hooks        which copy of the hooks would run -- the plugin cache, this checkout,
-               BOTH, or `cannot tell`, which is a real answer and not a failure
-  config.env   present or not, its refused lines, and the effective injection mode
-  thresholds   the two ADVISORY thresholds and WHERE EACH CAME FROM, so a mistyped
-               JIT_CONTEXT_DOCTOR_* key reads as a default rather than as a setting
-  dimensions   per layer: entries, whether the matcher loads it, whether an index is
-               there, and whether an entry is newer than it
-  hook log     never ran, ran recently, or ran a while ago -- three states, not two
-  advisory     short keywords, fat entries, entries with no record in the log
-
-Outcomes
-
-  ok, exit 0        nothing inert. ADVISORY findings do not move this.
-  defect, exit 1    a layer holds entries and no index: those rules cannot fire.
-  SKIPPED, exit 2   the tree could not be evaluated. The reason is named, on stderr.
-
-It reads and prints. It writes no entry and no index.
-EOF
+  printf '%s\n' \
+    'jit-doctor.sh -- is any of this running at all, and against which tree?' \
+    '' \
+    '  jit-doctor [--base DIR]' \
+    '' \
+    '  --base DIR   the entry tree to judge. Default: $CLAUDE_PROJECT_DIR/.claude/jit-context,' \
+    '               which is what the hooks read (with CLAUDE_PROJECT_DIR unset it falls' \
+    '               back to the current directory).' \
+    '  --help       this text.' \
+    '' \
+    'What it reports' \
+    '' \
+    '  tree         JIT_BASE as resolved, and what it resolved from' \
+    '  hooks        which copy of the hooks would run -- the plugin cache, this checkout,' \
+    '               BOTH, or `cannot tell`, which is a real answer and not a failure' \
+    '  config.env   present or not, its refused lines, and the effective injection mode' \
+    '  thresholds   the two ADVISORY thresholds and WHERE EACH CAME FROM, so a mistyped' \
+    '               JIT_CONTEXT_DOCTOR_* key reads as a default rather than as a setting' \
+    '  dimensions   per layer: entries, whether the matcher loads it, whether an index is' \
+    '               there, and whether an entry is newer than it' \
+    '  hook log     never ran, ran recently, or ran a while ago -- three states, not two' \
+    '  advisory     short keywords, fat entries, entries with no record in the log' \
+    '' \
+    'Outcomes' \
+    '' \
+    '  ok, exit 0        nothing inert. ADVISORY findings do not move this.' \
+    '  defect, exit 1    a layer holds entries and no index: those rules cannot fire.' \
+    '  SKIPPED, exit 2   the tree could not be evaluated. The reason is named, on stderr.' \
+    '' \
+    'It reads and prints. It writes no entry and no index.'
 }
-
-# A valued flag with no value is refused in the loop, not left to `shift 2`. Under
-# `set -uo pipefail` with no `-e` that shift merely fails, $1 never advances, and the loop
-# spins forever having printed nothing -- #114, on four flags across two tools. Every
-# refusal goes to stderr with a non-zero status, which is paths/00-manual/tooling.md
-# contract: STDOUT IS THE REPORT, and a refusal captured by `jit-doctor.sh > health.txt`
-# would otherwise sit in that file under no heading and read as a finding (#125).
 need_value() {
   echo "jit-doctor: SKIPPED -- $1 needs a value" >&2
   echo "  run with --help for the accepted flags. Nothing was checked." >&2
   exit 2
 }
-
-# commands/doctor.md hands the whole typed $ARGUMENTS string through this one
-# synthetic flag instead of splitting it in the command body's own `bash -c`
-# (#405's fix). That wrapper made the body's first word `bash -c`, which the
-# Anthropic directory holds as unscoped shell access no matter what follows
-# it, so the allowed-tools grant could never narrow to this script (#439).
-# Splitting happens HERE instead, under the bash this script always runs
-# under -- #405 only mattered when the splitting ran in whatever shell
-# happened to execute the command body, which was never guaranteed to be bash.
 if [ "${1:-}" = "--arguments-string" ]; then
   [ $# -ge 2 ] || need_value "$1"
   IFS=' ' read -r -a _jit_doctor_split_args <<< "${2:-}"
   shift 2
   set -- "${_jit_doctor_split_args[@]+"${_jit_doctor_split_args[@]}"}" "$@"
 fi
-
 while [ $# -gt 0 ]; do
   case "$1" in
     --base)
@@ -140,7 +1467,6 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
-
 if [ -z "$BASE" ]; then
   BASE="$JIT_BASE"
   if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
@@ -150,25 +1476,21 @@ if [ -z "$BASE" ]; then
   fi
 fi
 BASE="${BASE%/}"
-
 skip() {
   echo "jit-doctor: SKIPPED -- $1" >&2
   echo "  tree: $BASE" >&2
   echo "  Nothing was checked. This is not a clean result." >&2
   exit 2
 }
-
 [ -e "$BASE" ] || skip "no such directory -- this project has no entry tree, or it lives elsewhere (--base DIR)"
 [ -d "$BASE" ] || skip "not a directory"
 [ -r "$BASE" ] || skip "not readable"
-
 HAVE_DIM=0
 for _d in tools paths vocabulary; do
   [ -d "$BASE/$_d" ] && HAVE_DIM=1
 done
 unset _d
 [ "$HAVE_DIM" = 1 ] || skip "no tools/, paths/ or vocabulary/ under it -- there is no entry tree here to judge"
-
 DEFECTS=0
 ADVISORY=""
 ADVISORY_N=0
@@ -177,111 +1499,45 @@ advise() {
   ADVISORY="$ADVISORY  ADVISORY  $1
 "
 }
-
 echo "jit-doctor -- is any of this running at all, and against which tree?"
 echo ""
-
-# --- tree --------------------------------------------------------------------
-# Named before one word is said about it. Every finding below is a claim about THIS
-# directory, and a reader who assumes it is the one they are standing in is the reader
-# #183 was filed about.
 echo "tree"
 printf '  %-20s %s\n' "JIT_BASE" "$BASE"
 printf '  %-20s %s\n' "resolved from" "$BASE_FROM"
 printf '  %-20s %s\n' "CLAUDE_PROJECT_DIR" "${CLAUDE_PROJECT_DIR:-(unset)}"
-
-# #402: the leading candidate for a report of stale jit-context bodies surviving a
-# confirmed on-disk edit -- a WORKTREE session whose CLAUDE_PROJECT_DIR still names the
-# MAIN clone (or another worktree entirely). Every hook resolves JIT_BASE against
-# CLAUDE_PROJECT_DIR, never against $PWD (the "second trap" this repository own
-# CLAUDE.md already names), so an edit made in the tree the agent is actually sitting in
-# can be served back from a DIFFERENT tree's copy of the same relative path, silently.
-# rebuild-tsv.sh already refuses this shape at WRITE time (#231,
-# JIT_CONTEXT_ALLOW_CROSS_TREE); nothing on the READ side has ever surfaced it, and #402
-# itself could not confirm a mechanism -- this makes the most likely one checkable
-# rather than merely documented in prose.
-#
-# Advisory, not a defect: CLAUDE_PROJECT_DIR need not be a git repository at all (a
-# plain directory with no .git is a normal, healthy setup), and this must not read that
-# absence as a mismatch. `git rev-parse --show-toplevel` failing on EITHER side means
-# this check could not be run, not that the trees agree -- so it says nothing rather
-# than a false negative. Two failures, not one -- $CLAUDE_PROJECT_DIR is a git repo but
-# $PWD is not (or the reverse) must decline for the exact same reason a genuine mismatch
-# would be missed if either side were skipped.
 if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
   if ! command -v git > /dev/null 2>&1; then
-    # oss:auditor self-review: silence here used to read exactly like "confirmed the same
-    # tree" -- this file already treats `cannot tell` as a first-class answer everywhere
-    # else (the hooks-copy section a few lines below), and this check has to hold the
-    # same line: it CANNOT tell whether the trees agree without git, which is a different
-    # fact than having checked and found agreement.
     advise "cannot tell whether CLAUDE_PROJECT_DIR names a different git worktree than the one this shell is sitting in -- git is not on PATH, so this check (#402) could not run."
   else
-    PWD_TOPLEVEL="$(cd "$PWD" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)"
+    CWD_TOPLEVEL="$(git rev-parse --show-toplevel 2> /dev/null)"
     CPD_TOPLEVEL="$(cd "$CLAUDE_PROJECT_DIR" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)"
-    if [ -z "$PWD_TOPLEVEL" ] || [ -z "$CPD_TOPLEVEL" ]; then
+    if [ -z "$CWD_TOPLEVEL" ] || [ -z "$CPD_TOPLEVEL" ]; then
       UNRESOLVED=""
-      [ -z "$PWD_TOPLEVEL" ] && UNRESOLVED="\$PWD ($PWD)"
+      [ -z "$CWD_TOPLEVEL" ] && UNRESOLVED="the working directory"
       if [ -z "$CPD_TOPLEVEL" ]; then
         [ -n "$UNRESOLVED" ] && UNRESOLVED="$UNRESOLVED and "
         UNRESOLVED="${UNRESOLVED}CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR)"
       fi
       advise "cannot tell whether CLAUDE_PROJECT_DIR names a different git worktree than the one this shell is sitting in -- $UNRESOLVED is not inside a git worktree git can resolve, so this check (#402) could not run."
-    elif [ "$PWD_TOPLEVEL" != "$CPD_TOPLEVEL" ]; then
-      advise "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $CPD_TOPLEVEL) names a DIFFERENT git worktree than the one this shell is sitting in ($PWD -- git worktree $PWD_TOPLEVEL). Every hook resolves JIT_BASE from CLAUDE_PROJECT_DIR, never from \$PWD -- an edit made in the tree you are sitting in can be served back from the OTHER tree copy of the same relative path, silently (#402)."
+    elif [ "$CWD_TOPLEVEL" != "$CPD_TOPLEVEL" ]; then
+      advise "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $CPD_TOPLEVEL) names a DIFFERENT git worktree than the one this shell is sitting in (git worktree $CWD_TOPLEVEL). Every hook resolves JIT_BASE from CLAUDE_PROJECT_DIR, never from the working directory -- an edit made in the tree you are sitting in can be served back from the OTHER tree copy of the same relative path, silently (#402)."
     fi
   fi
 fi
 echo ""
-
-# --- which copy of the hooks would run ---------------------------------------
-# The whole reason this file exists, and the check whose THIRD STATE matters most: a
-# confident wrong answer here is worse than none.
-#
-# The scan is textual and says so. Two markers, read independently:
-#
-#   enabledPlugins  a quoted key naming this plugin -- the hooks come from the cache
-#   a hook command  a line naming one of this plugin's own hook scripts. If that same
-#                   line also names CLAUDE_PLUGIN_ROOT or a plugins/cache path it is the
-#                   cache again, wired by hand; otherwise it is a checkout.
-#
-# Anything else -- no readable settings file, or one that mentions neither -- is
-# `cannot tell`, which is NOT "nothing is registered". Claude Code merges user, project,
-# local and enterprise settings, and this script can see three of those at most.
 PROJ_DIR="$(cd "$BASE/../.." 2> /dev/null && pwd)" || PROJ_DIR=""
 SETTINGS_SEEN=0
 CACHE_SIDE=0
 CHECKOUT_SIDE=0
 SETTINGS_LIST=""
-
 scan_settings() {
   local f="$1" enab hooksline cacheline
   [ -f "$f" ] && [ -r "$f" ] || return 0
   SETTINGS_SEEN=$((SETTINGS_SEEN + 1))
   SETTINGS_LIST="$SETTINGS_LIST  $(printf '%-20s %s\n' "scanned" "$f (textual scan, not a JSON parse)")
 "
-  # TWO conditions, and the first draft had neither. `"claude-jit-context...":` alone
-  # matched the KEY and ignored the VALUE, so a plugin explicitly turned OFF --
-  # `"claude-jit-context@dpt-plugins": false` -- read as `the plugin cache serves the
-  # hooks`. That is the confident wrong answer this section's own header says is worse
-  # than none, in the one check the whole tool exists for.
-  #
-  # So the value must be `true`, and the file must mention `enabledPlugins` at all. The
-  # second is what scopes the first without a JSON parser: requiring `": true"` already
-  # rules out the plugin name appearing inside a hook COMMAND string, where it is part of
-  # a path and never a key with a boolean after it.
-  #
-  # Be honest about the residue, because this scan is textual and cannot be otherwise
-  # here: a `"claude-jit-context": true` sitting under some third key in a file that also
-  # carries an enabledPlugins block would still count. That is a shape nobody writes, and
-  # the alternative is brace-depth tracking in awk over minified JSON, which fails
-  # differently and more quietly. Everything this cannot establish falls through to
-  # `cannot tell`, which is the whole reason that verdict is a first-class one.
   enab=0
   if LC_ALL=C awk '/"enabledPlugins"[[:space:]]*:/ { found = 1 } END { exit !found }' "$f"; then
-    # #452: `jit-context` is the name, `claude-jit-context` the former one. A marketplace
-    # `renames` entry rewrites the key only once the user has updated, so both are this
-    # plugin. Anchored on the opening quote, so `my-jit-context` is not.
     enab=$(LC_ALL=C awk '/"(claude-)?jit-context(@[^"]*)?"[[:space:]]*:[[:space:]]*true/ { n++ } END { print n + 0 }' "$f")
   fi
   hooksline=$(LC_ALL=C awk '/(pre-prompt|pre-tool|pre-path|session-start)-hook[.]sh/ { n++ } END { print n + 0 }' "$f")
@@ -291,13 +1547,11 @@ scan_settings() {
   [ "$((hooksline - cacheline))" -gt 0 ] && CHECKOUT_SIDE=1
   return 0
 }
-
 if [ -n "$PROJ_DIR" ]; then
   scan_settings "$PROJ_DIR/.claude/settings.json"
   scan_settings "$PROJ_DIR/.claude/settings.local.json"
 fi
 [ -n "${HOME:-}" ] && scan_settings "$HOME/.claude/settings.json"
-
 echo "hooks"
 if [ "$CACHE_SIDE" = 1 ] && [ "$CHECKOUT_SIDE" = 1 ]; then
   printf '  %-20s %s\n' "which copy runs" "BOTH are registered -- a cache install and a hook command"
@@ -317,12 +1571,7 @@ if [ "$SETTINGS_SEEN" -gt 0 ]; then
 else
   printf '  %-20s %s\n' "scanned" "no settings file at any location this textual scan can reach"
 fi
-
-# Which cache copy, and at which version. Nothing in this repository controls the shape of
-# that path, so a miss and an ambiguity are both said out loud rather than guessed at.
 plugin_version() {
-  # $1 a plugin root. Prints the version, routed through jit_report_name() like every
-  # other value here -- it is read off a file on disk, not out of this repository.
   local pj="$1/.claude-plugin/plugin.json" v
   [ -r "$pj" ] || return 1
   v=$(LC_ALL=C awk '
@@ -337,7 +1586,6 @@ plugin_version() {
   jit_report_name "$v"
   return 0
 }
-
 CACHE_HITS=""
 CACHE_N=0
 note_cache() {
@@ -348,13 +1596,10 @@ note_cache() {
   CACHE_HITS="$CACHE_HITS  $(printf '%-20s %s\n' "plugin copy" "$root${v:+ (version $v)}")
 "
 }
-
 if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
   note_cache "$CLAUDE_PLUGIN_ROOT"
 fi
 if [ -n "${HOME:-}" ]; then
-  # #452: the cache directory is named after the plugin, so an install from before the
-  # rename and one after it sit under different names. Both are copies of this plugin.
   for _c in "$HOME"/.claude/plugins/cache/*/jit-context \
     "$HOME"/.claude/plugins/cache/*/jit-context/* \
     "$HOME"/.claude/plugins/cache/*/claude-jit-context \
@@ -372,13 +1617,6 @@ else
   fi
 fi
 echo ""
-
-# --- config.env --------------------------------------------------------------
-# jit_load_config() reads and never executes -- that is what closed the config.env hole --
-# but it does ASSIGN what it accepts, and a diagnostic must not take its behaviour from
-# the tree it was asked to judge. So it runs in a SUBSHELL and exactly four scalars cross
-# back out, each validated here before it is used or printed. jit-dry-run.sh takes the
-# same shape for the same reason.
 CFG="$BASE/config.env"
 CFG_STATE=absent
 CFG_REFUSED_N=0
@@ -388,12 +1626,6 @@ TREE_MIN=""
 CFG_LINE_MAX=""
 CFG_LINE_MIN=""
 CFG_UNKNOWN=""
-
-# config.env arrives with the clone, so a KEY read out of it is attacker-chosen text just
-# as an entry file name is. This is jit_report_name()'s set plus the underscore, because a
-# settable key carries one, and it is a function for the same reason that one is: under a
-# UTF-8 locale bash own [A-Za-z0-9] admits accented letters and ${#s} counts characters
-# rather than bytes, so the whole guard has to run under C collation.
 report_setting_name() {
   local LC_ALL=C
   case "$1" in
@@ -408,18 +1640,11 @@ report_setting_name() {
   }
   printf '%s' "$1"
 }
-
 if [ -L "$CFG" ]; then
-  # Quoted: `link` is a real command on some systems, and shellcheck SC2209 is right that
-  # a bare word here reads as one.
   CFG_STATE="link"
 elif [ -f "$CFG" ]; then
   CFG_STATE="present"
   _cfg=$(
-    # Both are reset, not just the count: jit_load_config() appends to the list and
-    # increments the number, and common.sh has already run it once against the SESSION
-    # config. Inheriting either would report this tree as carrying another tree lines.
-    # shellcheck disable=SC2034
     JIT_CONFIG_REFUSED=""
     JIT_CONFIG_REFUSED_N=0
     JIT_CONTEXT_INJECT=""
@@ -438,15 +1663,8 @@ elif [ -f "$CFG" ]; then
       max=*) TREE_MAX="${_l#max=}" ;;
       min=*) TREE_MIN="${_l#min=}" ;;
     esac
-  done << EOF
-$_cfg
-EOF
+  done <<< "$_cfg"
   case "$CFG_REFUSED_N" in '' | *[!0-9]*) CFG_REFUSED_N=0 ;; esac
-
-  # A second, tiny pass for PROVENANCE and for the typo case. jit_load_config() reports
-  # neither: a JIT_CONTEXT_DOCTOR_MAX_BYTE -- singular -- parses clean, is accepted as a
-  # settable key, and is never read by anything, which reads exactly like a setting that
-  # applied and did nothing. No line TEXT leaves this loop, only a key and a number.
   _n=0
   while IFS= read -r _l || [ -n "$_l" ]; do
     _n=$((_n + 1))
@@ -454,11 +1672,12 @@ EOF
     while [ "$_l" != "${_l#[[:space:]]}" ]; do _l="${_l#[[:space:]]}"; done
     case "$_l" in
       '' | '#'*) continue ;;
-      export[[:space:]]*)
-        _l="${_l#export}"
-        while [ "$_l" != "${_l#[[:space:]]}" ]; do _l="${_l#[[:space:]]}"; done
-        ;;
     esac
+    _r="${_l#export}"
+    if [ "$_r" != "$_l" ] && [ "${_r#[[:space:]]}" != "$_r" ]; then
+      _l="$_r"
+      while [ "$_l" != "${_l#[[:space:]]}" ]; do _l="${_l#[[:space:]]}"; done
+    fi
     case "$_l" in *=*) _k="${_l%%=*}" ;; *) continue ;; esac
     case "$_k" in
       JIT_CONTEXT_DOCTOR_MAX_BYTES) CFG_LINE_MAX="$_n" ;;
@@ -470,7 +1689,6 @@ EOF
   done < "$CFG"
   unset _n _k _l _cfg
 fi
-
 echo "config.env"
 case "$CFG_STATE" in
   absent) printf '  %-20s %s\n' "file" "absent -- every setting is at its default" ;;
@@ -489,45 +1707,27 @@ case "$TREE_INJECT" in
   *) printf '  %-20s %s\n' "JIT_CONTEXT_INJECT" "full (default)" ;;
 esac
 echo ""
-
-# --- thresholds --------------------------------------------------------------
-# Both default IN THIS SCRIPT, so it works against a tree with no config.env at all, and
-# both print WHERE THEY CAME FROM. That provenance is the whole point: config.env accepts
-# any JIT_CONTEXT_* key without refusing it, so the only way a typo becomes visible is a
-# threshold that still says (default) next to a key nobody reads.
-#
-# The value is VALIDATED, never trusted. `[ "$size" -gt "$junk" ]` would abort the report
-# halfway through with a bash diagnostic, on a file that arrived with the clone.
 MAX_BYTES=4096
 MAX_FROM="(default)"
 MIN_KEYWORD=3
 MIN_FROM="(default)"
 THRESH_REFUSED=""
-
-# GLOBALS OUT, never `$( )`. The first draft returned the accepted value on stdout and
-# appended the refusal to THRESH_REFUSED -- inside a command substitution, which is a
-# SUBSHELL, so every refusal was written into a process that then exited. The report said
-# `4096 (default)` and nothing else, which is precisely the silent-drop this function
-# exists to prevent, reproduced inside it. tests/test-jit-doctor.sh caught it because the
-# junk-value fixture asserts on the refusal TEXT and not only on the default surviving.
 THRESH_VALUE=""
 THRESH_FROM=""
 read_threshold() {
-  # $1 raw value, $2 line number, $3 key name. Sets THRESH_VALUE and THRESH_FROM on
-  # acceptance; appends to THRESH_REFUSED and returns 1 otherwise.
-  local raw="$1" line="$2" key="$3"
+  local raw="$1" line="$2" setting="$3"
   THRESH_VALUE=""
   THRESH_FROM=""
   [ -n "$raw" ] || return 1
   case "$raw" in
     '' | *[!0-9]*)
-      THRESH_REFUSED="$THRESH_REFUSED  $(printf '%-20s %s' "" "$key is not a whole number -- refused, the default stands")
+      THRESH_REFUSED="$THRESH_REFUSED  $(printf '%-20s %s' "" "$setting is not a whole number -- refused, the default stands")
 "
       return 1
       ;;
   esac
   if [ "$raw" -lt 1 ]; then
-    THRESH_REFUSED="$THRESH_REFUSED  $(printf '%-20s %s' "" "$key is not a whole number above zero -- refused, the default stands")
+    THRESH_REFUSED="$THRESH_REFUSED  $(printf '%-20s %s' "" "$setting is not a whole number above zero -- refused, the default stands")
 "
     return 1
   fi
@@ -535,7 +1735,6 @@ read_threshold() {
   THRESH_FROM="(config.env line ${line:-?})"
   return 0
 }
-
 if read_threshold "$TREE_MAX" "$CFG_LINE_MAX" "JIT_CONTEXT_DOCTOR_MAX_BYTES"; then
   MAX_BYTES="$THRESH_VALUE"
   MAX_FROM="$THRESH_FROM"
@@ -544,7 +1743,6 @@ if read_threshold "$TREE_MIN" "$CFG_LINE_MIN" "JIT_CONTEXT_DOCTOR_MIN_KEYWORD"; 
   MIN_KEYWORD="$THRESH_VALUE"
   MIN_FROM="$THRESH_FROM"
 fi
-
 echo "thresholds"
 printf '  %-20s %s\n' "max entry bytes" "$MAX_BYTES $MAX_FROM"
 printf '  %-20s %s\n' "min keyword bytes" "$MIN_KEYWORD $MIN_FROM"
@@ -554,11 +1752,6 @@ if [ -n "$CFG_UNKNOWN" ]; then
   printf '  %-20s %s\n' "" "config.env accepts any JIT_CONTEXT_* key; nothing reads these ones"
 fi
 echo ""
-
-# --- the hook log ------------------------------------------------------------
-# Three states, because "the hooks never ran here" and "they ran and matched nothing" are
-# different facts that are indistinguishable today. Read BEFORE the dimensions section,
-# which uses the fire counts.
 LOG="$BASE/.discovery/logs/hooks.log"
 LOG_STATE=absent
 LOG_RECORDS=0
@@ -566,14 +1759,21 @@ LOG_AGE=""
 if [ -f "$LOG" ] && [ -r "$LOG" ]; then
   LOG_STATE=present
   LOG_RECORDS=$(LC_ALL=C awk 'END { print NR + 0 }' "$LOG")
-  # perl, not `date -d`: the -d form is GNU-only and this runs on macOS and Git Bash too.
-  # perl is already a runtime dependency of every hook here (common.sh _ts/_ms), so this
-  # adds nothing. WHOLE DAYS, deliberately coarse -- a precise answer that is wrong on one
-  # leg is worth less than a coarse one that is right on all three.
-  LOG_AGE=$(perl -e 'printf("%d", int(-M $ARGV[0]))' "$LOG" 2> /dev/null) || LOG_AGE=""
-  case "$LOG_AGE" in '' | *[!0-9]*) LOG_AGE="" ;; esac
+  if [ -n "$(find "$LOG" -prune 2> /dev/null)" ] && [ -z "$(find "$LOG" -prune -mtime +8192 2> /dev/null)" ]; then
+    _age_lo=0
+    _age_hi=8192
+    while [ "$_age_lo" -lt "$_age_hi" ]; do
+      _age_mid=$(((_age_lo + _age_hi) / 2))
+      if [ -n "$(find "$LOG" -prune -mtime "+$_age_mid" 2> /dev/null)" ]; then
+        _age_lo=$((_age_mid + 1))
+      else
+        _age_hi=$_age_mid
+      fi
+    done
+    LOG_AGE=$_age_lo
+    unset _age_lo _age_hi _age_mid
+  fi
 fi
-
 echo "hook log"
 if [ "$LOG_STATE" = absent ]; then
   printf '  %-20s %s\n' "state" "no hook log under this tree"
@@ -583,7 +1783,7 @@ else
   printf '  %-20s %s\n' "file" "$LOG"
   printf '  %-20s %s\n' "records" "$LOG_RECORDS record(s)"
   if [ -z "$LOG_AGE" ]; then
-    printf '  %-20s %s\n' "last written" "cannot tell -- no perl here to read the timestamp"
+    printf '  %-20s %s\n' "last written" "cannot tell -- the file's age could not be read"
   elif [ "$LOG_AGE" -lt 1 ]; then
     printf '  %-20s %s\n' "last written" "today"
   else
@@ -591,20 +1791,13 @@ else
   fi
 fi
 echo ""
-
-# --- dimensions, layers, entries and indexes ---------------------------------
-# jit_scan_layers() is the function the three hooks call, sourced from the common.sh they
-# source, run here against the tree being judged. A layer in its list is a layer the code
-# ON THIS DISK opens -- measured, not documented (#176).
 JIT_LAYERS_REFUSED=""
 JIT_LAYERS_REFUSED_N=0
-
-ENTRY_KEY=()
+ENTRY_IDS=()
 ENTRY_LABEL=()
 ENTRY_NAME=()
 ENTRY_BYTES=()
 ENTRY_N=0
-
 echo "dimensions"
 for _dim in tools paths vocabulary; do
   if [ ! -d "$BASE/$_dim" ]; then
@@ -623,37 +1816,11 @@ for _dim in tools paths vocabulary; do
     _idx="$_d/00-index.tsv"
     _md_n=0
     _stale=0
-    # #374: a layer's own 00-README.md (or any other doc-only .md) carries no
-    # tool:/match: frontmatter, so rebuild-tsv.sh correctly leaves it out of
-    # 00-index.tsv, and the hooks -- which read that index and nothing else -- can never
-    # load it. It is never eligible to fire, so the two advisory passes below must not
-    # call it "fat" or "never fired": that is an absence THIS TOOL produced (it globs
-    # every *.md, indexed or not) read as an absence in the world, the same class the
-    # tools-dimension log-key fix above this loop exists to end, one class over.
-    #
-    # Read against the index rather than re-parsing each .md's own frontmatter: "the
-    # hooks read 00-index.tsv and nothing else" is already this file's standing test for
-    # eligibility (the comment just above), and the filename column is the one thing
-    # every dimension's row carries, so it needs no per-dimension frontmatter parser.
-    # The filename sits at a different column per dimension -- tools rows are
-    # `tool	match	filename	mode	...`, paths/vocabulary rows are `match	filename` or
-    # `keyword	filename	verdict` -- so the column picked here has to follow that.
     case "$_dim" in
       tools) _namecol=3 ;;
       *) _namecol=2 ;;
     esac
     _idx_names=""
-    # An index that EXISTS but cannot be READ (permission denied) is not the same state
-    # as no index at all -- `awk` would fail silently to stderr and leave _idx_names
-    # empty, which reads identically to "this layer has nothing indexed" and would
-    # exclude every genuinely-indexed rule from both advisories below with nothing
-    # naming why. `-r` alongside `-f` is this file's own sibling convention for the
-    # same file (the `[ -f "$d/00-index.tsv" ] && [ -r "$d/00-index.tsv" ]` guard in
-    # scan_short_keywords() further down) -- when it fails, fall back to the pre-#374
-    # behaviour for this layer (every .md is eligible) rather than silently excluding
-    # everything: jit_scan_layers() already surfaces an unreadable index elsewhere in
-    # this same report, as a layer the matcher does not read, so this fallback trades
-    # a possible false "fat"/"never fired" for never a false silence.
     _idx_readable=1
     if [ -f "$_idx" ]; then
       if [ -r "$_idx" ]; then
@@ -670,27 +1837,15 @@ for _dim in tools paths vocabulary; do
       if [ "$_idx_readable" = 1 ]; then
         case "$JIT_NL$_idx_names$JIT_NL" in
           *"$JIT_NL$_name$JIT_NL"*) : ;;
-          # Not a line 00-index.tsv names for this layer -- not a rule, so it is counted
-          # in _md_n above (the dimension's own tally still shows it) and left out of
-          # ENTRY_* below (the two advisory passes never see it).
           *) continue ;;
         esac
       fi
-      # THE LOG KEY IS NOT THE DISPLAY LABEL, and the two dimensions spell it differently.
-      # pre-path-hook.sh and the vocabulary half of pre-tool-hook.sh write `layer:file.md(`
-      # -- but the TOOLS half writes the literal `tool:file.md(` and never the layer name
-      # (the four `"tool:" r_logname` appends in the tools loop of pre-tool-hook.sh: the
-      # two BLOCKED ones for require and forbid, the `[full:block]` one, and the advisory
-      # one that builds `log_adv`). Keyed on the layer for all three, every
-      # tools entry came back with a fire count of zero and was reported `never fired`
-      # however often it had actually matched: an absence produced by this tool, reported
-      # as an absence in the world, in the section written to end exactly that.
       case "$_dim" in
-        tools) _key="tool:$_name" ;;
-        *) _key="$_layer:$_name" ;;
+        tools) _entry_id="tool:$_name" ;;
+        *) _entry_id="$_layer:$_name" ;;
       esac
-      case "$_key" in *"$JIT_NL"*) _key="<unnameable>" ;; esac
-      ENTRY_KEY[$ENTRY_N]="$_key"
+      case "$_entry_id" in *"$JIT_NL"*) _entry_id="<unnameable>" ;; esac
+      ENTRY_IDS[$ENTRY_N]="$_entry_id"
       ENTRY_LABEL[$ENTRY_N]="$_dim/$_safe"
       ENTRY_NAME[$ENTRY_N]="$(jit_report_name "$_name")"
       ENTRY_BYTES[$ENTRY_N]=$(LC_ALL=C awk 'END { print n + 0 } { n += length($0) + 1 }' "$_md")
@@ -699,18 +1854,12 @@ for _dim in tools paths vocabulary; do
     _note=""
     if [ ! -f "$_idx" ]; then
       if [ "$_md_n" -gt 0 ]; then
-        # EXACT, and the one thing here that is a defect rather than a hint: the hooks
-        # read 00-index.tsv and nothing else, so every rule in this layer is inert.
-        _note="no index -- every rule in this layer is inert, run scripts/rebuild-tsv.sh"
+        _note="no index -- every rule in this layer is inert, run the rebuild-tsv tool this plugin ships"
         DEFECTS=$((DEFECTS + 1))
       else
         _note="no index, and no entries either"
       fi
     elif [ "$_stale" = 1 ]; then
-      # ADVISORY and not a defect, on purpose. mtime is a PROXY: a fresh clone writes
-      # 00-index.tsv before the .md files beside it, so this accuses a tree that is
-      # perfectly current. jit-dry-run.sh compares the frontmatter against the row and
-      # owns that verdict; this only says where to look.
       _note="an entry is newer than the index -- see jit-dry-run.sh, which checks the rows"
       advise "$(printf '%-18s %-24s %s' "possibly inert" "$_dim/$_safe" "an entry is newer than the index")"
     else
@@ -722,39 +1871,26 @@ for _dim in tools paths vocabulary; do
     esac
     printf '  %-24s %3d entr(y/ies)  %s%s\n' "$_dim/$_safe" "$_md_n" "$_note" "$_loads"
   done
-  # A dimension directory that exists and holds no layer directory printed NOTHING: the
-  # glob stays literal with no nullglob, the `[ -d ]` drops it, and the loop body never
-  # runs. So the dimension simply did not appear under this heading -- which is what a
-  # scan that died halfway would also look like, and is the same collapsed pair the
-  # missing-dimension branch above was careful to keep apart.
   if [ "$_rows" = 0 ]; then
     printf '  %-24s %s\n' "$_dim/" "no layer directory under it -- there is nothing here to load"
   fi
 done
 unset _dim _d _layer _safe _idx _md _md_n _stale _name _key _note _loads _read _rows
 if [ "$JIT_LAYERS_REFUSED_N" -gt 0 ]; then
-  # By position and never by name, the rule the hooks own notice follows: a layer
-  # directory name arrives with the clone.
   printf '  %s\n' "$JIT_LAYERS_REFUSED_N layer director(y/ies) exist and the matcher does not read:"
   printf '%s\n' "$JIT_LAYERS_REFUSED" | sed 's/^/    /'
   printf '  %s\n' "Nothing inside them can fire. jit-dry-run.sh prints the same list with its lint."
 fi
 echo ""
-
-# --- how often each entry fired ----------------------------------------------
-# One awk pass over the log for every entry at once, rather than one grep per entry: a
-# 1,000-entry tree against a 2 MB log is the case this has to stay usable in. The keys go
-# in on stdin and come back out IN ORDER, one count per line, so nothing here needs an
-# associative array -- macOS ships bash 3.2 and does not have them.
 FIRED=()
 if [ "$LOG_STATE" = present ] && [ "$ENTRY_N" -gt 0 ]; then
-  _counts=$(printf '%s\n' "${ENTRY_KEY[@]}" | LC_ALL=C awk '
+  _counts=$(printf '%s\n' "${ENTRY_IDS[@]}" | LC_ALL=C awk '
     FNR == NR { order[++nk] = $0; next }
     {
       p = index($0, " | ")
       if (p == 0) next
       rest = substr($0, p + 3)
-      q = index(rest, " << ")
+      q = index(rest, sprintf(" %c%c ", 60, 60))
       if (q > 0) rest = substr(rest, 1, q - 1)
       n = split(rest, items, ", ")
       for (i = 1; i <= n; i++) {
@@ -769,20 +1905,9 @@ if [ "$LOG_STATE" = present ] && [ "$ENTRY_N" -gt 0 ]; then
   while IFS= read -r _c; do
     FIRED[$_i]="$_c"
     _i=$((_i + 1))
-  done << EOF
-$_counts
-EOF
+  done <<< "$_counts"
   unset _counts _i _c
 fi
-
-# --- the advisory heuristics -------------------------------------------------
-# Every one of these is ADVISORY and none moves the exit code. #47 has CI consuming these
-# codes; failing every project that carries a two-character keyword is a breaking change
-# nobody filed, and a `--strict` flag is the place for that if anyone wants it.
-#
-# Fat entries are a FLAT byte count, not weighted by how often the entry fires -- flat is
-# honest and dumb, and the fire count is printed BESIDE it so the reader judges rather
-# than the tool guessing.
 _i=0
 while [ "$_i" -lt "$ENTRY_N" ]; do
   _b="${ENTRY_BYTES[$_i]}"
@@ -796,12 +1921,6 @@ while [ "$_i" -lt "$ENTRY_N" ]; do
   fi
   _i=$((_i + 1))
 done
-
-# "Never fired despite existing for N days" is what #183 asks for and this deliberately
-# does NOT claim the second half. hooks.log records carry a TIME and no date, and an entry
-# mtime is rewritten by every clone and every checkout -- so "for N days" is not computable
-# from anything this repository keeps, and a threshold built on either would be a confident
-# number with nothing under it. What IS observable is stated, and no more than that.
 if [ "$LOG_STATE" = present ]; then
   _i=0
   while [ "$_i" -lt "$ENTRY_N" ]; do
@@ -812,20 +1931,6 @@ if [ "$LOG_STATE" = present ]; then
   done
 fi
 unset _i _b _f
-
-# Short keywords, read off the vocabulary indexes -- the index is what the hook matches
-# against, so a keyword that is not in there is not a keyword. The term is guarded by
-# jit_report_keyword(), NOT jit_report_name(): `vat rate` is a legitimate keyword and the
-# name set has no space in it (#126).
-# vocabulary alone, and not a loop over the three: a `match` is a pattern and a tools row
-# carries a tool name, so "shorter than N bytes" is a claim only about a KEYWORD. A
-# for-loop over one word would say otherwise, and shellcheck SC2043 is right to ask.
-#
-# IN A FUNCTION, so `local LC_ALL=C` holds for every ${#kw} inside it and is restored on
-# return. That is not tidiness. ${#s} in bash counts CHARACTERS under a UTF-8 locale and
-# BYTES under C, the threshold is documented in bytes, and jit_report_name() carries the
-# same `local LC_ALL=C` for the same reason one function up. Unpinned, a two-character
-# accented keyword measures 2 here and 4 in the index the hook reads.
 scan_short_keywords() {
   local LC_ALL=C dim=vocabulary d safe row kw ent
   [ -d "$BASE/$dim" ] || return 0
@@ -834,19 +1939,9 @@ scan_short_keywords() {
     d="${d%/}"
     safe="$(jit_report_name "${d##*/}")"
     [ -f "$d/00-index.tsv" ] && [ -r "$d/00-index.tsv" ] || continue
-    # The rows come through awk rather than straight into `read -r`, because `read -r`
-    # truncates a row at a NUL -- the trap paths/00-manual/tooling.md records for the
-    # byte checks.
     while IFS= read -r row; do
       [ -n "$row" ] || continue
       kw="${row%%	*}"
-      # #232 added a third column (the generic/specific verdict) to this same TSV, so
-      # "everything after the first tab" -- what this line read until now -- has grown
-      # a trailing "\tgeneric" or a bare trailing tab on any 3-column row. That extra
-      # tab is exactly the byte jit_report_name() below refuses on sight, so this
-      # advisory silently started printing "<withheld: not a plain name>" for every
-      # short keyword in a rebuilt tree instead of the file it actually lives in.
-      # Second field only, whatever the row's total column count is now or grows to.
       ent="${row#*	}"
       ent="${ent%%	*}"
       [ "${#kw}" -lt "$MIN_KEYWORD" ] || continue
@@ -856,7 +1951,6 @@ scan_short_keywords() {
   return 0
 }
 scan_short_keywords
-
 echo "advisory (none of this moves the exit code)"
 if [ "$ADVISORY_N" = 0 ]; then
   printf '  %s\n' "0 advisory notes -- nothing flagged on this tree"
@@ -865,14 +1959,12 @@ else
   printf '  %s\n' "$ADVISORY_N advisory note(s), and none of them changed the status below"
 fi
 echo ""
-
 echo "next"
-printf '  %s\n' "bash scripts/jit-dry-run.sh --base $BASE"
+printf '  %s\n' "jit-dry-run --base $BASE"
 printf '  %s\n' "    the pattern lint and the exact staleness check -- a rule the matcher cannot"
 printf '  %s\n' "    honour, and frontmatter the index does not carry. This tool reimplements"
 printf '  %s\n' "    neither of them, on purpose: two answers to one question drift."
 echo ""
-
 if [ "$DEFECTS" -gt 0 ]; then
   echo "jit-doctor: $DEFECTS defect(s) -- a layer holds entries the matcher can never load."
   exit 1

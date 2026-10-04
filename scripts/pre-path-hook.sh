@@ -1,91 +1,1527 @@
 #!/bin/bash
-# jit-context — Path-based PreToolUse hook
-# One awk program: parses JSON, matches file path against TSV patterns, outputs JSON.
-# Supports Read/Edit/Write/Glob/Grep (file_path/path) AND Bash (command field).
-# The program runs TWICE for a Bash command whose tokens name real files -- once to extract
-# the tokens, once over the ones bash confirmed exist. See the candidate section below;
-# every other payload still costs exactly one awk process.
-
-case "$0" in */*) SCRIPT_DIR="${0%/*}" ;; *) SCRIPT_DIR="." ;; esac
-source "$SCRIPT_DIR/common.sh"
+_ms() {
+  local e="${EPOCHREALTIME:-}" s f
+  case "$e" in
+    *[.,]*)
+      s="${e%%[.,]*}"
+      f="${e##*[.,]}000000"
+      f="${f:0:6}"
+      case "$s$f" in
+        '' | *[!0-9]*) ;;
+        *)
+          printf '%s\n' "$((s * 1000 + 10#$f / 1000))"
+          return
+          ;;
+      esac
+      ;;
+  esac
+  perl -MTime::HiRes -e 'printf("%.0f\n",Time::HiRes::time()*1000)'
+}
+if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+  JIT_BASE="$CLAUDE_PROJECT_DIR/.claude/jit-context"
+else
+  JIT_BASE="$(pwd)/.claude/jit-context"
+fi
+export JIT_BASE
+jit_worktree_mismatch_line() {
+  [ -n "${CLAUDE_PROJECT_DIR:-}" ] || return 0
+  command -v git > /dev/null 2>&1 || return 0
+  local pwd_top cpd_top
+  pwd_top="$(git rev-parse --show-toplevel 2> /dev/null)"
+  cpd_top="$(cd "$CLAUDE_PROJECT_DIR" 2> /dev/null && git rev-parse --show-toplevel 2> /dev/null)"
+  [ -n "$pwd_top" ] || return 0
+  [ -n "$cpd_top" ] || return 0
+  [ "$pwd_top" != "$cpd_top" ] || return 0
+  printf '%s' "CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR -- git worktree $cpd_top) names a DIFFERENT git worktree than the one this shell is sitting in (the current directory, $(pwd) -- git worktree $pwd_top)."
+}
+JIT_HOST="unknown"
+JIT_HOST_REFUSAL_STATE="refusal-not-established"
+JIT_TOOL_ALIASES=""
+JIT_HOST_REGISTRY='
+claude-code|CLAUDE_CODE_ENTRYPOINT,CLAUDE_CODE_SESSION_ID|CLAUDE_PROJECT_DIR|CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block|
+codex||CLAUDE_PROJECT_DIR|PLUGIN_ROOT,CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block|apply_patch=Edit;Write
+gemini-cli|GEMINI_SESSION_ID|GEMINI_PROJECT_DIR,CLAUDE_PROJECT_DIR||UNKNOWN|UNKNOWN|refusal-not-established|
+'
+jit_host_row() {
+  local want="$1" line
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if [[ "$line" == "$want|"* ]]; then
+      printf '%s\n' "$line"
+      return 0
+    fi
+  done <<< "$JIT_HOST_REGISTRY"
+  return 1
+}
+jit_host_sig_set() {
+  case "${1:-}" in
+    CLAUDE_CODE_ENTRYPOINT) [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ] ;;
+    CLAUDE_CODE_SESSION_ID) [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] ;;
+    GEMINI_SESSION_ID) [ -n "${GEMINI_SESSION_ID:-}" ] ;;
+    *) return 1 ;;
+  esac
+}
+jit_host_detect() {
+  local name hostvars hostvar old_ifs
+  while IFS='|' read -r name hostvars _ _ _ _ _; do
+    [ -n "$name" ] || continue
+    [ -n "$hostvars" ] || continue
+    old_ifs="$IFS"
+    IFS=','
+    for hostvar in $hostvars; do
+      IFS="$old_ifs"
+      if jit_host_sig_set "$hostvar"; then
+        printf '%s\n' "$name"
+        return 0
+      fi
+    done
+    IFS="$old_ifs"
+  done <<< "$JIT_HOST_REGISTRY"
+  printf 'unknown\n'
+  return 0
+}
+jit_host_refusal_state() {
+  local name="${1:-}" row refusal
+  [ -n "$name" ] || {
+    printf 'refusal-not-established\n'
+    return 0
+  }
+  row=$(jit_host_row "$name") || {
+    printf 'refusal-not-established\n'
+    return 0
+  }
+  IFS='|' read -r _ _ _ _ _ _ refusal _ <<< "$row"
+  printf '%s\n' "${refusal:-refusal-not-established}"
+}
+jit_all_tool_aliases() {
+  local line aliases all="" sep=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    aliases="${line##*|}"
+    [ -n "$aliases" ] || continue
+    all="$all$sep$aliases"
+    sep=","
+  done <<< "$JIT_HOST_REGISTRY"
+  printf '%s\n' "$all"
+}
+JIT_HOST="$(jit_host_detect 2> /dev/null)" \
+  && JIT_HOST_REFUSAL_STATE="$(jit_host_refusal_state "$JIT_HOST" 2> /dev/null)"
+[ -n "$JIT_HOST" ] || JIT_HOST="unknown"
+[ -n "$JIT_HOST_REFUSAL_STATE" ] || JIT_HOST_REFUSAL_STATE="refusal-not-established"
+JIT_TOOL_ALIASES="$(jit_all_tool_aliases 2> /dev/null)"
+[ -n "$JIT_TOOL_ALIASES" ] || JIT_TOOL_ALIASES=""
+export JIT_HOST JIT_HOST_REFUSAL_STATE JIT_TOOL_ALIASES
+export JIT_SYMLINKS=""
+JIT_SYMLINKS_MAX=8192
+export JIT_SYMLINKS_ALL=""
+export JIT_NONFILES=""
+export JIT_NONFILES_ALL=""
+JIT_NONFILES_MAX=4096
+JIT_NL="
+"
+jit_scan_symlinks() {
+  local base="$1" f parent rel rel2 found=0
+  JIT_SYMLINKS="$JIT_NL"
+  JIT_SYMLINKS_ALL=""
+  JIT_NONFILES="$JIT_NL"
+  JIT_NONFILES_ALL=""
+  if [ "${base%/*}" != "$base" ] && [ -L "${base%/*}" ]; then
+    JIT_SYMLINKS="$JIT_SYMLINKS${base%/*}$JIT_NL$base$JIT_NL"
+    found=1
+  fi
+  for f in "$base" "$base"/* "$base"/.* "$base"/*/* "$base"/*/.* "$base"/*/*/* "$base"/*/*/.*; do
+    case "$f" in
+      */. | */..) continue ;;
+    esac
+    if [ -L "$f" ]; then
+      JIT_SYMLINKS="$JIT_SYMLINKS$f$JIT_NL"
+      found=1
+      if [ "${#JIT_SYMLINKS}" -gt "$JIT_SYMLINKS_MAX" ]; then
+        JIT_SYMLINKS="$JIT_NL"
+        JIT_SYMLINKS_ALL=1
+        JIT_NONFILES="$JIT_NL"
+        JIT_NONFILES_ALL=1
+        export JIT_SYMLINKS JIT_SYMLINKS_ALL JIT_NONFILES JIT_NONFILES_ALL
+        return 0
+      fi
+      continue
+    fi
+    if [ ! -f "$f" ] && [ -e "$f" ] && [ "$f" != "$base" ]; then
+      rel="${f#"$base"/}"
+      rel2="${rel#*/}"
+      if [ "$rel2" != "$rel" ] && [ "${rel2#*/}" != "$rel2" ]; then
+        JIT_NONFILES="$JIT_NONFILES$f$JIT_NL"
+        if [ "${#JIT_NONFILES}" -gt "$JIT_NONFILES_MAX" ]; then
+          JIT_NONFILES="$JIT_NL"
+          JIT_NONFILES_ALL=1
+        fi
+      fi
+    fi
+    [ "$found" = 1 ] || continue
+    [ "$f" != "$base" ] || continue
+    parent="${f%/*}"
+    case "$JIT_SYMLINKS" in
+      *"$JIT_NL$parent$JIT_NL"*)
+        JIT_SYMLINKS="$JIT_SYMLINKS$f$JIT_NL"
+        if [ "${#JIT_SYMLINKS}" -gt "$JIT_SYMLINKS_MAX" ]; then
+          JIT_SYMLINKS="$JIT_NL"
+          JIT_SYMLINKS_ALL=1
+          JIT_NONFILES="$JIT_NL"
+          JIT_NONFILES_ALL=1
+          export JIT_SYMLINKS JIT_SYMLINKS_ALL JIT_NONFILES JIT_NONFILES_ALL
+          return 0
+        fi
+        ;;
+    esac
+  done
+  export JIT_SYMLINKS JIT_SYMLINKS_ALL JIT_NONFILES JIT_NONFILES_ALL
+}
+jit_scan_symlinks "$JIT_BASE"
+JIT_LOG_DISABLED=0
+LOG_DIR="$JIT_BASE/.discovery/logs"
+LOG_FILE="$LOG_DIR/hooks.log"
+for _jit_p in "${JIT_BASE%/*}" "$JIT_BASE" "$JIT_BASE/.discovery" "$LOG_DIR"; do
+  if [ -L "$_jit_p" ]; then JIT_LOG_DISABLED=1; fi
+done
+unset _jit_p
+if [ "${JIT_SAMPLE_CALL:-}" = "1" ]; then JIT_LOG_DISABLED=1; fi
+if [ ! -d "$JIT_BASE" ]; then JIT_LOG_DISABLED=1; fi
+if [ "$JIT_LOG_DISABLED" = 0 ]; then
+  [ -d "$LOG_DIR" ] || mkdir -p "$LOG_DIR" 2> /dev/null
+  if [ -L "$LOG_FILE" ]; then JIT_LOG_DISABLED=1; fi
+fi
+jit_log_write() {
+  if [ "$JIT_LOG_DISABLED" = 0 ]; then
+    printf '%s\n' "$1" 2> /dev/null >> "$LOG_FILE"
+  fi
+}
+JIT_STATE_DIR="$JIT_BASE/.discovery/state"
+for _jit_p in "${JIT_BASE%/*}" "$JIT_BASE" "$JIT_BASE/.discovery" "$JIT_STATE_DIR"; do
+  if [ -L "$_jit_p" ]; then JIT_STATE_DIR=""; fi
+done
+unset _jit_p
+if [ -n "$JIT_STATE_DIR" ] && [ -d "$JIT_BASE" ] && [ ! -d "$JIT_STATE_DIR" ]; then
+  if [ -d "$JIT_BASE/.discovery" ]; then
+    if [ -w "$JIT_BASE/.discovery" ]; then mkdir -p "$JIT_STATE_DIR" 2> /dev/null; fi
+  elif [ -w "$JIT_BASE" ]; then
+    mkdir -p "$JIT_STATE_DIR" 2> /dev/null
+  fi
+fi
+if [ ! -d "$JIT_STATE_DIR" ] || [ ! -w "$JIT_STATE_DIR" ]; then JIT_STATE_DIR=""; fi
+JIT_MARK_END='--jit-marks-end--'
+export JIT_MARK_END
+JIT_MARKS_IN=()
+JIT_MARKS_OK=0
+jit_marks_read() {
+  local line
+  JIT_MARKS_IN=()
+  JIT_MARKS_OK=0
+  while IFS= read -r line; do
+    if [ "$line" = "$JIT_MARK_END" ]; then
+      JIT_MARKS_OK=1
+      return 0
+    fi
+    JIT_MARKS_IN[${#JIT_MARKS_IN[@]}]="$line"
+  done
+  return 0
+}
+jit_shown_apply() {
+  local f k name entry
+  [ -n "$JIT_STATE_DIR" ] || return 0
+  [ "$JIT_MARKS_OK" = 1 ] || return 0
+  [ "${#JIT_MARKS_IN[@]}" -gt 0 ] || return 0
+  for entry in "${JIT_MARKS_IN[@]}"; do
+    f="${entry%%$'\t'*}"
+    k="${entry#*$'\t'}"
+    [ "$k" != "$entry" ] || continue
+    [ -n "$f" ] && [ -n "$k" ] || continue
+    name="${f#"$JIT_STATE_DIR"/}"
+    [ "$name" != "$f" ] || continue
+    [ "${name#*/}" = "$name" ] || continue
+    [ "${name#*[\\]}" = "$name" ] || continue
+    [ "${name%.txt}" != "$name" ] || continue
+    if [ "${name#path-shown-}" = "$name" ] && [ "${name#vocab-shown-}" = "$name" ] \
+      && [ "${name#bytes-shown-}" = "$name" ]; then
+      continue
+    fi
+    [ -L "$f" ] && continue
+    printf '%s\n' "$k" 2> /dev/null >> "$f"
+  done
+  return 0
+}
+JIT_TMP=""
+jit_tmp_open() {
+  local d
+  d="${TMPDIR:-/tmp}"
+  d="${d%/}"
+  JIT_TMP="$(mktemp "$d/claude-jit-XXXXXXXX" 2> /dev/null)" || JIT_TMP=""
+  [ -n "$JIT_TMP" ] || return 0
+  trap 'rm -f "$JIT_TMP"' EXIT
+  return 0
+}
+_jit_printf_time=0
+if printf -v _jit_probe '%(%H:%M:%S)T' -1 2> /dev/null; then
+  case "$_jit_probe" in
+    [0-9][0-9]:[0-9][0-9]:[0-9][0-9]) _jit_printf_time=1 ;;
+  esac
+fi
+unset _jit_probe
+_ts() {
+  local e="${EPOCHREALTIME:-}" s f out
+  if [ "$_jit_printf_time" = 1 ]; then
+    case "$e" in
+      *[.,]*)
+        s="${e%%[.,]*}"
+        f="${e##*[.,]}000000"
+        f="${f:0:6}"
+        case "$s$f" in
+          '' | *[!0-9]*) ;;
+          *)
+            printf -v out '%(%H:%M:%S)T' "$s"
+            printf '%s.%03d\n' "$out" "$((10#$f / 1000))"
+            return
+            ;;
+        esac
+        ;;
+    esac
+  fi
+  date '+%H:%M:%S.000'
+}
+JIT_CONFIG_REFUSED_MAX=4096
+export JIT_CONFIG_REFUSED=""
+export JIT_CONFIG_REFUSED_N=0
+JIT_CONFIG_REFUSED_CUT=0
+jit_config_refuse() {
+  JIT_CONFIG_REFUSED_N=$((JIT_CONFIG_REFUSED_N + 1))
+  if [ "${#JIT_CONFIG_REFUSED}" -gt "$JIT_CONFIG_REFUSED_MAX" ]; then
+    if [ "$JIT_CONFIG_REFUSED_CUT" = 0 ]; then
+      JIT_CONFIG_REFUSED_CUT=1
+      JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED$JIT_NL- the remaining refused lines are not listed here; the count above is the whole total"
+    fi
+    return 0
+  fi
+  JIT_CONFIG_REFUSED="$JIT_CONFIG_REFUSED${JIT_CONFIG_REFUSED:+$JIT_NL}- line $1: $2"
+}
+jit_cfg_clean_line() {
+  local LC_ALL=C
+  local line="$1"
+  line="${line%$'\r'}"
+  while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+  case "$line" in
+    '' | '#'*) return 1 ;;
+  esac
+  local rest="${line#export}"
+  if [ "$rest" != "$line" ] && [ "${rest#[[:space:]]}" != "$rest" ]; then
+    line="$rest"
+    while [ "$line" != "${line#[[:space:]]}" ]; do line="${line#[[:space:]]}"; done
+  fi
+  JIT_CFG_LINE="$line"
+}
+jit_config_name_ok() {
+  local LC_ALL=C
+  local prefix
+  [ -n "$1" ] && [ -z "${1//[A-Za-z0-9_]/}" ] || return 1
+  for prefix in JIT_CONTEXT_ DYNAMIC_RULES_ DVSI_; do
+    if [ "${1#"$prefix"}" != "$1" ] && [ -n "${1#"$prefix"}" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+jit_cfg_split() {
+  local LC_ALL=C
+  JIT_CFG_REASON=""
+  if [ "${1#*=}" = "$1" ]; then
+    JIT_CFG_NAME=""
+    JIT_CFG_VALUE=""
+    JIT_CFG_REASON="not a KEY=VALUE assignment"
+    return 1
+  fi
+  JIT_CFG_NAME="${1%%=*}"
+  JIT_CFG_VALUE="${1#*=}"
+  if ! jit_config_name_ok "$JIT_CFG_NAME"; then
+    JIT_CFG_REASON="unknown setting (only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* are read)"
+    return 1
+  fi
+}
+jit_cfg_unquote() {
+  local LC_ALL=C
+  local value="$1" reason="" q rest tail
+  local dq sq
+  printf -v dq '\042'
+  printf -v sq '\047'
+  q="${value%"${value#?}"}"
+  if [ "$q" = "$dq" ] || [ "$q" = "$sq" ]; then
+    rest="${value#?}"
+    if [ "${rest#*"$q"}" != "$rest" ]; then
+      tail="${rest#*"$q"}"
+      while [ "$tail" != "${tail#[[:space:]]}" ]; do tail="${tail#[[:space:]]}"; done
+      if [ -z "$tail" ] || [ "${tail#\#}" != "$tail" ]; then
+        value="${rest%%"$q"*}"
+      else
+        reason="trailing text after the closing quote"
+      fi
+    else
+      reason="unterminated quote"
+    fi
+  else
+    value="${value%%[[:space:]]#*}"
+    while [ "$value" != "${value%[[:space:]]}" ]; do value="${value%[[:space:]]}"; done
+  fi
+  JIT_CFG_VALUE="$value"
+  JIT_CFG_REASON="$reason"
+  [ -z "$reason" ]
+}
+jit_cfg_check_value() {
+  local LC_ALL=C
+  local cfg_name="$1" value="$2"
+  JIT_CFG_REASON=""
+  if [ "$cfg_name" = JIT_CONTEXT_INJECT ]; then
+    if [ "$value" != summary ] && [ "$value" != full ]; then
+      JIT_CFG_REASON="not an injection mode (the modes are summary and full)"
+      return 1
+    fi
+  fi
+  if [ "$cfg_name" = JIT_CONTEXT_STOP_REPORT ]; then
+    if [ "$value" != 0 ] && [ "$value" != 1 ]; then
+      JIT_CFG_REASON="not a stop-report toggle (0 or 1)"
+      return 1
+    fi
+  fi
+  if [ "$cfg_name" = JIT_CONTEXT_STATUS ]; then
+    if [ "$value" != fired ] && [ "$value" != summary ] && [ "$value" != off ]; then
+      JIT_CFG_REASON="not a status mode (fired, summary or off)"
+      return 1
+    fi
+  fi
+  if [ "$cfg_name" = JIT_CONTEXT_MISSES ]; then
+    if [ "$value" != on ] && [ "$value" != off ]; then
+      JIT_CFG_REASON="not a misses toggle (on or off)"
+      return 1
+    fi
+  fi
+  if [ "$cfg_name" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
+    if [ "$value" != 0 ]; then
+      if [ "${value#[1-9]}" = "$value" ] || [ -n "${value//[0-9]/}" ]; then
+        JIT_CFG_REASON="not a byte count (0, or digits with no leading zero)"
+        return 1
+      fi
+    fi
+  fi
+  return 0
+}
+jit_cfg_assign() {
+  if [ "$1" = DVSI_AUTONOMOUS_VOCAB_PATHS ]; then
+    DVSI_AUTONOMOUS_VOCAB_PATHS="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_CHECKOUT_WINDOW_S ]; then
+    DYNAMIC_RULES_CHECKOUT_WINDOW_S="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_COLLISION_BYTES ]; then
+    DYNAMIC_RULES_COLLISION_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_GENERIC_WORDS ]; then
+    DYNAMIC_RULES_GENERIC_WORDS="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_KEYWORD_BLACKLIST ]; then
+    DYNAMIC_RULES_KEYWORD_BLACKLIST="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_MODULE_PREFIX ]; then
+    DYNAMIC_RULES_MODULE_PREFIX="$2"
+    return 0
+  fi
+  if [ "$1" = DYNAMIC_RULES_VOCAB_PATHS ]; then
+    DYNAMIC_RULES_VOCAB_PATHS="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_ALLOW_CROSS_TREE ]; then
+    JIT_CONTEXT_ALLOW_CROSS_TREE="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_CHECKOUT_WINDOW_S ]; then
+    JIT_CONTEXT_CHECKOUT_WINDOW_S="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_COLLISION_BYTES ]; then
+    JIT_CONTEXT_COLLISION_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_DOCTOR_MAX_BYTES ]; then
+    JIT_CONTEXT_DOCTOR_MAX_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_DOCTOR_MIN_KEYWORD ]; then
+    JIT_CONTEXT_DOCTOR_MIN_KEYWORD="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_GENERIC_WORDS ]; then
+    JIT_CONTEXT_GENERIC_WORDS="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_INJECT ]; then
+    JIT_CONTEXT_INJECT="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_KEYWORD_BLACKLIST ]; then
+    JIT_CONTEXT_KEYWORD_BLACKLIST="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_LOG_MAX_BYTES ]; then
+    JIT_CONTEXT_LOG_MAX_BYTES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_MISSES ]; then
+    JIT_CONTEXT_MISSES="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_MODULE_PREFIX ]; then
+    JIT_CONTEXT_MODULE_PREFIX="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_STATUS ]; then
+    JIT_CONTEXT_STATUS="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_STOP_REPORT ]; then
+    JIT_CONTEXT_STOP_REPORT="$2"
+    return 0
+  fi
+  if [ "$1" = JIT_CONTEXT_VOCAB_PATHS ]; then
+    JIT_CONTEXT_VOCAB_PATHS="$2"
+    return 0
+  fi
+  return 0
+}
+jit_load_config() {
+  local file="$1" line lineno=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    lineno=$((lineno + 1))
+    jit_cfg_clean_line "$line" || continue
+    if jit_cfg_split "$JIT_CFG_LINE" \
+      && jit_cfg_unquote "$JIT_CFG_VALUE" \
+      && jit_cfg_check_value "$JIT_CFG_NAME" "$JIT_CFG_VALUE"; then
+      jit_cfg_assign "$JIT_CFG_NAME" "$JIT_CFG_VALUE"
+    else
+      jit_config_refuse "$lineno" "$JIT_CFG_REASON"
+    fi
+  done < "$file"
+}
+if [ -L "$JIT_BASE/config.env" ]; then
+  JIT_CONFIG_REFUSED_N=1
+  JIT_CONFIG_REFUSED="- the file itself: config.env is a symbolic link, so it was not read"
+  jit_log_write "$(printf '[%s] config.env | refused: symbolic link' "$(_ts)")"
+elif [ -f "$JIT_BASE/config.env" ]; then
+  jit_load_config "$JIT_BASE/config.env"
+  if [ "$JIT_CONFIG_REFUSED_N" -gt 0 ]; then
+    jit_log_write "$(printf '[%s] config.env | %d line(s) refused\n%s' \
+      "$(_ts)" "$JIT_CONFIG_REFUSED_N" "$JIT_CONFIG_REFUSED")"
+  fi
+fi
+JIT_INJECT="${JIT_CONTEXT_INJECT:-full}"
+case "$JIT_INJECT" in
+  summary | full) ;;
+  *) JIT_INJECT=full ;;
+esac
+JIT_STOP_REPORT="${JIT_CONTEXT_STOP_REPORT:-0}"
+case "$JIT_STOP_REPORT" in
+  0 | 1) ;;
+  *) JIT_STOP_REPORT=0 ;;
+esac
+JIT_STATUS="${JIT_CONTEXT_STATUS:-summary}"
+case "$JIT_STATUS" in
+  fired | summary | off) ;;
+  *) JIT_STATUS=summary ;;
+esac
+JIT_MISSES="${JIT_CONTEXT_MISSES:-on}"
+case "$JIT_MISSES" in
+  on | off) ;;
+  *) JIT_MISSES=on ;;
+esac
+JIT_FM_NL="
+"
+JIT_AWK_FRONTMATTER='
+  BEGIN { nf = split(fl, want, " ") }
+  /^---$/ { n++; if (n == 2) exit; next }
+  n == 1 {
+    for (i = 1; i <= nf; i++) {
+      f = want[i]
+      if (f == "" || seen[f]) continue
+      if (index($0, f ":") != 1) continue
+      line = $0
+      sub("^" f ": *", "", line)
+      if (f == "mode") { gsub(/ /, "", line) }
+      else {
+        v = line
+        sub(/[ \t\n\v\f\r]+$/, "", v)
+        if (v ~ /^"[^"]*"$/) line = substr(v, 2, length(v) - 2)
+      }
+      seen[f] = 1
+      printf "%s\t%s\n", f, line
+      next
+    }
+  }
+'
+JIT_AWK_GUARD='
+function jit_bad_pattern(p,   i, n, c, nx, depth, inbr, brpos) {
+  if (p ~ /^@[A-Za-z][A-Za-z0-9-]*([[:space:]]|$)/) return "unexpanded macro -- rebuild the index with the rebuild-tsv tool this plugin ships"
+  n = length(p)
+  depth = 0
+  inbr = 0
+  brpos = 0
+  for (i = 1; i <= n; i++) {
+    c = substr(p, i, 1)
+    if (c == "\134") {
+      nx = substr(p, i + 1, 1)
+      if (nx == "") return "trailing backslash"
+      if (nx ~ /[[:alnum:]]/ && nx !~ /^[ntr]$/) return "undefined escape \134" nx
+      if (nx > "\177") return "undefined escape \\ before a non-ASCII byte"
+      i++
+      continue
+    }
+    if (inbr) {
+      nx = substr(p, i + 1, 1)
+      if (c == "[" && nx != "" && index(sprintf("%c%c%c", 58, 46, 61), nx) > 0) {
+        k = index(substr(p, i + 2), substr(p, i + 1, 1) "]")
+        if (k == 0) return "unterminated [" substr(p, i + 1, 1) " element inside a character class"
+        i = i + 2 + k
+        continue
+      }
+      if (c == "]" && i != brpos + 1 && !(i == brpos + 2 && substr(p, brpos + 1, 1) == "^")) inbr = 0
+      continue
+    }
+    if (c == "[") { inbr = 1; brpos = i; continue }
+    if (c == "(") { depth++; continue }
+    if (c == ")") { if (depth > 0) depth--; continue }
+  }
+  if (inbr) return "unterminated character class"
+  if (depth > 0) return "unbalanced parenthesis"
+  return ""
+}
+'
+JIT_AWK_ENTRY='
+function jit_row_id(layer, rown) {
+  return layer " row " rown
+}
+function jit_entry_age(ident,   raw, n, i, ln, tp) {
+  if (!jit_age_loaded) {
+    jit_age_loaded = 1
+    raw = ENVIRON["JIT_ENTRY_AGES"]
+    if (raw != "") {
+      n = split(raw, jit_age_lines, "\n")
+      for (i = 1; i <= n; i++) {
+        ln = jit_age_lines[i]
+        if (ln == "") continue
+        tp = index(ln, "\t")
+        if (tp == 0) continue
+        jit_age[substr(ln, 1, tp - 1)] = substr(ln, tp + 1) + 0
+      }
+    }
+  }
+  if (ident in jit_age) return jit_age[ident]
+  return ""
+}
+function jit_log_text(s) {
+  gsub(/[\n\r]/, " ", s)
+  return s
+}
+function jit_log_name(f, layer, rown, why) {
+  return (why == "not a bare file name") ? jit_row_id(layer, rown) : f
+}
+function jit_symlinked(p,   n, i, a) {
+  if (ENVIRON["JIT_SYMLINKS_ALL"] == "1") return 1
+  if (!jit_sym_init) {
+    jit_sym_init = 1
+    n = split(ENVIRON["JIT_SYMLINKS"], a, "\n")
+    for (i = 1; i <= n; i++) if (a[i] != "") jit_sym[a[i]] = 1
+  }
+  return (p in jit_sym)
+}
+function jit_nonfile(p,   n, i, a) {
+  if (ENVIRON["JIT_NONFILES_ALL"] == "1") return 1
+  if (!jit_nf_init) {
+    jit_nf_init = 1
+    n = split(ENVIRON["JIT_NONFILES"], a, "\n")
+    for (i = 1; i <= n; i++) if (a[i] != "") jit_nf[a[i]] = 1
+  }
+  return (p in jit_nf)
+}
+function jit_bad_entry_file(f, dir) {
+  if (f == "") return ""
+  if (index(f, "/") > 0 || index(f, "\134") > 0) return "not a bare file name"
+  if (f == "\056" || f == "\056\056") return "not a bare file name"
+  if (substr(f, 1, 1) == "\056") return "the entry file name begins with a dot, so rename it without one"
+  if (dir != "") {
+    if (ENVIRON["JIT_SYMLINKS_ALL"] == "1") return "this tree has too many symbolic links to check, so every row in it is refused"
+    if (jit_symlinked(dir)) return "its layer directory is a symbolic link"
+    if (jit_symlinked(dir "/" f)) return "the entry file is a symbolic link"
+  }
+  return ""
+}
+function jit_utf8_init(   k) {
+  if (jit_utf8_ready) return
+  jit_utf8_ready = 1
+  for (k = 1; k <= 255; k++) jit_ord[sprintf("%c", k)] = k
+  jit_hi_re = "[" sprintf("%c", 128) "-" sprintf("%c", 255) "]"
+  jit_nul = sprintf("%c", 0)
+}
+function jit_bad_utf8(s,   i, n, b, need, lo, hi, j, cb) {
+  jit_utf8_init()
+  if (s !~ jit_hi_re) return 0
+  n = length(s)
+  for (i = 1; i <= n; i++) {
+    b = jit_ord[substr(s, i, 1)] + 0
+    if (b < 128) continue
+    if (b < 194 || b > 244) return 1
+    if (b < 224) { need = 1; lo = 128; hi = 191 }
+    else if (b < 240) { need = 2; lo = (b == 224) ? 160 : 128; hi = (b == 237) ? 159 : 191 }
+    else { need = 3; lo = (b == 240) ? 144 : 128; hi = (b == 244) ? 143 : 191 }
+    if (i + need > n) return 1
+    for (j = 1; j <= need; j++) {
+      cb = jit_ord[substr(s, i + j, 1)] + 0
+      if (j == 1) { if (cb < lo || cb > hi) return 1 }
+      else if (cb < 128 || cb > 191) return 1
+    }
+    i += need
+  }
+  return 0
+}
+function jit_bad_bytes(s, what) {
+  jit_utf8_init()
+  if (length(jit_nul) == 1 && index(s, jit_nul) > 0) return what " contains a NUL byte"
+  if (jit_bad_utf8(s)) return what " is not valid UTF-8"
+  return ""
+}
+function jit_entry_why(path) {
+  if (substr(path, length(path), 1) == "/") return "the row names no entry file"
+  if (jit_nonfile(path)) return "the entry file is not a regular file"
+  return ""
+}
+function jit_read_body(path,   line, r, first) {
+  JIT_BODY = ""
+  if ((r = jit_entry_why(path)) != "") return r
+  first = 1
+  while ((r = (getline line < path)) > 0) {
+    JIT_BODY = JIT_BODY (first ? "" : "\n") line
+    first = 0
+  }
+  close(path)
+  if (r < 0) return "the entry file could not be read"
+  return jit_bad_utf8(JIT_BODY) ? "the entry file is not valid UTF-8" : ""
+}
+function jit_refuse_add(list, item) {
+  if (length(list) > 4096) {
+    if (jit_refuse_cut) return list
+    jit_refuse_cut = 1
+    return list "\n- the remaining refused rows are not listed here; the count above is the whole total"
+  }
+  return list (list == "" ? "- " : "\n- ") item
+}
+function jit_unreached_add(list, item) {
+  if (length(list) > 4096) {
+    if (jit_unreached_cut) return list
+    jit_unreached_cut = 1
+    return list "\n- the remaining unreachable rows are not listed here; the count above is the whole total"
+  }
+  return list (list == "" ? "- " : "\n- ") item
+}
+function jit_refusal_notice(list, n) {
+  return "# JIT Context: " n " rule(s) could not be evaluated, so they did NOT run\n" list \
+    "\nA pattern the matcher cannot honour is not a rule that did not match, and until now the two looked identical. Lint the tree that owns these rules with the jit-dry-run tool this plugin ships, --base <tree>/.claude/jit-context"
+}
+function jit_layers_notice(list, n) {
+  return "# JIT Context: " n " jit-context layer director" (n == 1 ? "y" : "ies") " could not be read, so no rule inside them ran\n" list "\nThese are directories under .claude/jit-context/<dimension>/ that exist and hold rules the matcher never opened. A layer that was never loaded and a layer whose rules never matched look identical from a session, which is why this says so. Name a layer directory with letters, digits, dot, underscore and hyphen only, and lint the tree with the jit-dry-run tool this plugin ships, --base <tree>/.claude/jit-context"
+}
+function jit_no_subject_notice(list, n) {
+  return "# JIT Context: " n " tools rule(s) name this tool, but the hook could build no subject to match them against, so they did NOT run\n" list \
+    "\nA tools rule is matched against a subject built from the tool_input keys `command`, `skill`, `file_path`, `pattern` and `subagent_type`. This dispatch carried none of them, so the rules above were indexed and counted and never consulted. Either they name a tool whose input this hook cannot read, or they name the wrong tool. A rule that cannot be reached is not a rule that did not match, and until now the two looked identical."
+}
+function jit_config_notice(list, n) {
+  return "# JIT Context: " n " line(s) in .claude/jit-context/config.env were refused, so they did NOT take effect\n" list \
+    "\nconfig.env is read as plain KEY=VALUE and is never executed. Only JIT_CONTEXT_*, DYNAMIC_RULES_* and DVSI_* settings are read; anything else, shell included, is refused. If a refused line is not one you wrote, treat that file as hostile -- it arrived with the repository."
+}
+function jit_worktree_notice(line) {
+  return "# JIT Context: CLAUDE_PROJECT_DIR names a different git worktree than this shell is sitting in\n" line \
+    "\nEvery hook resolves rules from CLAUDE_PROJECT_DIR, never from the working directory -- content injected below (or on any call in this session) can be served from the copy in the OTHER tree, silently (#402). Run /jit-context:doctor"
+}
+'
+JIT_AWK_INJECT='
+function jit_clip(s, n,   i) {
+  if (length(s) <= n) return s
+  s = substr(s, 1, n)
+  if (length("é") > 1) {
+    if (!jit_cont) {
+      for (i = 128; i <= 191; i++) jit_cont = jit_cont sprintf("%c", i)
+      for (i = 192; i <= 253; i++) jit_lead = jit_lead sprintf("%c", i)
+    }
+    i = 0
+    while (i < 3 && length(s) > 0 && index(jit_cont, substr(s, length(s), 1)) > 0) {
+      s = substr(s, 1, length(s) - 1)
+      i++
+    }
+    if (length(s) > 0 && index(jit_lead, substr(s, length(s), 1)) > 0) s = substr(s, 1, length(s) - 1)
+  }
+  sub(/\r$/, "", s)
+  sub(/[ \t\n\v\f\r]+$/, "", s)
+  return s " [clipped]"
+}
+BEGIN {
+  JIT_TRANSCLUDE_DEPTH_MAX = 3
+  JIT_TRANSCLUDE_TOTAL_MAX = 12
+}
+function jit_transclude_component_ok(s) {
+  if (s == "" || s == "\056" || s == "\056\056") return 0
+  if (substr(s, 1, 1) == "\056") return 0
+  if (s ~ /[^A-Za-z0-9._-]/) return 0
+  return 1
+}
+function jit_transclude_resolve(spec,   n, parts, dim, layer, file, dir, path, why) {
+  jit_transclude_why = ""
+  n = split(spec, parts, "/")
+  if (n != 3) { jit_transclude_why = "not a dimension/layer/file.md path"; return "" }
+  dim = parts[1]; layer = parts[2]; file = parts[3]
+  if (!jit_transclude_component_ok(dim) || !jit_transclude_component_ok(layer) || !jit_transclude_component_ok(file) || file !~ /\.md$/) {
+    jit_transclude_why = "not a dimension/layer/file.md path"
+    return ""
+  }
+  dir = ENVIRON["JIT_BASE"] "/" dim "/" layer
+  why = jit_bad_entry_file(file, dir)
+  if (why == "") {
+    path = dir "/" file
+    why = jit_entry_why(path)
+  }
+  if (why != "") { jit_transclude_why = why; return "" }
+  return path
+}
+function jit_transclude_strip_frontmatter(body,   lines, n, i, out, closed, first, ln) {
+  n = split(body, lines, "\n")
+  if (n == 0) return body
+  ln = lines[1]; sub(/\r$/, "", ln)
+  if (ln != "---") return body
+  closed = 0
+  for (i = 2; i <= n; i++) {
+    ln = lines[i]; sub(/\r$/, "", ln)
+    if (ln == "---") { closed = 1; i++; break }
+  }
+  if (!closed) return body
+  out = ""; first = 1
+  for (; i <= n; i++) { out = out (first ? "" : "\n") lines[i]; first = 0 }
+  return out
+}
+function jit_expand_transclusions(body, depth,   out, i, n, lines, first) {
+  n = split(body, lines, "\n")
+  out = ""; first = 1
+  for (i = 1; i <= n; i++) {
+    out = out (first ? "" : "\n") jit_transclude_expand_line(lines[i], depth)
+    first = 0
+  }
+  return out
+}
+function jit_transclude_expand_line(line, depth,   trimmed, out, i, n, start, endp, spec, path, tent, expanded, saved_infence) {
+  trimmed = line
+  sub(/^[[:space:]]+/, "", trimmed)
+  if (trimmed ~ /^```/) { jit_infence = !jit_infence; return line }
+  if (jit_infence) return line
+  if (index(line, "{{") == 0) return line
+  out = ""
+  n = length(line)
+  i = 1
+  while (i <= n) {
+    start = index(substr(line, i), "{{")
+    if (start == 0) { out = out substr(line, i); break }
+    start = i + start - 1
+    out = out substr(line, i, start - i)
+    if (start > 1 && substr(line, start - 1, 1) == "$") {
+      out = out "{{"
+      i = start + 2
+      continue
+    }
+    endp = index(substr(line, start + 2), "}}")
+    if (endp == 0) { out = out substr(line, start); break }
+    endp = start + 2 + endp - 1
+    spec = substr(line, start + 2, endp - (start + 2))
+    gsub(/^[[:space:]]+/, "", spec)
+    gsub(/[[:space:]]+$/, "", spec)
+    i = endp + 2
+    if (jit_transclude_total >= JIT_TRANSCLUDE_TOTAL_MAX) {
+      out = out "{{" spec "}} [jit] transclusion refused: this fire already spliced in " JIT_TRANSCLUDE_TOTAL_MAX " file(s), so this one was left as a pointer"
+      continue
+    }
+    if (depth >= JIT_TRANSCLUDE_DEPTH_MAX) {
+      out = out "{{" spec "}} [jit] transclusion refused: nested " JIT_TRANSCLUDE_DEPTH_MAX " deep already, so this one was left as a pointer"
+      continue
+    }
+    path = jit_transclude_resolve(spec)
+    if (path == "") {
+      out = out "{{" spec "}} [jit] transclusion refused: " jit_transclude_why
+      continue
+    }
+    if (index(jit_transclude_stack, "\n" path "\n") > 0) {
+      out = out "{{" spec "}} [jit] transclusion refused: this would include itself (a cycle)"
+      continue
+    }
+    if (!jit_entry_load(path, "full", 1, tent)) {
+      out = out "{{" spec "}} [jit] transclusion refused: " (tent["why"] != "" ? tent["why"] : "the entry file is empty")
+      continue
+    }
+    jit_transclude_total++
+    jit_transclude_stack = jit_transclude_stack path "\n"
+    saved_infence = jit_infence
+    jit_infence = 0
+    expanded = jit_expand_transclusions(jit_transclude_strip_frontmatter(tent["body"]), depth + 1)
+    jit_infence = saved_infence
+    jit_transclude_stack = substr(jit_transclude_stack, 1, length(jit_transclude_stack) - length(path) - 1)
+    out = out expanded
+  }
+  return out
+}
+function jit_entry_load(path, def, keepbody, e,   line, ln, nfm, want, ident, val, nread, r) {
+  e["body"] = ""; e["title"] = ""; e["desc"] = ""
+  e["mode"] = def; e["fm"] = 0; e["badmode"] = 0; e["read"] = 0; e["injseen"] = 0
+  e["pin"] = 0
+  e["why"] = jit_entry_why(path)
+  if (e["why"] != "") return 0
+  nfm = 0; want = 1; nread = 0
+  while ((r = (getline line < path)) > 0) {
+    nread++
+    e["read"] = 1
+    if (want) e["body"] = e["body"] (nread == 1 ? "" : "\n") line
+    ln = line
+    sub(/\r$/, "", ln)
+    if (ln == "---") {
+      if (nfm == 0) {
+        if (nread != 1) continue
+        nfm = 1; e["fm"] = 1; continue
+      }
+      if (nfm == 1) {
+        nfm = 2
+        if (!keepbody && e["mode"] != "full") { e["body"] = ""; want = 0; break }
+        continue
+      }
+      continue
+    }
+    if (nfm != 1) continue
+    if (index(ln, ":") == 0) continue
+    ident = substr(ln, 1, index(ln, ":") - 1)
+    if (ident ~ /[^A-Za-z0-9_-]/) continue
+    val = substr(ln, index(ln, ":") + 1)
+    sub(/^[[:space:]]+/, "", val)
+    sub(/[[:space:]]+$/, "", val)
+    if (val ~ /^"[^"]*"$/) val = substr(val, 2, length(val) - 2)
+    if (ident == "title") { if (e["title"] == "") e["title"] = val }
+    else if (ident == "description") { if (e["desc"] == "") e["desc"] = val }
+    else if (ident == "inject" && !e["injseen"]) {
+      e["injseen"] = 1
+      gsub(/[[:space:]]/, "", val)
+      val = tolower(val)
+      if (val == "summary" || val == "full") { e["mode"] = val; e["pin"] = 1 }
+      else if (val != "") e["badmode"] = 1
+    }
+  }
+  close(path)
+  if (r < 0) { e["why"] = "the entry file could not be read"; return 0 }
+  if (jit_bad_utf8(e["body"] e["title"] e["desc"])) {
+    e["why"] = "the entry file is not valid UTF-8"
+    return 0
+  }
+  if (!e["fm"]) { e["mode"] = "full"; e["pin"] = 1 }
+  return e["read"]
+}
+function jit_badmode_note(e) {
+  if (!e["badmode"]) return ""
+  return "\n[jit] The inject: value in this entry is not summary or full, so the project default applied."
+}
+function jit_inject_text(e, rel, selfpath,   out, tbody) {
+  if (e["mode"] == "full") {
+    if (e["body"] != "" && e["body"] ~ /^[[:space:]]*$/) return "[jit] The entry file has no text to inject." jit_badmode_note(e)
+    jit_transclude_total = 0
+    jit_transclude_stack = (selfpath != "" ? "\n" selfpath "\n" : "\n")
+    jit_infence = 0
+    tbody = (index(e["body"], "{{") > 0) ? jit_expand_transclusions(e["body"], 0) : e["body"]
+    return tbody jit_badmode_note(e)
+  }
+  out = ""
+  if (e["title"] != "") out = jit_clip(e["title"], 160)
+  if (e["desc"] != "") out = out (out == "" ? "" : "\n") jit_clip(e["desc"], 400)
+  else out = out (out == "" ? "" : "\n") "[jit] There is no description: in this entry, so a match can only name it. Add one and the next match will say what it holds."
+  out = out jit_badmode_note(e)
+  return out "\n[jit] Summary only -- read " rel " for the entry."
+}
+function jit_inject_tag(e,   t) {
+  if (e["mode"] == "full") t = "[full"
+  else if (e["desc"] == "") t = "[summary:no-description"
+  else t = "[summary"
+  return t (e["badmode"] ? ":badmode" : "") "]"
+}
+'
+JIT_AWK_FOLD='
+function jit_fold_latin1(s,   i, p, out) {
+  if (_jit_fold_n == 0)
+    _jit_fold_n = split("á a à a â a ä a ã a å a æ ae ç c é e è e ê e ë e í i ì i î i ï i ñ n " \
+                        "ó o ò o ô o ö o õ o œ oe ß ss ú u ù u û u ü u ý y ÿ y " \
+                        "Á a À a Â a Ä a Ã a Å a Æ ae Ç c É e È e Ê e Ë e Í i Ì i Î i Ï i Ñ n " \
+                        "Ó o Ò o Ô o Ö o Õ o Œ oe Ú u Ù u Û u Ü u Ý y", _jit_fold_tr, "[ ]")
+  for (i = 1; i + 1 <= _jit_fold_n; i += 2) {
+    out = ""
+    while ((p = index(s, _jit_fold_tr[i])) > 0) {
+      out = out substr(s, 1, p - 1) _jit_fold_tr[i+1]
+      s = substr(s, p + length(_jit_fold_tr[i]))
+    }
+    s = out s
+  }
+  return s
+}
+'
+JIT_AWK_HEREDOC='
+function jit_heredoc_opener_is_suppressed(prefix, state0,    i, c, state, n, q1, q2, bs) {
+  q1 = sprintf("%c", 39)
+  q2 = sprintf("%c", 34)
+  bs = sprintf("%c", 92)
+  state = state0
+  n = length(prefix)
+  for (i = 1; i <= n; i++) {
+    c = substr(prefix, i, 1)
+    if (state == 0) {
+      if (c == q1) state = 1
+      else if (c == q2) state = 2
+      else if (c == "#") return 1
+      else if (c == bs) i++
+    } else if (state == 1) {
+      if (c == q1) state = 0
+    } else if (state == 2) {
+      if (c == bs) i++
+      else if (c == q2) state = 0
+    }
+  }
+  return (state != 0)
+}
+function jit_heredoc_line_exit_state(line, state0,    i, c, len, q1, q2, bs, state) {
+  q1 = sprintf("%c", 39)
+  q2 = sprintf("%c", 34)
+  bs = sprintf("%c", 92)
+  state = state0
+  len = length(line)
+  for (i = 1; i <= len; i++) {
+    c = substr(line, i, 1)
+    if (state == 0) {
+      if (c == q1) state = 1
+      else if (c == q2) state = 2
+      else if (c == "#") break
+      else if (c == bs) i++
+    } else if (state == 1) {
+      if (c == q1) state = 0
+    } else if (state == 2) {
+      if (c == bs) i++
+      else if (c == q2) state = 0
+    }
+  }
+  return state
+}
+function jit_heredoc_quote_states(lines, n, qin,    i, state) {
+  state = 0
+  for (i = 1; i <= n; i++) {
+    qin[i] = state
+    state = jit_heredoc_line_exit_state(lines[i], state)
+  }
+}
+function jit_strip_heredoc_body(s, unconditional,    n, lines, i, j, out, strip_tabs, delim, line, rest, probed, op, word, prefix, q1, q2, q3, qclass, close_i, quote_in, lt2) {
+  lt2 = sprintf("%c%c", 60, 60)
+  q1 = sprintf("%c", 39)
+  q2 = sprintf("%c", 34)
+  q3 = sprintf("%c%c", 92, 92)
+  qclass = "[" q1 q2 q3 "]?"
+  n = split(s, lines, "\n")
+  jit_heredoc_quote_states(lines, n, quote_in)
+  out = ""
+  i = 1
+  while (i <= n) {
+    line = lines[i]
+    probed = " " line
+    close_i = 0
+    if (match(probed, "[^<]" lt2 "-?[ \t]*" qclass "[A-Za-z_][A-Za-z0-9_]*" qclass)) {
+      prefix = substr(probed, 1, RSTART)
+      if (!jit_heredoc_opener_is_suppressed(prefix, quote_in[i])) {
+        op = substr(probed, RSTART + 1, RLENGTH - 1)
+        strip_tabs = (substr(op, 1, 3) == lt2 "-")
+        word = op
+        sub("^" lt2 "-?[ \t]*", "", word)
+        gsub("[" q1 q2 q3 "]", "", word)
+        if (word != "" && (unconditional || jit_heredoc_opener_is_known_sink(line))) {
+          delim = word
+          for (j = i + 1; j <= n; j++) {
+            rest = lines[j]
+            sub(/\r$/, "", rest)
+            if (strip_tabs) sub(/^\t+/, "", rest)
+            if (rest == delim) { close_i = j; break }
+          }
+        }
+      }
+    }
+    out = (out == "") ? line : out "\n" line
+    if (close_i > 0) {
+      i = close_i + 1
+    } else {
+      i++
+    }
+  }
+  return out
+}
+function jit_heredoc_opener_has_danger_token(line) {
+  if (index(line, "|") > 0) return 1
+  if (index(line, "$(") > 0) return 1
+  if (index(line, "`") > 0) return 1
+  if (index(line, ">(") > 0) return 1
+  if (index(line, "<(") > 0) return 1
+  return 0
+}
+function jit_heredoc_opener_is_known_sink(line) {
+  if (jit_heredoc_opener_has_danger_token(line)) return 0
+  if (line ~ /(^|[;&|])[ \t]*cat([ \t]|$)/ && line ~ />/) return 1
+  if (line ~ /(^|[;&|])[ \t]*tee[ \t]+[^ \t;&|\n]/) return 1
+  if (line ~ /(^|[;&|])[ \t]*(\.\/)?supertool([ \t]|$)/) return 1
+  if (line ~ /(^|[;&|])[ \t]*git[ \t]+commit([ \t]|$)/ && line ~ /(^|[ \t])(-F|--file)[ \t]*-([ \t]|$)/) return 1
+  if (line ~ /(^|[;&|])[ \t]*gh([ \t]|$)/ && line ~ /(^|[ \t])(--body-file|-F)[ \t]*-([ \t]|$)/) return 1
+  return 0
+}
+'
+JIT_AWK_JSON='
+function jit_trailing_backslashes(s,   c, n) {
+  n = length(s); c = 0
+  while (c < n && substr(s, n - c, 1) == "\134") c++
+  return c
+}
+function jit_json_fields(s, raw, fs, fe,   n, i, k) {
+  n = split(s, raw, "\042")
+  k = 1
+  fs[1] = 1
+  for (i = 1; i < n; i++) {
+    if (jit_trailing_backslashes(raw[i]) % 2 == 1) continue
+    fe[k] = i
+    k++
+    fs[k] = i + 1
+  }
+  fe[k] = n
+  return k
+}
+function jit_hook_fields(raw, fs, fe, n, top_wanted, ti_wanted, TOP, TI,   depth, ti_depth, pending_ident, pending_key_depth, i, c, ch, txt, val, nxt, is_ident) {
+  depth = 0
+  ti_depth = -1
+  pending_ident = ""
+  pending_key_depth = -1
+  for (i = 1; i <= n; i++) {
+    if (i % 2 == 1) {
+      txt = raw[fs[i]]
+      for (c = 1; c <= length(txt); c++) {
+        ch = substr(txt, c, 1)
+        if (ch == "{") {
+          depth++
+          if (pending_ident == "tool_input" && pending_key_depth == 1 && ti_depth == -1) ti_depth = depth
+        } else if (ch == "}") {
+          if (depth == ti_depth) ti_depth = -1
+          depth--
+        }
+      }
+      continue
+    }
+    if (fs[i] != fe[i]) { pending_ident = ""; pending_key_depth = -1; continue }
+    val = raw[fs[i]]
+    is_ident = 0
+    if (i + 1 <= n) {
+      nxt = raw[fs[i+1]]
+      if (nxt ~ /^[[:space:]]*:/) is_ident = 1
+    }
+    if (!is_ident) { pending_ident = ""; pending_key_depth = -1; continue }
+    pending_ident = val
+    pending_key_depth = depth
+    if (i + 2 > n) continue
+    if (depth == 1) {
+      if ((val in top_wanted) && !(val in TOP)) TOP[val] = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
+    } else if (depth == ti_depth) {
+      if ((val in ti_wanted) && !(val in TI)) TI[val] = jit_unescape(jit_field(raw, fs[i+2], fe[i+2]))
+    }
+  }
+}
+function jit_session_key(raw, fs, fe, n,   i, k) {
+  for (i = 2; i + 2 <= n; i += 2) {
+    if (fs[i] != fe[i]) continue
+    if (raw[fs[i]] != "session_id") continue
+    if (fs[i+2] != fe[i+2]) return ""
+    k = raw[fs[i+2]]
+    if (k == "" || length(k) > 64) return ""
+    if (k ~ /[^A-Za-z0-9_-]/) return ""
+    return k
+  }
+  return ""
+}
+function jit_agent_key(raw, fs, fe, n,   i, v, base) {
+  for (i = 2; i + 2 <= n; i += 2) {
+    if (fs[i] != fe[i]) continue
+    if (raw[fs[i]] != "transcript_path") continue
+    if (fs[i+2] != fe[i+2]) return ""
+    v = raw[fs[i+2]]
+    if (v == "") return ""
+    base = v
+    gsub(/.*[\/\\]/, "", base)
+    sub(/\.jsonl$/, "", base)
+    if (base == "" || length(base) > 64) return ""
+    if (base ~ /[^A-Za-z0-9_-]/) return ""
+    return base
+  }
+  return ""
+}
+function jit_stop_hook_active(raw, fs, fe, n,   i) {
+  for (i = 2; i <= n; i += 2) {
+    if (fs[i] != fe[i]) continue
+    if (raw[fs[i]] != "stop_hook_active") continue
+    return (raw[fe[i] + 1] ~ /^[[:space:]]*:[[:space:]]*true/) ? 1 : 0
+  }
+  return 0
+}
+function jit_shown_file(dir, kind, raw, fs, fe, n,   k) {
+  return jit_shown_path(dir, kind, jit_session_key(raw, fs, fe, n))
+}
+function jit_agent_shown_file(dir, kind, raw, fs, fe, n,   k) {
+  k = jit_agent_key(raw, fs, fe, n)
+  if (k == "") k = jit_session_key(raw, fs, fe, n)
+  return jit_shown_path(dir, kind, k)
+}
+function jit_shown_path(dir, kind, k) {
+  if (dir == "" || k == "") return ""
+  return dir "/" kind "-shown-" k ".txt"
+}
+function jit_shown_load(file, set,   line) {
+  if (file == "") return
+  while ((getline line < file) > 0) set[line] = 1
+}
+function jit_shown_mark(file, ident) {
+  if (file == "") return
+  JIT_MARKS = JIT_MARKS file "\t" ident "\n"
+}
+function jit_loc_key(dim, layer, file) {
+  return "loc:" dim ":" layer ":" file
+}
+function jit_shown_flush(out) {
+  printf "%s%s\n", JIT_MARKS, ENVIRON["JIT_MARK_END"] > out
+}
+function jit_field(raw, a, b,   o, i) {
+  if (a == "" || b == "" || a > b) return ""
+  if (a == b) return raw[a]
+  o = raw[a]
+  for (i = a + 1; i <= b; i++) o = o "\042" raw[i]
+  return o
+}
+function jit_unescape(s,   n, i, c, nx, o) {
+  if (index(s, "\134") == 0) return s
+  n = length(s); o = ""
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (c != "\134" || i == n) { o = o c; continue }
+    nx = substr(s, i + 1, 1)
+    if (nx == "n") o = o "\n"
+    else if (nx == "t") o = o "\t"
+    else if (nx == "r") o = o "\r"
+    else if (nx == "b") o = o "\b"
+    else if (nx == "f") o = o "\f"
+    else if (nx == "\042") o = o "\042"
+    else if (nx == "/") o = o "/"
+    else if (nx == "\134") o = o "\134"
+    else { o = o c nx; i++; continue }
+    i++
+  }
+  return o
+}
+'
+JIT_AWK_BLK_BUILD='
+function jit_blk_prepend(text,   i) {
+  for (i = nblk; i >= 1; i--) blk[i + 1] = blk[i]
+  blk[1] = text
+  nblk++
+}
+function jit_blk_join(   bi, out, manifest) {
+  if (nblk == 0) return ""
+  manifest = "# JIT-CTX-BLOCKS " nblk
+  out = ""
+  for (bi = 1; bi <= nblk; bi++) {
+    manifest = manifest " " length(blk[bi])
+    out = (out == "") ? blk[bi] : out "\n---\n" blk[bi]
+  }
+  return manifest "\n" out
+}
+'
+JIT_AWK_BLOCKS='
+function jit_unescape_blocks(s,   n, i, c, nx, hx, v, o) {
+  if (index(s, "\134") == 0) return s
+  n = length(s); o = ""
+  for (i = 1; i <= n; i++) {
+    c = substr(s, i, 1)
+    if (c != "\134" || i == n) { o = o c; continue }
+    nx = substr(s, i + 1, 1)
+    if (nx == "n") { o = o "\n"; i++; continue }
+    if (nx == "t") { o = o "\t"; i++; continue }
+    if (nx == "r") { o = o "\r"; i++; continue }
+    if (nx == "b") { o = o "\b"; i++; continue }
+    if (nx == "f") { o = o "\f"; i++; continue }
+    if (nx == "\042") { o = o "\042"; i++; continue }
+    if (nx == "/") { o = o "/"; i++; continue }
+    if (nx == "\134") { o = o "\134"; i++; continue }
+    if (nx == "u" && substr(s, i, 6) ~ /^\\u00[0-9a-fA-F][0-9a-fA-F]$/) {
+      hx = tolower(substr(s, i + 4, 2))
+      v = index("0123456789abcdef", substr(hx, 1, 1)) - 1
+      v = v * 16 + index("0123456789abcdef", substr(hx, 2, 1)) - 1
+      if (v <= 31) { o = o sprintf("%c", v); i += 5; continue }
+    }
+    o = o c nx; i++; continue
+  }
+  return o
+}
+function jit_split_ctx_blocks(ctx,   nl_pos, header, body_rest, hn, hf, declared_n, pos, bi, blen, rest, p1, p2, p) {
+  jit_blk_n = 0
+  jit_blk_manifest_ok = 0
+  delete jit_blk_body
+  if (substr(ctx, 1, 17) == "# JIT-CTX-BLOCKS ") {
+    nl_pos = index(ctx, "\n")
+    if (nl_pos > 0) {
+      header = substr(ctx, 1, nl_pos - 1)
+      body_rest = substr(ctx, nl_pos + 1)
+      hn = split(header, hf, " ")
+      declared_n = hf[3] + 0
+      if (hn == 3 + declared_n && declared_n >= 0 && hf[1] == "#" && hf[2] == "JIT-CTX-BLOCKS") {
+        jit_blk_manifest_ok = 1
+        pos = 1
+        for (bi = 1; bi <= declared_n; bi++) {
+          blen = hf[3 + bi] + 0
+          if (blen < 0 || pos + blen - 1 > length(body_rest)) { jit_blk_manifest_ok = 0; break }
+          jit_blk_body[bi] = substr(body_rest, pos, blen)
+          pos += blen
+          if (bi < declared_n) {
+            if (substr(body_rest, pos, 5) != "\n---\n") { jit_blk_manifest_ok = 0; break }
+            pos += 5
+          }
+        }
+        if (jit_blk_manifest_ok && pos - 1 != length(body_rest)) jit_blk_manifest_ok = 0
+        if (jit_blk_manifest_ok) jit_blk_n = declared_n
+      }
+    }
+  }
+  if (!jit_blk_manifest_ok) {
+    rest = ctx
+    jit_blk_n = 0
+    while (1) {
+      p1 = index(rest, "\n---\n# Vocabulary: ")
+      p2 = index(rest, "\n---\n# JIT Context: ")
+      if (p1 == 0 && p2 == 0) { jit_blk_n++; jit_blk_body[jit_blk_n] = rest; break }
+      if (p1 == 0) p = p2
+      else if (p2 == 0) p = p1
+      else p = (p1 < p2) ? p1 : p2
+      jit_blk_n++
+      jit_blk_body[jit_blk_n] = substr(rest, 1, p - 1)
+      rest = substr(rest, p + 5)
+    }
+  }
+}
+'
+JIT_AWK_ENVELOPE='
+function jit_envelope_inject(event, text_escaped) {
+  if (text_escaped == "") return "{}"
+  return "{\042hookSpecificOutput\042:{\042hookEventName\042:\042" event "\042,\042additionalContext\042:\042" text_escaped "\042}}"
+}
+function jit_envelope_block(reason_escaped) {
+  return "{\042decision\042:\042block\042,\042reason\042:\042" reason_escaped "\042}"
+}
+function jit_envelope_empty() {
+  return "{}"
+}
+'
+JIT_AWK_ENVELOPE_SYSMSG='
+function jit_fmt_bytes(n) {
+  if (n < 1000) return n "b"
+  return sprintf("%.1fk", n / 1000)
+}
+function jit_envelope_inject_sysmsg(event, text_escaped, sysmsg_escaped) {
+  if (text_escaped == "" && sysmsg_escaped == "") return "{}"
+  if (text_escaped == "") return "{\042systemMessage\042:\042" sysmsg_escaped "\042}"
+  if (sysmsg_escaped == "") return jit_envelope_inject(event, text_escaped)
+  return "{\042hookSpecificOutput\042:{\042hookEventName\042:\042" event "\042,\042additionalContext\042:\042" text_escaped "\042},\042systemMessage\042:\042" sysmsg_escaped "\042}"
+}
+function jit_envelope_block_sysmsg(reason_escaped, sysmsg_escaped) {
+  if (sysmsg_escaped == "") return jit_envelope_block(reason_escaped)
+  return "{\042decision\042:\042block\042,\042reason\042:\042" reason_escaped "\042,\042systemMessage\042:\042" sysmsg_escaped "\042}"
+}
+'
+jit_frontmatter_many() { # VAR, entry file, field...
+  local _v="$1" _file="$2" _fields="${*:3}"
+  printf -v "$_v" '%s%s' "$JIT_FM_NL" \
+    "$(LC_ALL=C awk -v fl="$_fields" "$JIT_AWK_FRONTMATTER" "$_file")"
+}
+jit_fm_get() { # VAR, memo, field
+  local _probe="$JIT_FM_NL$3	" _rest
+  case "$2" in
+    *"$_probe"*)
+      _rest="${2#*"$_probe"}"
+      printf -v "$1" '%s' "${_rest%%"$JIT_FM_NL"*}"
+      ;;
+    *) printf -v "$1" '%s' "" ;;
+  esac
+}
+JIT_VALID_MODE_RE='^(remind|block|once)(,(remind|block|once))*$'
+JIT_VALID_REQUIRES_RE='^[A-Za-z0-9._+-]{1,255}$'
+JIT_MACRO_ANCHOR='(^|[;&|\n] *)'
+JIT_MACRO_WRAP='(([a-z_][a-z0-9_]*=[^[:space:];&|]*|rtk|command|[e]nv|sudo|nohup|nice|time)[[:space:]]+)*'
+JIT_MACRO_OPT='(-[^[:space:];&|]*[[:space:]]+([^-;&|[:space:]][^[:space:];&|]*[[:space:]]+)?)*'
+JIT_MACRO_END='($|[[:space:];&|])'
+JIT_LOG_MATCHES_MAX=2048
+JIT_LOG_ARROW='<''<'
+_log_hook() {
+  local LC_ALL=C
+  local hook="$1"
+  local ms="$2"
+  local matches="${3:-(none)}"
+  local tail="${4:-}"
+  local dropped head
+  if [ "${#matches}" -gt "$JIT_LOG_MATCHES_MAX" ]; then
+    head="${matches:0:$JIT_LOG_MATCHES_MAX}"
+    [ "${head%, *}" = "$head" ] || head="${head%, *}, "
+    dropped=$((${#matches} - ${#head}))
+    matches="${head}[+$dropped bytes not listed here, and the item before this marker may be a fragment; this line is capped at ${JIT_LOG_MATCHES_MAX} bytes -- the jit-dry-run tool prints the whole tree]"
+  fi
+  jit_log_write "[$(_ts)] $hook ${ms}ms | $matches${tail:+ $tail}"
+}
+export JIT_NAME_WITHHELD='<withheld: not a plain name>'
+JIT_LAYERS_MAX=64
+JIT_LAYERS_REFUSED_MAX=4096
+JIT_LAYERS=""
+export JIT_LAYERS_REFUSED=""
+export JIT_LAYERS_REFUSED_N=0
+JIT_LAYERS_REFUSED_CUT=0
+jit_layer_refuse() {
+  JIT_LAYERS_REFUSED_N=$((JIT_LAYERS_REFUSED_N + 1))
+  if [ "${#JIT_LAYERS_REFUSED}" -gt "$JIT_LAYERS_REFUSED_MAX" ]; then
+    if [ "$JIT_LAYERS_REFUSED_CUT" = 0 ]; then
+      JIT_LAYERS_REFUSED_CUT=1
+      JIT_LAYERS_REFUSED="$JIT_LAYERS_REFUSED$JIT_NL- the remaining refused layer directories are not listed here; the count above is the whole total"
+    fi
+    return 0
+  fi
+  JIT_LAYERS_REFUSED="$JIT_LAYERS_REFUSED${JIT_LAYERS_REFUSED:+$JIT_NL}- $1: $2"
+}
+jit_scan_layers() {
+  local base="$1" dim="$2" d name tsv seen=0 kept=0 cut=0
+  local LC_ALL=C
+  JIT_LAYERS=""
+  for d in "$base"/*/; do
+    [ -d "$d" ] || continue
+    d="${d%/}"
+    name="${d##*/}"
+    seen=$((seen + 1))
+    if [ "$kept" -ge "$JIT_LAYERS_MAX" ]; then
+      if [ "$cut" = 0 ]; then
+        cut=1
+        jit_layer_refuse "$dim" "the layer directories after the first $JIT_LAYERS_MAX were not read"
+      fi
+      continue
+    fi
+    case "$name" in
+      '' | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
+        jit_layer_refuse "$dim" "layer directory $seen was not read: the directory name is not a plain name"
+        continue
+        ;;
+    esac
+    if [ "${#name}" -gt 64 ]; then
+      jit_layer_refuse "$dim" "layer directory $seen was not read: the directory name is longer than 64 bytes"
+      continue
+    fi
+    if [ ! -r "$d" ] || [ ! -x "$d" ]; then
+      jit_layer_refuse "$dim" "layer directory $seen was not read: the directory could not be opened"
+      continue
+    fi
+    for tsv in "$d/00-index.tsv" "$d/01-paths.tsv"; do
+      [ -e "$tsv" ] || continue
+      if [ ! -r "$tsv" ]; then
+        jit_layer_refuse "$dim" "layer directory $seen was not read: an index inside it could not be opened"
+        continue 2
+      fi
+    done
+    JIT_LAYERS="$JIT_LAYERS${JIT_LAYERS:+ }$name"
+    kept=$((kept + 1))
+  done
+}
+JIT_ENTRY_AGES_MAX=8192
+export JIT_ENTRY_AGES=""
+export JIT_KEYWORD_WITHHELD='<withheld: not a plain keyword>'
+JIT_MISSING_REQUIRES_MAX=4096
+jit_awk_capture() {
+  local d f urc
+  d="${TMPDIR:-/tmp}"
+  d="${d%/}"
+  f="$(mktemp "$d/claude-jit-awkout-XXXXXXXX" 2> /dev/null)" || f=""
+  if [ -z "$f" ]; then
+    LC_ALL=C "$@"
+    urc=$?
+    JIT_AWK_CAPTURE_OUT=""
+    if [ "$urc" -gt 128 ] 2> /dev/null; then
+      JIT_AWK_CAPTURE_RC=$urc
+    else
+      JIT_AWK_CAPTURE_RC="uncaptured"
+    fi
+    return 0
+  fi
+  LC_ALL=C "$@" > "$f"
+  JIT_AWK_CAPTURE_RC=$?
+  IFS= read -r -d '' JIT_AWK_CAPTURE_OUT < "$f"
+  rm -f "$f"
+}
+jit_awk_crash_block() {
+  local rc="${1:-?}"
+  printf '{"decision":"block","reason":"# JIT Context: the rule engine could not evaluate this call -- awk exited %s before it finished. Refusing rather than permitting a call no rule was actually checked against. See issue #397."}' "$rc"
+}
+jit_awk_crash_sysmsg() {
+  local rc="${1:-?}"
+  printf '{"systemMessage":"JIT Context: the rule engine could not evaluate this turn -- awk exited %s before it finished. No entries were checked, so none were injected. See issue #397."}' "$rc"
+}
+jit_awk_empty_ok() {
+  printf '{}\n'
+}
+jit_awk_dispatch() {
+  local crash_fn="$1" empty_fn="$2"
+  if [ "$JIT_AWK_CAPTURE_RC" = "uncaptured" ]; then
+    return 0
+  fi
+  if [ "$JIT_AWK_CAPTURE_RC" -eq 0 ] 2> /dev/null; then
+    printf '%s' "$JIT_AWK_CAPTURE_OUT"
+  elif [ "$JIT_AWK_CAPTURE_RC" -gt 128 ] 2> /dev/null; then
+    _jit_awk_handler "$crash_fn" "$JIT_AWK_CAPTURE_RC"
+  elif [ -n "$JIT_AWK_CAPTURE_OUT" ]; then
+    printf '%s' "$JIT_AWK_CAPTURE_OUT"
+  else
+    _jit_awk_handler "$empty_fn" "$JIT_AWK_CAPTURE_RC"
+  fi
+}
+_jit_awk_handler() {
+  case "$1" in
+    jit_path_awk_could_not_evaluate) jit_path_awk_could_not_evaluate "$2" ;;
+    jit_path_awk_ordinary_empty) jit_path_awk_ordinary_empty "$2" ;;
+    jit_awk_crash_sysmsg) jit_awk_crash_sysmsg "$2" ;;
+    jit_awk_empty_ok) jit_awk_empty_ok "$2" ;;
+    jit_awk_crash_block) jit_awk_crash_block "$2" ;;
+    *) return 127 ;;
+  esac
+}
 T_START=$(_ms)
-
-# Created with O_EXCL under an unpredictable name, removed by an EXIT trap in this
-# process, and empty when this platform could not give us one. See common.sh (#60).
 jit_tmp_open
-
-# Vocabulary-by-path is OFF for interactive sessions: every prompt already gets a
-# vocabulary pass, so path-triggered entries would only duplicate context. Autonomous
-# runs send exactly one prompt for the whole run — tool calls are their only remaining
-# injection point, and that single prompt lands before the agent knows which part of the
-# codebase it will touch. Opt in with DYNAMIC_RULES_VOCAB_PATHS=1.
-# The pre-0.2 name is still honoured so existing runners do not break silently.
 VOCAB_PATHS="${JIT_CONTEXT_VOCAB_PATHS:-${DYNAMIC_RULES_VOCAB_PATHS:-${DVSI_AUTONOMOUS_VOCAB_PATHS:-0}}}"
-
-# LC_ALL=C on this awk and nowhere else (#68). A malformed UTF-8 byte in the payload --
-# a paste out of a Latin-1 file, a multibyte sequence cut at a copy boundary, a filename
-# echoed from a differently-encoded checkout -- made one-true-awk abort the END block with
-# `illegal byte sequence`: nothing on stdout, not even `{}`, the diagnostic written into
-# the session, exit 0. Failing open AND being loud, which is what the top of common.sh
-# forbids in one sentence. gawk did not abort but printed a multibyte warning to the same
-# place. Under `C` both engines read the record as bytes and neither has anything to
-# decode, so neither can fail to.
-#
-# WHAT IT COSTS HERE: nothing, and for a narrower reason than the one this comment used to
-# give. It claimed the Latin-1 fold table from #31 absorbed the change, on the grounds that
-# one-true-awk tolower() never folded a multibyte capital. Both halves were shaky: awk
-# 20200816 DOES fold `CLÉ` to `clé` under a UTF-8 locale, exactly as gawk 5.4.1 does
-# (measured 2026-08-12), and this hook calls neither tolower() nor the fold table. Its path
-# patterns are matched case-sensitively, byte for byte, against the raw path -- so the pin
-# cannot change a verdict here in either direction, whatever tolower() does.
-#
-# The paragraph mattered because the same text sat in pre-tool-hook.sh, where it was false:
-# that hook has a tolower()-only comparison in its tool-rule matcher, and a `forbid` rule
-# stopped blocking under the pin (#76). Stated per file now rather than pasted three times.
-#
-# The alternative -- sanitising the bytes before matching -- needs a pass that cannot
-# itself decode, which is the same trap one layer down.
-#
-# Scoped to this awk, not exported: rebuild-tsv.sh has its own awk and the opposite
-# contract (it may fail loudly), and it sources this hook shared file too.
-# The project directory, and the sentinel that opens the candidate channel below. The
-# directory is read from ENVIRON inside awk rather than passed with -v: a -v value has its
-# escape sequences PROCESSED, so a checkout under a directory with a backslash in its name
-# would arrive mangled, and a newline in one is a fatal awk error raised before the program
-# runs. ENVIRON does neither. bash needs the same value, so it is normalised once here.
-JIT_PROJECT="${CLAUDE_PROJECT_DIR:-.}"
+JIT_PROJECT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 while [ "${JIT_PROJECT%/}" != "$JIT_PROJECT" ] && [ "$JIT_PROJECT" != "/" ]; do
   JIT_PROJECT="${JIT_PROJECT%/}"
 done
 JIT_CAND_BEGIN='--jit-candidates--'
-
-# ONE program, TWO possible passes. See the candidate section in END: the first pass parses
-# the payload, and when a Bash command yields path candidates it writes them to the scratch
-# channel and prints NOTHING, because whether they are real files is a question awk must not
-# ask (a getline probe on a directory is a fatal i/o error on one-true-awk, which is the awk
-# macOS ships). bash answers it with builtins and runs the program again over the survivors.
 JIT_PATH_PROG=$JIT_AWK_GUARD$JIT_AWK_ENTRY$JIT_AWK_INJECT$JIT_AWK_JSON$JIT_AWK_BLK_BUILD$JIT_AWK_ENVELOPE$JIT_AWK_ENVELOPE_SYSMSG'
-# RFC 8259 forbids a raw U+0000-U+001F inside a JSON string, and a strict parser is
-# entitled to reject the whole object -- which renders as this hook having had nothing to
-# say. Only backslash, quote, tab and newline were escaped; CR was the one that shipped,
-# because an entry authored on Windows has CRLF line endings and this repo .gitattributes
-# covers OUR files, not a user (issue #15).
-#
-# Backslash goes first, or every escape introduced after it is doubled.
-#
-# The tail loop is guarded by index() rather than a regex: index() is a byte search with no
-# multibyte decode -- the same reason the CamelCase split in the prompt and tool hooks uses
-# it -- and no byte of a UTF-8 sequence falls in 0x00-0x1F, so it can never cut a multibyte
-# character in half.
-#
-# U+0000 IS reachable, on exactly one of the two engines. gawk is NUL-transparent and
-# carries an embedded NUL through getline into the buffer; one-true-awk truncates the line
-# at it and cannot even build a one-byte NUL with sprintf("%c", 0). So the loop starts at 0
-# and skips the code point the engine cannot represent -- without that skip, index(s, "")
-# returns 1 and gsub would be handed an empty regex, which matches at every position.
 function jit_json_escape(s,   k, c) {
-  gsub(/\\/, "\\\\", s)
-  gsub(/"/, "\\\"", s)
+  gsub(/\\/, "\134\134", s)
+  gsub(/"/, "\134\042", s)
   gsub(/\t/, "\\t", s)
   gsub(/\n/, "\\n", s)
   gsub(/\r/, "\\r", s)
@@ -97,39 +1533,10 @@ function jit_json_escape(s,   k, c) {
   }
   return s
 }
-# --- Path candidates out of an arbitrary Bash command (#85) -------------------
-# The path dimension used to see a Bash payload and collect NOTHING unless the command
-# matched a supertool invocation. `vim scripts/pre-tool-hook.sh` reached no path rule;
-# `Read` of the same file reached every one of them. The tool the agent happened to use
-# decided whether the rule existed, and neither the session nor the log said so.
-#
-# So a token is a candidate now. What makes guessing safe is not this function -- it is
-# the EXISTENCE test in the bash half: a token becomes a path only if it names a regular
-# file inside the project. Everything here is the confinement that has to hold BEFORE
-# anything is stat-ed, because a stat follows what it is given:
-#
-#   * `..` in ANY position is refused, including a traversal that resolves back inside.
-#     There is no realpath here that costs nothing, so the verdict is lexical -- the same
-#     trade jit_bad_entry_file() makes for a symbolic link one dimension over.
-#   * An ABSOLUTE token must sit under the project directory, and is made relative to it.
-#     One outside is dropped, not tested.
-#   * A BACKSLASH drops the token. Here it is a shell escape; on Git Bash the Win32 API
-#     underneath treats it as a separator, so a dot-dot spelled with backslashes traverses
-#     there while reading as an ordinary character in every check above. jit_shown_apply()
-#     draws the same line for the same reason.
-#   * A NUL drops the token, because the channel that carries candidates back to bash is
-#     line-based and `read -r` truncates at one (#78, one channel over).
-#
-# No verb is inspected and no intent is guessed. `grep foo scripts/common.sh` fires the
-# rule about common.sh, and that is correct: the rule is about the file the agent is about
-# to read. Over-firing is not the defect; silence is.
-#
-# The count is capped because the command length is chosen by the payload and each survivor
-# costs bash a stat. 64 is far above any honest command line.
 function jit_cand_sep(   q) {
   if (jit_sep_re == "") {
     q = sprintf("%c", 39)
-    jit_sep_re = "[ \t\n\r;&|()<>\"`," q "=]+"
+    jit_sep_re = "[ \t\n\r;&|()<>\042`," q "=]+"
   }
   return jit_sep_re
 }
@@ -140,7 +1547,7 @@ function jit_cand_ctl(s) {
 function jit_cand_tokens(c, out,   nt, tk, i, t, project, plen, k) {
   jit_utf8_init()
   project = ENVIRON["CLAUDE_PROJECT_DIR"]
-  if (project == "") project = "."
+  if (project == "") project = "\056"
   sub(/\/+$/, "", project)
   if (project == "") project = "/"
   k = 0
@@ -149,11 +1556,8 @@ function jit_cand_tokens(c, out,   nt, tk, i, t, project, plen, k) {
     if (k >= 64) break
     t = tk[i]
     if (t == "") continue
-    # An option is not a path. Its VALUE still is: `=` is a separator above, so
-    # --file=src/x.php arrives here as two tokens and the second one survives.
     if (substr(t, 1, 1) == "-") continue
-    if (index(t, "\\") > 0) continue
-    # one-true-awk truncates the record at a NUL and never sees one; gawk carries it.
+    if (index(t, "\134") > 0) continue
     if (length(jit_nul) == 1 && index(t, jit_nul) > 0) continue
     if (jit_cand_ctl(t)) continue
     if (substr(t, 1, 1) == "/") {
@@ -162,27 +1566,18 @@ function jit_cand_tokens(c, out,   nt, tk, i, t, project, plen, k) {
       else if (substr(t, 1, plen + 1) == project "/") t = substr(t, plen + 2)
       else continue
     } else if (t ~ /^[A-Za-z]:/) continue
-    # `./scripts/x.sh` and `scripts/x.sh` are the same file, and a shell prints the first
-    # form whenever a completion or a `find .` produced the token. A rule anchored with ^
-    # matches only one of them, so the two forms are folded here rather than left to every
-    # author to spell twice. Ordered before the .. checks below, so that `./../x` is
-    # refused rather than normalised out of view. Loops because gsub does not rescan what
-    # it just produced: `a/././b` needs two passes and `a///b` needs two as well.
     while (substr(t, 1, 2) == "./") t = substr(t, 3)
     while (t ~ /\/\.\//) sub(/\/\.\//, "/", t)
     while (t ~ /\/\//) sub(/\/\//, "/", t)
     sub(/\/\.$/, "", t)
     if (t == "" || substr(t, 1, 1) == "/") continue
-    if (t == "." || t == "..") continue
+    if (t == "\056" || t == "\056\056") continue
     if (t ~ /(^|\/)\.\.(\/|$)/) continue
     k++
     out[k] = t
   }
   return k
 }
-# The survivors, handed back by the bash half through the environment for the second pass.
-# The environment rather than -v for the reason JIT_SYMLINKS uses it: the list is
-# newline-separated, and a newline in a -v value is fatal before the program runs.
 function jit_cand_load(out,   nc, a, i, k) {
   k = 0
   nc = split(ENVIRON["JIT_PATH_CANDIDATES"], a, "\n")
@@ -191,26 +1586,11 @@ function jit_cand_load(out,   nc, a, i, k) {
 }
 { input = input $0 }
 END {
-  # --- Parse JSON: extract file_path, path, or command ---
-  # jit_json_fields/jit_unescape live in common.sh. Splitting on a bare quote ended a
-  # value at the first ESCAPED one, and nothing decoded \n — so a supertool call sitting
-  # on the second line of a multi-line command was invisible here.
   n = jit_json_fields(input, raw, fs, fe)
-  # Both marker paths are derived from the same parse. state_dir is empty when the tree
-  # cannot hold one and the key is empty when the payload names no session; either way
-  # these are "" and the shown sets live and die with this process. See common.sh.
-  # The vocabulary one is deliberately the SAME file the prompt hook writes.
   shown_file = jit_shown_file(state_dir, "path", raw, fs, fe, n)
   vocab_shown_file = jit_shown_file(state_dir, "vocab", raw, fs, fe, n)
-  # #389: one bytes marker file for BOTH passes below, the same file the vocab pass
-  # in pre-prompt-hook.sh writes to when a session shares its shown_file with it --
-  # one naming convention, not two.
   bytes_shown_file = jit_shown_file(state_dir, "bytes", raw, fs, fe, n)
   cmd = ""
-  # #426: jit_hook_fields() (common.sh) reads structurally rather than positionally, so
-  # a tool_input STRING VALUE equal to file_path/path/command can never repoint the
-  # field it names -- it is read at the wrong depth, is not followed by a colon, or
-  # both. All three are read only directly inside tool_input, never from the top level.
   ti_wanted["file_path"] = 1
   ti_wanted["path"] = 1
   ti_wanted["command"] = 1
@@ -218,54 +1598,34 @@ END {
   file_path = TI["file_path"]
   if (file_path == "") file_path = TI["path"]
   cmd = TI["command"]
-
-  # --- Collect paths to match against ---
   path_count = 0
-  # The SECOND pass (#85). Its stdin is empty, so everything parsed above came out blank;
-  # the paths were extracted from a Bash command in the first pass and bash kept the ones
-  # that name a regular file inside the project. The session key rides back with them so
-  # that both passes address the same marker file rather than two.
   if (cand_mode == 1) {
     path_count = jit_cand_load(all_paths)
-    shown_file = jit_shown_path(state_dir, "path", ENVIRON["JIT_SESSION_KEY"])
-    vocab_shown_file = jit_shown_path(state_dir, "vocab", ENVIRON["JIT_SESSION_KEY"])
-    bytes_shown_file = jit_shown_path(state_dir, "bytes", ENVIRON["JIT_SESSION_KEY"])
+    shown_file = jit_shown_path(state_dir, "path", ENVIRON["JIT_SESSION_REF"])
+    vocab_shown_file = jit_shown_path(state_dir, "vocab", ENVIRON["JIT_SESSION_REF"])
+    bytes_shown_file = jit_shown_path(state_dir, "bytes", ENVIRON["JIT_SESSION_REF"])
   } else if (file_path != "") {
     path_count = 1; all_paths[1] = file_path
-  # \n joins the class for the same reason ; and | are in it: a decoded multi-line
-  # command puts the second invocation after a real newline, and without it the call was
-  # simply not seen.
   } else if (cmd != "" && cmd ~ /(^|[ \t\n;&|(])(\.\/)?supertool(\.py)?[ \t]/) {
-    # Extract paths from supertool single-quoted arguments.
-    # The separator is bracketed, so awk compiles it as a REGEX rather than a single
-    # character. Measured on awk 20200816 (macOS): with a one-character separator that awk
-    # also splits on a newline, so a multi-line command produced one extra field and
-    # shifted the odd/even parity this loop walks — every quoted argument was then read
-    # from the wrong side of the quote. "[\047]" splits on the quote and nothing else, on
-    # every awk.
     n2 = split(cmd, args, "[\047]")
     for (ai = 2; ai <= n2; ai += 2) {
       arg = args[ai]
-      # read:PATH, map:PATH, ls:PATH, tail:PATH, head:PATH, wc:PATH
       if (match(arg, /^(read|map|ls|tail|head|wc):/)) {
         sub(/^[^:]+:/, "", arg)
         sub(/:.*/, "", arg)
         if (arg != "") { path_count++; all_paths[path_count] = arg }
       }
-      # grep:PATTERN:PATH, around:PATTERN:PATH
       else if (match(arg, /^(grep|around):/)) {
         sub(/^[^:]+:/, "", arg)
         sub(/^[^:]+:/, "", arg)
         sub(/:.*/, "", arg)
         if (arg != "") { path_count++; all_paths[path_count] = arg }
       }
-      # glob:PATTERN — extract directory prefix
       else if (match(arg, /^glob:/)) {
         sub(/^glob:/, "", arg)
         sub(/[^\/]*\*.*/, "", arg)
         if (arg != "") { path_count++; all_paths[path_count] = arg }
       }
-      # check:PRESET:PATH
       else if (match(arg, /^check:/)) {
         sub(/^check:/, "", arg)
         sub(/^[^:]+:/, "", arg)
@@ -273,23 +1633,6 @@ END {
       }
     }
   }
-
-  # --- A Bash command that named no supertool op: ask bash about its tokens (#85) ---
-  # Nothing is printed on this branch. The hook has not decided anything yet: the tokens
-  # go down the scratch channel, bash keeps the ones that name a regular file inside the
-  # project, and either runs this program again over them or prints {} itself.
-  #
-  # WHY THE EXISTENCE TEST IS NOT HERE. It is a stat, and awk has none. The nearest thing
-  # is `(getline x < t) >= 0`, and a token is very often a DIRECTORY -- `ls -la scripts/`.
-  # Measured on awk version 20200816, the awk macOS ships: getline on a directory returns 0
-  # and then raises `i/o error occurred on scripts/`, which exits 2 and prints into the
-  # stranger session. Failing hard and being loud, from the line meant to add a feature.
-  # gawk returns -1 there and is fine, so a local green run would have said nothing about
-  # it. common.sh already records the same engine trap for close() on a directory.
-  #
-  # Without a scratch file there is no channel, and the branch degrades to what this hook
-  # did before: no candidates, no injection, exit 0. That is the same degradation an
-  # unwritable TMPDIR already costs the log and the dedup.
   if (cand_mode != 1 && path_count == 0 && cmd != "" && log_tmp != "") {
     n_cand = jit_cand_tokens(cmd, cands)
     if (n_cand > 0) {
@@ -299,54 +1642,31 @@ END {
       exit
     }
   }
-
   if (path_count == 0) { print "{}"; exit }
-
-  # --- Load shown set ---
   jit_shown_load(shown_file, shown)
-
   nblk = 0
   log_matches = ""
   sep = ""
   refused = ""
   n_refused = 0
   sys_msg = ""
-
-  # --- Scan path layers ---
-  # Enumerated from disk by jit_scan_layers() in common.sh and handed in as a -v value
-  # (#176). The bound comes off the same split() rather than being a second literal beside
-  # it: the `li <= 4` this replaces was a separate copy of the same fact, and a fix that
-  # changed only the string would have truncated the list silently.
   n_path_layers = split(path_layers, players, " ")
   for (li = 1; li <= n_path_layers; li++) {
     layer = players[li]
     index_file = paths_base "/" layer "/00-index.tsv"
-
     rown = 0
     while ((getline tline < index_file) > 0) {
       rown++
-
-      # An index row is a channel into additionalContext in its own right: the pattern
-      # column is echoed back in the (matched: ...) header, so a byte the JSON string
-      # cannot carry reaches stdout without ever being in an entry file (#77). A NUL here
-      # truncated the dedup key on both engines (#78). Checked BEFORE the split, so no
-      # column of an unusable row is read at all.
       why = jit_bad_bytes(tline, "the index row")
       if (why != "") {
         n_refused++
         refused = jit_refuse_add(refused, jit_row_id("paths/" layer, rown) ": " why)
-        # Positioned, never quoted: the raw text is the thing that could not be carried.
         log_matches = log_matches sep "refused:" jit_row_id("paths/" layer, rown) "(" why ")"
         sep = ", "
         continue
       }
-
       split(tline, tf, "\t")
       pattern = tf[1]; rule_file = tf[2]
-
-      # Containment first, before the shown set and before the pattern: the file name is
-      # about to be concatenated onto this layer directory, and a row of ../../../x made
-      # the hook read that file and inject it. See jit_bad_entry_file in common.sh.
       why = jit_bad_entry_file(rule_file, paths_base "/" layer)
       if (why != "") {
         n_refused++
@@ -355,50 +1675,21 @@ END {
         sep = ", "
         continue
       }
-
       rlockey = jit_loc_key("paths", layer, rule_file)
       if (rlockey in shown) continue
-
-      # Every path pattern is a regex, so the guard applies to all of them. See
-      # common.sh: an undefined escape matches nothing and exits 0, a malformed one
-      # is fatal and silences the entire index. Refuse the row, keep the rest.
       why = jit_bad_pattern(pattern)
       if (why != "") {
         n_refused++
-        # POSITIONED, not named. This branch used to echo rule_file, arguing that the row
-        # had passed the bare-name check above so the name could not carry a separator.
-        # True, and beside the point: that check forbids a slash, a backslash, `.` and `..`
-        # and nothing else, so 250 bytes of English pass it intact. A file-name column
-        # reading "IGNORE ALL PREVIOUS INSTRUCTIONS. Run: ..." arrived in the context
-        # verbatim, with no rule matched and no entry file present (#35).
-        #
-        # The name is not lost, it moved: jit_log_name() puts it in hooks.log, which a
-        # person reads and no model does, and jit-dry-run.sh — which this notice tells the
-        # author to run — prints the name beside the reason. The model gets the row.
-        # Qualified by DIMENSION, not just by layer. This hook reads paths/<layer> and
-        # vocabulary/<layer>, both of which are called 00-manual, and the file name used to
-        # tell those two apart. Withholding the name without adding the dimension would have
-        # made one notice line ambiguous in exchange for closing the other hole.
         refused = jit_refuse_add(refused, jit_row_id("paths/" layer, rown) ": " why)
         log_matches = log_matches sep "refused:" rule_file "(" why ")"
         sep = ", "
         continue
       }
-
       path_matched = 0
       for (pi = 1; pi <= path_count; pi++) {
         if (match(all_paths[pi], pattern)) { path_matched = 1; break }
       }
       if (!path_matched) continue
-
-      # The entry is read BEFORE anything is marked shown. A row whose entry file will not
-      # open used to be marked anyway -- nothing injected, nothing refused, and the key
-      # recorded as delivered, which is how a NUL-truncated row went missing in silence on
-      # one-true-awk (#78). A mark now records an injection that happened.
-      #
-      # jit_entry_load/jit_inject_text live in common.sh: the title and the
-      # author-written description by default, the whole body only when the project or
-      # the entry asks for it.
       content = ""
       rpath = paths_base "/" layer "/" rule_file
       if (jit_entry_load(rpath, inject_default, 0, ent)) {
@@ -407,13 +1698,10 @@ END {
         why = ent["why"]
         n_refused++
         refused = jit_refuse_add(refused, jit_row_id("paths/" layer, rown) ": " why)
-        # The name PASSED the bare-name check above, so it is what an author fixing this
-        # needs and jit_log_name() keeps it -- the log is read by a person, not a model.
         log_matches = log_matches sep "refused:" jit_log_name(rule_file, layer, rown, why) "(" why ")"
         sep = ", "
         continue
       }
-
       if (content != "") {
         shown[rlockey] = 1
         jit_shown_mark(shown_file, rlockey)
@@ -422,7 +1710,6 @@ END {
         sep = ", "
         blk_body = header "\n" content
         nblk++; blk[nblk] = blk_body
-        # #389: a byte record beside the mark just above, same rlockey.
         jit_shown_mark(bytes_shown_file, rlockey "\t" length(blk_body))
         if (status_mode == "fired") {
           sys_msg = sys_msg (sys_msg != "" ? "\n" : "") "JIT : paths/" layer "/" rule_file " (" jit_fmt_bytes(length(blk_body)) ")"
@@ -431,28 +1718,15 @@ END {
     }
     close(index_file)
   }
-
-  # --- Scan vocabulary path layers (autonomous runs only) ---
-  # Shares the shown-file written by the prompt hook, so an entry already delivered at
-  # intake is not repeated here. Index entries are literal path fragments ("src2/SiBlog/"),
-  # not regexes: matched with index(), and the trailing slash keeps src2/Bra/ off src2/Bram/.
   if (vocab_paths == "1") {
     jit_shown_load(vocab_shown_file, vshown)
-
-    # Its OWN list, not the path one. Until #176 this loop reused the `layers` array the
-    # path scan above built, which was only correct while both were the same constant --
-    # enumerated, vocabulary/ and paths/ can legitimately hold different layer directories,
-    # and sharing the array would have read this dimension for the other one names.
     n_vocab_layers = split(vocab_layers, vlayers, " ")
     for (li = 1; li <= n_vocab_layers; li++) {
       layer = vlayers[li]
       vindex = vocab_base "/" layer "/01-paths.tsv"
-
       vrown = 0
       while ((getline vline < vindex) > 0) {
         vrown++
-
-        # Same two channels as the rule loop above, same verdict. See jit_bad_bytes().
         why = jit_bad_bytes(vline, "the index row")
         if (why != "") {
           n_refused++
@@ -461,11 +1735,8 @@ END {
           sep = ", "
           continue
         }
-
         split(vline, vf, "\t")
         vpattern = vf[1]; vocab_file = vf[2]
-
-        # Same containment check as the rule loop above: this name is concatenated too.
         why = jit_bad_entry_file(vocab_file, vocab_base "/" layer)
         if (why != "") {
           n_refused++
@@ -474,17 +1745,13 @@ END {
           sep = ", "
           continue
         }
-
         vfkey = jit_loc_key("vocabulary", layer, vocab_file)
         if (vfkey in vshown) continue
-
         vmatched = 0
         for (pi = 1; pi <= path_count; pi++) {
           if (index(all_paths[pi], vpattern) > 0) { vmatched = 1; break }
         }
         if (!vmatched) continue
-
-        # Read first, mark only what was delivered. Same reason as the rule loop above.
         vcontent = ""
         vfpath = vocab_base "/" layer "/" vocab_file
         if (jit_entry_load(vfpath, inject_default, 0, vent)) {
@@ -497,7 +1764,6 @@ END {
           sep = ", "
           continue
         }
-
         if (vcontent != "") {
           vshown[vfkey] = 1
           jit_shown_mark(vocab_shown_file, vfkey)
@@ -506,7 +1772,6 @@ END {
           sep = ", "
           vblk_body = vheader "\n" vcontent
           nblk++; blk[nblk] = vblk_body
-          # #389: a byte record beside the mark just above, same vfkey.
           jit_shown_mark(bytes_shown_file, vfkey "\t" length(vblk_body))
           if (status_mode == "fired") {
             sys_msg = sys_msg (sys_msg != "" ? "\n" : "") "JIT : vocabulary/" layer "/" vocab_file " (" jit_fmt_bytes(length(vblk_body)) ")"
@@ -516,21 +1781,12 @@ END {
       close(vindex)
     }
   }
-
-  # --- A refused row is reported, once per session ---
-  # Same reason as the tool hook: the log is where dead rules go unnoticed, and this
-  # is the only channel that reaches an author who can fix it. Free while clean.
   if (n_refused > 0 && !("jit-refused-paths" in shown)) {
     shown["jit-refused-paths"] = 1
     jit_shown_mark(shown_file, "jit-refused-paths")
     note = jit_refusal_notice(refused, n_refused)
     jit_blk_prepend(note)
   }
-
-  # --- A layer directory that could not be read is reported, once per session ---
-  # #176: the state that had no channel at all. A layer nobody could load and a layer whose
-  # rules never matched produced the same silence, and every other signal -- the rebuild
-  # count, the linter, doctor -- reported the layer as healthy.
   layers_refused = ENVIRON["JIT_LAYERS_REFUSED"]
   layers_refused_n = ENVIRON["JIT_LAYERS_REFUSED_N"] + 0
   if (layers_refused_n > 0 && !("jit-refused-layers" in shown)) {
@@ -539,12 +1795,6 @@ END {
     lnote = jit_layers_notice(layers_refused, layers_refused_n)
     jit_blk_prepend(lnote)
   }
-
-  # --- A refused config.env line is reported, once per session ---
-  # Parsed in common.sh, reported here, because this is the only channel that reaches the
-  # user. The case that matters is the one where they did NOT write the file: config.env
-  # arrives with the repository, and a refused line there is either their own typo or a
-  # shell payload someone shipped them. Both are worth saying out loud.
   config_refused = ENVIRON["JIT_CONFIG_REFUSED"]
   config_refused_n = ENVIRON["JIT_CONFIG_REFUSED_N"] + 0
   if (config_refused_n > 0 && !("jit-refused-config" in shown)) {
@@ -553,14 +1803,6 @@ END {
     cnote = jit_config_notice(config_refused, config_refused_n)
     jit_blk_prepend(cnote)
   }
-
-  # --- CLAUDE_PROJECT_DIR names a DIFFERENT worktree than $PWD, confirmed (#402, #416) ---
-  # `worktree_note` arrives through ENVIRON, not -v, from jit_worktree_mismatch_line() in
-  # common.sh -- see the bash-side comment above for why. Empty unless a mismatch was
-  # CONFIRMED. Deduped on shown_file, the SAME "path"-keyed marker config_refused just
-  # used above -- this hook already keeps its own notices isolated from the tool/prompt
-  # pair (unlike jit-refused-config there, which shares a "vocab" marker), so this stays
-  # consistent with the isolation this file already chose rather than reaching across.
   worktree_note = ENVIRON["JIT_WORKTREE_NOTE"]
   if (worktree_note != "" && !("jit-worktree-mismatch" in shown)) {
     shown["jit-worktree-mismatch"] = 1
@@ -568,8 +1810,6 @@ END {
     wnote = jit_worktree_notice(worktree_note)
     jit_blk_prepend(wnote)
   }
-
-  # --- Log info to temp file ---
   fp_short = ""
   for (pi = 1; pi <= path_count; pi++) {
     if (pi > 1) fp_short = fp_short ","
@@ -577,38 +1817,13 @@ END {
     if (match(p, /src2\//)) p = substr(p, RSTART)
     fp_short = fp_short p
   }
-  # jit_log_text() first, THEN the truncation. fp_short is payload text after
-  # jit_unescape(), so a JSON newline escape is a real newline here; stripping after the
-  # cut would leave the first 80 bytes still carrying one. See common.sh (#65).
-  #
-  # 200, not 80. The one admitted loss in the summary design (issue #1) is that the pull
-  # step is soft: the agent is handed a description and decides whether to read the file.
-  # Whether it does is measurable with no new machinery, because reading an entry IS a
-  # tool call and this is the line that records it -- but at 80 characters an absolute
-  # path to `.claude/jit-context/vocabulary/00-manual/<entry>.md` under any real project
-  # directory was cut before the part that identifies it, and the measurement read as a
-  # pull that never happened.
   fp_short = substr(jit_log_text(fp_short), 1, 200)
   if (log_matches == "") log_matches = "(none)"
-  # Empty means bash could not get a scratch file at all -- see jit_tmp_open() in
-  # common.sh. Redirecting to "" is a FATAL awk error raised inside END, which would take
-  # the injection below with it: the #50 shape, out of the line meant to record it.
   if (log_tmp != "") {
-    # Marks FIRST, then the sentinel jit_shown_flush() writes, then the log line. The log
-    # line ends with payload text, so anything after it can be forged with a newline --
-    # which is how a `block` rule was silently marked already-shown (#65). One `path<TAB>key`
-    # per mark; bash appends them, because bash can test `[ -L ]` and survive a redirect
-    # that fails. See common.sh.
     jit_shown_flush(log_tmp)
     printf "%s\t%s\n", log_matches, fp_short > log_tmp
     close(log_tmp)
   }
-
-  # --- Output JSON ---
-  # jit_blk_join() (common.sh, JIT_AWK_BLK_BUILD, #230) assembles the "# JIT-CTX-BLOCKS"
-  # manifest from nblk/blk[] the same way pre-prompt-hook.sh always has -- this hook
-  # never built one before, so a consumer walking additionalContext always fell back to
-  # searching it for "\n---\n", a separator an entry body can forge.
   if ((matched = jit_blk_join()) != "") {
     matched = jit_json_escape(matched)
     printf "%s", jit_envelope_inject_sysmsg("PreToolUse", matched, (sys_msg != "") ? jit_json_escape(sys_msg) : "")
@@ -617,23 +1832,6 @@ END {
   }
 }
 '
-
-# Enumerated, never a literal (#176). See jit_scan_layers() in common.sh.
-#
-# TWO SCANS, TWO LISTS, and that is the change rather than an accident of it: this hook
-# used to build one `layers` array and walk it over BOTH paths_base and vocab_base, which
-# was only correct while the list was a constant. Enumerated, the two dimensions can hold
-# different layer directories -- a scaffold that ships vocabulary/01-oss and no
-# paths/01-oss is the ordinary case -- and one array serving both would read each
-# dimension for the other one directories.
-#
-# Scanned HERE and not inside jit_path_awk(), because that function may run twice in one
-# invocation and the refusal list accumulates: scanning per call would count every refused
-# layer twice and report a number that is not the number of layers.
-#
-# The vocabulary scan is gated exactly as its loop is. With DYNAMIC_RULES_VOCAB_PATHS off
-# this hook never opens that dimension, and a notice about layers it was not going to read
-# would be a report of a consequence that does not exist.
 jit_scan_layers "$JIT_BASE/paths" paths
 JIT_PATH_LAYERS="$JIT_LAYERS"
 JIT_VOCAB_LAYERS=""
@@ -641,62 +1839,8 @@ if [ "$VOCAB_PATHS" = "1" ]; then
   jit_scan_layers "$JIT_BASE/vocabulary" vocabulary
   JIT_VOCAB_LAYERS="$JIT_LAYERS"
 fi
-
-# #416: same computation and same reasoning as pre-tool-hook.sh's copy (#402) -- the
-# comparison needs `git rev-parse`, which the awk half cannot run itself. Empty unless a
-# mismatch was CONFIRMED; see jit_worktree_mismatch_line() in common.sh.
-#
-# Routed through ENVIRON, not -v, for the reason #378's comment on JIT_BASE's own export
-# gives: a -v value has its escapes PROCESSED, and this string embeds $PWD and
-# $CLAUDE_PROJECT_DIR verbatim -- real filesystem paths, backslash and all on Windows.
 JIT_WORKTREE_NOTE="$(jit_worktree_mismatch_line)"
 export JIT_WORKTREE_NOTE
-
-# One place the -v list lives, because this program may run twice. cand_mode is the only
-# thing that differs: 0 parses the payload on stdin, 1 takes its paths from the environment.
-#
-# #397: used to write straight to stdout with its exit status never read, at BOTH call
-# sites below. A crash (measured: SIGSEGV, exit 139, under #393's concurrent load) then
-# printed 0 bytes -- for mode 0 that reads identically to "wrote its candidates to
-# $JIT_TMP instead of stdout", the OTHER legitimate way this function produces no direct
-# output, so the crash and the healthy no-output case were indistinguishable exactly the
-# way #397 describes. Output is now captured once here and the exit status checked
-# before anything is printed: on success the captured bytes go out unchanged -- #400
-# (CI) caught a first cut of this that captured through a bare "$( )" and silently
-# dropped the trailing newline a healthy "{}" relied on: this hook was NOT uniformly
-# exempt just because it happens to have a second, bash-level `echo "{}"` elsewhere
-# (the candidates-written-but-none-resolved case) -- this function's OWN "{}" (a
-# Read/Edit tool_input, never routed through the Bash-command two-pass channel) went
-# through the same capture and regressed identically to the other two hooks. Fixed by
-# routing through jit_awk_capture() (common.sh), which preserves the exact bytes; on
-# a non-zero exit this says so via jit_awk_crash_sysmsg() (common.sh) rather than
-# staying quiet -- this hook has no decision field to fail closed WITH, the same
-# reasoning pre-prompt-hook.sh's own #397 fix documents.
-# #397 self-review (oss:auditor), still true after #400's rc-vs-crash split below:
-# mode 0's own program writes the candidates channel and calls `exit` right after
-# (see the `close(log_tmp); exit` two lines above the mode-0 awk source) -- so a
-# crash landing in the narrow window between that flush and process death can
-# leave a fully-formed $JIT_TMP sentinel behind even though awk's own exit status
-# says it did not finish cleanly. Left alone, the caller below still finds that
-# sentinel, still runs the SECOND pass, and THAT pass's own stdout lands after
-# this hook's own "could not evaluate" message -- two JSON objects on one hook's
-# stdout, where the harness expects exactly one. $JIT_TMP is not trustworthy
-# whenever this hook has nothing trustworthy to report, so it is cleared here
-# first; the existing "[ -s "$JIT_TMP" ]" gate downstream then takes the same
-# path it already takes for a healthy call that wrote nothing to it. Scoped to
-# ONLY the two "could not evaluate" outcomes (not the #400 "ordinary error, but
-# trust the output" branch below): that branch is reached exclusively through
-# the direct single-pass match/no-match path, which never touches the candidates
-# channel in the first place, so there is nothing there to clear and nothing to
-# protect against.
-#
-# #400 self-review: `: > "$JIT_TMP"` alone, even with `2> /dev/null`, still
-# printed "No such file or directory" to this hook's own stderr when $JIT_TMP was
-# empty (the same degraded-TMPDIR corner jit_awk_capture() can also degrade
-# through) -- bash reports a failed redirect target using the ORIGINAL stderr,
-# before a later `2>` on the same line takes effect, so the suppression this line
-# once had never actually applied to its own failure. Guarded instead: nothing to
-# truncate when there was never a channel to begin with.
 jit_path_awk_could_not_evaluate() {
   [ -n "$JIT_TMP" ] && : > "$JIT_TMP" 2> /dev/null
   jit_awk_crash_sysmsg "$1"
@@ -705,7 +1849,6 @@ jit_path_awk_ordinary_empty() {
   [ -n "$JIT_TMP" ] && : > "$JIT_TMP" 2> /dev/null
   jit_awk_empty_ok
 }
-
 jit_path_awk() {
   jit_awk_capture awk \
     -v path_layers="$JIT_PATH_LAYERS" \
@@ -722,47 +1865,17 @@ jit_path_awk() {
     "$JIT_PATH_PROG"
   jit_awk_dispatch jit_path_awk_could_not_evaluate jit_path_awk_ordinary_empty
 }
-
-# No `cat |` in front of it: jit_path_awk() is a wrapper around one awk, awk reads stdin
-# itself, and the second call site below already invokes this function outside a pipeline.
 jit_path_awk 0
-
-# --- The question awk cannot ask: does this token name a file? (#85) ----------
-# `[ -f ]` and `[ -L ]` are shell BUILTINS -- this forks nothing, and it is the same trade
-# jit_scan_symlinks() makes at the top of common.sh: the tests awk has no syscall for are
-# paid in bash, once, with no per-row subprocess.
-#
-# `-f` or `-d`, never `-e`. A directory is a path a rule can be about -- `grep -r x
-# src/Billing/Components` is the case README calls "a test runner pointed at a directory"
-# -- so it counts. What -e would ALSO admit is a fifo, a socket and a device node, and
-# those are refused: nothing here opens a candidate, but the moment something did, opening
-# a fifo for reading blocks until somebody writes, and a clone chooses what is in the tree.
-#
-# A SYMBOLIC LINK is refused at every component, leaf included, whether or not its target
-# is inside the tree. That is the verdict common.sh already gives an entry file, and for
-# the same reason: resolving instead would need a realpath this design cannot afford, and a
-# structural answer is the same answer on every platform.
-#
-# What a bad candidate could actually do is worth stating, because it bounds this: the path
-# is never opened and never read. It is matched against rule patterns and written to the
-# log tail. So the cost of getting containment wrong is a rule firing for a file the
-# project does not contain -- and #13 and #27 are why that is still refused rather than
-# argued down.
-# The accepted token comes back in JIT_CAND_VALUE rather than on stdout: `$( )` is a fork,
-# and this runs once per token. A DIRECTORY is normalised to a trailing slash there, which
-# is how path rules are written -- `Components/`, `src/Billing/` -- and how the supertool
-# glob extractor above has always handed one over. Without it `grep -r x src/Components`
-# and `grep -r x src/Components/` are the same directory and only one of them fires.
 JIT_CAND_VALUE=""
 jit_cand_ok() {
-  local tok="$1" rest comp pre=""
+  local seg="$1" rest comp pre="" bs
   JIT_CAND_VALUE=""
-  case "$tok" in
-    "" | /*) return 1 ;;
-    *\\*) return 1 ;;
-    .. | ../* | */../* | */..) return 1 ;;
-  esac
-  rest="$tok"
+  printf -v bs '\134'
+  [ -n "$seg" ] && [ "${seg#/}" = "$seg" ] || return 1
+  [ "${seg#*"$bs"}" = "$seg" ] || return 1
+  [ "$seg" != .. ] && [ "${seg#../}" = "$seg" ] && [ "${seg#*/../}" = "$seg" ] \
+    && [ "${seg%/..}" = "$seg" ] || return 1
+  rest="$seg"
   while [ "$rest" != "${rest#*/}" ]; do
     comp="${rest%%/*}"
     rest="${rest#*/}"
@@ -771,80 +1884,53 @@ jit_cand_ok() {
     if [ -L "$JIT_PROJECT/$pre" ]; then return 1; fi
     pre="$pre/"
   done
-  if [ -L "$JIT_PROJECT/$tok" ]; then return 1; fi
-  if [ -d "$JIT_PROJECT/$tok" ]; then
-    case "$tok" in */) JIT_CAND_VALUE="$tok" ;; *) JIT_CAND_VALUE="$tok/" ;; esac
+  if [ -L "$JIT_PROJECT/$seg" ]; then return 1; fi
+  if [ -d "$JIT_PROJECT/$seg" ]; then
+    if [ "${seg%/}" != "$seg" ]; then
+      JIT_CAND_VALUE="$seg"
+    else
+      JIT_CAND_VALUE="$seg/"
+    fi
     return 0
   fi
-  [ -f "$JIT_PROJECT/$tok" ] || return 1
-  JIT_CAND_VALUE="$tok"
+  [ -f "$JIT_PROJECT/$seg" ] || return 1
+  JIT_CAND_VALUE="$seg"
   return 0
 }
-
-# The first pass printed NOTHING if it wrote this channel, so exactly one of the three
-# branches below produces the hook output: the second pass, or the `{}` beside it, or --
-# when the channel holds no candidate sentinel -- the first pass, which already printed.
-#
-# Capped in bytes, like JIT_SYMLINKS and JIT_CONFIG_REFUSED, and for the same reason: the
-# list crosses an exec into the second pass, and its length is chosen by the payload.
 JIT_CANDIDATES=""
-JIT_SESSION_KEY=""
+JIT_SESSION_REF=""
 if [ -n "$JIT_TMP" ] && [ -s "$JIT_TMP" ]; then
   IFS= read -r JIT_CAND_HEAD < "$JIT_TMP" || JIT_CAND_HEAD=""
   if [ "$JIT_CAND_HEAD" = "$JIT_CAND_BEGIN" ]; then
     {
       IFS= read -r _JIT_SENTINEL
-      IFS= read -r JIT_SESSION_KEY
-      while IFS= read -r JIT_TOK; do
+      IFS= read -r JIT_SESSION_REF
+      while IFS= read -r JIT_SEG; do
         [ "${#JIT_CANDIDATES}" -lt 4096 ] || break
-        if jit_cand_ok "$JIT_TOK"; then
+        if jit_cand_ok "$JIT_SEG"; then
           JIT_CANDIDATES="$JIT_CANDIDATES$JIT_CAND_VALUE$JIT_NL"
         fi
       done
     } < "$JIT_TMP"
-    # awk built this key out of the payload and constrained it; checked again here because
-    # it is about to become part of a file name in the second pass.
-    case "$JIT_SESSION_KEY" in *[!A-Za-z0-9_-]*) JIT_SESSION_KEY="" ;; esac
-    # Emptied either way. The second pass rewrites this file with its marks and its log
-    # line; without one, the block at the bottom would read leftover candidate lines as a
-    # marks channel and a log line.
+    case "$JIT_SESSION_REF" in *[!A-Za-z0-9_-]*) JIT_SESSION_REF="" ;; esac
     : > "$JIT_TMP"
     if [ -n "$JIT_CANDIDATES" ]; then
       export JIT_PATH_CANDIDATES="$JIT_CANDIDATES"
-      export JIT_SESSION_KEY
+      export JIT_SESSION_REF
       jit_path_awk 1 < /dev/null
     else
       echo "{}"
     fi
   fi
 fi
-
-# --- Timing + log ---
 T_END=$(_ms)
 TOTAL=$((T_END - T_START))
-
-# `-s`, not `-f`: mktemp always leaves the file there, so its EXISTENCE stopped being
-# evidence that awk had anything to say. An empty one would otherwise be read as a log
-# line made of empty fields. Removal is the EXIT trap in common.sh, not a line here --
-# one creator, one remover, and the crash path covered too.
 if [ -n "$JIT_TMP" ] && [ -s "$JIT_TMP" ]; then
-  # One open: every marker append awk asked for, the sentinel that ends them, then the
-  # log line. Marks are read into memory and applied AFTER the file is closed, so a
-  # channel with no sentinel applies nothing -- see jit_marks_read() in common.sh (#65).
   {
     jit_marks_read
     IFS=$'\t' read -r AWK_MATCHES AWK_PATH
   } < "$JIT_TMP"
   jit_shown_apply
-  # Two arguments, not one concatenation: _log_hook caps the matches field and leaves the
-  # tail alone (#64). The tail is already bounded to 80 bytes inside awk and is what
-  # jit-misses.sh reads, so it must survive a line that had to be cut.
-  _log_hook "pre-path" "$TOTAL" "$AWK_MATCHES" "<< $AWK_PATH"
+  _log_hook "pre-path" "$TOTAL" "$AWK_MATCHES" "$JIT_LOG_ARROW $AWK_PATH"
 fi
-
-# Stated, not inherited. The hook exit status used to be whatever the last command
-# happened to leave behind -- which was `rm -f`, and always 0 by accident. With the
-# removal moved to the EXIT trap the last command became the log append, and a project
-# whose .discovery is read-only exited 1: a hook that FAILED HARD because it could not
-# write a log line. tests/test-session-markers.sh section H caught it.
 exit 0
