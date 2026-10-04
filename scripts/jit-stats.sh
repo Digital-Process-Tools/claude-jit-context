@@ -389,6 +389,11 @@ fi
 
 echo ""
 echo "--- recurring misses (jit-misses) ---"
+# #461: config.env's generic-words setting reaches jit-misses.sh too. common.sh set it as a
+# shell variable, which a child bash never saw -- while the release build, which inlines
+# jit-misses.sh as a function, did. Exported, both read the same setting.
+[ -z "${JIT_CONTEXT_GENERIC_WORDS+set}" ] || export JIT_CONTEXT_GENERIC_WORDS
+[ -z "${DYNAMIC_RULES_GENERIC_WORDS+set}" ] || export DYNAMIC_RULES_GENERIC_WORDS
 bash "$SCRIPT_DIR/jit-misses.sh" --log "$LOG_FILE" --top "$MISSES_TOP"
 
 exit 0

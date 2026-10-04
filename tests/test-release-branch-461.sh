@@ -69,6 +69,33 @@ else
 fi
 
 echo ""
+echo "=== the compiler's own two guarantees, on planted input (#461 release audit) ==="
+# strip_comments: an escaped quote inside a multi-line double-quoted string must not end
+# the string, or the `#`-leading data line after it is dropped from the shipped script.
+# The escape branch compared one character against a two-character string and never ran.
+# Positive control on the same input: the real comment after the string IS dropped.
+STRIP=$(
+  python3 - "$REPO/.github/scripts" << 'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import compile_scripts as c
+src = 'x="a\\"b\n# data line\nc"\n# real comment\necho done\n'
+out = c.strip_comments(src)
+print("keeps-data" if "# data line" in out else "drops-data")
+print("drops-comment" if "# real comment" not in out else "keeps-comment")
+w = c.wrap_as_function("f", "echo hi")
+print("resets-options" if w.split("\n")[1] == "set +e +u +o pipefail" else "inherits-options")
+PY
+)
+for want in keeps-data drops-comment resets-options; do
+  if grep -qx -- "$want" <<< "$STRIP"; then
+    ok "compile_scripts.py: $want"
+  else
+    bad "compile_scripts.py: expected $want" "$STRIP"
+  fi
+done
+
+echo ""
 echo "=== --help, byte for byte, source vs compiled ==="
 for s in jit-dry-run.sh jit-match.sh jit-doctor.sh jit-stats.sh jit-init.sh; do
   SRC_HELP=$(bash "$REPO/scripts/$s" --help 2>&1)

@@ -270,6 +270,20 @@ OUT="$(CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/jit-stats.sh" 2>&1)"
 assert_contains "with nothing to correlate against, bytes stays honestly unknown" "$OUT" "bytes=unknown"
 
 echo ""
+echo "=== P: #461 -- a config.env generic-words setting reaches the misses report ==="
+# The release build inlines jit-misses.sh as a function, which sees config.env's settings;
+# a child bash used not to, so the shipped plugin and this source disagreed. Both now honour
+# config.env. Control first: with no setting, the shipped list is the one set aside.
+P="$(new_project p)"
+printf '{"session_id":"sess-p","prompt":"zorkword please"}' \
+  | CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/pre-prompt-hook.sh" > /dev/null
+OUT="$(CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/jit-stats.sh" 2>&1)"
+assert_contains "control: no setting, the shipped word list is used" "$OUT" "generic word(s) set aside"
+printf 'JIT_CONTEXT_GENERIC_WORDS=\n' > "$P/.claude/jit-context/config.env"
+OUT="$(CLAUDE_PROJECT_DIR="$P" bash "$SCRIPTS/jit-stats.sh" 2>&1)"
+assert_contains "an empty JIT_CONTEXT_GENERIC_WORDS in config.env turns the filter off" "$OUT" "generic words not filtered"
+
+echo ""
 echo "=========================================="
 echo "Results: $PASS passed, $FAIL failed"
 echo "=========================================="

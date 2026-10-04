@@ -161,6 +161,9 @@ jit_log_rotate "$JIT_CONTEXT_LOG_MAX_BYTES"
 # over: not just whether the log could be read, but how much of it was.
 JIT_MISSES_TOP=5
 JIT_MISSES_TAIL=5000
+# #461: config.env's generic-words setting reaches jit-misses.sh, as in jit-stats.sh.
+[ -z "${JIT_CONTEXT_GENERIC_WORDS+set}" ] || export JIT_CONTEXT_GENERIC_WORDS
+[ -z "${DYNAMIC_RULES_GENERIC_WORDS+set}" ] || export DYNAMIC_RULES_GENERIC_WORDS
 MISSES_OUT="$(bash "$SCRIPT_DIR/jit-misses.sh" --top "$JIT_MISSES_TOP" --tail "$JIT_MISSES_TAIL" 2>&1)"
 MISSES_RC=$?
 JIT_RECUR=""
@@ -326,15 +329,15 @@ else
       # #461: tests rather than a case with a quoted empty pattern and a class.
       if [ -z "$JIT_CONTEXT_LOG_MAX_BYTES" ] || [ -n "${JIT_CONTEXT_LOG_MAX_BYTES//[0-9]/}" ] \
         || [ "${JIT_CONTEXT_LOG_MAX_BYTES#0}" != "$JIT_CONTEXT_LOG_MAX_BYTES" ]; then
-          # Self-review (oss:auditor): this refused value is exactly the kind of input
-          # #423's own comment above says "can be exported straight into the
-          # environment" -- i.e. it never passed jit_load_config()'s validation, so it
-          # cannot be assumed to be quote/backslash-free the way a real byte count
-          # always is. Escaped the same way $LOG_FILE is escaped into JIT_LOG_ESC just
-          # above (a literal " or \\ in the value would otherwise break the JSON this
-          # line is embedded in at the printf below).
-          JIT_MAX_ESC="$(printf '%s' "$JIT_CONTEXT_LOG_MAX_BYTES" | LC_ALL=C awk '{ gsub("\134\134", "\134\134"); gsub("\042", "\134\042"); print }')"
-          JIT_LINES="${JIT_LINES:+$JIT_LINES$JIT_JNL}JIT : hooks.log is $JIT_MB MB. JIT_CONTEXT_LOG_MAX_BYTES=$JIT_MAX_ESC is not a byte count automatic rotation accepts, so it did NOT rotate this session -- delete or rotate it yourself: $JIT_LOG_ESC"
+        # Self-review (oss:auditor): this refused value is exactly the kind of input
+        # #423's own comment above says "can be exported straight into the
+        # environment" -- i.e. it never passed jit_load_config()'s validation, so it
+        # cannot be assumed to be quote/backslash-free the way a real byte count
+        # always is. Escaped the same way $LOG_FILE is escaped into JIT_LOG_ESC just
+        # above (a literal " or \\ in the value would otherwise break the JSON this
+        # line is embedded in at the printf below).
+        JIT_MAX_ESC="$(printf '%s' "$JIT_CONTEXT_LOG_MAX_BYTES" | LC_ALL=C awk '{ gsub("\134\134", "\134\134"); gsub("\042", "\134\042"); print }')"
+        JIT_LINES="${JIT_LINES:+$JIT_LINES$JIT_JNL}JIT : hooks.log is $JIT_MB MB. JIT_CONTEXT_LOG_MAX_BYTES=$JIT_MAX_ESC is not a byte count automatic rotation accepts, so it did NOT rotate this session -- delete or rotate it yourself: $JIT_LOG_ESC"
       fi
     fi
   fi
