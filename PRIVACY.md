@@ -10,32 +10,44 @@ and it sends nothing over the network: none of its scripts opens a connection.
   kept beyond what the log below records.
 - The entries in your project's `.claude/jit-context/` directory, and its `config.env`.
 
-Nothing outside the project is read, apart from the plugin's own files. The one exception
-is `/jit-context:doctor`, run by hand: to say which copy of the plugin is active, it reads
-`~/.claude/settings.json` and lists the plugin's own copies in Claude Code's plugin cache.
-It prints what it finds to you and keeps nothing.
+Outside the project, it reads only the plugin's own files, with two exceptions:
+
+- On every prompt and tool call, the hooks ask git for the top of the repository you are
+  standing in and of the project Claude Code opened (`git rev-parse --show-toplevel`). When
+  the two differ, they tell the model both paths, so it does not edit the wrong worktree.
+  This reads git's own metadata, nothing else, and is not kept.
+- `/jit-context:doctor`, run by hand: to say which copy of the plugin is active, it reads
+  `~/.claude/settings.json` and lists the plugin's own copies in Claude Code's plugin
+  cache. It prints what it finds to you and keeps nothing.
 
 ## What it writes
 
 **In every project, opted in or not:** each prompt and tool-call hook creates a few scratch
-files in your temporary directory (`$TMPDIR`, or `/tmp`), named `claude-jit-...`, and deletes
-them when the hook exits. They hold the hook's own working data and, in an opted-in project,
-the log line below before it is appended to the log. A hook killed outright can leave one
-behind; your system's temporary-directory cleanup removes it.
+files in your temporary directory (`$TMPDIR`, or `/tmp`), named `claude-jit-...`, readable
+by you only, and deletes them when the hook exits. They hold the hook's own working data and
+the log line described below, the start of your prompt included, **even in a project that has
+not opted in**; there the line is then discarded instead of appended to a log. A hook that is
+killed can leave one behind; your system's temporary-directory cleanup removes it.
 
 **Only in a project that has opted in**, by having a `.claude/jit-context/` directory, and
 only inside its `.claude/jit-context/.discovery/`:
 
-- `logs/hooks.log`: one line per hook run, whether or not an entry matched, with the time,
-  the hook, which entries fired and on which word or path, and the start of what it was
-  given: the first 80 bytes of the prompt, or of a tool call the first 120 bytes of its
-  command or the first 200 bytes of its file path. The words that recur in your prompts
-  with no entry behind them are reported from this log. So anything you type at the very
-  start of a prompt, a pasted secret included, can end up in this file on your disk. The
-  log rotates at 20 MB by default and keeps one previous copy, `hooks.log.1`. The size is
-  set by `JIT_CONTEXT_LOG_MAX_BYTES` in `config.env`.
-- `state/`: small per-session markers, so an entry is shown once per session. Markers
-  older than seven days are removed at the start of the next session.
+- `logs/hooks.log`: one line per prompt or tool call, whether or not an entry matched, with
+  the time, the hook, which entries fired and on which word or path, and part of what it was
+  given:
+  - for a prompt, its first 80 bytes;
+  - for a tool call, up to 120 bytes made of the file path and of every word in the command
+    that contains a `/` (paths and URLs), wherever it sits in the command, lowercased;
+  - for a file being touched, up to 200 bytes of the paths involved.
+
+  The words that recur in your prompts with no entry behind them are reported from this
+  log. So the start of a prompt, and a URL or path anywhere in a command, can end up in this
+  file on your disk, a secret included if it was pasted there (a token in a URL, say). The
+  log rotates at 20 MB by default, checked when a session starts, and keeps one previous
+  copy, `hooks.log.1`. The size is set by `JIT_CONTEXT_LOG_MAX_BYTES` in `config.env`.
+- `state/`: small per-session markers, so an entry is shown once per session. Most are
+  removed after seven days, at the start of a session; the `bytes-shown-*` markers (entry
+  names and sizes) are currently not, and accumulate until you delete them (#469).
 
 Delete `.claude/jit-context/.discovery/` at any time; it holds no configuration, only these
 records, and is recreated as needed.
