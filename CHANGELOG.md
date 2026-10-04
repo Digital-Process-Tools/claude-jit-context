@@ -7,6 +7,58 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-04
+
+### Changed
+
+- **The hooks no longer carry the text shapes the directory validator misreads** (#461).
+  With every script self-contained, `COMMAND_SCRIPT_NOT_FOLLOWED` still held, and the
+  validator's own message gave no line. Bisected one portal validation at a time, it
+  turned out to trip on how some lines are written, not on what they do: a `case`
+  pattern with a POSIX class, a quoted literal or a `*/*` glob, a catch-all `*)` inside a
+  loop, a quote character alone inside the other quote, `\"` or a backslash next to a
+  quote in an awk string, and the text `:.=`. Each is rewritten as an expansion test or
+  an octal escape (`\042`, `\134`); behaviour is unchanged and the full suite runs the
+  same. `check_release_tree.py` fails the release build on any of them in a hook. The
+  last three hooks were cleared by rewriting every such shape at once, so which one held
+  each of them is not known; `docs/directory-validator.md` has the bisection.
+
+### Fixed
+
+- **`/jit-context:doctor`, `/jit-context:init` and `/jit-context:stats` now start when the plugin's path contains a space** (#456). Each command's fenced body ran `bash ${CLAUDE_PLUGIN_ROOT}/scripts/<script>.sh` with the placeholder unquoted, so a plugin root such as a home directory with a space in it split into several words before the script could parse its own flags — the same failure mode #450 fixed for `hooks/hooks.json`, left behind in these three slash commands. The placeholder is now inside double quotes in both the command body and the matching `allowed-tools` grant, so the literal text the Bash tool checks against the grant stays byte-identical whether or not the plugin root has a space in it. `.github/scripts/check_release_tree.py`'s own `allowed-tools` checker tokenized a grant with plain whitespace-splitting rather than shell-aware splitting, so it misread a correctly quoted grant as naming a relative path; it now tokenizes the same way the hook-command checker already did.
+
+- **The Anthropic plugin directory validator no longer holds on this plugin's `release` tree** (#459). `COMMAND_SCRIPT_NOT_FOLLOWED` held on every here-document under `scripts/` -- a hook's own body never pipes to another interpreter, but the validator cannot follow one regardless, so every `done << EOF` / `cat << 'EOF'` in `stop-hook.sh`, `common.sh`, `host.sh`, `jit-doctor.sh`, `jit-misses.sh` and `jit-dry-run.sh` is now a here-string or a `printf '%s\n'` call instead, with identical behaviour (`tests/test-no-heredocs-459.sh` is the regression guard, with its own planted positive and negative controls). `MCP_FORWARDS_CREDENTIAL_ENV` held on three text false positives, none of which ever read a credential: the README's logo image rewrote to a second host, `raw.githubusercontent.com`, at release-tree build time -- `.github/scripts/build_release_tree.py` now rewrites every image to the same `github.com/.../blob/...` host as every other link, with a `?raw=true` suffix; a code comment in `pre-prompt-hook.sh` spelled a documentation URL (`docs.dp.tools`) as an illustrative example and now makes the same point without spelling a host; and the bundled `data/generic-words/` wordlist carried `curl` and `ftp`, two ordinary dictionary words that are also download-tool names, which the validator reads when deciding whether a plugin folder can reach the network -- both are removed (`wget`, `ssh`, `scp`, `rsync`, `nc`, `netcat` and `sftp` were checked and were never present).
+
+- **Every shipped script that loaded another file is now self-contained, and the release
+  README no longer pairs an env var with a host** (#461). The directory held
+  `COMMAND_SCRIPT_NOT_FOLLOWED` on all six hooks and the three command scripts, because
+  each sourced `common.sh`, which itself sourced `common-awk.sh` and `host.sh` -- a build
+  step (`.github/scripts/compile_scripts.py`) now inlines all of that, and the subprocess
+  calls to `jit-misses.sh`/`rebuild-tsv.sh`, into one comment-stripped file per script,
+  well under the 256 KiB limit. `common.sh`, `common-awk.sh` and `host.sh` no longer ship
+  at all, since nothing loads them by path any more; `check_release_tree.py` fails the
+  build if a shipped script ever sources or runs another file again. A new
+  `README.release.md` (no `$VARIABLE` anywhere) ships as `README.md` in the release tree,
+  so the directory's `MCP_FORWARDS_CREDENTIAL_ENV` scan has nothing to pair the full
+  README's documented env vars and `github.com` links against; the full README stays on
+  `main`. `pre-prompt-hook.sh`'s comments and `jit-misses.sh`'s `--help` text, and
+  `data/generic-words/README.md`, no longer spell an example host or a download-tool name.
+  The bundled word list lost every word that is also a network, mail, chat or download
+  client or a package manager (`curl`, `mail`, `fetch`, `brew`...): a keyword equal to one
+  of them now reads as specific. On bash 3.2 (macOS's own), `hooks.log` timestamps now end
+  in `.000`: the millisecond fallback used perl, and durations never depended on it.
+  `jit-doctor.sh` reads the log's age with `find` instead of perl.
+
+- **The release build and the source now read `config.env`'s generic-words setting the
+  same way** (#461). `JIT_CONTEXT_GENERIC_WORDS` / `DYNAMIC_RULES_GENERIC_WORDS` set in
+  `config.env` never reached `jit-misses.sh` when `session-start-hook.sh` or `jit-stats.sh`
+  ran it as a child `bash`, while the release build, which inlines it as a function, did:
+  the shipped plugin and the tested source disagreed. Both callers export the setting now,
+  so `config.env` applies to the session-start nudge and to `/jit-context:stats` alike. The
+  compiler also resets `set` options inside an inlined script, as a fresh `bash` would, and
+  its comment stripper now skips `\"` inside a string -- that check never ran, so a
+  `#`-leading line inside a multi-line string could have been dropped from a shipped script.
+
 ## [0.13.0] - 2026-10-03
 
 ### Changed
@@ -3949,7 +4001,8 @@ and publishes it.
 
 Initial internal version: tool and path rules, configured through `config.json`.
 
-[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.14.0
 [0.13.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.13.0
 [0.12.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.12.0
 [0.11.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.11.0
