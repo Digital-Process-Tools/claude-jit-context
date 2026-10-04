@@ -1809,11 +1809,9 @@ else
     JIT_SKIP_REASON=""
   fi
   if [ -n "$JIT_SKIP_REASON" ]; then
-    JIT_SKIP_REASON="$(printf '%s' "$JIT_SKIP_REASON" | LC_ALL=C awk '{ gsub(/\\/, "\134\134"); gsub(/"/, "\134\042"); print }')"
+    JIT_SKIP_REASON="$(printf '%s' "$JIT_SKIP_REASON" | LC_ALL=C awk '{ gsub("\134\134", "\134\134"); gsub("\042", "\134\042"); print }')"
   fi
 fi
-
-# #248: jit-misses.sh names the log's own size, and past its watch threshold says so in
 JIT_SIZE_NOTE="$(printf '%s\n' "$MISSES_OUT" | LC_ALL=C awk '
   {
     prefix = "  the log has reached "
@@ -1821,23 +1819,13 @@ JIT_SIZE_NOTE="$(printf '%s\n' "$MISSES_OUT" | LC_ALL=C awk '
   }
 ')"
 if [ -n "$JIT_SIZE_NOTE" ]; then
-  JIT_SIZE_NOTE="$(printf '%s' "$JIT_SIZE_NOTE" | LC_ALL=C awk '{ gsub(/\\/, "\134\134"); gsub(/"/, "\134\042"); print }')"
+  JIT_SIZE_NOTE="$(printf '%s' "$JIT_SIZE_NOTE" | LC_ALL=C awk '{ gsub("\134\134", "\134\134"); gsub("\042", "\134\042"); print }')"
 fi
-
-# #386: one report, one action, nothing else. The line before this read "recurring
-# misses (last 5000 line(s) of the log, raw counts, not filtered for ordinary words --
-# judge before adding a vocabulary entry): ... -- also, 10134016 bytes, at or past the
-# 10000000 byte watch threshold (#248) -- reads may be getting slower; consider --tail
-# or rotating", and the maintainer read it and asked what any of it was for. The window
-# (#248), the unfiltered caveat (#246) and the issue numbers were all true and all
-# addressed to the wrong reader: a person at the start of a session wants to know what
-# was found and what to do about it. The caveat is gone because jit-misses.sh now
-# filters ordinary words itself (data/generic-words/, same list rebuild-tsv.sh
-# uses); the window is still bounded, and still named in jit-misses.sh's own report
 if [ "$JIT_STATUS" = "off" ]; then
   echo '{}'
 else
   JIT_LINES=""
+  printf -v JIT_JNL '\134n'
   if [ -n "$JIT_RECUR" ] && [ "$JIT_MISSES" != "off" ]; then
     JIT_LINES="JIT : you use these words a lot and no entry matches them: $JIT_RECUR. Write one with /jit-context:vocabulary <word>, or turn this off with JIT_CONTEXT_MISSES=off in .claude/jit-context/config.env"
   elif [ -n "$JIT_SKIP_REASON" ] && [ "$JIT_MISSES" != "off" ]; then
@@ -1845,30 +1833,15 @@ else
   fi
   if [ -n "$JIT_SIZE_NOTE" ]; then
     JIT_MB="$(printf '%s' "$JIT_SIZE_NOTE" | LC_ALL=C awk '{ printf "%.1f", $1 / 1000000 }')"
-    JIT_LOG_ESC="$(printf '%s' "$LOG_FILE" | LC_ALL=C awk '{ gsub(/\\/, "\134\134"); gsub(/"/, "\134\042"); print }')"
-    # #406: this line used to say "Delete or rotate it" -- the exact instruction this
-    # issue exists to stop giving, since delete loses the corpus jit-misses.sh reads
-    # and nothing here ever said so. Rotation past JIT_CONTEXT_LOG_MAX_BYTES is now
-    # automatic (jit_log_rotate(), run above, before jit-misses.sh was even called),
-    # #434: when rotation is on and JIT_CONTEXT_LOG_MAX_BYTES is a valid byte count, a
-    # reading in between the watch threshold and that max carries no action -- the
-    # feature already rotated, or will at the next SessionStart -- so this case prints
-    # nothing at all now (the "rotates automatically -- nothing to do" line this used
-    # to print cost every such session a line and told the reader nothing they could
-    # act on). Only the two states that still need a person to act get a line:
-    # rotation explicitly off (JIT_CONTEXT_LOG_MAX_BYTES=0, handled below), or a value
-    # jit_log_rotate() refused, so rotation did NOT run this session.
+    JIT_LOG_ESC="$(printf '%s' "$LOG_FILE" | LC_ALL=C awk '{ gsub("\134\134", "\134\134"); gsub("\042", "\134\042"); print }')"
     if [ "$JIT_CONTEXT_LOG_MAX_BYTES" = 0 ]; then
-      JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. Automatic rotation is off (JIT_CONTEXT_LOG_MAX_BYTES=0) -- delete or rotate it yourself: $JIT_LOG_ESC"
+      JIT_LINES="${JIT_LINES:+$JIT_LINES$JIT_JNL}JIT : hooks.log is $JIT_MB MB. Automatic rotation is off (JIT_CONTEXT_LOG_MAX_BYTES=0) -- delete or rotate it yourself: $JIT_LOG_ESC"
     else
-      # #423: JIT_CONTEXT_LOG_MAX_BYTES arrives here with no validation -- it can be
-      # exported straight into the environment, bypassing jit_load_config()'s own
-      case "$JIT_CONTEXT_LOG_MAX_BYTES" in
-        "" | *[!0-9]* | 0*)
-          JIT_MAX_ESC="$(printf '%s' "$JIT_CONTEXT_LOG_MAX_BYTES" | LC_ALL=C awk '{ gsub(/\\/, "\134\134"); gsub(/"/, "\134\042"); print }')"
-          JIT_LINES="${JIT_LINES:+$JIT_LINES\\n}JIT : hooks.log is $JIT_MB MB. JIT_CONTEXT_LOG_MAX_BYTES=$JIT_MAX_ESC is not a byte count automatic rotation accepts, so it did NOT rotate this session -- delete or rotate it yourself: $JIT_LOG_ESC"
-          ;;
-      esac
+      if [ -z "$JIT_CONTEXT_LOG_MAX_BYTES" ] || [ -n "${JIT_CONTEXT_LOG_MAX_BYTES//[0-9]/}" ] \
+        || [ "${JIT_CONTEXT_LOG_MAX_BYTES#0}" != "$JIT_CONTEXT_LOG_MAX_BYTES" ]; then
+          JIT_MAX_ESC="$(printf '%s' "$JIT_CONTEXT_LOG_MAX_BYTES" | LC_ALL=C awk '{ gsub("\134\134", "\134\134"); gsub("\042", "\134\042"); print }')"
+          JIT_LINES="${JIT_LINES:+$JIT_LINES$JIT_JNL}JIT : hooks.log is $JIT_MB MB. JIT_CONTEXT_LOG_MAX_BYTES=$JIT_MAX_ESC is not a byte count automatic rotation accepts, so it did NOT rotate this session -- delete or rotate it yourself: $JIT_LOG_ESC"
+      fi
     fi
   fi
   if [ -n "$JIT_LINES" ]; then
