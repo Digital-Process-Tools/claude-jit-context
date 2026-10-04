@@ -541,6 +541,32 @@ rm -rf "$J_ENGINE_BIN"
 rm -f "$J_RMLOG"
 
 echo ""
+echo "=== K: every marker kind ages out, bytes-shown included (#469) ==="
+# jit_shown_mark (#389) writes bytes-shown-<session>.txt beside the three older kinds, and
+# the age-out regex and the resume cleanup both named only those three. One file per
+# session, kept forever. All four are backdated here, so the vocab-shown removal is the
+# control: if it stays, the age-out never ran and the bytes-shown assertion says nothing.
+P="$(new_project k)"
+K_STATE="$(state_of "$P")"
+mkdir -p "$K_STATE"
+for kind in vocab-shown path-shown edited bytes-shown; do
+  printf 'x\n' > "$K_STATE/$kind-sess-kold.txt"
+  printf 'x\n' > "$K_STATE/$kind-sess-kfresh.txt"
+  printf 'x\n' > "$K_STATE/$kind-sess-kmine.txt"
+done
+touch -t 202001010000 "$K_STATE"/*-sess-kold.txt
+OUT="$(run_session_start "$P" "sess-kmine")"
+assert_rc0 "session-start exits 0" "$?"
+assert_no_file "control: an old vocab-shown marker is aged out" "$K_STATE/vocab-shown-sess-kold.txt"
+assert_no_file "an old path-shown marker is aged out" "$K_STATE/path-shown-sess-kold.txt"
+assert_no_file "an old edited marker is aged out" "$K_STATE/edited-sess-kold.txt"
+assert_no_file "an old bytes-shown marker is aged out" "$K_STATE/bytes-shown-sess-kold.txt"
+assert_file "a fresh bytes-shown marker of another session is kept" "$K_STATE/bytes-shown-sess-kfresh.txt"
+assert_file "control: a fresh vocab-shown marker of another session is kept" "$K_STATE/vocab-shown-sess-kfresh.txt"
+assert_no_file "control: this session's own vocab-shown marker is cleared" "$K_STATE/vocab-shown-sess-kmine.txt"
+assert_no_file "this session's own bytes-shown marker is cleared" "$K_STATE/bytes-shown-sess-kmine.txt"
+
+echo ""
 if [ "$SKIPPED_SECTIONS" -gt 0 ] || [ "$H_SKIPPED" -eq 1 ] || [ "$J_SKIPPED" -eq 1 ]; then
   # The symlink clause is printed only when a symlink section actually skipped. It used to
   # be unconditional, so an H-only skip already rendered as "0 section(s) SKIPPED (no
