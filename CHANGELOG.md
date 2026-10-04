@@ -7,6 +7,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-04
+
+### Added
+
+- **The plugin has an icon** (#464). `.claude-plugin/icon.png` (1024x1024, opaque) is what
+  the Anthropic plugin directory reads as the listing icon, so the listing no longer falls
+  back to the GitHub owner's avatar. One manila index card on warm near-black: the plugin
+  hands over one note at the moment it applies, not the whole stack. The source is
+  `docs/icon.svg`, which does not ship.
+
 ## [0.14.0] - 2026-10-04
 
 ### Changed
@@ -4001,7 +4011,8 @@ and publishes it.
 
 Initial internal version: tool and path rules, configured through `config.json`.
 
-[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/Digital-Process-Tools/claude-jit-context/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.15.0
 [0.14.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.14.0
 [0.13.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.13.0
 [0.12.0]: https://github.com/Digital-Process-Tools/claude-jit-context/releases/tag/v0.12.0
