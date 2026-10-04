@@ -200,6 +200,32 @@ cleared. Also state-dependent: `jit_scan_symlinks` has a `*/*/*)` arm in every h
 `check_release_tree.py`. **`stop-hook.sh` cleared** (`release-preview-ck`); four hooks and
 `.` left.
 
+**Ninth trigger: a quoted literal in a `case` pattern (2026-10-04).** The three `pre-*`
+hooks share their definitions. On `pre-prompt-hook.sh` cut at 1570: dropping every
+function no clearing hook has cleared (`p4`), keeping `_log_hook` alone held (`p5`), and
+`_log_hook` without its one `case "$head" in *", "*) ... esac` line cleared (`p7`). A
+quoted variable in a pattern (`*"$JIT_NL$x$JIT_NL"*)`) clears in `stop-hook.sh`, so the
+guard refuses only a literal. Rewritten as `[ "${head%, *}" = "$head" ] || ...`, plus the
+same shape in `session-start-hook.sh` and two in `post-tool-hook.sh`.
+**`pre-prompt-hook.sh` cleared** (`release-preview-cl`).
+
+**The last three were cleared in batches, not one shape at a time.** Each rewrote every
+shape the hook carried and no clearing hook did, then one full-build validation:
+- `pre-path-hook.sh` and the bare `.`: `jit_cand_ok`'s two `case` statements (a backslash
+  pattern, `..` and slash patterns, a catch-all), the inlined `jit-misses` argument loop's
+  `*)` arm, and its `"."` default directory. Both cleared (`release-preview-cm`).
+- `pre-tool-hook.sh`: the `jit_missing_requires` loop's two `case` patterns, and two awk
+  strings opening on `"\\` (`"\\.^$..."`, `"\\n[vocab-upkeep]"`). Cleared
+  (`release-preview-c2`, which also cut `session-start-hook.sh` at the end of the inlined
+  `jit-misses` and cleared it there).
+- `session-start-hook.sh`: its report block, the only code with `gsub(/\\/, ...)` and
+  `gsub(/"/, ...)` in awk, `\\n` written into two bash strings, and a `case` over `""` and
+  a class. Cleared.
+
+Which shape in each batch was the trigger is not known. **The full release build has no
+policy hold** (`release-preview-co`, 2026-10-04): the only diagnostic left is the
+`ICON_MISSING` warning.
+
 **The cross-plugin version of all this** -- every trigger, the method, an offline sweep
 (`tools/sweep.sh`) and the preview builders -- lives in the local repository
 `~/Documents/claude-directory-publishing`, shared by the DPT plugins. This file keeps the
