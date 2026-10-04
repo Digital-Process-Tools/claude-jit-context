@@ -17,20 +17,32 @@ It prints what it finds to you and keeps nothing.
 
 ## What it writes
 
-Only inside the project's `.claude/jit-context/.discovery/` directory, and only once the
-project has opted in by having a `.claude/jit-context/` directory at all. In any other
-project the plugin creates nothing and logs nothing.
+**In every project, opted in or not:** each prompt and tool-call hook creates a few scratch
+files in your temporary directory (`$TMPDIR`, or `/tmp`), named `claude-jit-...`, and deletes
+them when the hook exits. They hold the hook's own working data and, in an opted-in project,
+the log line below before it is appended to the log. A hook killed outright can leave one
+behind; your system's temporary-directory cleanup removes it.
 
-- `logs/hooks.log`: one line per hook run, with the time, the hook, which entries fired, on
-  which word or path, and their size. The words that recur in your prompts with no entry
-  behind them are reported from this log, so a word you typed can appear in it. The log
-  rotates at 20 MB by default and keeps one previous copy, `hooks.log.1`. The size is set by
-  `JIT_CONTEXT_LOG_MAX_BYTES` in `config.env`.
+**Only in a project that has opted in**, by having a `.claude/jit-context/` directory, and
+only inside its `.claude/jit-context/.discovery/`:
+
+- `logs/hooks.log`: one line per hook run, whether or not an entry matched, with the time,
+  the hook, which entries fired and on which word or path, and the start of what it was
+  given: the first 80 bytes of the prompt, or of a tool call the first 120 bytes of its
+  command or the first 200 bytes of its file path. The words that recur in your prompts
+  with no entry behind them are reported from this log. So anything you type at the very
+  start of a prompt, a pasted secret included, can end up in this file on your disk. The
+  log rotates at 20 MB by default and keeps one previous copy, `hooks.log.1`. The size is
+  set by `JIT_CONTEXT_LOG_MAX_BYTES` in `config.env`.
 - `state/`: small per-session markers, so an entry is shown once per session. Markers
   older than seven days are removed at the start of the next session.
 
 Delete `.claude/jit-context/.discovery/` at any time; it holds no configuration, only these
 records, and is recreated as needed.
+
+The commands you run yourself also write where you point them: `/jit-context:init` creates
+your first entries under `.claude/jit-context/`, and the index rebuild writes its
+`00-index.tsv` files there.
 
 ## What it does not do
 
