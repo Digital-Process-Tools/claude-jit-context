@@ -42,18 +42,14 @@
 # attacker-chosen file name and keyword list. #219 closed that class at the source: the
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
-  JIT_BASE="$CLAUDE_PROJECT_DIR/.claude/jit-context"
-else
-  JIT_BASE="$(pwd)/.claude/jit-context"
-fi
+  JIT_BASE="${CLAUDE_PROJECT_DIR:-$(pwd)}/.claude/jit-context"
 export JIT_BASE
 JIT_HOST="unknown"
 JIT_HOST_REFUSAL_STATE="refusal-not-established"
 JIT_TOOL_ALIASES=""
 JIT_HOST_REGISTRY='
-claude-code|CLAUDE_CODE_ENTRYPOINT,CLAUDE_CODE_SESSION_ID|CLAUDE_PROJECT_DIR|CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block|
-codex||CLAUDE_PROJECT_DIR|PLUGIN_ROOT,CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block|apply_patch=Edit;Write
+claude-code|CLAUDE_CODE_ENTRYPOINT,CLAUDE_CODE_SESSION_ID|CLAUDE_PROJECT_DIR||OBSERVED|claude-hookSpecificOutput|claude-decision-block|
+codex||CLAUDE_PROJECT_DIR||OBSERVED|claude-hookSpecificOutput|claude-decision-block|apply_patch=Edit;Write
 gemini-cli|GEMINI_SESSION_ID|GEMINI_PROJECT_DIR,CLAUDE_PROJECT_DIR||UNKNOWN|UNKNOWN|refusal-not-established|
 '
 jit_host_row() {
