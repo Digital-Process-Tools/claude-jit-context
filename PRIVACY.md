@@ -47,7 +47,8 @@ only inside its `.claude/jit-context/.discovery/`:
   copy, `hooks.log.1`. The size is set by `JIT_CONTEXT_LOG_MAX_BYTES` in `config.env`.
 - `state/`: small per-session markers, so an entry is shown once per session. Most are
   removed after seven days, at the start of a session; the `bytes-shown-*` markers (entry
-  names and sizes) are currently not, and accumulate until you delete them (#469).
+  names and sizes) are too from the release after 0.16.0. Up to 0.16.0 they were not, and
+  accumulate until you delete them (#469).
 
 Delete `.claude/jit-context/.discovery/` at any time; it holds no configuration, only these
 records, and is recreated as needed.

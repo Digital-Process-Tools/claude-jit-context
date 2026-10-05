@@ -74,16 +74,18 @@ fi
 
 if [ -n "$JIT_STATE_DIR" ]; then
   # SESSION_ID passed the same [A-Za-z0-9_-] check the hooks apply, so it is a name and not
-  # a path. Three exact files, no glob: a session that resumes or is /cleared keeps its id,
+  # a path. Four exact files, no glob: a session that resumes or is /cleared keeps its id,
   # and every other session in this project is none of our business. The third,
   # edited-<id>.txt, is #244's own edit marker -- a session that resumes under the same id
   # starts this run with no memory of an edit a PREVIOUS run under that id may have made,
   # for the same reason a resumed session gets a fresh shot at every entry rather than one
-  # already spent.
+  # already spent. The fourth, bytes-shown-<id>.txt, is jit_shown_mark's (#389), and was
+  # missing from this list and from the age-out pattern below until #469.
   if [ -n "$SESSION_ID" ]; then
     rm -f "$JIT_STATE_DIR/vocab-shown-$SESSION_ID.txt" \
       "$JIT_STATE_DIR/path-shown-$SESSION_ID.txt" \
-      "$JIT_STATE_DIR/edited-$SESSION_ID.txt" 2> /dev/null
+      "$JIT_STATE_DIR/edited-$SESSION_ID.txt" \
+      "$JIT_STATE_DIR/bytes-shown-$SESSION_ID.txt" 2> /dev/null
     # A directory at one of those two names is what makes one-true-awk raise a fatal i/o
     # error on the marker READ, which the hooks cannot test for and cannot afford to sweep
     # for (see common.sh). It is O(1) here, once per session, before any hook runs. `rmdir`
@@ -92,7 +94,8 @@ if [ -n "$JIT_STATE_DIR" ]; then
     # was made locally -- and is left alone rather than removed by a hook.
     rmdir "$JIT_STATE_DIR/vocab-shown-$SESSION_ID.txt" \
       "$JIT_STATE_DIR/path-shown-$SESSION_ID.txt" \
-      "$JIT_STATE_DIR/edited-$SESSION_ID.txt" 2> /dev/null
+      "$JIT_STATE_DIR/edited-$SESSION_ID.txt" \
+      "$JIT_STATE_DIR/bytes-shown-$SESSION_ID.txt" 2> /dev/null
   fi
   # Markers die with the tree, which bounds the leak but does not bound a long-lived
   # checkout: one pair per session, forever. So they age out here -- in a directory this
@@ -103,7 +106,7 @@ if [ -n "$JIT_STATE_DIR" ]; then
     my $d = shift or exit 0;
     opendir(my $h, $d) or exit 0;
     while (defined(my $e = readdir $h)) {
-      next unless $e =~ /\A(?:(?:vocab|path)-shown|edited)-[A-Za-z0-9_-]{1,64}\.txt\z/;
+      next unless $e =~ /\A(?:(?:vocab|path|bytes)-shown|edited)-[A-Za-z0-9_-]{1,64}\.txt\z/;
       my $f = "$d/$e";
       next if -l $f;
       next unless -f $f;
