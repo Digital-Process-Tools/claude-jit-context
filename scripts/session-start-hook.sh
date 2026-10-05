@@ -9,8 +9,8 @@ JIT_HOST="unknown"
 JIT_HOST_REFUSAL_STATE="refusal-not-established"
 JIT_TOOL_ALIASES=""
 JIT_HOST_REGISTRY='
-claude-code|CLAUDE_CODE_ENTRYPOINT,CLAUDE_CODE_SESSION_ID|CLAUDE_PROJECT_DIR|CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block|
-codex||CLAUDE_PROJECT_DIR|PLUGIN_ROOT,CLAUDE_PLUGIN_ROOT|OBSERVED|claude-hookSpecificOutput|claude-decision-block|apply_patch=Edit;Write
+claude-code|CLAUDE_CODE_ENTRYPOINT,CLAUDE_CODE_SESSION_ID|CLAUDE_PROJECT_DIR||OBSERVED|claude-hookSpecificOutput|claude-decision-block|
+codex||CLAUDE_PROJECT_DIR||OBSERVED|claude-hookSpecificOutput|claude-decision-block|apply_patch=Edit;Write
 gemini-cli|GEMINI_SESSION_ID|GEMINI_PROJECT_DIR,CLAUDE_PROJECT_DIR||UNKNOWN|UNKNOWN|refusal-not-established|
 '
 jit_host_row() {
@@ -100,7 +100,7 @@ jit_scan_symlinks() {
     JIT_SYMLINKS="$JIT_SYMLINKS${base%/*}$JIT_NL$base$JIT_NL"
     found=1
   fi
-  for f in "$base" "$base"/* "$base"/.* "$base"/*/* "$base"/*/.* "$base"/*/*/* "$base"/*/*/.*; do
+  for f in "$base"; do
     case "$f" in
       */. | */..) continue ;;
     esac
@@ -1348,16 +1348,18 @@ if [ -n "$JIT_STATE_DIR" ]; then
   if [ -n "$SESSION_ID" ]; then
     rm -f "$JIT_STATE_DIR/vocab-shown-$SESSION_ID.txt" \
       "$JIT_STATE_DIR/path-shown-$SESSION_ID.txt" \
-      "$JIT_STATE_DIR/edited-$SESSION_ID.txt" 2> /dev/null
+      "$JIT_STATE_DIR/edited-$SESSION_ID.txt" \
+      "$JIT_STATE_DIR/bytes-shown-$SESSION_ID.txt" 2> /dev/null
     rmdir "$JIT_STATE_DIR/vocab-shown-$SESSION_ID.txt" \
       "$JIT_STATE_DIR/path-shown-$SESSION_ID.txt" \
-      "$JIT_STATE_DIR/edited-$SESSION_ID.txt" 2> /dev/null
+      "$JIT_STATE_DIR/edited-$SESSION_ID.txt" \
+      "$JIT_STATE_DIR/bytes-shown-$SESSION_ID.txt" 2> /dev/null
   fi
   perl -e '
     my $d = shift or exit 0;
     opendir(my $h, $d) or exit 0;
     while (defined(my $e = readdir $h)) {
-      next unless $e =~ /\A(?:(?:vocab|path)-shown|edited)-[A-Za-z0-9_-]{1,64}\.txt\z/;
+      next unless $e =~ /\A(?:(?:vocab|path|bytes)-shown|edited)-[A-Za-z0-9_-]{1,64}\.txt\z/;
       my $f = "$d/$e";
       next if -l $f;
       next unless -f $f;
