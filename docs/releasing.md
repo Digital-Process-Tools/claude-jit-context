@@ -16,20 +16,17 @@ branches people can install from:
 | Branch | Who reads it | What decides the version they get |
 | --- | --- | --- |
 | `main` | the DPT marketplace, manual installs | `version` in `.claude-plugin/plugin.json` on `main` |
-| `release` | the Anthropic directory, once the listing's tracked branch is switched to it (**not done yet for this plugin** -- see "Switching the listing to `release`" below) | the latest commit on `release`, which only the release workflow writes |
+| `release` | the Anthropic directory, which has tracked it since the submission of 2026-10-04 (`Digital-Process-Tools/claude-jit-context@release`, v0.16.0) | the latest commit on `release`, which only the release workflow writes |
 
 `release` is built by [`.github/workflows/release-branch.yml`](../.github/workflows/release-branch.yml)
 from a tag. It never shares history with `main`: each release is one commit on top of the
 previous release commit, and its message names the tag and the `main` commit it came from.
 
-**Nothing in this file has been run against a real tag yet (#437).** The workflow, the
-three scripts under `.github/scripts/` and `.github/release-branch.json` were all
-exercised locally (`tests/test-release-branch-437.sh`, and a manual
-`build_release_tree.py` + `check_release_tree.py` + `smoke_release_tree.py` run against
-this branch's own HEAD) before this file was written, but no tag has been pushed and the
-directory listing still follows `main`. Facts below marked **observed** come from that
-local run; facts marked **not yet observed** are carried over from claude-remember's own
-sequence and have not been confirmed against this repository's first real release.
+**Run against real tags since v0.13.0.** The tag pushes of v0.13.0, v0.14.0, v0.15.0 and
+v0.16.0 each started the `release branch` workflow, which went green and pushed one commit
+on `release` (`588ae2f` for v0.16.0). This file was first written before any of that ran
+(#437); the claims it carried as **not yet observed** were checked against those four runs
+on 2026-10-05 and rewritten where the runs settled them.
 
 ## The sequence
 
@@ -44,19 +41,29 @@ sequence and have not been confirmed against this repository's first real releas
 
 2. **Run the full suite (`bash tests/run-all.sh`) and commit the release on `main`.**
    `.oss.json`'s `release.merge_method` is `"squash"` for this repository (claude-remember
-   leaves it `null`, i.e. a direct commit) -- **not yet observed**: which shape the first
-   real release commit here takes depends on which path `release.authority` (`"loop"`)
-   actually drives it through, and that has not run yet.
+   leaves it `null`, i.e. a direct commit). **Observed:** the v0.13.0 to v0.16.0 release
+   commits are direct commits on `main` named `chore(release): x.y.z`, with no pull
+   request number in the subject.
    *Why:* that commit is what gets tagged; CI across three OSes (`hooks (ubuntu-latest)`,
    `hooks (macos-latest)`, `hooks (windows-latest)`, plus `fragment` and `shellcheck` --
    all five are required status checks on `main`, observed via the GitHub API) is the gate.
 
-3. **Tag that commit `vx.y.z`** (`.oss.json`'s `release.tag_pattern` is `"v{version}"`)
+3. **Validate the tree that tag will publish, in the portal, before you tag.** Build it
+   (`build_release_tree.py --ref <release-commit-sha>`), push it to a throwaway branch
+   (`release-preview`), and validate `Digital-Process-Tools/claude-jit-context@release-preview`
+   in the submission form without clicking Next. Delete the branch after.
+   *Why:* the listing has auto-publish on and a GitHub push webhook (2026-10-04), so a tag
+   reaches the directory within minutes and nobody looks at it first. `check_release_tree.py`
+   and the `tests/test-no-*` suites only know the shapes we already found; the portal is the
+   only place a new one shows. A hold found here costs a branch, the same hold found after the
+   tag costs a version stuck in review. `docs/directory-validator.md` has the method, and the
+   shared notes in `~/Documents/claude-directory-publishing` have every shape seen so far.
+
+4. **Tag that commit `vx.y.z`** (`.oss.json`'s `release.tag_pattern` is `"v{version}"`)
    **and push the tag with your own credentials**: `git tag vx.y.z <release-commit-sha> &&
    git push origin vx.y.z`, then check it landed with
    `git ls-remote --tags origin vx.y.z`.
-   *Why:* **pushing the tag is what publishes to the directory**, once the listing's
-   tracked branch follows `release` (not yet true here -- see below). The tag push starts
+   *Why:* **pushing the tag is what publishes to the directory**. The tag push starts
    the `release branch` workflow (`on: push: tags: ["v*"]`, confirmed by reading the
    workflow file), and that workflow is the only thing that writes `release`. No tag, no
    directory update.
@@ -66,7 +73,7 @@ sequence and have not been confirmed against this repository's first real releas
    checkout with the user's own forge credentials, the same way the oss plugin's release
    flow does for claude-remember.
 
-4. **Watch the `release branch` run** (Actions tab, or `gh run list --workflow
+5. **Watch the `release branch` run** (Actions tab, or `gh run list --workflow
    release-branch.yml`). It has the same two jobs claude-remember's does -- this
    workflow was copied and only its header comment and the final commit message's issue
    number were changed (#437); everything else, including `CLAUDE_CLI_VERSION:
@@ -91,8 +98,8 @@ sequence and have not been confirmed against this repository's first real releas
    *Why two jobs:* the smoke test runs the plugin's own hooks, so it never holds a token
    that can push.
 
-   **Not yet observed: whether `github-actions[bot]` can actually push `release` here.**
-   Checked without changing anything (#437, via `gh api
+   **Observed since v0.13.0: `github-actions[bot]` pushes `release` here.** Before the
+   first run it was checked without changing anything (#437, via `gh api
    repos/Digital-Process-Tools/claude-jit-context/rulesets` and
    `.../branches/main/protection`):
    - **No repository rulesets** (`rulesets` returned `[]`).
@@ -112,17 +119,18 @@ sequence and have not been confirmed against this repository's first real releas
      every repository would not show up in either check above and is the one gap this
      audit could not close.
 
-5. **Publish the GitHub release** (`scripts/release_publish.py` from the `oss` plugin,
+6. **Publish the GitHub release** (`scripts/release_publish.py` from the `oss` plugin,
    not a file in this repository -- same as claude-remember; confirmed `.oss/` here
    carries only `assemble_changelog.py`, `statusline.py` and its own `README.md`, no
    release script). It runs `gh release create --verify-tag`, reading release notes from
    `CHANGELOG.md` in the maintainer's local `main` checkout, never from the release tree.
    `.oss.json`'s `release.create_release` is `true`, `draft` is `false`, `latest` is
-   `true` -- **not yet observed against a real tag**.
+   `true`. **Observed:** v0.12.0 to v0.16.0 are GitHub releases, v0.16.0 marked Latest.
 
-6. **The directory picks up the new `release` commit** and scans it, once the listing's
-   tracked branch has been switched to `release` (step not yet taken for this plugin --
-   see below). Read the portal's **Versions** tab rather than assuming a waiting version
+7. **The directory picks up the new `release` commit** through the push webhook and scans
+   it. With auto-publish on, a version with no hold goes live without a person. Not yet
+   observed: what happens to a new version while the first submission is still in review.
+   Read the portal's **Versions** tab rather than assuming a waiting version
    is only in a queue; a **Policy hold** (the `UNREAD_ASSET_REFERENCED` /
    `VALIDATION_INCOMPLETE` findings #437 exists to clear) waits for an Anthropic reviewer
    regardless of how clean a later version is.
@@ -220,13 +228,9 @@ suites run a second time against the tree it builds. Both run in `release-branch
 
 The directory follows **one branch or tag**, set in the developer portal
 (claude.ai/directory/manage, the plugin's page, Settings, Source, "Tracked branch or
-tag"). **Not yet switched for this plugin (#437):** claude-remember's own listing moved
-to `release` only after that repository's `release` branch already existed and was
-checked to hold only the slim tree -- the same order applies here: cut a release through
-the sequence above first, confirm `release` exists and is slim, and only then change the
-portal field. Left on the default branch (`main`) until that switch, every merge to
-`main` still shows up in the portal's **Versions** tab as a new version to check, which
-is the `UNREAD_ASSET_REFERENCED` / "Validation didn't finish" hold #437 exists to clear.
+tag"). For this plugin it is `release`, set at the submission of 2026-10-04, after
+`release` existed and was checked to hold only the slim tree (the order claude-remember
+used too). A merge to `main` does not reach the directory; only a tag does.
 
 ## Contacting Anthropic about a plugin
 

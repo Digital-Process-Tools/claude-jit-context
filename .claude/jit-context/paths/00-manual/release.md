@@ -49,8 +49,9 @@ gh release create v0.2.0 --title "..." --notes "..."
 
 0. **Assemble the changelog and commit it**, before the green check — the assembled `CHANGELOG.md` heading is one of the three sites `tests/test-version-sites.sh` compares, so a tag cut before the fold is a tag whose CI never saw the file it ships.
 1. **CI green on the exact commit you are about to tag** — `gh-branch:main` reports the head SHA it judged, so a stale run cannot pass for a current one.
-2. **Tag, then push the tag** — `git push` alone does not carry tags.
-3. **Create the GitHub release** against that tag, notes from the CHANGELOG section.
-4. **Add or update the entry in [`claude-marketplace`](https://github.com/Digital-Process-Tools/claude-marketplace)** — `/plugin install jit-context@dpt-plugins` resolves through `.claude-plugin/marketplace.json` there, not through this repo. The README documents that install command, so until the marketplace entry exists the first instruction a new user follows fails.
+2. **Validate the release tree in the portal before the tag.** Build it from the release commit, push it to a throwaway `release-preview` branch, validate `Digital-Process-Tools/claude-jit-context@release-preview` without clicking Next, delete the branch. The listing auto-publishes from a push webhook since 2026-10-04: the tag reaches the directory in minutes and no one looks first. `docs/releasing.md` step 3 has why.
+3. **Tag, then push the tag** — `git push` alone does not carry tags.
+4. **Create the GitHub release** against that tag, notes from the CHANGELOG section.
+5. **Add or update the entry in [`claude-marketplace`](https://github.com/Digital-Process-Tools/claude-marketplace)** — `/plugin install jit-context@dpt-plugins` resolves through `.claude-plugin/marketplace.json` there, not through this repo. The README documents that install command, so until the marketplace entry exists the first instruction a new user follows fails.
 
 Marketplace entries name the repo, not a version — users get the default branch. A tag is therefore for humans and the changelog, not a pinning mechanism: whatever is on `main` is what installs.
