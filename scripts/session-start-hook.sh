@@ -1348,16 +1348,18 @@ if [ -n "$JIT_STATE_DIR" ]; then
   if [ -n "$SESSION_ID" ]; then
     rm -f "$JIT_STATE_DIR/vocab-shown-$SESSION_ID.txt" \
       "$JIT_STATE_DIR/path-shown-$SESSION_ID.txt" \
-      "$JIT_STATE_DIR/edited-$SESSION_ID.txt" 2> /dev/null
+      "$JIT_STATE_DIR/edited-$SESSION_ID.txt" \
+      "$JIT_STATE_DIR/bytes-shown-$SESSION_ID.txt" 2> /dev/null
     rmdir "$JIT_STATE_DIR/vocab-shown-$SESSION_ID.txt" \
       "$JIT_STATE_DIR/path-shown-$SESSION_ID.txt" \
-      "$JIT_STATE_DIR/edited-$SESSION_ID.txt" 2> /dev/null
+      "$JIT_STATE_DIR/edited-$SESSION_ID.txt" \
+      "$JIT_STATE_DIR/bytes-shown-$SESSION_ID.txt" 2> /dev/null
   fi
   perl -e '
     my $d = shift or exit 0;
     opendir(my $h, $d) or exit 0;
     while (defined(my $e = readdir $h)) {
-      next unless $e =~ /\A(?:(?:vocab|path)-shown|edited)-[A-Za-z0-9_-]{1,64}\.txt\z/;
+      next unless $e =~ /\A(?:(?:vocab|path|bytes)-shown|edited)-[A-Za-z0-9_-]{1,64}\.txt\z/;
       my $f = "$d/$e";
       next if -l $f;
       next unless -f $f;
