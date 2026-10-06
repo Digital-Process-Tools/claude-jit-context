@@ -32,9 +32,12 @@ bad() {
 
 # classify_check_result RC OUTPUT -- "clean", "crash" or "offenders". A non-zero
 # RC with no "^FAIL " line anywhere in OUTPUT is check_release_tree.py crashing
-# (a traceback, not a reported offender) -- #476. Shared by this file's real
+# (a traceback, not a reported offender) -- #476. Used by this file's real
 # check below and by its own self-test, so the self-test exercises the exact
-# function the real flow uses rather than a restatement of it.
+# function the real flow uses rather than a restatement of it. DUPLICATED
+# (not sourced from a common file) in test-release-branch-437.sh -- these two
+# are standalone suites with no shared library, so keep both copies in sync
+# by hand if this function's logic ever changes.
 classify_check_result() {
   local rc="$1" out="$2" fails
   if [ "$rc" -eq 0 ]; then
@@ -83,6 +86,18 @@ RESULT=$(classify_check_result 1 "FAIL something.md: offender")
   [ "$REF" = "v0.1.0" ]
 ) && ok "REF selection: \$SOURCE_REF=v0.1.0 -> builds that ref, not HEAD (#477 -- workflow_dispatch with an older ref)" \
   || bad "REF selection: with \$SOURCE_REF set, REF should be that ref, not HEAD"
+
+# The two checks above only prove bash's own "${VAR:-default}" semantics, not
+# that THIS SCRIPT still wires $REF into the real build call below -- they
+# would keep passing even if the build line were reverted to a hardcoded
+# "--ref HEAD" (exactly the #477 regression). Grep this script's own source
+# for the build invocation actually passing "$REF" (sourced from
+# $SOURCE_REF), so a revert to a literal HEAD fails this self-test.
+if grep -qE -- '--ref[[:space:]]+"\$REF"' "$0"; then
+  ok "REF selection: the build invocation passes \$REF, not a hardcoded --ref HEAD (#477 regression guard)"
+else
+  bad "REF selection: the build invocation no longer passes \$REF -- #477 may have regressed back to a hardcoded --ref HEAD"
+fi
 
 for f in "$BUILD" "$CHECK" "$CONFIG"; do
   [ -f "$f" ] || {

@@ -35,10 +35,12 @@ bad() {
 
 # classify_check_result RC OUTPUT -- "clean", "crash" or "offenders". A non-zero
 # RC with no "^FAIL " line anywhere in OUTPUT is check_release_tree.py crashing
-# (a traceback, not a reported offender) -- #476. Shared by this file's real
+# (a traceback, not a reported offender) -- #476. Used by this file's real
 # check below and by its own self-test, so the self-test exercises the exact
-# function the real flow uses rather than a restatement of it. Mirrors the
-# same function in test-release-branch-461.sh.
+# function the real flow uses rather than a restatement of it. DUPLICATED
+# (not sourced from a common file) in test-release-branch-461.sh -- these two
+# are standalone suites with no shared library, so keep both copies in sync
+# by hand if this function's logic ever changes.
 classify_check_result() {
   local rc="$1" out="$2" fails
   if [ "$rc" -eq 0 ]; then
