@@ -678,6 +678,57 @@ OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"x='"'"'\n<<EOF\nlit
 assert_blocked "a <<EOF shape on a line still inside a multi-line single-quoted argument does not hide the command that follows it" "$OUT"
 
 # =============================================
+# SECTION 4d: the allowlist sink check must bind to its OWN command, and the closing
+# delimiter must match bash own word-ending rule (issue #447, carried forward from
+# v0.12.0 gate 3 round 2)
+# =============================================
+# jit_heredoc_opener_is_known_sink() used to be handed the WHOLE line, so a decoy sink
+# command sharing the line with the real heredoc -- separated by ; or & -- made the
+# allowlist match even though the heredoc belongs to a DIFFERENT, non-sink command.
+# Each case has a positive control earlier in this file proving the forbid row fires
+# at all (section 4b/4c); these prove the negative result here is not that either.
+
+echo ""
+echo "=== issue #447: a decoy sink before ; no longer hides a non-sink heredoc body (tee;bash) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-sink.txt </dev/null; bash <<EOF\nheredocforbid now\nEOF"}}')
+assert_blocked "a tee decoy before bash<<EOF no longer hides the forbidden word" "$OUT"
+
+echo ""
+echo "=== issue #447: a decoy sink before && no longer hides a non-sink heredoc body (cat;sh) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-decoy.txt </dev/null && sh <<EOF\nheredocforbid now\nEOF"}}')
+assert_blocked "a tee decoy before && sh<<EOF no longer hides the forbidden word" "$OUT"
+
+echo ""
+echo "=== issue #447: a decoy supertool invocation before ; no longer hides a non-sink heredoc body ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; supertool '"'"'ops'"'"' >/dev/null; bash <<EOF\nheredocforbid now\nEOF"}}')
+assert_blocked "a supertool decoy before bash<<EOF no longer hides the forbidden word" "$OUT"
+
+echo ""
+echo "=== issue #447: a decoy sink combined with the round-1 fake-arithmetic-opener no longer hides the real command (coordinator finding) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-decoy.txt </dev/null; (( y = 1<<EOF ))\nheredocforbid now\nEOF"}}')
+assert_blocked "a tee decoy ahead of a fake arithmetic <<EOF opener no longer hides the forbidden word" "$OUT"
+
+echo ""
+echo "=== issue #447 control: a real sink alone (no decoy clause) still gets its heredoc body stripped ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-sink.txt <<EOF\nheredocforbid mentioned only here\nEOF"}}')
+assert_not_contains "a lone tee sink with no decoy clause still strips its own body" "$OUT" '"decision":"block"'
+
+echo ""
+echo "=== issue #447: a closing delimiter spelled EOF then a quoted X closes where bash does (EOFX), not at a bare EOF ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-sink.txt <<EOF\"X\"\nheredocforbid mentioned only here\nEOFX"}}')
+assert_not_contains "a quote-concatenated delimiter still gets its real sink body stripped" "$OUT" '"decision":"block"'
+
+echo ""
+echo "=== issue #447: a closing delimiter spelled EOF-1 closes where bash does (EOF-1), dash and digit are bare word characters ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-sink.txt <<EOF-1\nheredocforbid mentioned only here\nEOF-1"}}')
+assert_not_contains "a dash/digit-suffixed delimiter still gets its real sink body stripped" "$OUT" '"decision":"block"'
+
+echo ""
+echo "=== issue #447: a closing delimiter with a backslash mid-word closes where bash does (the backslash collapses) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-sink.txt <<E\\OF\nheredocforbid mentioned only here\nEOF"}}')
+assert_not_contains "a backslash-mid-word delimiter still gets its real sink body stripped" "$OUT" '"decision":"block"'
+
+# =============================================
 # SECTION: awk engine matrix — multibyte paths, control characters in entries
 # =============================================
 # See the same section in test-pre-prompt-hook.sh: issue #14 aborted the END block under

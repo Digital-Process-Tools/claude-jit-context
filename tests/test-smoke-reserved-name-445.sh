@@ -1,10 +1,17 @@
 #!/bin/bash
-# #445: CLI 2.1.287's `claude plugin validate --strict` rejects `claude-jit-context`
-# as a reserved name (claude-5h-window-spread #20 hit it first). smoke_release_tree.py
-# lets exactly that error through as a ::warning::, and only when it is the ONLY error.
-# Four cases, driven through run_validate() with a fake `claude`: reserved alone is a
-# warning and passes; reserved plus another error fails; any other error fails; a clean
-# validate passes with no warning.
+# #455: #445/#448's reserved-name exception in smoke_release_tree.py is now stale --
+# #452 renamed the plugin from claude-jit-context to jit-context, so `claude plugin
+# validate --strict` no longer reports the reserved-name error this exception existed
+# to downgrade. #455 also found the exception's own heading parser could mask a SECOND
+# real error whose heading did not match the regex it expected. Removing the whole
+# exception settles both at once: a future validate failure of ANY kind -- reserved-name
+# shaped or not, recognized heading or not -- now fails the smoke test outright, rather
+# than carrying forward dead code whose only remaining effect would be to (incompletely)
+# mask some unrelated error that happens to be the sole bullet under whatever heading it
+# checked for.
+#
+# This file used to assert the exception's OWN behavior (#445/#448); it was rewritten by
+# #455 to assert the exception is gone, not merely that its old behavior still holds.
 #
 # Usage: bash tests/test-smoke-reserved-name-445.sh
 #
@@ -22,6 +29,15 @@ SMOKE="$REPO/.github/scripts/smoke_release_tree.py"
 if ! command -v python3 > /dev/null 2>&1; then
   echo "SKIPPED: no python3 on PATH -- this script is not part of the hook runtime"
   exit 2
+fi
+
+echo "=== #455: no trace of the removed reserved-name exception remains in the source ==="
+if grep -q "_only_reserved_name_error" "$SMOKE"; then
+  echo "  FAIL: _only_reserved_name_error still referenced in $SMOKE"
+  STATIC_FAIL=1
+else
+  echo "  PASS: _only_reserved_name_error is gone from $SMOKE"
+  STATIC_FAIL=0
 fi
 
 python3 - "$SMOKE" << 'PY'
@@ -68,43 +84,38 @@ def run(name, output, code):
     return result
 
 
-r = run("alone", "\u2718 Found 1 error:\n\n  \u276f name: Plugin name \"claude-jit-context\" is "
-        "reserved: it passes as one of Anthropic's own.\n\n\u2718 Validation failed\n", 1)
-check("reserved name as the only error: run stays ok", r.ok, f"errors: {r.errors!r}")
-check("and says so as a ::warning::", any("::warning::" in n for n in r.notes), f"notes: {r.notes!r}")
+# #455 problem 2: the plugin is renamed (#452) -- a reserved-name-shaped error must now
+# fail like any other validate error, never be let through as a warning.
+r = run("alone", "✘ Found 1 error:\n\n  ❯ name: Plugin name \"claude-jit-context\" is "
+        "reserved: it passes as one of Anthropic's own.\n\n✘ Validation failed\n", 1)
+check("a reserved-name-shaped error now fails -- the exception is really gone", not r.ok,
+      f"errors: {r.errors!r}")
+check("and raises no ::warning:: carve-out for it", not any("::warning::" in n for n in r.notes),
+      f"notes: {r.notes!r}")
 
-r = run("two", "\u2718 Found 2 errors:\n\n  \u276f name: Plugin name \"claude-x\" is reserved.\n"
-        "  \u276f version: invalid\n\n\u2718 Validation failed\n", 1)
+r = run("two", "✘ Found 2 errors:\n\n  ❯ name: Plugin name \"claude-x\" is reserved.\n"
+        "  ❯ version: invalid\n\n✘ Validation failed\n", 1)
 check("reserved name beside another error still fails", not r.ok, f"errors: {r.errors!r}")
 
-r = run("other", "\u2718 Found 1 error:\n\n  \u276f version: invalid\n\n\u2718 Validation failed\n", 1)
+r = run("other", "✘ Found 1 error:\n\n  ❯ version: invalid\n\n✘ Validation failed\n", 1)
 check("any other validate failure still fails", not r.ok, f"errors: {r.errors!r}")
 
-r = run("clean", "\u2714 Validation passed\n", 0)
+r = run("clean", "✔ Validation passed\n", 0)
 check("a passing validate passes", r.ok, f"errors: {r.errors!r}")
 check("with no warning", not any("::warning::" in n for n in r.notes), f"notes: {r.notes!r}")
 
-# #448: the real v0.12.0 output. Warnings are also `❯` bullets, under their own
-# heading, and counting every bullet read this as 7 errors.
-WARN = ("  ❯ hooks.Stop: Shell command uses ${CLAUDE_PLUGIN_ROOT} without quotes: "
-        "bash ${CLAUDE_PLUGIN_ROOT}/scripts/stop-hook.sh.\n")
-V012 = ("Validating plugin manifest: /tmp/release-tree/.claude-plugin/plugin.json\n\n"
-        "✘ Found 1 error:\n\n  ❯ name: Plugin name \"claude-jit-context\" is reserved: "
-        "it passes as one of Anthropic's own.\n\n"
-        "Validating hooks: /tmp/release-tree/hooks/hooks.json\n\n"
-        "⚠ Found 6 warnings:\n\n" + WARN * 6 + "\n✘ Validation failed\n")
-r = run("v012", V012, 1)
-check("#448: reserved name plus 6 warnings (the real v0.12.0 output) stays ok", r.ok,
-      f"errors: {r.errors!r}")
-check("#448: and still warns", any("::warning::" in n for n in r.notes), f"notes: {r.notes!r}")
-
-r = run("twofiles", "Validating plugin manifest: x\n\n✘ Found 1 error:\n\n"
-        "  ❯ name: Plugin name \"claude-x\" is reserved.\n\n"
-        "Validating hooks: y\n\n✘ Found 1 error:\n\n  ❯ hooks.Stop: invalid\n\n"
+# #455 problem 1: a second error block whose own heading does not match the old parser's
+# regex (e.g. a per-file heading like "Found 1 error in hooks.json:") used to be able to
+# slip past uncounted. With the whole exception removed there is no heading parsing left
+# to fool -- ANY non-zero exit fails, regardless of what the output looks like.
+r = run("oddheading", "✘ Found 1 error in hooks.json:\n\n  ❯ hooks.Stop: invalid\n\n"
         "✘ Validation failed\n", 1)
-check("#448: a second error in another file's block still fails", not r.ok,
-      f"errors: {r.errors!r}")
+check("#455 problem 1: an unrecognized per-file heading still fails (nothing to fool anymore)",
+      not r.ok, f"errors: {r.errors!r}")
 
 print(f"== Results: {PASS} passed, {FAIL} failed ==")
 sys.exit(1 if FAIL else 0)
 PY
+PY_STATUS=$?
+
+[ "$STATIC_FAIL" -eq 0 ] && [ "$PY_STATUS" -eq 0 ]
