@@ -33,6 +33,46 @@ bad() {
   [ $# -eq 0 ] || echo "    $*"
 }
 
+# classify_check_result RC OUTPUT -- "clean", "crash" or "offenders". A non-zero
+# RC with no "^FAIL " line anywhere in OUTPUT is check_release_tree.py crashing
+# (a traceback, not a reported offender) -- #476. Shared by this file's real
+# check below and by its own self-test, so the self-test exercises the exact
+# function the real flow uses rather than a restatement of it. Mirrors the
+# same function in test-release-branch-461.sh.
+classify_check_result() {
+  local rc="$1" out="$2" fails
+  if [ "$rc" -eq 0 ]; then
+    echo "clean"
+    return
+  fi
+  fails=$(printf '%s\n' "$out" | grep '^FAIL ' || true)
+  if [ -z "$fails" ]; then
+    echo "crash"
+  else
+    echo "offenders"
+  fi
+}
+
+echo "=== DETECTOR SELF-TEST: classify_check_result (#476) ==="
+RESULT=$(classify_check_result 0 "")
+[ "$RESULT" = "clean" ] \
+  && ok "classify_check_result: rc=0 -> clean" \
+  || bad "classify_check_result: rc=0 should be clean, got '$RESULT'"
+
+CRASH_OUT='Traceback (most recent call last):
+  File "check_release_tree.py", line 42, in <module>
+    raise ZeroDivisionError
+ZeroDivisionError'
+RESULT=$(classify_check_result 1 "$CRASH_OUT")
+[ "$RESULT" = "crash" ] \
+  && ok "classify_check_result: rc!=0, no FAIL lines -> crash (#476 -- this used to read as clean)" \
+  || bad "classify_check_result: rc!=0 with no FAIL lines should be crash, got '$RESULT'"
+
+RESULT=$(classify_check_result 1 "FAIL something.md: offender")
+[ "$RESULT" = "offenders" ] \
+  && ok "classify_check_result: rc!=0, FAIL line(s) present -> offenders" \
+  || bad "classify_check_result: rc!=0 with a FAIL line should be offenders, got '$RESULT'"
+
 echo "=== harness guard: the three scripts and the config exist here ==="
 for f in "$BUILD" "$CHECK" "$SMOKE" "$CONFIG"; do
   [ -f "$f" ] || {
@@ -187,17 +227,27 @@ _KNOWN_ALLOWED_TOOLS_HOLDS=""
 if [ "$BUILD_RC" -eq 0 ]; then
   CHECK_OUT=$(python3 "$CHECK" "$TREE" --config "$CONFIG" 2>&1)
   CHECK_RC=$?
-  if [ "$CHECK_RC" -eq 0 ]; then
-    ok "check_release_tree.py exits 0"
-  else
-    UNEXPECTED=$(printf '%s\n' "$CHECK_OUT" | grep '^FAIL ' | sed 's/^FAIL //' \
-      | grep -vFxf <(printf '%s\n' "$_KNOWN_ALLOWED_TOOLS_HOLDS") || true)
-    if [ -z "$UNEXPECTED" ]; then
-      ok "check_release_tree.py's only offender(s) are the known, already-filed ALLOWED_TOOLS_BROAD hold on commands/doctor.md, commands/init.md and commands/stats.md"
-    else
-      bad "check_release_tree.py reported (an) UNEXPECTED offender(s)" "$UNEXPECTED"
-    fi
-  fi
+  case "$(classify_check_result "$CHECK_RC" "$CHECK_OUT")" in
+    clean)
+      ok "check_release_tree.py exits 0"
+      ;;
+    crash)
+      # #476: rc != 0 with no "^FAIL " line at all is check_release_tree.py
+      # crashing (a traceback), not a reported offender -- the old
+      # UNEXPECTED-emptiness-only check took the "known holds" ok branch here
+      # too, so a crash read as a clean pass.
+      bad "check_release_tree.py exited $CHECK_RC with no FAIL lines -- it crashed rather than finishing the check" "$CHECK_OUT"
+      ;;
+    offenders)
+      UNEXPECTED=$(printf '%s\n' "$CHECK_OUT" | grep '^FAIL ' | sed 's/^FAIL //' \
+        | grep -vFxf <(printf '%s\n' "$_KNOWN_ALLOWED_TOOLS_HOLDS") || true)
+      if [ -z "$UNEXPECTED" ]; then
+        ok "check_release_tree.py's only offender(s) are the known, already-filed ALLOWED_TOOLS_BROAD hold on commands/doctor.md, commands/init.md and commands/stats.md"
+      else
+        bad "check_release_tree.py reported (an) UNEXPECTED offender(s)" "$UNEXPECTED"
+      fi
+      ;;
+  esac
 else
   bad "check skipped -- the build above did not produce a tree"
 fi
