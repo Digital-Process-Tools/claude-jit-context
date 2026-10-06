@@ -1409,7 +1409,16 @@ out=$(
     [ -L "$layerdir" ] && continue
     # Dimension included, like every other layer label this script prints (#150).
     layer="vocabulary/$(jit_report_name "$(basename "$layerdir")")"
-    LC_ALL=C awk -F'\t' -v layerdir="$layerdir" -v layer="$layer" "$JIT_AWK_REPORT_NAME"'
+    # #475: layerdir used to travel in via `-v layerdir=...`, and -v PROCESSES backslash
+    # escapes in the value it receives -- the exact mistake #424 fixed for JIT_BASE/
+    # tools_base/vocab_base and #437 fixed for GENERIC_WORDS_FILE/GENERIC_WORDS_FILES, in
+    # this same file. On a backslash-bearing CLAUDE_PROJECT_DIR, bytesof()'s getline
+    # against the mangled path silently failed to open and every entry in that layer
+    # reported "unmeasured" instead of its real byte count. layerdir now travels through
+    # ENVIRON instead, the same route GENERIC_WORDS_FILES already uses a few hundred
+    # lines below -- never -v, since ENVIRON hands the awk program the bytes bash built,
+    # undecoded.
+    layerdir="$layerdir" LC_ALL=C awk -F'\t' -v layer="$layer" "$JIT_AWK_REPORT_NAME"'
       function bytesof(path,    b, line, rc, first) {
         if (path in bcache) return bcache[path]
         b = 0; first = 1
@@ -1426,7 +1435,7 @@ out=$(
         return b
       }
       $1 != "" && $2 != "" {
-        printf "%s\t%d\t%s[%s]\n", $1, bytesof(layerdir "/" $2), jit_report_name($2), layer
+        printf "%s\t%d\t%s[%s]\n", $1, bytesof(ENVIRON["layerdir"] "/" $2), jit_report_name($2), layer
       }
     ' "$tsv"
   done | LC_ALL=C awk -F'\t' -v floor="$COLLISION_BYTES_FLOOR" "$JIT_AWK_REPORT_KEYWORD"'
