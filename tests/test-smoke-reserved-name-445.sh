@@ -118,4 +118,15 @@ sys.exit(1 if FAIL else 0)
 PY
 PY_STATUS=$?
 
-[ "$STATIC_FAIL" -eq 0 ] && [ "$PY_STATUS" -eq 0 ]
+# #455 self-review: PY_STATUS can legitimately be 2 (SKIPPED, no /bin/sh to run the
+# fake claude shim on) -- folding every non-zero PY_STATUS into this script own exit 1
+# would report that platform-driven skip as a FAILURE to tests/run-all.sh, which reads
+# exit 2 as SKIPPED and anything else as FAILED. The static grep check runs regardless
+# of /bin/sh, so it still fails outright on its own.
+if [ "$STATIC_FAIL" -ne 0 ]; then
+  exit 1
+fi
+if [ "$PY_STATUS" -eq 2 ]; then
+  exit 2
+fi
+[ "$PY_STATUS" -eq 0 ]
