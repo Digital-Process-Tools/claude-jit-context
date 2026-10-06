@@ -69,12 +69,21 @@ HEREDOC_PATTERN="(^|[^<])<<-?[[:space:]]*[${Q1}${Q2}]?[A-Za-z0-9_][A-Za-z0-9_]*"
 # heredoc here" from "could not read this file at all". Return 2 on an awk
 # failure so a caller can tell the two apart instead of treating both as the
 # same empty, clean result.
+#
+# Self-review caught a second-order version of the same bug this fix exists
+# to close: an earlier draft merged awk's stderr into $filtered via "2>&1" on
+# EVERY run, including a successful one. A non-fatal stderr warning from a
+# different awk implementation (gawk on a Linux CI runner vs. the BSD/mawk
+# this was likely tested against) would then have spliced extra text into
+# the very data grep -nE scans afterward, shifting the line numbers it
+# reports for a real hit -- a corruption #478's own pre-fix code never had,
+# because stderr used to pass straight through untouched. awk's stderr is
+# now discarded on success and never enters the grep pipe at all; only the
+# exit status crosses the function boundary.
 detect_heredoc_lines() {
-  local filtered awk_rc
-  filtered=$(awk '{ if ($0 ~ /^[[:space:]]*#/) print ""; else print }' "$1" 2>&1)
-  awk_rc=$?
-  if [ "$awk_rc" -ne 0 ]; then
-    echo "AWK_READ_FAILED($1): $filtered" >&2
+  local filtered
+  if ! filtered=$(awk '{ if ($0 ~ /^[[:space:]]*#/) print ""; else print }' "$1" 2> /dev/null); then
+    echo "AWK_READ_FAILED($1)" >&2
     return 2
   fi
   printf '%s\n' "$filtered" | grep -nE -- "$HEREDOC_PATTERN" || true

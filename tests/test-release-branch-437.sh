@@ -243,8 +243,17 @@ if [ "$BUILD_RC" -eq 0 ]; then
     offenders)
       UNEXPECTED=$(printf '%s\n' "$CHECK_OUT" | grep '^FAIL ' | sed 's/^FAIL //' \
         | grep -vFxf <(printf '%s\n' "$_KNOWN_ALLOWED_TOOLS_HOLDS") || true)
+      # Self-review on #476/#477/#478: _KNOWN_ALLOWED_TOOLS_HOLDS is currently
+      # empty (the comment above explains why -- #439 resolved the one hold it
+      # used to pin), so this "ok" branch cannot actually be reached by
+      # anything today; filtering a non-empty $UNEXPECTED against an empty
+      # exclusion list changes nothing. The old wording named the #439 hold by
+      # file, which read as describing a live exception that no longer
+      # exists. Kept generic (naming the variable rather than a specific,
+      # resolved hold) so it stays accurate if this set is ever populated
+      # again for a future pinned, already-filed exception.
       if [ -z "$UNEXPECTED" ]; then
-        ok "check_release_tree.py's only offender(s) are the known, already-filed ALLOWED_TOOLS_BROAD hold on commands/doctor.md, commands/init.md and commands/stats.md"
+        ok "check_release_tree.py's only offender(s) are already covered by the pinned, already-filed exception(s) in \$_KNOWN_ALLOWED_TOOLS_HOLDS"
       else
         bad "check_release_tree.py reported (an) UNEXPECTED offender(s)" "$UNEXPECTED"
       fi
