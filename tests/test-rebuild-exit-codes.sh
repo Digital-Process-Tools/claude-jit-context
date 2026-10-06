@@ -239,24 +239,45 @@ echo ""
 echo "=== G. an index it cannot write is 2, not a count read back off the stale file ==="
 # Truncating the index failing left the previous one in place while the run reported the
 # rule count it read back OUT of that stale file -- success, with a number, for an index
-# nobody rebuilt.
+# nobody rebuilt. Since #480 the index is built ASIDE and swapped in with `mv`, which is a
+# rename() -- governed by write permission on the DIRECTORY, never on the file it
+# replaces. So the two probes below are deliberately different now: a FILE that cannot be
+# written through no longer blocks the swap (#480's own intended behaviour change, not a
+# regression -- the same reason `git` and most atomic-write tools can replace a read-only
+# file as long as its directory is writable), and the genuine "cannot write" case moved to
+# the directory.
 TSV="$BASE/tools/00-manual/00-index.tsv"
+TSV_DIR="$(dirname "$TSV")"
 chmod 444 "$TSV" 2> /dev/null
 # The probe is an actual open-for-write, not `[ -w ]`. Root passes `-w` on a mode nobody
 # can write, and Git Bash answers it from an emulated attribute -- both of which decide
 # this section by a proxy for the capability rather than the capability. An append of zero
-# bytes takes the same permission check as the truncation and changes nothing.
+# bytes takes the same permission check an in-place truncation used to take.
 if printf %s "" >> "$TSV" 2> /dev/null; then
   echo "  SKIP-NOTE: chmod did not remove write permission here (running as root, or a"
-  echo "             filesystem without POSIX modes). Section G tested nothing."
+  echo "             filesystem without POSIX modes). Section G's first probe tested nothing."
 else
   rebuild
-  assert_rc "an unwritable index exits 2" 2 "$RC"
-  # The phrase, not the path: bash prints its own "Permission denied" naming the file
-  # whatever this script does, so a bare name grep passed before the fix existed.
-  assert_contains "and says that index is now stale" "$(cat "$ERR")" "was NOT rebuilt"
+  assert_rc "a file that cannot itself be written through still rebuilds (#480: mv replaces it)" 0 "$RC"
 fi
 chmod 644 "$TSV" 2> /dev/null
+
+chmod 555 "$TSV_DIR" 2> /dev/null
+# Same probe shape, now against the DIRECTORY: can a new entry be created in it at all --
+# the permission mktemp actually needs, and the one `[ -w ]` on the directory itself would
+# answer the same way root or Git Bash already misreport for a file.
+if : 2> /dev/null > "$TSV_DIR/.jit480-probe"; then
+  rm -f "$TSV_DIR/.jit480-probe" 2> /dev/null
+  echo "  SKIP-NOTE: chmod did not remove write permission on the directory here (running as"
+  echo "             root, or a filesystem without POSIX modes). Section G's second probe tested nothing."
+else
+  rebuild
+  assert_rc "a directory that cannot be written into exits 2" 2 "$RC"
+  assert_contains "and says a temp file could not be created" "$(cat "$ERR")" "could not create a temp file"
+  assert_contains "and says that index is now stale" "$(cat "$ERR")" "was NOT rebuilt"
+fi
+chmod 755 "$TSV_DIR" 2> /dev/null
+
 rebuild
 assert_rc "and once it is writable again, 0" 0 "$RC"
 
