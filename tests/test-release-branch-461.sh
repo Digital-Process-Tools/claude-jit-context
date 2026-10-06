@@ -30,6 +30,75 @@ bad() {
   [ $# -eq 0 ] || echo "    $*"
 }
 
+# classify_check_result RC OUTPUT -- "clean", "crash" or "offenders". A non-zero
+# RC with no "^FAIL " line anywhere in OUTPUT is check_release_tree.py crashing
+# (a traceback, not a reported offender) -- #476. Used by this file's real
+# check below and by its own self-test, so the self-test exercises the exact
+# function the real flow uses rather than a restatement of it. DUPLICATED
+# (not sourced from a common file) in test-release-branch-437.sh -- these two
+# are standalone suites with no shared library, so keep both copies in sync
+# by hand if this function's logic ever changes.
+classify_check_result() {
+  local rc="$1" out="$2" fails
+  if [ "$rc" -eq 0 ]; then
+    echo "clean"
+    return
+  fi
+  fails=$(printf '%s\n' "$out" | grep '^FAIL ' || true)
+  if [ -z "$fails" ]; then
+    echo "crash"
+  else
+    echo "offenders"
+  fi
+}
+
+echo "=== DETECTOR SELF-TEST: classify_check_result and REF selection (#476, #477) ==="
+
+RESULT=$(classify_check_result 0 "")
+[ "$RESULT" = "clean" ] \
+  && ok "classify_check_result: rc=0 -> clean" \
+  || bad "classify_check_result: rc=0 should be clean, got '$RESULT'"
+
+CRASH_OUT='Traceback (most recent call last):
+  File "check_release_tree.py", line 42, in <module>
+    raise ZeroDivisionError
+ZeroDivisionError'
+RESULT=$(classify_check_result 1 "$CRASH_OUT")
+[ "$RESULT" = "crash" ] \
+  && ok "classify_check_result: rc!=0, no FAIL lines -> crash (#476 -- this used to read as clean)" \
+  || bad "classify_check_result: rc!=0 with no FAIL lines should be crash, got '$RESULT'"
+
+RESULT=$(classify_check_result 1 "FAIL something.md: offender")
+[ "$RESULT" = "offenders" ] \
+  && ok "classify_check_result: rc!=0, FAIL line(s) present -> offenders" \
+  || bad "classify_check_result: rc!=0 with a FAIL line should be offenders, got '$RESULT'"
+
+(
+  unset SOURCE_REF
+  REF="${SOURCE_REF:-HEAD}"
+  [ "$REF" = "HEAD" ]
+) && ok "REF selection: no \$SOURCE_REF set -> HEAD (local/manual run)" \
+  || bad "REF selection: with no \$SOURCE_REF, REF should fall back to HEAD"
+
+(
+  SOURCE_REF="v0.1.0"
+  REF="${SOURCE_REF:-HEAD}"
+  [ "$REF" = "v0.1.0" ]
+) && ok "REF selection: \$SOURCE_REF=v0.1.0 -> builds that ref, not HEAD (#477 -- workflow_dispatch with an older ref)" \
+  || bad "REF selection: with \$SOURCE_REF set, REF should be that ref, not HEAD"
+
+# The two checks above only prove bash's own "${VAR:-default}" semantics, not
+# that THIS SCRIPT still wires $REF into the real build call below -- they
+# would keep passing even if the build line were reverted to a hardcoded
+# "--ref HEAD" (exactly the #477 regression). Grep this script's own source
+# for the build invocation actually passing "$REF" (sourced from
+# $SOURCE_REF), so a revert to a literal HEAD fails this self-test.
+if grep -qE -- '--ref[[:space:]]+"\$REF"' "$0"; then
+  ok "REF selection: the build invocation passes \$REF, not a hardcoded --ref HEAD (#477 regression guard)"
+else
+  bad "REF selection: the build invocation no longer passes \$REF -- #477 may have regressed back to a hardcoded --ref HEAD"
+fi
+
 for f in "$BUILD" "$CHECK" "$CONFIG"; do
   [ -f "$f" ] || {
     echo "FAIL: harness guard -- $f does not exist, every assertion below is vacuous"
@@ -45,8 +114,19 @@ TMPD=$(mktemp -d 2> /dev/null || mktemp -d -t jiteq)
 trap 'rm -rf "$TMPD"' EXIT
 TREE="$TMPD/release-tree"
 
-echo "=== build: HEAD builds a release tree, and check_release_tree.py is clean ==="
-BUILD_OUT=$(python3 "$BUILD" --repo "$REPO" --ref HEAD --out "$TREE" --config "$CONFIG" 2>&1)
+# #477: the release-branch workflow builds and publishes $SOURCE_REF (the
+# workflow_dispatch input, or the pushed tag on a tag push) -- not necessarily
+# HEAD. On a tag push the checkout's HEAD IS that tag, so the two happen to
+# agree; on workflow_dispatch with an older ref= input, HEAD is the dispatching
+# branch (main) and this step used to build and check THAT tree while the
+# workflow published a different one built from $SOURCE_REF, leaving the
+# equivalence check silently pointed at the wrong commit. $SOURCE_REF is a
+# job-level env var in the workflow, so it is already in this step's
+# environment when CI runs this script; a local/manual run has no such var and
+# keeps building HEAD, as before.
+REF="${SOURCE_REF:-HEAD}"
+echo "=== build: $REF builds a release tree, and check_release_tree.py is clean ==="
+BUILD_OUT=$(python3 "$BUILD" --repo "$REPO" --ref "$REF" --out "$TREE" --config "$CONFIG" 2>&1)
 BUILD_RC=$?
 if [ "$BUILD_RC" -eq 0 ]; then
   ok "build_release_tree.py exits 0"
@@ -58,15 +138,18 @@ else
 fi
 CHECK_OUT=$(python3 "$CHECK" "$TREE" --config "$CONFIG" 2>&1)
 CHECK_RC=$?
-# Same pinned, already-filed exception test-release-branch-437.sh carries (#439,
-# narrowed allowed-tools grants on the three command scripts) -- not this issue's
-# subject, so it is excluded from "unexpected" the same way there.
-UNEXPECTED=$(printf '%s\n' "$CHECK_OUT" | grep '^FAIL ' || true)
-if [ "$CHECK_RC" -eq 0 ] || [ -z "$UNEXPECTED" ]; then
-  ok "check_release_tree.py reports no offender in the built tree"
-else
-  bad "check_release_tree.py reported offender(s)" "$UNEXPECTED"
-fi
+case "$(classify_check_result "$CHECK_RC" "$CHECK_OUT")" in
+  clean)
+    ok "check_release_tree.py reports no offender in the built tree"
+    ;;
+  crash)
+    bad "check_release_tree.py exited $CHECK_RC with no FAIL lines -- it crashed rather than finishing the check" "$CHECK_OUT"
+    ;;
+  offenders)
+    UNEXPECTED=$(printf '%s\n' "$CHECK_OUT" | grep '^FAIL ' || true)
+    bad "check_release_tree.py reported offender(s)" "$UNEXPECTED"
+    ;;
+esac
 
 echo ""
 echo "=== the compiler's own two guarantees, on planted input (#461 release audit) ==="

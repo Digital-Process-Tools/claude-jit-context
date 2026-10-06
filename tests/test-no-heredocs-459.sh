@@ -61,9 +61,41 @@ HEREDOC_PATTERN="(^|[^<])<<-?[[:space:]]*[${Q1}${Q2}]?[A-Za-z0-9_][A-Za-z0-9_]*"
 # heredoc, comment lines excluded. Blanks comment lines rather than deleting them
 # (awk) before the grep -nE pass, so the line numbers grep reports stay the file's
 # own.
+#
+# #478: awk's own exit status is captured BEFORE the grep -nE pass, not folded
+# into the pipeline's "|| true". A file that vanishes, loses read permission,
+# or otherwise makes awk fail produces the exact same empty string as a file
+# that was genuinely read and found clean -- the caller could not tell "no
+# heredoc here" from "could not read this file at all". Return 2 on an awk
+# failure so a caller can tell the two apart instead of treating both as the
+# same empty, clean result.
+#
+# Self-review caught a second-order version of the same bug this fix exists
+# to close: an earlier draft merged awk's stderr into $filtered via "2>&1" on
+# EVERY run, including a successful one. A non-fatal stderr warning from a
+# different awk implementation (gawk on a Linux CI runner vs. the BSD/mawk
+# this was likely tested against) would then have spliced extra text into
+# the very data grep -nE scans afterward, shifting the line numbers it
+# reports for a real hit -- a corruption #478's own pre-fix code never had,
+# because stderr used to pass straight through untouched. awk's stderr is
+# now discarded on success and never enters the grep pipe at all; only the
+# exit status crosses the function boundary.
 detect_heredoc_lines() {
-  awk '{ if ($0 ~ /^[[:space:]]*#/) print ""; else print }' "$1" \
-    | grep -nE -- "$HEREDOC_PATTERN" || true
+  local filtered awk_err
+  # stdout and stderr captured separately: $filtered only ever holds awk's
+  # stdout (what the grep pass below scans), while $awk_err is read only on
+  # the failure path -- the second self-review round caught that discarding
+  # stderr outright on failure too lost the diagnostic text (what awk
+  # actually said), not just the risk the first round fixed (stderr noise
+  # splicing into a SUCCESSFUL run's scanned data).
+  if ! filtered=$(awk '{ if ($0 ~ /^[[:space:]]*#/) print ""; else print }' "$1" 2> "$TMPD/awk-err.$$"); then
+    awk_err=$(cat "$TMPD/awk-err.$$" 2> /dev/null)
+    rm -f "$TMPD/awk-err.$$"
+    echo "AWK_READ_FAILED($1): $awk_err" >&2
+    return 2
+  fi
+  rm -f "$TMPD/awk-err.$$"
+  printf '%s\n' "$filtered" | grep -nE -- "$HEREDOC_PATTERN" || true
 }
 
 echo "=== DETECTOR SELF-TEST: a planted fixture, both directions ==="
@@ -120,6 +152,25 @@ for ln in $FALSE_POSITIVE_LINES; do
 done
 [ "$ANY_FALSE_POSITIVE" -eq 0 ] && ok "NEGATIVE: comments, quoted \"<< \" tokens, and here-strings (<<<) are not flagged"
 
+# #478: an unreadable/vanished file must render distinguishably from a clean
+# one -- both used to produce the same empty string. Positive control (a
+# genuine read failure IS reported) paired with the clean-file negative
+# control already proven above, so a harness that reports nothing for
+# everything cannot pass this pair.
+detect_heredoc_lines "$TMPD/does-not-exist-478.sh" > /dev/null 2> /dev/null
+UNREADABLE_RC=$?
+if [ "$UNREADABLE_RC" -eq 2 ]; then
+  ok "POSITIVE: a vanished/unreadable file is reported as a read failure (rc=2), not silently 'clean'"
+else
+  bad "POSITIVE: a vanished/unreadable file should return rc=2, got rc=$UNREADABLE_RC -- indistinguishable from a clean file"
+fi
+
+detect_heredoc_lines "$FIXTURE" > /dev/null 2> /dev/null
+CLEAN_RC=$?
+[ "$CLEAN_RC" -eq 0 ] \
+  && ok "NEGATIVE: a real, readable file still returns rc=0 (the read-failure path does not fire on a clean read)" \
+  || bad "NEGATIVE: a readable file should return rc=0, got rc=$CLEAN_RC"
+
 echo ""
 echo "=== LIVE SWEEP: every tracked file under scripts/ ==="
 
@@ -129,16 +180,26 @@ if [ -z "$SCRIPTS_FILES" ]; then
   bad "git ls-files scripts returned nothing -- the sweep below would pass for the wrong reason"
 else
   VIOLATIONS=""
+  UNREADABLE=""
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    HITS="$(detect_heredoc_lines "$REPO/$f")"
+    HITS="$(detect_heredoc_lines "$REPO/$f" 2> /dev/null)"
+    DETECT_RC=$?
+    if [ "$DETECT_RC" -eq 2 ]; then
+      UNREADABLE="$UNREADABLE
+$f"
+      continue
+    fi
     [ -n "$HITS" ] || continue
     VIOLATIONS="$VIOLATIONS
 $f:
 $HITS"
   done <<< "$SCRIPTS_FILES"
 
-  if [ -z "$VIOLATIONS" ]; then
+  if [ -n "$UNREADABLE" ]; then
+    bad "could not scan every tracked file under scripts/ -- the sweep below is incomplete, not clean" \
+      "$UNREADABLE"
+  elif [ -z "$VIOLATIONS" ]; then
     ok "no tracked file under scripts/ opens a real here-document"
   else
     bad "a real here-document was found under scripts/ -- the directory validator holds on this" \
