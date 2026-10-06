@@ -21,6 +21,8 @@
 # than a false pass.
 #
 # Usage: bash tests/test-rebuild-atomic-swap-480.sh
+#
+# jit-drive: assert_contains contains capture
 
 set -uo pipefail
 
@@ -129,7 +131,7 @@ assert_rc "a clean rebuild (no shim) exits 0" "0" "$CLEAN_RC"
 
 VOCAB_TSV="$VOCAB_DIR/00-index.tsv"
 if [ ! -s "$VOCAB_TSV" ]; then
-  bad "the clean rebuild produced a non-empty vocabulary index" "found: $(wc -l < "$VOCAB_TSV" 2>/dev/null || echo missing) lines"
+  bad "the clean rebuild produced a non-empty vocabulary index" "found: $(wc -l < "$VOCAB_TSV" 2> /dev/null || echo missing) lines"
 else
   ok "the clean rebuild produced a non-empty vocabulary index"
 fi
