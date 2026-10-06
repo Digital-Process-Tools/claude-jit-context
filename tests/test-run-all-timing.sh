@@ -28,6 +28,7 @@ RUN_ALL="$REPO/tests/run-all.sh"
 
 PASS=0
 FAIL=0
+SKIP=0
 
 TMP="$(mktemp -d 2> /dev/null)" || TMP=""
 if [ -z "$TMP" ] || [ ! -d "$TMP" ]; then
@@ -46,6 +47,13 @@ bad() {
   shift
   [ $# -gt 0 ] && echo "    $*"
   return 0
+}
+# A third outcome, distinct from both -- an assertion that genuinely cannot be
+# evaluated this run (the two suites tied at whole-second resolution) is neither
+# a pass nor a failure, and counting it as either would misreport what ran.
+skip() {
+  SKIP=$((SKIP + 1))
+  echo "  SKIPPED: $1"
 }
 
 # A minimal fixture directory: run-all.sh cds to its own dirname and globs test-*.sh
@@ -110,6 +118,13 @@ fi
 # regression still has to fail here: when the two printed times differ, the strict
 # line-position check below still applies -- this is the positive control a
 # tie-tolerant assertion needs.
+#
+# A tie is only legitimate at 2s or more. test-b-slow.sh sleeps a full 2 seconds,
+# so a correct measurement can never read below 2 for it -- if a broken timer
+# (or one stuck printing the same constant for every suite, as a stub would)
+# reports "1s" for both, that is not a resolution tie, it is the measurement
+# itself being wrong, and it must fail rather than slide into SKIPPED (review
+# finding on #482: the first draft let SLOW_SECS==FAST_SECS==1 through as a tie).
 SLOW_LINE=$(grep -n 'test-b-slow\.sh' "$OUT_PASS" | tail -1 | cut -d: -f1)
 FAST_LINE=$(grep -n 'test-a-fast\.sh' "$OUT_PASS" | tail -1 | cut -d: -f1)
 SLOW_SECS=$(grep 'test-b-slow\.sh' "$OUT_PASS" | tail -1 | sed -E 's/^[[:space:]]*([0-9]+)s.*/\1/')
@@ -117,8 +132,11 @@ FAST_SECS=$(grep 'test-a-fast\.sh' "$OUT_PASS" | tail -1 | sed -E 's/^[[:space:]
 if [ -z "$SLOW_LINE" ] || [ -z "$FAST_LINE" ] || [ -z "$SLOW_SECS" ] || [ -z "$FAST_SECS" ]; then
   bad "the slower suite is listed before the faster one" "could not read a printed line/time for one or both suites"
   cat "$OUT_PASS"
+elif [ "$SLOW_SECS" -lt 2 ]; then
+  bad "the slower suite is listed before the faster one" "test-b-slow.sh (sleep 2) printed ${SLOW_SECS}s, which a correct measurement cannot produce -- not a tie, a broken timer"
+  cat "$OUT_PASS"
 elif [ "$SLOW_SECS" -eq "$FAST_SECS" ]; then
-  echo "  SKIPPED: test-a-fast.sh and test-b-slow.sh both printed ${SLOW_SECS}s -- a tie at 1s resolution, order is undefined, not wrong"
+  skip "test-a-fast.sh and test-b-slow.sh both printed ${SLOW_SECS}s -- a tie at 1s resolution, order is undefined, not wrong"
 elif [ "$SLOW_LINE" -lt "$FAST_LINE" ]; then
   ok "the slower suite is listed before the faster one"
 else
@@ -134,10 +152,11 @@ else
   cat "$OUT_PASS"
 fi
 
-# Positive control for the timing itself: the slow suite's own line names a number of
-# seconds greater than 0 -- this is the case "would this pass if the code did nothing"
-# is aimed at: a stub that always printed "1s" for every suite would pass every
-# assertion above except this one.
+# A second, independent positive control for the timing itself: the slow suite's
+# own line names a number of seconds greater than 0 -- this is the case "would
+# this pass if the code did nothing" is aimed at. The stronger form of this check
+# (SLOW_SECS -lt 2, above) already fails a stub that always prints "1s" for every
+# suite; this one is the last line of defense if that check is ever weakened.
 SLOW_TIME_LINE=$(grep 'test-b-slow\.sh' "$OUT_PASS" | tail -1)
 if grep -qE '^ *[1-9][0-9]*s' <<< "$SLOW_TIME_LINE"; then
   ok "the slow suite (sleep 2) is timed at 1 second or more, not 0"
@@ -210,7 +229,11 @@ fi
 echo ""
 echo "========================"
 TOTAL=$((PASS + FAIL))
-echo "  $PASS/$TOTAL passed, $FAIL failed"
+if [ "$SKIP" -gt 0 ]; then
+  echo "  $PASS/$TOTAL passed, $FAIL failed, $SKIP skipped (inconclusive, not counted above)"
+else
+  echo "  $PASS/$TOTAL passed, $FAIL failed"
+fi
 echo "========================"
 
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1
