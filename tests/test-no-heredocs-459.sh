@@ -81,11 +81,20 @@ HEREDOC_PATTERN="(^|[^<])<<-?[[:space:]]*[${Q1}${Q2}]?[A-Za-z0-9_][A-Za-z0-9_]*"
 # now discarded on success and never enters the grep pipe at all; only the
 # exit status crosses the function boundary.
 detect_heredoc_lines() {
-  local filtered
-  if ! filtered=$(awk '{ if ($0 ~ /^[[:space:]]*#/) print ""; else print }' "$1" 2> /dev/null); then
-    echo "AWK_READ_FAILED($1)" >&2
+  local filtered awk_err
+  # stdout and stderr captured separately: $filtered only ever holds awk's
+  # stdout (what the grep pass below scans), while $awk_err is read only on
+  # the failure path -- the second self-review round caught that discarding
+  # stderr outright on failure too lost the diagnostic text (what awk
+  # actually said), not just the risk the first round fixed (stderr noise
+  # splicing into a SUCCESSFUL run's scanned data).
+  if ! filtered=$(awk '{ if ($0 ~ /^[[:space:]]*#/) print ""; else print }' "$1" 2> "$TMPD/awk-err.$$"); then
+    awk_err=$(cat "$TMPD/awk-err.$$" 2> /dev/null)
+    rm -f "$TMPD/awk-err.$$"
+    echo "AWK_READ_FAILED($1): $awk_err" >&2
     return 2
   fi
+  rm -f "$TMPD/awk-err.$$"
   printf '%s\n' "$filtered" | grep -nE -- "$HEREDOC_PATTERN" || true
 }
 
