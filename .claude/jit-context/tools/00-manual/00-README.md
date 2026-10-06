@@ -16,3 +16,15 @@ so nothing here is ever indexed or injected.
   upstream as `Digital-Process-Tools/claude-oss#1042`. Until it lands, follow every
   `--apply` with `CLAUDE_PROJECT_DIR="$PWD" bash scripts/rebuild-tsv.sh` and commit both
   files.
+
+- **wrong-worktree-edits** (2026-10-06, `trap.d/437.wrong-worktree-edits.md`). A `supertool
+  edit`/`paste`/`batch` call sent without its own `cd <worktree> &&` prefix landed in the main
+  clone instead of the worktree a task was meant to edit -- caught only by a later fixture run
+  behaving as if the old code were still there. Declined rather than promoted: there is no ERE
+  that can distinguish "this call already has a same-call `cd` prefix" from "it does not"
+  without lookbehind, which awk's dialect does not have (per `paths/00-manual/entries.md`), so
+  the only matchable rule here would fire on every `edit`/`paste`/`batch` call in the whole
+  repository, correctly-prefixed ones included -- noise on every legitimate call to catch a rare
+  miss. The op's own `[branch: ...]` receipt line already names which branch a write landed on,
+  checkable after the fact on exactly the calls that need it. See the parallel
+  `paths/00-manual/00-README.md` entry for the same decision.
