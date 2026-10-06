@@ -419,6 +419,37 @@ for ENG in $ENGINES; do
   rm -rf "$PROJ"
 
   # ============================================================================
+  # 475 - layerdir fed to bytesof() via -v, mangled by a backslash-bearing path
+  # ============================================================================
+  # Same defect class as #424/#437 elsewhere in this file: a CLAUDE_PROJECT_DIR-derived
+  # path handed to awk via -v has its escapes DECODED, so a literal backslash in the
+  # path mangles it before bytesof()'s getline ever opens the file -- every entry in
+  # that layer is then reported unmeasured instead of its real byte count. Positive
+  # control first, inside the SAME fixture: the collision report must still fire on the
+  # shared keyword (so the absence of the bad note below is not just a report that never
+  # ran), and only the backslash case may show the "could not be measured" note.
+  echo ""
+  echo "=== 475 [$ENG]: a backslash-bearing vocabulary layer path still gets real byte counts ==="
+  ROOT475=$(mktemp -d)
+  BACKSLASH475="$(printf '\\')"
+  PROJ="$ROOT475/x${BACKSLASH475}zz475"
+  mkdir -p "$PROJ/.claude/jit-context/vocabulary/00-manual" 2> /dev/null
+  if [ -d "$PROJ/.claude/jit-context/vocabulary/00-manual" ]; then
+    V="$PROJ/.claude/jit-context/vocabulary/00-manual"
+    printf -- '---\ntitle: T475a\nkeywords: dpt475\n---\nfirst entry body for 475\n' > "$V/a475.md"
+    printf -- '---\ntitle: T475b\nkeywords: dpt475\n---\nsecond entry body for 475\n' > "$V/b475.md"
+    ERR475=$(mktemp)
+    PATH="$ENGINE_BIN/$ENG:$PATH" CLAUDE_PROJECT_DIR="$PROJ" JIT_CONTEXT_COLLISION_BYTES=1 LC_ALL=C \
+      bash "$SCRIPTS/rebuild-tsv.sh" > /dev/null 2> "$ERR475"
+    assert_has "the collision report still fires on the shared keyword" "$ERR475" "dpt475"
+    assert_lacks "every entry in the backslash-bearing layer is measured, not reported unmeasured (#475)" "$ERR475" "could not be measured"
+    rm -f "$ERR475"
+  else
+    echo "  SKIPPED: could not create a directory containing a literal backslash on this filesystem."
+  fi
+  rm -rf "$ROOT475"
+
+  # ============================================================================
   # 156 - jit_clip() rewrote values nobody asked it to rewrite
   # ============================================================================
   # The comment block above jit_clip() promises "No other rewriting" and cites #19 as what
