@@ -159,7 +159,10 @@ fi
 #
 #   0  the index was written and every row can be honoured
 #   1  the index was written, and at least one row will be REFUSED by the matcher
-#   2  the index was not written, or not completely -- what is on disk is not this run
+#   2  at least one index was not written. Since #480 that means ONLY "not written" --
+#      truncate_index()/commit_index() build every index aside and swap it in only on a
+#      clean build, so a layer this run could not finish leaves its PREVIOUSLY committed
+#      index untouched rather than replaced by a partial one.
 #
 # The same 0/1/2 jit-dry-run.sh uses, on purpose: the two are read together and documented
 # in one table in paths/00-manual/tooling.md.
@@ -191,8 +194,14 @@ fi
 # the same report block as the ambiguity tally.
 JIT_RC=0
 # 2 outranks 1: an index that was not written is a worse claim than one that was.
+# JIT_RC2_COUNT (#480): a plain max cannot tell "one FATAL happened, ever" apart from
+# "a FATAL happened during THIS index's own build" -- commit_index() below needs the
+# latter, snapshotted before and after one builder's loop, to decide whether a crashed
+# helper process poisoned the index it is about to swap into place.
+JIT_RC2_COUNT=0
 jit_rc() {
   [ "$1" -gt "$JIT_RC" ] && JIT_RC="$1"
+  [ "$1" -eq 2 ] && JIT_RC2_COUNT=$((JIT_RC2_COUNT + 1))
   return 0
 }
 
@@ -331,23 +340,30 @@ fi
 # silent one.
 echo "rebuild-tsv: writing JIT_BASE=$JIT_BASE (CLAUDE_PROJECT_DIR=${CLAUDE_PROJECT_DIR:-<unset, so the current directory>}, cwd=$(pwd))" >&2
 
-# Truncation failing left the previous index in place while every line after it reported
-# the rule count read back OUT of that stale file -- a success, with a number, for an index
-# nobody rebuilt. The other dimensions are independent, so the run continues and the code
-# is raised once at the end.
+# A failed build used to leave the previous index in place while every COUNT line after it
+# was still read back OUT of that now-stale file -- a success, with a number, for an index
+# nobody rebuilt. Since #480, COUNT is read from the TEMP build instead (see truncate_index/
+# commit_index just below), so that specific misreport is gone; the dimensions stay
+# independent either way, and the run continues with the worst code raised once at the end.
 # DISP, not the path: the failing path runs through the layer directory, which is a name
 # the clone chose, and a clone can force this branch on purpose by shipping a DIRECTORY
 # called 00-index.tsv. Callers pass the already-withheld label plus the constant leaf, so
 # the reader still gets the two components that say which index this was (#113).
+# Builds the next index ASIDE and reports where (#480): the caller's loop writes rows
+# into the printed TEMP path, never into $tsv directly, and commit_index() below is the
+# only thing that ever touches $tsv again. Before this, `: > "$tsv"` truncated the REAL,
+# committed index before a single row of the new one existed -- so a helper process that
+# died partway through the loop (a macOS 27 built-in-bash child taking "Bus error: 10",
+# #480's own report) left whatever had been appended so far, which is to say an index
+# shorter than the one on disk a moment earlier, silently committed as this run's answer.
 truncate_index() {
-  local tsv="$1" disp="${2:-$1}" why=""
-  # A SYMBOLIC LINK at this path is checked BEFORE the truncating redirect below, not
-  # after: `: > "$tsv"` truncates through a link exactly as readily as it truncates a
-  # real file, so by the time the redirect below could fail on anything, the outside
-  # target is already gone (#332). git clone recreates a committed symlink, so cloning a
-  # hostile tree is the whole attack -- the same one test-symlink-entry.sh already closed
-  # for an ENTRY file, one write site over. `[ -L ]` never follows, so this sees the link
-  # itself even when its target does not exist.
+  local tsv="$1" disp="${2:-$1}" tmp
+  # A SYMBOLIC LINK at this path is checked BEFORE anything is created, not after: `[ -L ]`
+  # never follows, so this sees the link itself even when its target does not exist.
+  # git clone recreates a committed symlink, so cloning a hostile tree is the whole attack
+  # -- the same one test-symlink-entry.sh already closed for an ENTRY file, one write site
+  # over. Checked again, against the same $tsv, by commit_index() right before the swap:
+  # this check only proves the path was not a symlink a moment ago.
   if [ -L "$tsv" ]; then
     echo "FATAL    $disp: could not be written -- that path is a SYMBOLIC LINK, not a file" >&2
     echo "         -- refusing to truncate or write through a symlinked index path" >&2
@@ -356,27 +372,74 @@ truncate_index() {
     jit_rc 2
     return 1
   fi
-  # `2>/dev/null` BEFORE the redirection it is meant to silence, and this was a real leak.
-  # Redirections are applied left to right, so `: > "$tsv" 2>/dev/null` set up the failing
-  # one while stderr was still the terminal: bash printed its own diagnostic, carrying the
-  # ABSOLUTE path -- layer directory included -- and the 2>/dev/null that follows silenced
-  # nothing. Measured against `00-index.tsv` shipped as a directory.
-  if : 2> /dev/null > "$tsv"; then return 0; fi
-  # bash own reason is gone with that message, so the one case a clone can construct on
-  # purpose is classified here instead. Everything else stays unattributed rather than
-  # guessed at.
-  [ -d "$tsv" ] && why=" -- there is a DIRECTORY at that path, not a file"
-  echo "FATAL    $disp: could not be written$why" >&2
-  echo "         -- that index was NOT rebuilt and is now stale." >&2
-  # DISP is dimension/layer/leaf, so the absolute path is gone with the withheld component.
-  # JIT_BASE gets it back for the ordinary failure -- a read-only tree, a full disk -- which
-  # is the common one and the one where the reader needs a path they can act on. It is the
-  # same string the no-entry-tree FATAL above already prints, and it comes from
-  # CLAUDE_PROJECT_DIR rather than from the clone, so it is not the column this change is
-  # about. `ls` under it finds a withheld name in one step.
-  echo "         -- under JIT_BASE=$JIT_BASE" >&2
-  jit_rc 2
-  return 1
+  # The one case a clone can construct on purpose, classified before mktemp even runs --
+  # a DIRECTORY at $tsv would otherwise make commit_index()'s own `mv` move the temp file
+  # INTO that directory instead of failing, which is worse than the old behaviour, not
+  # merely unfixed by it.
+  if [ -d "$tsv" ]; then
+    echo "FATAL    $disp: could not be written -- there is a DIRECTORY at that path, not a file" >&2
+    echo "         -- that index was NOT rebuilt and is now stale." >&2
+    echo "         -- under JIT_BASE=$JIT_BASE" >&2
+    jit_rc 2
+    return 1
+  fi
+  # Same directory as the real index, never $TMPDIR: a rename within one directory is the
+  # atomic swap a crash mid-build cannot half-apply, and crossing a filesystem boundary
+  # would turn commit_index()'s `mv` into a copy-then-unlink, un-doing exactly the
+  # atomicity this exists to buy. The leading dot keeps the scratch file out of every
+  # `*.md` glob the builders below walk; mktemp's own suffix keeps two concurrent rebuilds
+  # of the same tree from colliding on the same scratch name.
+  tmp="$(mktemp "$(dirname "$tsv")/.$(basename "$tsv").XXXXXX" 2> /dev/null)"
+  if [ -z "$tmp" ] || [ ! -e "$tmp" ]; then
+    echo "FATAL    $disp: could not create a temp file to rebuild into" >&2
+    echo "         -- that index was NOT rebuilt and is now stale." >&2
+    echo "         -- under JIT_BASE=$JIT_BASE" >&2
+    jit_rc 2
+    return 1
+  fi
+  printf '%s' "$tmp"
+  return 0
+}
+
+# Swaps a freshly-built TEMP index into place -- but only when nothing called jit_rc(2)
+# for THIS index while it was being built (#480). The per-file loops below already detect
+# a crashed helper (a non-zero awk exit, a verdict count that comes up short) and call
+# jit_rc 2 when they do; comparing JIT_RC2_COUNT before and after one builder's own loop
+# is what turns "somewhere, at some point in this whole run, something failed" into "THIS
+# index's own build failed", without asking every builder to carry its own flag.
+#
+# $1 the temp path truncate_index() handed back, $2 the real destination ($tsv), $3 the
+# display label, $4 the JIT_RC2_COUNT snapshot taken right after truncate_index() returned,
+# before this index's own loop ran.
+commit_index() {
+  local tmp="$1" tsv="$2" disp="$3" rc2_before="$4"
+  if [ "$JIT_RC2_COUNT" -gt "$rc2_before" ]; then
+    rm -f "$tmp" 2> /dev/null
+    echo "FATAL    $disp: a helper process failed while this index was being rebuilt -- the partial rebuild was discarded and the COMMITTED index on disk was left untouched (#480)" >&2
+    return 1
+  fi
+  # Re-checked here, not just by truncate_index() above: nothing in this script can turn
+  # $tsv into a symlink mid-run on its own, but this is the narrowest possible window
+  # before the write. `mv`'s rename() would not write THROUGH the link the way the old
+  # truncating redirect did -- it replaces the directory entry itself, link included --
+  # but that would silently turn a committed symlink into a plain file, which is still a
+  # change nobody asked for. Refused outright instead, the same call #332 already makes.
+  if [ -L "$tsv" ]; then
+    rm -f "$tmp" 2> /dev/null
+    echo "FATAL    $disp: could not be written -- that path is now a SYMBOLIC LINK -- refusing to swap the rebuilt index into place" >&2
+    echo "         -- that index was NOT rebuilt and is now stale." >&2
+    jit_rc 2
+    return 1
+  fi
+  if ! mv -f "$tmp" "$tsv" 2> /dev/null; then
+    rm -f "$tmp" 2> /dev/null
+    echo "FATAL    $disp: the rebuilt index could not be moved into place" >&2
+    echo "         -- that index was NOT rebuilt and is now stale." >&2
+    echo "         -- under JIT_BASE=$JIT_BASE" >&2
+    jit_rc 2
+    return 1
+  fi
+  return 0
 }
 
 # A LAYER DIRECTORY that is itself a symbolic link is the other half of #332:
@@ -454,7 +517,18 @@ build_tool_tsv() {
   T0=$(_ms)
 
   [ -d "$dir" ] || return
-  truncate_index "$tsv" "$label/${tsv##*/}" || return
+  local tsv_tmp rc2_before
+  # `|| { jit_rc 2; return; }`, not `|| return`: truncate_index() runs inside this
+  # command substitution's own SUBSHELL, so any jit_rc() call it makes internally never
+  # reaches JIT_RC/JIT_RC2_COUNT in this (the caller's) shell -- a subshell's variable
+  # writes die with it. Every failure return out of truncate_index() already means "the
+  # index was not written", so raising jit_rc 2 here, unconditionally, is not a guess
+  # about which failure it was.
+  tsv_tmp=$(truncate_index "$tsv" "$label/${tsv##*/}") || {
+    jit_rc 2
+    return
+  }
+  rc2_before=$JIT_RC2_COUNT
 
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -525,10 +599,11 @@ build_tool_tsv() {
     # writing the row through -- see common.sh for why the row is not dropped.
     match=$(jit_expand_match "$match" tools "$label/$(jit_report_name "$filename")") || jit_rc 1
 
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$tool" "$match" "$filename" "${mode:-remind}" "$require" "$forbid" "$requires" >> "$tsv"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$tool" "$match" "$filename" "${mode:-remind}" "$require" "$forbid" "$requires" >> "$tsv_tmp"
   done
 
-  COUNT=$(wc -l < "$tsv" | tr -d ' ')
+  COUNT=$(wc -l < "$tsv_tmp" | tr -d ' ')
+  commit_index "$tsv_tmp" "$tsv" "$label/${tsv##*/}" "$rc2_before"
   _log "rebuild-tsv" $(($(_ms) - T0)) "$label: $COUNT rules"
 }
 
@@ -789,7 +864,15 @@ build_vocab_tsv() {
     return
   fi
 
-  truncate_index "$tsv" "$label/${tsv##*/}" || return
+  local tsv_tmp rc2_before
+  # See build_tool_tsv()'s identical comment: truncate_index() runs in this command
+  # substitution's own subshell, so its internal jit_rc() calls never reach this shell's
+  # JIT_RC/JIT_RC2_COUNT -- raised explicitly here instead.
+  tsv_tmp=$(truncate_index "$tsv" "$label/${tsv##*/}") || {
+    jit_rc 2
+    return
+  }
+  rc2_before=$JIT_RC2_COUNT
 
   # --- Deferred generic-word classification (#255) -----------------------------------
   # Every non-blacklisted keyword this call writes a row for lands in ALL_KW (flat, one
@@ -1137,10 +1220,11 @@ build_vocab_tsv() {
 "
       JIT_ALLGENERIC_N=$((JIT_ALLGENERIC_N + 1))
     fi
-    printf '%s\n' "${_entry_rows[@]}" >> "$tsv"
+    printf '%s\n' "${_entry_rows[@]}" >> "$tsv_tmp"
   done
 
-  COUNT=$(wc -l < "$tsv" | tr -d ' ')
+  COUNT=$(wc -l < "$tsv_tmp" | tr -d ' ')
+  commit_index "$tsv_tmp" "$tsv" "$label/${tsv##*/}" "$rc2_before"
   _log "rebuild-tsv" $(($(_ms) - T0)) "$label: $COUNT keywords"
 }
 
@@ -1174,7 +1258,15 @@ build_vocab_path_tsv() {
   T0=$(_ms)
 
   [ -d "$dir" ] || return
-  truncate_index "$tsv" "$label/${tsv##*/}" || return
+  local tsv_tmp rc2_before
+  # See build_tool_tsv()'s identical comment: truncate_index() runs in this command
+  # substitution's own subshell, so its internal jit_rc() calls never reach this shell's
+  # JIT_RC/JIT_RC2_COUNT -- raised explicitly here instead.
+  tsv_tmp=$(truncate_index "$tsv" "$label/${tsv##*/}") || {
+    jit_rc 2
+    return
+  }
+  rc2_before=$JIT_RC2_COUNT
 
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -1214,7 +1306,7 @@ build_vocab_path_tsv() {
           printf "%s%s/\t%s\n", prefix, m[i], file
         }
       }
-    ' "$md" >> "$tsv"
+    ' "$md" >> "$tsv_tmp"
     mod_rc=$?
     if [ "$mod_rc" -ne 0 ]; then
       echo "FATAL    $label/${tsv##*/}: $(jit_report_name "$filename"): awk exited $mod_rc while reading its \"## Modules\" section -- rows for this file may be missing or partial, and the index is not this run" >&2
@@ -1222,7 +1314,8 @@ build_vocab_path_tsv() {
     fi
   done
 
-  COUNT=$(wc -l < "$tsv" | tr -d ' ')
+  COUNT=$(wc -l < "$tsv_tmp" | tr -d ' ')
+  commit_index "$tsv_tmp" "$tsv" "$label/${tsv##*/}" "$rc2_before"
   # The LEAF, unlike every other builder's log line, because this is the only dimension
   # that writes two indexes out of one layer directory and the layer name alone would name
   # both. `$label/${tsv##*/}` is the same string truncate_index is handed above, so the
@@ -1252,7 +1345,15 @@ build_path_tsv() {
   T0=$(_ms)
 
   [ -d "$dir" ] || return
-  truncate_index "$tsv" "$label/${tsv##*/}" || return
+  local tsv_tmp rc2_before
+  # See build_tool_tsv()'s identical comment: truncate_index() runs in this command
+  # substitution's own subshell, so its internal jit_rc() calls never reach this shell's
+  # JIT_RC/JIT_RC2_COUNT -- raised explicitly here instead.
+  tsv_tmp=$(truncate_index "$tsv" "$label/${tsv##*/}") || {
+    jit_rc 2
+    return
+  }
+  rc2_before=$JIT_RC2_COUNT
 
   for md in "$dir"/*.md; do
     [ -f "$md" ] || continue
@@ -1273,10 +1374,11 @@ build_path_tsv() {
     # indexed as a literal that can never match a path.
     match_line=$(jit_expand_match "$match_line" paths "$label/$(jit_report_name "$filename")") || jit_rc 1
 
-    printf '%s\t%s\n' "$match_line" "$filename" >> "$tsv"
+    printf '%s\t%s\n' "$match_line" "$filename" >> "$tsv_tmp"
   done
 
-  COUNT=$(wc -l < "$tsv" | tr -d ' ')
+  COUNT=$(wc -l < "$tsv_tmp" | tr -d ' ')
+  commit_index "$tsv_tmp" "$tsv" "$label/${tsv##*/}" "$rc2_before"
   _log "rebuild-tsv" $(($(_ms) - T0)) "$label: $COUNT rules"
 }
 
@@ -1750,8 +1852,15 @@ case "$JIT_RC" in
     echo "             by the matcher. That rule is on disk and will never fire." >&2
     ;;
   2)
-    echo "rebuild-tsv: exit 2 -- an index could not be written. What is on disk is NOT what this" >&2
-    echo "             run built." >&2
+    # #480: the FATAL lines above each build aside and swap in only on a clean build, so
+    # "what is on disk" is now the OLD committed index for anything this run could not
+    # finish -- stale, not corrupt, and still the index a hook would have read a moment
+    # ago. The one exception is the small set of guards that still exit before any
+    # builder runs at all (no entry tree found, a hostile CLAUDE_PROJECT_DIR) -- those
+    # print their own FATAL and `exit 2` directly, above, and never reach this line.
+    echo "rebuild-tsv: exit 2 -- at least one index above was NOT rebuilt. What is on disk for" >&2
+    echo "             it is the index this run STARTED with, left untouched rather than" >&2
+    echo "             replaced by a partial build." >&2
     ;;
 esac
 exit "$JIT_RC"
