@@ -1407,24 +1407,124 @@ function jit_heredoc_quote_states(lines, n, qin,    i, state) {
 # column no matter what command it sits under; it does NOT skip the suppression
 # checks above, since those answer a different question (is this text a real
 # heredoc operator at all) that both callers need answered the same way.
-function jit_strip_heredoc_body(s, unconditional,    n, lines, i, j, out, strip_tabs, delim, line, rest, probed, op, word, prefix, q1, q2, q3, qclass, close_i, quote_in, lt2) {
+# #447: jit_heredoc_opener_is_known_sink() used to be handed the WHOLE line, so a
+# real sink elsewhere on the SAME line (a decoy cat/tee/gh command followed by ; or
+# & and then bash <<EOF) made the allowlist match even though the heredoc actually
+# belongs to a DIFFERENT, non-sink command on that same line -- including a sink
+# decoy combined with the round-1 fake-arithmetic-opener shape, since binding the
+# operator to its own clause makes the fake opener own clause the one with no sink
+# in it either way. Binds the sink check to just the clause the operator sits in,
+# bounded by the nearest ";" or "&" on either side (a lone "&" covers "&&" too, since
+# each "&" character is itself a boundary). jit_heredoc_opener_has_danger_token()
+# runs on that same clause now too -- more precise than the whole line, never less
+# conservative, since a pipe or substitution in an UNRELATED earlier clause has
+# nothing to do with this heredoc own command.
+#
+# Self-review finding: a bare scan for ";"/"&" is quote-UNAWARE, so a quoted ";" or
+# "&" inside the heredoc operator own command (python3 -c "x=1; tee y" <<EOF) could
+# forge a fake clause boundary and truncate the clause down to a substring (" tee y"
+# <<EOF") that happens to satisfy the sink allowlist on its own -- reopening the exact
+# bypass class this fix exists to close, just through a quoted separator instead of a
+# bare one. state0 is the quote state carried INTO this physical line from every line
+# before it (jit_heredoc_quote_states() own quote_in[i], the same value the opener
+# suppression check already uses for a different question), since a quote can span
+# more than one line; a ";"/"&" only ends a clause when the state AT that character,
+# replaying the SAME escaping rules jit_heredoc_line_exit_state() already uses, is 0.
+function jit_heredoc_clause_at(line, col, state0,    i, c, start, endp, len, state, instate, q1, q2, bs) {
+  q1 = sprintf("%c", 39)
+  q2 = sprintf("%c", 34)
+  bs = sprintf("%c", 92)
+  len = length(line)
+  state = state0
+  for (i = 1; i <= len; i++) {
+    instate[i] = state
+    c = substr(line, i, 1)
+    if (state == 0) {
+      if (c == q1) state = 1
+      else if (c == q2) state = 2
+      else if (c == bs) { i++; instate[i] = -1 }
+    } else if (state == 1) {
+      if (c == q1) state = 0
+    } else if (state == 2) {
+      if (c == bs) { i++; instate[i] = -1 }
+      else if (c == q2) state = 0
+    }
+  }
+  start = 1
+  for (i = col - 1; i >= 1; i--) {
+    c = substr(line, i, 1)
+    if ((c == ";" || c == "&") && instate[i] == 0) { start = i + 1; break }
+  }
+  endp = len
+  for (i = col; i <= len; i++) {
+    c = substr(line, i, 1)
+    if ((c == ";" || c == "&") && instate[i] == 0) { endp = i - 1; break }
+  }
+  if (endp < start) return ""
+  return substr(line, start, endp - start + 1)
+}
+# #447: the OLD closing-delimiter extraction kept only ONE optional quote or
+# backslash character on each side of the bare identifier, so a delimiter bash
+# itself builds by concatenating several quoted/escaped/bare pieces was read wrong
+# -- a quote-then-bare-letters suffix, a bare dash-digit suffix, and a backslash
+# mid-word all closed at the WRONG line for this stripper, either leaving a real
+# sink own data visible (false block) or never finding a close at all. Replays
+# bash own word-formation rule one character at a time: a bare run of ordinary
+# characters, a single-quoted run, a double-quoted run (where a backslash-escaped
+# double-quote, backslash, dollar or backtick collapses to the literal character),
+# or a single backslash-escaped character outside quotes, concatenated with no
+# gap, stopping at the first blank or shell word-ending character. start is the
+# column of the first character of the word (i.e. right after the operator, its
+# optional "-", and any blanks) -- not the operator itself.
+function jit_heredoc_scan_word(line, start,    i, n, c, nc, state, word, bs, q1, q2, stopchars) {
+  q1 = sprintf("%c", 39)
+  q2 = sprintf("%c", 34)
+  bs = sprintf("%c", 92)
+  stopchars = " \t" bs q1 q2 ";&|<>()"
+  n = length(line)
+  i = start
+  state = 0
+  word = ""
+  while (i <= n) {
+    c = substr(line, i, 1)
+    if (state == 0) {
+      if (c == q1) { state = 1; i++; continue }
+      if (c == q2) { state = 2; i++; continue }
+      if (c == bs) {
+        if (i == n) break
+        word = word substr(line, i + 1, 1)
+        i += 2
+        continue
+      }
+      if (index(stopchars, c) > 0) break
+      word = word c
+      i++
+      continue
+    }
+    if (state == 1) {
+      if (c == q1) { state = 0; i++; continue }
+      word = word c
+      i++
+      continue
+    }
+    # state == 2: double-quoted -- only an escaped double-quote, backslash, dollar
+    # or backtick collapses (bash own double-quote escape set); any other
+    # backslash stays literal.
+    if (c == q2) { state = 0; i++; continue }
+    if (c == bs && i < n) {
+      nc = substr(line, i + 1, 1)
+      if (nc == q2 || nc == bs || nc == "$" || nc == "`") { word = word nc; i += 2; continue }
+    }
+    word = word c
+    i++
+  }
+  return word
+}
+function jit_strip_heredoc_body(s, unconditional,    n, lines, i, j, out, strip_tabs, delim, line, rest, probed, word, prefix, close_i, quote_in, lt2, op_col, after_pos) {
   # #461: the heredoc operator is built from its character code, never typed. Once the
   # release build inlines this file into a hook, the directory validator reads a typed
   # double `<` here as a shell here-document it cannot close, and blocks the plugin.
   lt2 = sprintf("%c%c", 60, 60)
-  q1 = sprintf("%c", 39)
-  q2 = sprintf("%c", 34)
-  # TWO bytes, not one: q3 sits inside a DYNAMIC (string) regex bracket expression
-  # below, and this awk regex compiler treats a lone backslash there as an escape
-  # introducer for whatever follows -- q3 alone made the escaped closing bracket read
-  # as a literal close-bracket character rather than the class-closing bracket itself,
-  # and the whole pattern failed to compile ("nonterminated character class", caught
-  # by re-running the suite after this change -- self-review finding). Two backslash
-  # bytes let that same escape reading collapse them back to ONE literal backslash
-  # inside the class, so the real closing bracket after it closes the class as
-  # intended.
-  q3 = sprintf("%c%c", 92, 92)
-  qclass = "[" q1 q2 q3 "]?"
   n = split(s, lines, "\n")
   jit_heredoc_quote_states(lines, n, quote_in)
   out = ""
@@ -1433,15 +1533,19 @@ function jit_strip_heredoc_body(s, unconditional,    n, lines, i, j, out, strip_
     line = lines[i]
     probed = " " line
     close_i = 0
-    if (match(probed, "[^<]" lt2 "-?[ \t]*" qclass "[A-Za-z_][A-Za-z0-9_]*" qclass)) {
+    # Detection only -- deliberately loose, just "a non-< char followed by <<" -- the
+    # ACCURATE word is computed below by jit_heredoc_scan_word(), never by trusting
+    # how much of the operator this match happens to consume (#447).
+    if (match(probed, "[^<]" lt2)) {
       prefix = substr(probed, 1, RSTART)
       if (!jit_heredoc_opener_is_suppressed(prefix, quote_in[i])) {
-        op = substr(probed, RSTART + 1, RLENGTH - 1)
-        strip_tabs = (substr(op, 1, 3) == lt2 "-")
-        word = op
-        sub("^" lt2 "-?[ \t]*", "", word)
-        gsub("[" q1 q2 q3 "]", "", word)
-        if (word != "" && (unconditional || jit_heredoc_opener_is_known_sink(line))) {
+        op_col = RSTART
+        after_pos = op_col + length(lt2)
+        strip_tabs = (substr(line, after_pos, 1) == "-")
+        if (strip_tabs) after_pos++
+        while (substr(line, after_pos, 1) == " " || substr(line, after_pos, 1) == "\t") after_pos++
+        word = jit_heredoc_scan_word(line, after_pos)
+        if (word != "" && (unconditional || jit_heredoc_opener_is_known_sink(jit_heredoc_clause_at(line, op_col, quote_in[i])))) {
           delim = word
           for (j = i + 1; j <= n; j++) {
             rest = lines[j]
@@ -1504,10 +1608,12 @@ function jit_strip_heredoc_body(s, unconditional,    n, lines, i, j, out, strip_
 # "$(cat <<EOF" / bash -c "$(cat <<EOF" (command substitution feeding the body text
 # itself to a shell that runs it). None of a plain file write, tee, supertool, git
 # commit -F - or gh --body-file - ever legitimately carries a |, a $(, a backtick, a
-# >( or a <( on the SAME line as the heredoc operator, so their presence overrides
-# the allowlist unconditionally rather than being named in each sink pattern one at
-# a time -- the same posture as the comment/quote suppression above: a check that
-# can only ever turn a match into a non-match, never the reverse.
+# >( or a <( on the SAME CLAUSE as the heredoc operator (#447: the argument this
+# function receives is that clause, jit_heredoc_clause_at()s own return value, not
+# necessarily the whole physical line any more), so their presence overrides the
+# allowlist unconditionally rather than being named in each sink pattern one at a
+# time -- the same posture as the comment/quote suppression above: a check that can
+# only ever turn a match into a non-match, never the reverse.
 function jit_heredoc_opener_has_danger_token(line) {
   if (index(line, "|") > 0) return 1
   if (index(line, "$(") > 0) return 1
@@ -1519,9 +1625,10 @@ function jit_heredoc_opener_has_danger_token(line) {
 function jit_heredoc_opener_is_known_sink(line) {
   if (jit_heredoc_opener_has_danger_token(line)) return 0
   # cat writing to a file: the write target may be spelled before OR after the
-  # heredoc operator on the same physical line (cat > out <<EOF and cat <<EOF > out
-  # are both ordinary bash), so this checks the whole line for a > rather than just
-  # the text before the operator.
+  # heredoc operator in the same clause (cat > out <<EOF and cat <<EOF > out are
+  # both ordinary bash), so this checks the whole clause (#447: the caller now hands
+  # this the operator own clause, not necessarily the whole physical line) for a >
+  # rather than just the text before the operator.
   if (line ~ /(^|[;&|])[ \t]*cat([ \t]|$)/ && line ~ />/) return 1
   # tee always takes its target as a plain argument, never a redirect.
   if (line ~ /(^|[;&|])[ \t]*tee[ \t]+[^ \t;&|\n]/) return 1

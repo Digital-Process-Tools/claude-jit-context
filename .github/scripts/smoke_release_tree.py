@@ -38,7 +38,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import signal
 import subprocess
@@ -247,46 +246,16 @@ def run_validate(tree: Path, mode: str, claude_bin: str | None, home: Path,
     result.notes.append(f"validate: `claude plugin validate --strict` exit {r.returncode}")
     result.notes.extend(f"    {line}" for line in output.splitlines())
     if r.returncode != 0:
-        if _only_reserved_name_error(output):
-            # #445 (claude-5h-window-spread #20): CLI 2.1.287 reserves `claude-` names.
-            # The directory's own scan has not objected to this listing's name, and a
-            # rename changes every install ID. Until Anthropic answers, this ONE error
-            # is a warning, never any other.
-            warning = ("::warning::claude plugin validate --strict: the plugin name is "
-                       "reserved (#445) -- the only error, let through as a warning")
-            print(warning)
-            result.notes.append(warning)
-            return
+        # #455: this used to let exactly one error through as a warning when the
+        # validator's own output named the plugin a reserved name (#445/#448) -- CLI
+        # 2.1.287 rejected the `claude-` prefix this repo carried at the time. #452
+        # renamed the plugin away from that prefix, so `claude plugin validate
+        # --strict` no longer reports that error for this tree, and the carve-out
+        # that downgraded it is dead code going forward. It is also removed rather
+        # than kept dormant: its own heading parser could mask a SECOND real error
+        # whose heading did not match the regex it expected, so any future validate
+        # error -- reserved-name shaped or not -- now fails the smoke test outright.
         result.errors.append(f"validate: claude plugin validate --strict exited {r.returncode}")
-
-
-def _only_reserved_name_error(output: str) -> bool:
-    """True only when the validator reported exactly one error, the reserved name.
-
-    Errors and warnings both print as `❯` bullets, each under its own "Found N
-    error(s)" / "Found N warning(s)" heading, and the validator prints one such block
-    per file it checks. So only bullets under an ERROR heading count, and the totals
-    of every error heading are summed (#448: the v0.12.0 run printed 1 error and 6
-    warnings, and counting every bullet read 7 errors).
-    """
-    error_bullets: list[str] = []
-    stated_errors = 0
-    in_errors = False
-    for line in output.splitlines():
-        text = line.strip()
-        m = re.match(r"^\S*\s*Found (\d+) (error|warning)s?:?$", text)
-        if m:
-            in_errors = m.group(2) == "error"
-            if in_errors:
-                stated_errors += int(m.group(1))
-            continue
-        if text.startswith("Validat"):
-            in_errors = False
-            continue
-        if in_errors and text.startswith("❯"):
-            error_bullets.append(text)
-    return (stated_errors == 1 and len(error_bullets) == 1
-            and "is reserved" in error_bullets[0])
 
 
 def run_smoke(tree: Path, validate: str = "auto", claude_bin: str | None = None,

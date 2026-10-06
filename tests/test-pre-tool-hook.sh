@@ -678,6 +678,69 @@ OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"x='"'"'\n<<EOF\nlit
 assert_blocked "a <<EOF shape on a line still inside a multi-line single-quoted argument does not hide the command that follows it" "$OUT"
 
 # =============================================
+# SECTION 4d: the allowlist sink check must bind to its OWN command, and the closing
+# delimiter must match bash own word-ending rule (issue #447, carried forward from
+# v0.12.0 gate 3 round 2)
+# =============================================
+# jit_heredoc_opener_is_known_sink() used to be handed the WHOLE line, so a decoy sink
+# command sharing the line with the real heredoc -- separated by ; or & -- made the
+# allowlist match even though the heredoc belongs to a DIFFERENT, non-sink command.
+# Each case has a positive control earlier in this file proving the forbid row fires
+# at all (section 4b/4c); these prove the negative result here is not that either.
+
+echo ""
+echo "=== issue #447: a decoy sink before ; no longer hides a non-sink heredoc body (tee;bash) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-sink.txt </dev/null; bash <<EOF\nheredocforbid now\nEOF"}}')
+assert_blocked "a tee decoy before bash<<EOF no longer hides the forbidden word" "$OUT"
+
+echo ""
+echo "=== issue #447: a decoy sink before && no longer hides a non-sink heredoc body (cat;sh) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-decoy.txt </dev/null && sh <<EOF\nheredocforbid now\nEOF"}}')
+assert_blocked "a tee decoy before && sh<<EOF no longer hides the forbidden word" "$OUT"
+
+echo ""
+echo "=== issue #447: a decoy supertool invocation before ; no longer hides a non-sink heredoc body ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; supertool '"'"'ops'"'"' >/dev/null; bash <<EOF\nheredocforbid now\nEOF"}}')
+assert_blocked "a supertool decoy before bash<<EOF no longer hides the forbidden word" "$OUT"
+
+echo ""
+echo "=== issue #447: a decoy sink combined with the round-1 fake-arithmetic-opener no longer hides the real command (coordinator finding) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-decoy.txt </dev/null; (( y = 1<<EOF ))\nheredocforbid now\nEOF"}}')
+assert_blocked "a tee decoy ahead of a fake arithmetic <<EOF opener no longer hides the forbidden word" "$OUT"
+
+echo ""
+echo "=== issue #447 control: a real sink alone (no decoy clause) still gets its heredoc body stripped ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-sink.txt <<EOF\nheredocforbid mentioned only here\nEOF"}}')
+assert_not_contains "a lone tee sink with no decoy clause still strips its own body" "$OUT" '"decision":"block"'
+
+echo ""
+echo "=== issue #447: a closing delimiter spelled EOF then a quoted X closes where bash does (EOFX), not at a bare EOF ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-sink.txt <<EOF\"X\"\nheredocforbid mentioned only here\nEOFX"}}')
+assert_not_contains "a quote-concatenated delimiter still gets its real sink body stripped" "$OUT" '"decision":"block"'
+
+echo ""
+echo "=== issue #447: a closing delimiter spelled EOF-1 closes where bash does (EOF-1), dash and digit are bare word characters ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-sink.txt <<EOF-1\nheredocforbid mentioned only here\nEOF-1"}}')
+assert_not_contains "a dash/digit-suffixed delimiter still gets its real sink body stripped" "$OUT" '"decision":"block"'
+
+echo ""
+echo "=== issue #447: a closing delimiter with a backslash mid-word closes where bash does (the backslash collapses) ==="
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-sink.txt <<E\\OF\nheredocforbid mentioned only here\nEOF"}}')
+assert_not_contains "a backslash-mid-word delimiter still gets its real sink body stripped" "$OUT" '"decision":"block"'
+
+echo ""
+echo "=== issue #447 self-review: a quoted ; inside the sink own argument does not forge a fake clause boundary ==="
+# jit_heredoc_clause_at()'s first cut scanned for a bare ";"/"&" with no quote tracking --
+# a quoted one (tee writing to a file literally named ";") would have been read as a real
+# clause boundary, cutting the returned clause in half mid-quote and losing the "tee" name
+# entirely, which would have wrongly kept this real sink's own data visible to a forbid:
+# rule (over-cautious, not a bypass, but still wrong). Quote-aware boundary scanning fixes
+# the precision; this is the positive case (forbidden word correctly stays hidden, the
+# literal file name it sits inside is not mistaken for a boundary).
+OUT=$(run_hook '{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee \";\" <<EOF\nheredocforbid mentioned only here\nEOF"}}')
+assert_not_contains "a tee writing to a literal \";\" filename still gets its own body stripped" "$OUT" '"decision":"block"'
+
+# =============================================
 # SECTION: awk engine matrix — multibyte paths, control characters in entries
 # =============================================
 # See the same section in test-pre-prompt-hook.sh: issue #14 aborted the END block under
@@ -735,6 +798,29 @@ for eng in $ENGINES; do
   assert_blocked "#442 round 3: node18 (non-sink) still blocks under $eng" "$OUT"
   OUT=$(run_hook_engine "$eng" "$P442_R6_TEE")
   assert_not_contains "#442 round 3: tee (real sink) still strips its body under $eng" "$OUT" '"decision":"block"'
+done
+
+# #447 self-review (oss:auditor finding): jit_heredoc_scan_word() and
+# jit_heredoc_clause_at() are the same shape of character-by-character state machine
+# as jit_heredoc_opener_is_suppressed() above, which this file has already seen
+# diverge across awk engines (#14, #68, #76) -- so the per-engine treatment extends to
+# them too, not just the default $PATH awk the rest of SECTION 4d ran under.
+P447_DECOY='{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-sink.txt </dev/null; bash <<EOF\nheredocforbid now\nEOF"}}'
+P447_DELIM_QUOTE='{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-sink.txt <<EOF\"X\"\nheredocforbid mentioned only here\nEOFX"}}'
+P447_DELIM_DASH='{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-sink.txt <<EOF-1\nheredocforbid mentioned only here\nEOF-1"}}'
+P447_DELIM_BACKSLASH='{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee /tmp/jit447-sink.txt <<E\OF\nheredocforbid mentioned only here\nEOF"}}'
+P447_CLAUSE_QUOTE='{"tool_name":"Bash","tool_input":{"command":"hdcmd; tee \";\" <<EOF\nheredocforbid mentioned only here\nEOF"}}'
+for eng in $ENGINES; do
+  OUT=$(run_hook_engine "$eng" "$P447_DECOY")
+  assert_blocked "#447: a tee decoy before bash<<EOF no longer hides the forbidden word under $eng" "$OUT"
+  OUT=$(run_hook_engine "$eng" "$P447_DELIM_QUOTE")
+  assert_not_contains "#447: a quote-concatenated delimiter still strips its real sink body under $eng" "$OUT" '"decision":"block"'
+  OUT=$(run_hook_engine "$eng" "$P447_DELIM_DASH")
+  assert_not_contains "#447: a dash/digit-suffixed delimiter still strips its real sink body under $eng" "$OUT" '"decision":"block"'
+  OUT=$(run_hook_engine "$eng" "$P447_DELIM_BACKSLASH")
+  assert_not_contains "#447: a backslash-mid-word delimiter still strips its real sink body under $eng" "$OUT" '"decision":"block"'
+  OUT=$(run_hook_engine "$eng" "$P447_CLAUSE_QUOTE")
+  assert_not_contains "#447: a quoted ; inside the sink own argument still strips its own body under $eng" "$OUT" '"decision":"block"'
 done
 
 # RFC 8259 forbids a raw U+0000-U+001F inside a JSON string; a strict parser is entitled
