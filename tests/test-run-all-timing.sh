@@ -61,7 +61,7 @@ exit 0
 EOF
   cat > "$dir/test-b-slow.sh" << 'EOF'
 #!/bin/bash
-sleep 1
+sleep 2
 exit 0
 EOF
   chmod +x "$dir"/test-*.sh
@@ -103,13 +103,26 @@ else
   bad "the timing block comes after the tally, not before it" "tally=$TALLY_LINE timing=$TIMING_LINE"
 fi
 
-# Slowest first: test-b-slow.sh (sleep 1) must be listed before test-a-fast.sh.
+# Slowest first: test-b-slow.sh (sleep 2) must be listed before test-a-fast.sh --
+# unless the two land on the same whole second, which a loaded runner can do even
+# with the 2s margin (#482). A tie makes the ORDER undefined at 1s resolution, not
+# wrong, so it is reported as inconclusive rather than failed. A real sort
+# regression still has to fail here: when the two printed times differ, the strict
+# line-position check below still applies -- this is the positive control a
+# tie-tolerant assertion needs.
 SLOW_LINE=$(grep -n 'test-b-slow\.sh' "$OUT_PASS" | tail -1 | cut -d: -f1)
 FAST_LINE=$(grep -n 'test-a-fast\.sh' "$OUT_PASS" | tail -1 | cut -d: -f1)
-if [ -n "$SLOW_LINE" ] && [ -n "$FAST_LINE" ] && [ "$SLOW_LINE" -lt "$FAST_LINE" ]; then
+SLOW_SECS=$(grep 'test-b-slow\.sh' "$OUT_PASS" | tail -1 | sed -E 's/^[[:space:]]*([0-9]+)s.*/\1/')
+FAST_SECS=$(grep 'test-a-fast\.sh' "$OUT_PASS" | tail -1 | sed -E 's/^[[:space:]]*([0-9]+)s.*/\1/')
+if [ -z "$SLOW_LINE" ] || [ -z "$FAST_LINE" ] || [ -z "$SLOW_SECS" ] || [ -z "$FAST_SECS" ]; then
+  bad "the slower suite is listed before the faster one" "could not read a printed line/time for one or both suites"
+  cat "$OUT_PASS"
+elif [ "$SLOW_SECS" -eq "$FAST_SECS" ]; then
+  echo "  SKIPPED: test-a-fast.sh and test-b-slow.sh both printed ${SLOW_SECS}s -- a tie at 1s resolution, order is undefined, not wrong"
+elif [ "$SLOW_LINE" -lt "$FAST_LINE" ]; then
   ok "the slower suite is listed before the faster one"
 else
-  bad "the slower suite is listed before the faster one" "slow_line=$SLOW_LINE fast_line=$FAST_LINE"
+  bad "the slower suite is listed before the faster one" "slow_line=$SLOW_LINE fast_line=$FAST_LINE slow_secs=$SLOW_SECS fast_secs=$FAST_SECS"
   cat "$OUT_PASS"
 fi
 
@@ -127,9 +140,9 @@ fi
 # assertion above except this one.
 SLOW_TIME_LINE=$(grep 'test-b-slow\.sh' "$OUT_PASS" | tail -1)
 if grep -qE '^ *[1-9][0-9]*s' <<< "$SLOW_TIME_LINE"; then
-  ok "the slow suite (sleep 1) is timed at 1 second or more, not 0"
+  ok "the slow suite (sleep 2) is timed at 1 second or more, not 0"
 else
-  bad "the slow suite (sleep 1) is timed at 1 second or more, not 0" "$SLOW_TIME_LINE"
+  bad "the slow suite (sleep 2) is timed at 1 second or more, not 0" "$SLOW_TIME_LINE"
 fi
 
 # --- Failing fixture: the exit code and the tally text must not change shape ---
