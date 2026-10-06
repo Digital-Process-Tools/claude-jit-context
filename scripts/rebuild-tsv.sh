@@ -205,6 +205,22 @@ jit_rc() {
   return 0
 }
 
+# Every temp index truncate_index() creates, so a killed PROCESS -- not merely a killed
+# forked awk helper -- still leaves no debris (review finding, #480). A forked awk dying
+# is already handled: the shell that is running this script survives it, the loop notices
+# (jit_rc 2 / a short verdict count) and commit_index() cleans up its own temp file. But
+# nothing removed a temp file if THIS SCRIPT ITSELF is killed (SIGTERM, SIGINT, an agent
+# session cut off mid-rebuild, an OOM kill) between truncate_index() creating it and
+# commit_index() ever running -- reproduced: a SIGTERM two seconds into a 1500-entry
+# fixture left a real `.00-index.tsv.XXXXXX` behind in a committed layer directory, which
+# nothing on the next run cleans up either, since mktemp only ever picks a fresh name.
+# Appended right after each successful truncate_index() call (never inside it -- that
+# runs in a subshell, the same reason its own jit_rc() calls need raising explicitly at
+# the call site), so the trap below sees every temp file this run ever created, swapped
+# in or not: `rm -f` on an already-renamed-away path is a silent no-op.
+JIT_TEMP_FILES=()
+trap 'rm -f "${JIT_TEMP_FILES[@]}" 2> /dev/null' EXIT
+
 # --- What a report may say about a name that arrived with the clone (#113, #131) ----
 # Every name printed by the reports below is a directory entry under
 # `.claude/jit-context/`, and that tree arrives with the repository. The policy for what
@@ -528,6 +544,7 @@ build_tool_tsv() {
     jit_rc 2
     return
   }
+  JIT_TEMP_FILES+=("$tsv_tmp")
   rc2_before=$JIT_RC2_COUNT
 
   for md in "$dir"/*.md; do
@@ -603,8 +620,17 @@ build_tool_tsv() {
   done
 
   COUNT=$(wc -l < "$tsv_tmp" | tr -d ' ')
-  commit_index "$tsv_tmp" "$tsv" "$label/${tsv##*/}" "$rc2_before"
-  _log "rebuild-tsv" $(($(_ms) - T0)) "$label: $COUNT rules"
+  # Logged conditionally on commit_index()'s own verdict (review finding, #480): COUNT is
+  # read from the TEMP build, before it is known whether that build gets swapped in at
+  # all, so logging it unconditionally would print a success-shaped "$label: N rules"
+  # line to pipeline.log and stdout for a build commit_index just discarded -- the exact
+  # "detected the crash but reported success anyway" confusion this whole fix exists to
+  # remove, one line further down.
+  if commit_index "$tsv_tmp" "$tsv" "$label/${tsv##*/}" "$rc2_before"; then
+    _log "rebuild-tsv" $(($(_ms) - T0)) "$label: $COUNT rules"
+  else
+    _log "rebuild-tsv" $(($(_ms) - T0)) "$label: build discarded, $COUNT row(s) NOT committed (see FATAL above)"
+  fi
 }
 
 TOOLS_BASE="$JIT_BASE/tools"
@@ -872,6 +898,7 @@ build_vocab_tsv() {
     jit_rc 2
     return
   }
+  JIT_TEMP_FILES+=("$tsv_tmp")
   rc2_before=$JIT_RC2_COUNT
 
   # --- Deferred generic-word classification (#255) -----------------------------------
@@ -1224,8 +1251,13 @@ build_vocab_tsv() {
   done
 
   COUNT=$(wc -l < "$tsv_tmp" | tr -d ' ')
-  commit_index "$tsv_tmp" "$tsv" "$label/${tsv##*/}" "$rc2_before"
-  _log "rebuild-tsv" $(($(_ms) - T0)) "$label: $COUNT keywords"
+  # See build_tool_tsv()'s identical comment: logged conditionally on commit_index()'s own
+  # verdict, not unconditionally, so a discarded build never prints a success-shaped line.
+  if commit_index "$tsv_tmp" "$tsv" "$label/${tsv##*/}" "$rc2_before"; then
+    _log "rebuild-tsv" $(($(_ms) - T0)) "$label: $COUNT keywords"
+  else
+    _log "rebuild-tsv" $(($(_ms) - T0)) "$label: build discarded, $COUNT row(s) NOT committed (see FATAL above)"
+  fi
 }
 
 VOCAB_BASE="$JIT_BASE/vocabulary"
@@ -1254,7 +1286,7 @@ build_vocab_path_tsv() {
   local dir="$1"
   local tsv="$2"
   local label="$3"
-  local T0
+  local T0 COMMITTED
   T0=$(_ms)
 
   [ -d "$dir" ] || return
@@ -1266,6 +1298,7 @@ build_vocab_path_tsv() {
     jit_rc 2
     return
   }
+  JIT_TEMP_FILES+=("$tsv_tmp")
   rc2_before=$JIT_RC2_COUNT
 
   for md in "$dir"/*.md; do
@@ -1315,13 +1348,20 @@ build_vocab_path_tsv() {
   done
 
   COUNT=$(wc -l < "$tsv_tmp" | tr -d ' ')
-  commit_index "$tsv_tmp" "$tsv" "$label/${tsv##*/}" "$rc2_before"
+  # See build_tool_tsv()'s identical comment: logged conditionally on commit_index()'s own
+  # verdict, not unconditionally, so a discarded build never prints a success-shaped line.
+  COMMITTED=0
+  commit_index "$tsv_tmp" "$tsv" "$label/${tsv##*/}" "$rc2_before" && COMMITTED=1
   # The LEAF, unlike every other builder's log line, because this is the only dimension
   # that writes two indexes out of one layer directory and the layer name alone would name
   # both. `$label/${tsv##*/}` is the same string truncate_index is handed above, so the
   # FATAL line and the success line for this index agree on what it is called -- and it is
   # a path that exists, which `vocabulary/<layer>/paths` never was (#153).
-  _log "rebuild-tsv" $(($(_ms) - T0)) "$label/${tsv##*/}: $COUNT path mappings"
+  if [ "$COMMITTED" -eq 1 ]; then
+    _log "rebuild-tsv" $(($(_ms) - T0)) "$label/${tsv##*/}: $COUNT path mappings"
+  else
+    _log "rebuild-tsv" $(($(_ms) - T0)) "$label/${tsv##*/}: build discarded, $COUNT row(s) NOT committed (see FATAL above)"
+  fi
 }
 
 for dir in "$VOCAB_BASE"/*/; do
@@ -1353,6 +1393,7 @@ build_path_tsv() {
     jit_rc 2
     return
   }
+  JIT_TEMP_FILES+=("$tsv_tmp")
   rc2_before=$JIT_RC2_COUNT
 
   for md in "$dir"/*.md; do
@@ -1378,8 +1419,13 @@ build_path_tsv() {
   done
 
   COUNT=$(wc -l < "$tsv_tmp" | tr -d ' ')
-  commit_index "$tsv_tmp" "$tsv" "$label/${tsv##*/}" "$rc2_before"
-  _log "rebuild-tsv" $(($(_ms) - T0)) "$label: $COUNT rules"
+  # See build_tool_tsv()'s identical comment: logged conditionally on commit_index()'s own
+  # verdict, not unconditionally, so a discarded build never prints a success-shaped line.
+  if commit_index "$tsv_tmp" "$tsv" "$label/${tsv##*/}" "$rc2_before"; then
+    _log "rebuild-tsv" $(($(_ms) - T0)) "$label: $COUNT rules"
+  else
+    _log "rebuild-tsv" $(($(_ms) - T0)) "$label: build discarded, $COUNT row(s) NOT committed (see FATAL above)"
+  fi
 }
 
 PATHS_BASE="$JIT_BASE/paths"
